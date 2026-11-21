@@ -10026,7 +10026,19 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
     // Workspace's tabs, then the task's space, in their order; the task's tab on show.
     assert_eq!(tab_titles(&after), tab_titles(&before));
     assert_eq!((on_show(&after), &after["state"]["sidebar"]), (json!(1), &json!("tasks")));
-    assert_eq!(after["spaces"], before["spaces"]);
+    // What persists: each space but what goes on in it (live before the quit: needs you; none runs now).
+    let kept = |s: &Value| {
+        let mut spaces = s["spaces"].clone();
+        spaces
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+            .for_each(|space| drop(space.as_object_mut().map(|o| o.remove("indicator"))));
+        spaces
+    };
+    assert_eq!(kept(&after), kept(&before));
+    let task = after["spaces"].as_array().unwrap().iter().find(|s| s["of"] == json!({"kind": "task", "id": 1}));
+    assert_eq!(task.map(|s| &s["indicator"]), Some(&json!("idle")), "{}", after["spaces"]);
     // The drawer shows the task's conversation to go on with; no agent was started.
     let talk = &after["state"]["talk"];
     assert_eq!((&talk["task"], &talk["open"], &talk["keys"]), (&json!(1), &json!(true), &json!(false)), "{talk}");

@@ -20,7 +20,8 @@
 {"cmd":"open_space","space":{"kind":"task","id":2}}
 {"click":"top:new_workspace"}
 {"cmd":"section","section":"tasks"}
-{"click":"task:1","at":[0.3,0.3]}
+{"cmd":"open_space","space":{"kind":"task","id":1}}
+{"click":"drawer-rail:1"}
 {"click":"talk:talk-start"}
 {"until":"drawer.native.chats.1.transcript.turn"}
 {"cmd":"key","keys":"cmd-shift-l","as":"user"}
