@@ -414,6 +414,30 @@ impl Workspace {
     /// The project and repository pickers, and where there is a choice, this checkout or a new
     /// worktree (⌥⌘N).
     fn pickers(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        // The quick note: its project's alone, × leaves it untagged.
+        if self.model.quick_pills().is_some() {
+            let project = self.model.quick_project();
+            let off = project.as_ref().map(|_| {
+                div()
+                    .id("quick-project-off")
+                    .px_1()
+                    .rounded_sm()
+                    .text_color(rgb(theme::MUTED))
+                    .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
+                    .child("×")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, window, cx| {
+                            this.dispatch(Action::ComposePick { mark: '#', name: None }, this.input, window, cx);
+                            cx.stop_propagation();
+                        }),
+                    )
+            });
+            let label = project.map_or("#no project".into(), |name| format!("#{name}"));
+            let pill =
+                div().flex().flex_shrink().min_w_0().items_center().child(self.picker('#', label, cx)).children(off);
+            return vec![pill.into_any_element()];
+        }
         let Some(choices) = self.model.compose_choices() else { return Vec::new() };
         let project = choices.project.map_or("#no project".into(), |name| format!("#{name}"));
         let place = choices.place.map_or(">no repository".into(), |place| format!(">{place}"));

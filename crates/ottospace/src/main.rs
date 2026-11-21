@@ -4142,6 +4142,9 @@ impl Workspace {
             // them; and the open picker's list (`mark`, `rows`, `selected`), or null.
             "compose_choices": self.model.compose_choices(),
             "compose_picker": self.model.picker_menu(),
+            // The quick note's project (⌘⇧N): the line's `#project`, else that of what was in front
+            // as it opened, or the one its picker took; null untagged or closed.
+            "quick_project": self.model.quick_project(),
             // The one line under the box: what ↵ does with the line as it is, then the other keys;
             // null while it is closed. The tag hint, while the box's tags' sheet shows ("? tags", ⌘/).
             "compose_status": self.model.compose_status(),

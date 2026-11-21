@@ -6248,6 +6248,13 @@ impl Model {
             Action::ComposePicker { mark } => self.picker_toggle(mark),
             Action::ComposePickerStep { delta } => self.picker_step(delta),
             Action::ComposeDefault => self.picker_make_default(effects),
+            // The quick note's project pill's ×: untagged, typed tag and all.
+            Action::ComposePick { mark: '#', name: None } if self.quick.is_some() => {
+                if let Some(quick) = &mut self.quick {
+                    quick.project = None;
+                }
+                self.compose_pick('#', None);
+            }
             Action::ComposePick { mark, name } => self.compose_pick(mark, name),
             Action::ComposeAttach { paths, home, unreadable } => {
                 // A name the line cannot hold (a line break in it) or one too long to keep
@@ -8421,7 +8428,8 @@ impl Model {
         // Short: it is the part of the line cut last (`fit_status`).
         let first = if untitled && self.capture_title().is_none() { "Type, then " } else { "" };
         if self.quick.is_some() {
-            return Some(format!("{first}↵ files it for later · ⌘↵ starts it now · Esc"));
+            let under = self.quick_project().map(|project| format!(" under #{project}")).unwrap_or_default();
+            return Some(format!("{first}↵ files it for later{under} · ⌘↵ starts it now · Esc"));
         }
         if !plan.starts {
             return Some(format!("{first}↵ files it; nothing starts · Esc"));

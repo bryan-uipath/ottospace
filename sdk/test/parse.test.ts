@@ -120,6 +120,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     compose_hint: null,
     compose_choices: { project: null, place: "app · main", agent: "claude", default: true },
     compose_picker: null,
+    quick_project: null,
     compose_worktree: null,
     compose_target: null,
     welcome: false,

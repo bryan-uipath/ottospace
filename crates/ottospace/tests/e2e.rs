@@ -4388,12 +4388,16 @@ fn the_boxs_pickers_show_the_choice_and_its_bottom_row_is_one_line() {
         let filed = otto.user_key("shift-enter");
         let tasks = filed["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
         assert_eq!(tasks.last().map(|task| task["agent"].clone()), Some(json!(agent)));
-        // The quick note: its field and its button, no agent or repository.
+        // The quick note: its field, its project's picker and its button; no agent or repository.
         let quick = otto.user_key("cmd-shift-n");
         assert_eq!((&quick["compose_choices"], quick["quick_pills"].is_array()), (&Value::Null, true));
         let drawn = quick["compose_rects"].as_object().cloned().unwrap_or_default();
-        assert!(drawn.contains_key("compose-start") && !drawn.keys().any(|id| id.starts_with("picker:")), "{drawn:?}");
-        assert_eq!(quick["compose_status"], "Type, then ↵ files it for later · ⌘↵ starts it now · Esc");
+        let pickers: Vec<&String> = drawn.keys().filter(|id| id.starts_with("picker:")).collect();
+        assert!(drawn.contains_key("compose-start") && pickers == ["picker:#"], "{drawn:?}");
+        // Its project, if what is in front has one, is said where ↵ files it; × leaves it untagged.
+        let under = quick["quick_project"].as_str().map(|project| format!(" under #{project}")).unwrap_or_default();
+        let said = format!("Type, then ↵ files it for later{under} · ⌘↵ starts it now · Esc");
+        assert_eq!(quick["compose_status"], json!(said));
     }
     let _ = std::fs::remove_dir_all(&root);
 }
