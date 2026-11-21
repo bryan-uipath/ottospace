@@ -45,10 +45,106 @@ pub fn utf8_locale(set: bool, system: Option<&str>, exists: impl Fn(&str) -> boo
     Some(wanted.filter(|locale| !language.is_empty() && exists(locale)).unwrap_or_else(|| "en_US.UTF-8".into()))
 }
 
-/// Whether the wheel scrolls our history. Not while the program reads the mouse or uses the
-/// alternate screen: the wheel is the program's there.
-pub fn wheel_scrolls(mouse_mode: bool, alt_screen: bool) -> bool {
-    !mouse_mode && !alt_screen
+/// What a program asked of the mouse and the wheel (DECSET 1000, 1002, 1003, 1006, 1007).
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct MouseMode {
+    /// 1000: presses and releases.
+    pub clicks: bool,
+    /// 1002: moves while a button is down too.
+    pub drags: bool,
+    /// 1003: every move.
+    pub motion: bool,
+    /// 1006: reports as `CSI < b ; x ; y M`, not the old bytes.
+    pub sgr: bool,
+    pub alt_screen: bool,
+    /// 1007: on the alternate screen, the wheel as arrow keys (on unless the program turns it off).
+    pub alternate_scroll: bool,
+}
+
+impl MouseMode {
+    /// The program reads the mouse.
+    pub fn reads(&self) -> bool {
+        self.clicks || self.drags || self.motion
+    }
+}
+
+/// Where the wheel goes: ottospace's history, the program's mouse, or the program as ↑ and ↓.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum WheelGoes {
+    History,
+    Reports,
+    Arrows,
+}
+
+/// Where the wheel goes. ⇧ held: ottospace's history, whatever the program asked (the way out
+/// other terminals give, also from modes a program left on). Else the program's while it reads
+/// the mouse (Claude Code's and Codex's full-screen views scroll themselves); on the alternate
+/// screen (less, man) ↑ and ↓ unless the program turned that off, then nothing; else the history.
+pub fn wheel_goes(mode: MouseMode, shift: bool) -> Option<WheelGoes> {
+    match (mode.reads(), mode.alt_screen) {
+        _ if shift => Some(WheelGoes::History),
+        (true, _) => Some(WheelGoes::Reports),
+        (false, true) => mode.alternate_scroll.then_some(WheelGoes::Arrows),
+        (false, false) => Some(WheelGoes::History),
+    }
+}
+
+/// A press goes to a program that reads the mouse, unless ⇧ or ⌥ is held: then it selects, as in
+/// Terminal and iTerm. ⌘-click (open a path) is ottospace's either way.
+pub fn press_is_the_programs(mode: MouseMode, mods: Mods) -> bool {
+    mode.reads() && !mods.shift && !mods.alt && !mods.cmd
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Button {
+    Left,
+    Middle,
+    Right,
+}
+
+/// What the pointer did over a cell.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Pointer {
+    Press(Button),
+    Release(Button),
+    /// A move, with the button held if any.
+    Move(Option<Button>),
+    /// One line of the wheel: up (back) or down.
+    Wheel {
+        up: bool,
+    },
+}
+
+/// The report of `pointer` at cell (`col`, `row`), from 0, for the program's `mode`; `None` when the
+/// mode does not take it (a move without 1002 or 1003). e.g. a left press at (0, 0) with 1006:
+/// `CSI < 0 ; 1 ; 1 M`, its release `... m`. Modifiers: ⇧ 4, ⌥ 8, ⌃ 16.
+pub fn mouse_report(pointer: Pointer, col: usize, row: usize, mods: Mods, mode: MouseMode) -> Option<Vec<u8>> {
+    if !mode.reads() {
+        return None;
+    }
+    let code = |button: Button| match button {
+        Button::Left => 0,
+        Button::Middle => 1,
+        Button::Right => 2,
+    };
+    let (button, release) = match pointer {
+        Pointer::Press(button) => (code(button), false),
+        Pointer::Release(button) => (code(button), true),
+        Pointer::Move(Some(button)) if mode.drags || mode.motion => (code(button) + 32, false),
+        Pointer::Move(None) if mode.motion => (3 + 32, false),
+        Pointer::Move(_) => return None,
+        Pointer::Wheel { up } => (if up { 64 } else { 65 }, false),
+    };
+    let button = button + 4 * mods.shift as u32 + 8 * mods.alt as u32 + 16 * mods.ctrl as u32;
+    let (x, y) = (col + 1, row + 1);
+    if mode.sgr {
+        let end = if release { 'm' } else { 'M' };
+        return Some(format!("\x1b[<{button};{x};{y}{end}").into_bytes());
+    }
+    // The old form: a byte each, 32 on; a release has no button of its own (3). Past 223 it cannot say.
+    let button = if release { 3 + (button & !3) } else { button };
+    let byte = |n: usize| u8::try_from(n + 32).ok();
+    Some(vec![0x1b, b'[', b'M', byte(button as usize)?, byte(x)?, byte(y)?])
 }
 
 /// Turns trackpad pixels into whole lines, keeping the remainder for the next event.
@@ -77,7 +173,7 @@ impl Wheel {
 }
 
 /// A point on the visible grid: row from the top, column, and whether it is the cell's right half.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct CellPoint {
     pub row: usize,
     pub col: usize,
@@ -393,6 +489,9 @@ mod tests {
         assert_eq!(scroll_key("a", SHIFT, false), None);
     }
 
+    const CLICKS: MouseMode =
+        MouseMode { clicks: true, drags: false, motion: false, sgr: true, alt_screen: false, alternate_scroll: true };
+
     #[test]
     fn a_terminal_gets_a_utf8_locale_only_when_none_is_set() {
         let known = |locale: &str| ["en_US.UTF-8", "de_CH.UTF-8", "zh_CN.UTF-8", "ca_ES.UTF-8"].contains(&locale);
@@ -407,9 +506,61 @@ mod tests {
 
     #[test]
     fn the_wheel_belongs_to_programs_that_read_the_mouse_or_use_the_alternate_screen() {
-        assert!(wheel_scrolls(false, false));
-        assert!(!wheel_scrolls(true, false));
-        assert!(!wheel_scrolls(false, true));
+        let plain = MouseMode { alternate_scroll: true, ..MouseMode::default() };
+        assert_eq!(wheel_goes(plain, false), Some(WheelGoes::History), "a shell's prompt: the history");
+        assert_eq!(wheel_goes(CLICKS, false), Some(WheelGoes::Reports), "Claude Code's full-screen view");
+        assert_eq!(wheel_goes(MouseMode { alt_screen: true, ..CLICKS }, false), Some(WheelGoes::Reports));
+        // less and man read no mouse: on the alternate screen the wheel is ↑ and ↓, unless turned off.
+        assert_eq!(wheel_goes(MouseMode { alt_screen: true, ..plain }, false), Some(WheelGoes::Arrows));
+        let off = MouseMode { alt_screen: true, alternate_scroll: false, ..plain };
+        assert_eq!(wheel_goes(off, false), None);
+    }
+
+    /// ⇧ and the wheel scroll ottospace's history whatever the program asked.
+    #[test]
+    fn shift_and_the_wheel_always_scroll_the_history() {
+        let alt = MouseMode { alt_screen: true, ..CLICKS };
+        for mode in [CLICKS, alt, MouseMode { clicks: false, ..alt }, MouseMode::default()] {
+            assert_eq!(wheel_goes(mode, true), Some(WheelGoes::History), "{mode:?}");
+        }
+    }
+
+    #[test]
+    fn a_press_is_the_programs_unless_shift_or_option_is_held() {
+        assert!(press_is_the_programs(CLICKS, Mods::default()));
+        assert!(press_is_the_programs(CLICKS, Mods { ctrl: true, ..Mods::default() }));
+        for held in [Mods { shift: true, ..Mods::default() }, Mods { alt: true, ..Mods::default() }] {
+            assert!(!press_is_the_programs(CLICKS, held), "{held:?} selects");
+        }
+        assert!(!press_is_the_programs(CLICKS, Mods { cmd: true, ..Mods::default() }), "⌘-click opens a path");
+        assert!(!press_is_the_programs(MouseMode::default(), Mods::default()), "a shell's prompt: it selects");
+    }
+
+    #[test]
+    fn mouse_reports_say_the_button_the_cell_and_the_modifiers() {
+        let none = Mods::default();
+        let report = |pointer, col, row, mods, mode| mouse_report(pointer, col, row, mods, mode).map(String::from_utf8);
+        let sgr = |text: &str| Some(Ok(text.to_string()));
+        assert_eq!(report(Pointer::Press(Button::Left), 0, 0, none, CLICKS), sgr("\x1b[<0;1;1M"));
+        assert_eq!(report(Pointer::Release(Button::Left), 4, 2, none, CLICKS), sgr("\x1b[<0;5;3m"));
+        assert_eq!(
+            report(Pointer::Press(Button::Right), 0, 0, Mods { ctrl: true, ..none }, CLICKS),
+            sgr("\x1b[<18;1;1M")
+        );
+        assert_eq!(report(Pointer::Wheel { up: true }, 1, 1, none, CLICKS), sgr("\x1b[<64;2;2M"));
+        assert_eq!(report(Pointer::Wheel { up: false }, 1, 1, none, CLICKS), sgr("\x1b[<65;2;2M"));
+        // Moves only where the program asked: with a button under 1002, any under 1003.
+        assert_eq!(report(Pointer::Move(Some(Button::Left)), 0, 0, none, CLICKS), None);
+        let drags = MouseMode { drags: true, ..CLICKS };
+        assert_eq!(report(Pointer::Move(Some(Button::Left)), 2, 0, none, drags), sgr("\x1b[<32;3;1M"));
+        assert_eq!(report(Pointer::Move(None), 2, 0, none, drags), None);
+        assert_eq!(report(Pointer::Move(None), 2, 0, none, MouseMode { motion: true, ..CLICKS }), sgr("\x1b[<35;3;1M"));
+        // The old form: bytes, 32 on; a release is button 3; too far right for a byte, none.
+        let old = MouseMode { sgr: false, ..CLICKS };
+        assert_eq!(mouse_report(Pointer::Press(Button::Left), 0, 0, none, old), Some(b"\x1b[M !!".to_vec()));
+        assert_eq!(mouse_report(Pointer::Release(Button::Left), 0, 0, none, old), Some(b"\x1b[M#!!".to_vec()));
+        assert_eq!(mouse_report(Pointer::Press(Button::Left), 300, 0, none, old), None);
+        assert_eq!(mouse_report(Pointer::Press(Button::Left), 0, 0, none, MouseMode::default()), None);
     }
 
     #[test]
