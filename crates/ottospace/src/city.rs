@@ -10,11 +10,11 @@ use std::path::Path;
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::mpsc::{Receiver, Sender};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use gpui::{
-    AnyElement, Bounds, Context, Corners, Hsla, Pixels, Point, RenderImage, TextRun, Window, WindowId, canvas, div,
-    fill, point, prelude::*, px, rgb,
+    AnyElement, Bounds, Context, Corners, Hsla, PathBuilder, Pixels, Point, RenderImage, TextRun, Window, WindowId,
+    canvas, div, fill, point, prelude::*, px, rgb,
 };
 use ottospace_core::atlas::{self, Atlas};
 use ottospace_core::empty::{self, Backdrop};
@@ -38,8 +38,9 @@ const KEPT: usize = 8;
 /// and the districts on it).
 const MOST_NAMES: usize = 24;
 const NAMED_TIERS: usize = 2;
-/// A hovered building's beacon: its line rises this many points above the building's top.
-const BEACON: f32 = 36.;
+/// A beam's label sits this many points beside its dot; the hovered beam fades in over this long.
+const BESIDE: f32 = 8.;
+const FADE: Duration = Duration::from_millis(120);
 /// Room kept between a name and the empty tab's hints, in points.
 const CLEAR: f32 = 12.;
 /// The hints' backing fades out over this many points, in this many layers: no edge to see.
@@ -146,7 +147,7 @@ fn read(dir: &Path, roots: &[String]) -> Option<Atlas> {
         dir.canonicalize().ok().filter(|top| top.to_str().is_some_and(|top| status_bar::reads_changes(top, roots)))?;
     let mut list = crate::child::git_read(&top);
     list.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
-    let late = std::time::Instant::now() + TIMEOUT;
+    let late = Instant::now() + TIMEOUT;
     let said = crate::child::run(list, TIMEOUT, MOST_BYTES).ok().filter(|said| said.ok)?;
     let names: Vec<&str> = said.out.split('\0').filter(|name| !name.is_empty()).collect();
     if said.out.len() as u64 >= MOST_BYTES || names.len() > MOST_FILES {
@@ -158,7 +159,7 @@ fn read(dir: &Path, roots: &[String]) -> Option<Atlas> {
     let mut files: Vec<(String, u64)> = Vec::new();
     for name in names {
         // A slow disk: the limit is the whole read's, not git's alone.
-        if std::time::Instant::now() > late {
+        if Instant::now() > late {
             return None;
         }
         let mut over = Path::new(name).ancestors().skip(1).filter(|folder| !folder.as_os_str().is_empty());
@@ -222,11 +223,23 @@ struct Place {
     window: Option<WindowId>,
     labels: usize,
     /// The box the user's pointer is over (an index into the scene's blocks), where that pointer
-    /// was (found again in a new picture), and the beacon's label as the last paint drew it:
-    /// whether a file's, whether lit, where.
+    /// was (found again in a new picture), and its beam as the last paint drew it.
     hovered: Option<usize>,
     pointer: Option<Point<Pixels>>,
-    beacon: Option<(bool, bool, Bounds<Pixels>)>,
+    beacon: Option<Beacon>,
+    /// The box whose beam fades in, and since when.
+    fading: Option<(usize, Instant)>,
+    /// The lit buildings' beams the last paint drew: foot and end.
+    lit_beams: Vec<[f32; 4]>,
+}
+
+/// A hovered box's beam as drawn: whether a file's, whether lit, its foot and end, its label.
+#[derive(Clone, Copy)]
+struct Beacon {
+    file: bool,
+    lit: bool,
+    beam: [f32; 4],
+    label: Bounds<Pixels>,
 }
 
 /// The pictures made and what each empty place drew: for the state of a test run, no name or
@@ -242,6 +255,8 @@ pub struct Drawn {
     places: HashMap<Floor, Place>,
     renders: usize,
     paints: usize,
+    /// Frames the hovered beam's fade asked for: none under Reduce Motion.
+    beam_frames: u64,
     /// Pictures no place shows: GPUI keeps each in the window's atlas until it is dropped.
     retired: Vec<Arc<RenderImage>>,
 }
@@ -285,7 +300,7 @@ impl Painter {
 
 /// The scene of `plan` and its picture, on the picture's thread.
 fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
-    let started = std::time::Instant::now();
+    let started = Instant::now();
     let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
     let (w, h) = key.size;
     let scene = scene::scene(plan, &lit, w as f32 / h as f32);
@@ -370,13 +385,15 @@ impl Drawn {
         let tops: Vec<[f32; 2]> =
             (made.iter().flat_map(|made| &made.lit)).map(|(_, (tx, ty))| [x + tx * w, y + ty * h]).collect();
         let beacon = place.and_then(|place| place.beacon);
-        let hovered = beacon.map(|(file, lit, at)| serde_json::json!({ "file": file, "lit": lit, "beacon": rect(at) }));
+        let hovered = beacon
+            .map(|b| serde_json::json!({ "file": b.file, "lit": b.lit, "beam": b.beam, "beacon": rect(b.label) }));
+        let lit_beams = place.map(|place| place.lit_beams.clone()).unwrap_or_default();
         serde_json::json!({
             "on": on(floor), "places": made.map(|made| made.places), "groups": made.map(|made| made.groups),
             "picture": made.map(|made| made.key.size), "bounds": [x, y, w, h], "scale": scale,
             "lit": lit, "labels": place.map_or(0, |place| place.labels), "failed": failed, "reads": reads,
             "renders": self.renders, "paints": self.paints, "render_us": made.map(|made| made.render_us),
-            "hovered": hovered, "lit_tops": tops, "pictures": self.pictures.len(),
+            "hovered": hovered, "lit_tops": tops, "lit_beams": lit_beams, "pictures": self.pictures.len(),
         })
     }
 }
@@ -600,6 +617,11 @@ impl Workspace {
     pub(crate) fn city_reads(&self) -> usize {
         self.city.came
     }
+
+    /// Frames the hovered beam's fade asked for: for the counts of a test run.
+    pub(crate) fn city_beam_frames(&self) -> u64 {
+        self.city_drawn.borrow().beam_frames
+    }
 }
 
 /// Where a place is, for the state of a test run: `"tab"`, `{"pane": id}` or `{"out": tab}`.
@@ -628,6 +650,7 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
     let Some(place) = drawn.places.get_mut(&floor) else { return };
     // Nothing of an earlier paint is on show until this one draws it.
     (place.beacon, place.labels, place.window) = (None, 0, Some(window.window_handle().window_id()));
+    place.lit_beams.clear();
     let (bounds, hovered) = (place.bounds, place.hovered);
     let drawn = &mut *drawn;
     let Some(made) = drawn.places.get(&floor).and_then(|place| drawn.picture(place)) else { return };
@@ -645,11 +668,11 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
         }
     }
     let style = window.text_style();
-    let shape = |text: &str, color: u32, size: f32, window: &mut Window| {
+    let shape = |text: &str, color: Hsla, size: f32, window: &mut Window| {
         let run = TextRun {
             len: text.len(),
             font: style.font(),
-            color: Hsla::from(rgb(color)),
+            color,
             background_color: None,
             underline: None,
             strikethrough: None,
@@ -661,7 +684,7 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
     // A name with a line break in it is not drawn: `shape_line` takes one line. Nor one wider
     // than its plate's edge, or over the hints or another name.
     for name in made.names.iter().filter(|name| !name.text.contains(char::is_control)) {
-        let line = shape(&name.text, theme::MUTED, theme::TEXT_2XS, window);
+        let line = shape(&name.text, Hsla::from(rgb(theme::MUTED)), theme::TEXT_2XS, window);
         let at = bounds.origin + point(px(name.at.0 * w + 4.), px(name.at.1 * h + 2.));
         let room = Bounds { origin: at, size: gpui::size(line.width, px(14.)) };
         if f32::from(line.width) + 8. <= name.room * w
@@ -674,83 +697,133 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
         }
     }
     let labels = drawn_names.len();
-    let beacon = hovered.and_then(|i| beacon(made, i, bounds, clear, window, cx, &shape));
+    let to_window = |p: [f32; 3]| {
+        let (x, y) = made.scene.camera?.project(p)?;
+        Some(bounds.origin + point(px(x * w), px(y * h)))
+    };
+    let beam_of = |i: usize| {
+        let (foot, end) = made.scene.beam(i)?;
+        Some((to_window(foot)?, to_window(end)?))
+    };
+    // Each lit building's beam, steady and thin in its task's colour (a hovered one's over it).
+    let mut lit_beams = Vec::new();
+    for (i, block) in made.scene.blocks.iter().enumerate() {
+        let Kind::Lit(colour) = block.kind else { continue };
+        let Some((foot, end)) = beam_of(i) else { continue };
+        if let Some((end, _)) = fit_beam(foot, end, None, bounds, clear) {
+            paint_beam(window, foot, end, Hsla::from(rgb(colour)).opacity(0.85), 1., 2.);
+            lit_beams.push([foot.x, foot.y, end.x, end.y].map(f32::from));
+        }
+    }
+    // The hovered box's beam fades in, at once under Reduce Motion.
+    let since = match (hovered, drawn.places.get(&floor).and_then(|place| place.fading)) {
+        (Some(i), Some((was, since))) if was == i => Some((i, since)),
+        (Some(i), _) => Some((i, Instant::now())),
+        (None, _) => None,
+    };
+    let shown_for = since.map_or(FADE, |(_, since)| since.elapsed());
+    let alpha = if crate::dial::calm() { 1. } else { (shown_for.as_secs_f32() / FADE.as_secs_f32()).min(1.) };
+    let beacon = hovered.and_then(|i| {
+        let (foot, end) = beam_of(i)?;
+        beacon(made, i, (foot, end), alpha, bounds, clear, window, cx, &shape)
+    });
+    let fades = beacon.is_some() && alpha < 1.;
+    if fades {
+        window.request_animation_frame();
+    }
     drawn.paints += 1;
+    drawn.beam_frames += u64::from(fades);
     if let Some(place) = drawn.places.get_mut(&floor) {
         (place.labels, place.beacon, place.shown) = (labels, beacon, Some(shown));
+        (place.fading, place.lit_beams) = (since, lit_beams);
     }
 }
 
-/// The hovered box's beacon: a line rising from its top and a label at the line's end, the
-/// file's name over its folder, or a district's folder. Drawn over the picture, never over the
-/// hints: placed below the box if above would cover them, else not drawn. Returns whether it is
-/// a file's, whether lit, and where the label is.
+/// Where the end of a beam from `foot` to `end` is drawn (window points), and its label's box (`label`: its
+/// size) beside the dot, right of it or else left: the beam lowered (to three quarters, a half, a
+/// quarter) until none of it is over the hints or off the picture; none if it never fits.
+fn fit_beam(
+    foot: Point<Pixels>,
+    end: Point<Pixels>,
+    label: Option<gpui::Size<Pixels>>,
+    bounds: Bounds<Pixels>,
+    clear: Bounds<Pixels>,
+) -> Option<(Point<Pixels>, Option<Bounds<Pixels>>)> {
+    let clear_of = |b: &Bounds<Pixels>| !b.intersects(&clear);
+    let inside = |b: &Bounds<Pixels>| bounds.contains(&b.origin) && bounds.contains(&b.bottom_right());
+    [1., 0.75, 0.5, 0.25].into_iter().find_map(|t: f32| {
+        let end = foot + (end - foot) * t;
+        let line = Bounds::from_corners(
+            point(foot.x.min(end.x) - px(4.), end.y - px(4.)),
+            point(foot.x.max(end.x) + px(4.), foot.y),
+        );
+        if !(clear_of(&line) && inside(&line)) {
+            return None;
+        }
+        let Some(size) = label else { return Some((end, None)) };
+        let at = |left: Pixels| Bounds { origin: point(left, end.y - size.height / 2.), size };
+        let sides = [at(end.x + px(BESIDE)), at(end.x - px(BESIDE) - size.width)];
+        let label = sides.into_iter().find(|b| clear_of(b) && inside(b))?;
+        Some((end, Some(label)))
+    })
+}
+
+/// A beam: a line from `foot` up to `end`, faint at the box and brightest at its dot (as light
+/// falling from it), and the dot.
+fn paint_beam(window: &mut Window, foot: Point<Pixels>, end: Point<Pixels>, colour: Hsla, width: f32, dot: f32) {
+    const STEPS: usize = 6;
+    for step in 0..STEPS {
+        let (a, b) = (step as f32 / STEPS as f32, (step + 1) as f32 / STEPS as f32);
+        let mut line = PathBuilder::stroke(px(width));
+        line.move_to(foot + (end - foot) * a);
+        line.line_to(foot + (end - foot) * b);
+        crate::dial::stroke(window, line, colour.opacity(0.15 + 0.85 * b * b));
+    }
+    crate::dial::disc(window, end, dot, colour);
+}
+
+/// The hovered box's beacon: its beam (`foot` to `end`, window points) in the text's colour, and
+/// beside its dot a label: the file's path in the checkout, or the district's, cut in the middle
+/// if long. Never over the hints (`fit_beam`). `alpha`: how far it has faded in.
+#[allow(clippy::too_many_arguments)]
 fn beacon(
     made: &Made,
     i: usize,
+    (foot, end): (Point<Pixels>, Point<Pixels>),
+    alpha: f32,
     bounds: Bounds<Pixels>,
     clear: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut gpui::App,
-    shape: &dyn Fn(&str, u32, f32, &mut Window) -> gpui::ShapedLine,
-) -> Option<(bool, bool, Bounds<Pixels>)> {
+    shape: &dyn Fn(&str, Hsla, f32, &mut Window) -> gpui::ShapedLine,
+) -> Option<Beacon> {
     let block = made.scene.blocks.get(i)?;
     let place = made.plan.places.get(block.place?)?;
-    let (x, y) = made.scene.camera?.project(block.top())?;
-    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-    let foot = bounds.origin + point(px(x * w), px(y * h));
-    let file = !place.group;
-    let (name, folder) = match place.id.rsplit_once('/') {
-        Some((folder, name)) if file => (name, folder),
-        _ => (place.id.as_str(), ""),
-    };
-    // One line each, as wide as the picture allows: a long path keeps its end (`…ui/views`).
-    let most = bounds.size.width - px(16.);
-    let fit = |text: &str, colour: u32, size: f32, window: &mut Window| {
-        let mut text: String = text.chars().map(|c| if c.is_control() { '?' } else { c }).collect();
-        loop {
-            let line = shape(&text, colour, size, window);
-            let count = text.chars().count();
-            if line.width <= most || count <= 2 {
-                return line;
-            }
-            let keep = ((count as f32 * f32::from(most) / f32::from(line.width)) as usize).clamp(1, count - 2);
-            text = std::iter::once('…').chain(text.chars().skip(count - keep)).collect();
+    let colour = Hsla::from(rgb(theme::TEXT)).opacity(alpha);
+    // One line, as wide as the wider side of the dot allows: `src/…/views/list.rs`.
+    let side = (bounds.right() - foot.x.max(end.x)).max(foot.x.min(end.x) - bounds.left());
+    let most = (side - px(BESIDE + 12.)).max(px(40.));
+    let mut text: String = place.id.chars().map(|c| if c.is_control() { '?' } else { c }).collect();
+    let line = loop {
+        let line = shape(&text, colour, theme::TEXT_XS, window);
+        let count = text.chars().count();
+        if line.width <= most || count <= 3 {
+            break line;
         }
+        let keep = ((count as f32 * f32::from(most) / f32::from(line.width)) as usize).clamp(2, count - 2);
+        let (head, tail) = (keep / 2, keep - keep / 2);
+        let chars: Vec<char> = text.chars().collect();
+        text = chars[..head].iter().chain(['…'].iter()).chain(&chars[count - tail..]).collect();
     };
-    let name = fit(name, theme::TEXT, theme::TEXT_XS, window);
-    let under = (!folder.is_empty()).then(|| fit(folder, theme::MUTED, theme::TEXT_2XS, window));
-    let width = name.width.max(under.as_ref().map_or(px(0.), |line| line.width)) + px(16.);
-    let tall = px(if under.is_some() { 34. } else { 20. });
-    // Centred over the box, kept inside the picture.
-    let left = (foot.x - width / 2.).max(bounds.left()).min(bounds.right() - width);
-    let label = |top: Pixels| Bounds { origin: point(left, top), size: gpui::size(width, tall) };
-    let (up, down) = (label(foot.y - px(BEACON) - tall), label(foot.y + px(BEACON)));
-    // The label, its line and its dot: none of them over the hints.
-    let stem = |at: &Bounds<Pixels>| {
-        let (from, to) = if at.top() < foot.y { (at.bottom(), foot.y) } else { (foot.y, at.top()) };
-        Bounds::from_corners(point(foot.x - px(3.), from), point(foot.x + px(3.), to + px(3.)))
-    };
-    let fits = |b: &Bounds<Pixels>| {
-        !b.intersects(&clear)
-            && !stem(b).intersects(&clear)
-            && bounds.contains(&b.origin)
-            && bounds.contains(&b.bottom_right())
-    };
-    let at = [up, down].into_iter().find(fits)?;
-    let line = stem(&at);
-    let colour = Hsla::from(rgb(theme::PRIMARY));
-    let line =
-        Bounds::from_corners(point(foot.x - px(0.5), line.top()), point(foot.x + px(0.5), line.bottom() - px(3.)));
-    window.paint_quad(fill(line, colour));
-    window.paint_quad(fill(Bounds::centered_at(foot, gpui::size(px(5.), px(5.))), colour).corner_radii(px(2.5)));
-    let pill = fill(at, Hsla::from(rgb(theme::BACKGROUND)).opacity(0.88)).corner_radii(px(theme::RADIUS_MD));
-    window.paint_quad(pill.border_widths(px(1.)).border_color(colour.opacity(0.6)));
-    let _ = name.paint(at.origin + point(px(8.), px(3.)), px(14.), window, cx);
-    if let Some(under) = under {
-        let _ = under.paint(at.origin + point(px(8.), px(18.)), px(14.), window, cx);
-    }
-    Some((file, matches!(block.kind, Kind::Lit(_)), at))
+    let size = gpui::size(line.width + px(12.), px(18.));
+    let (end, label) = fit_beam(foot, end, Some(size), bounds, clear)?;
+    let label = label?;
+    paint_beam(window, foot, end, colour, 1.5, 3.);
+    let backing = Hsla::from(rgb(theme::BACKGROUND)).opacity(0.8 * alpha);
+    window.paint_quad(fill(label, backing).corner_radii(px(theme::RADIUS_MD)));
+    let _ = line.paint(label.origin + point(px(6.), px(2.)), px(14.), window, cx);
+    let beam = [foot.x, foot.y, end.x, end.y].map(f32::from);
+    Some(Beacon { file: !place.group, lit: matches!(block.kind, Kind::Lit(_)), beam, label })
 }
 
 #[cfg(test)]
@@ -765,7 +838,7 @@ mod tests {
         for dir in std::env::var("CITY_BENCH").unwrap_or_default().split(':').filter(|dir| !dir.is_empty()) {
             let top = Path::new(dir).canonicalize().unwrap();
             let roots = [top.to_string_lossy().into_owned()];
-            let started = std::time::Instant::now();
+            let started = Instant::now();
             let places = read(&top, &roots).map(|atlas| atlas.places.len());
             println!("{dir}: {places:?} places in {:.1} ms", started.elapsed().as_secs_f64() * 1000.);
         }

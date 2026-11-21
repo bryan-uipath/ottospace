@@ -16359,9 +16359,19 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
         let now = city(&otto);
         assert_eq!((now["reads"].as_u64(), now["renders"].as_u64(), &now["lit"]), (reads, renders, &lit["lit"]));
     }
-    // The user's pointer on the lit building's top: its beacon, a file's, lit, clear of the hints;
-    // nothing rendered again. A client's pointer, and the user's over the hints: no beacon.
+    // The lit building's steady beam rises from its top.
     let top = numbers(&city(&otto)["lit_tops"][0]);
+    let rises = |beam: &[f64]| {
+        let (dx, dy) = (beam[2] - beam[0], beam[1] - beam[3]);
+        (beam[0] - top[0]).abs() < 1. && (beam[1] - top[1]).abs() < 1. && dy > 8. && dx.abs() < dy
+    };
+    let beams = city(&otto)["lit_beams"].clone();
+    assert!(beams.as_array().is_some_and(|b| b.len() == 1 && rises(&numbers(&b[0]))), "{beams} from {top:?}");
+    // The user's pointer on the lit building's top: its beam, from the top up, with a label beside
+    // its dot, a file's, lit, clear of the hints; it fades in; nothing rendered again. A client's
+    // pointer, and the user's over the hints: no beam.
+    let frames = || otto.call(json!({"cmd": "state"}))["counts"]["city_beam_frames"].as_u64().unwrap();
+    let before = frames();
     let point = |x: f64, y: f64, user: bool| {
         let mut move_to = json!({"cmd": "mouse", "action": "move", "x": x, "y": y});
         if user {
@@ -16372,11 +16382,16 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     };
     let hovered = point(top[0], top[1] + 1., true);
     assert_eq!((&hovered["file"], &hovered["lit"]), (&json!(true), &json!(true)), "{hovered}");
+    assert!(rises(&numbers(&hovered["beam"])), "{hovered} from {top:?}");
+    assert!(frames() > before, "the beam fades in");
+    assert_eq!(city(&otto)["lit_beams"], beams, "its steady beam stays under the hovered one");
     let hints = otto.control("home:terminal");
     let label = numbers(&hovered["beacon"]);
     let apart =
         |a: &[f64], b: &[f64]| a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
     assert!(apart(&label, &hints), "{label:?} over {hints:?}");
+    let dot = numbers(&hovered["beam"]);
+    assert!((label[1] + label[3] / 2. - dot[3]).abs() < 1., "the label beside the dot: {label:?} {dot:?}");
     assert_eq!(city(&otto)["renders"].as_u64(), renders, "hover renders nothing");
     assert_eq!(point(hints[0] + 4., hints[1] + 4., true), Value::Null, "over a hint, the hint wins");
     assert_eq!(point(top[0], top[1] + 1., false), Value::Null, "a client's pointer shows none");

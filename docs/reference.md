@@ -1532,9 +1532,10 @@ moves only its own folder
   files, the lit files or the tab's size change. The outer two tiers of districts are named on
   their plates where the name fits, never behind the tab's hints; no path or name is in the
   socket's state or the logs.
-- Pointing at a building shows a beacon: a line up from it to its file's name over its folder;
-  at a district, its folder. Over the hints, the hints win, and the beacon is never drawn over
-  them. Hovering draws, and renders nothing again.
+- Pointing at a building shows a beam: a thin line straight up from its top to a dot, with the
+  file's path beside the dot (cut in the middle if long); at a district, its folder's. A lit
+  building has a steady, thinner beam in its task's colour. Over the hints, the hints win, and
+  no beam is drawn over them. Hovering draws, and renders nothing again.
 - No GPU, or a render that fails: the lattice.
 
 ### Displays
