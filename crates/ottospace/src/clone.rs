@@ -153,8 +153,9 @@ fn staged(
     clear_stale(staging)?;
     let made = make(staging)?;
     let gh = clone(source, gh, remote, staging, stop, line);
-    let result = after_gh(gh, stop.load(Ordering::Relaxed), staging.join(".git").is_dir())
-        .and_then(|()| rename_new(staging, dest));
+    // Only the folder this clone made, with a repository in it, is moved into place.
+    let has_repo = is_made(staging, made) && staging.join(".git").is_dir();
+    let result = after_gh(gh, stop.load(Ordering::Relaxed), has_repo).and_then(|()| rename_new(staging, dest));
     if result.is_err() {
         remove_made(staging, made);
     }
@@ -196,10 +197,14 @@ fn rename_new(from: &Path, to: &Path) -> Result<(), Failure> {
 
 /// Removes `dest` only if it is still the folder this clone made: not a link, the same inode.
 fn remove_made(dest: &Path, made: Made) {
-    let same = std::fs::symlink_metadata(dest).is_ok_and(|m| m.is_dir() && (m.dev(), m.ino()) == made);
-    if same {
+    if is_made(dest, made) {
         let _ = std::fs::remove_dir_all(dest);
     }
+}
+
+/// Whether `path` is still the folder this clone made: not a link, the same inode.
+fn is_made(path: &Path, made: Made) -> bool {
+    std::fs::symlink_metadata(path).is_ok_and(|m| m.is_dir() && (m.dev(), m.ino()) == made)
 }
 
 /// gh, run to its end in a process group of its own (so a stop ends git too), its error output
@@ -504,6 +509,10 @@ mod tests {
         std::os::unix::fs::symlink(&code, &staging).unwrap();
         assert!(matches!(staged(&git, gh, &hello(), (&staging, &dest), &stop, |_| {}), Err(Failure::Said(_))));
         assert!(std::fs::symlink_metadata(&staging).is_ok() && !dest.exists());
+        // A clone on its way is not read as a repository of `clone_dir`.
+        std::fs::remove_file(&staging).unwrap();
+        std::fs::create_dir_all(staging.join(".git")).unwrap();
+        assert!(crate::repos::found_in(&code).is_empty());
     }
 
     #[test]

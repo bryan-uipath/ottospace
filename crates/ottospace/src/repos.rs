@@ -35,7 +35,13 @@ pub fn found_in(root: &Path) -> Vec<Repo> {
         return read(root).into_iter().collect();
     }
     let children = fs::read_dir(root).into_iter().flatten().flatten().map(|entry| entry.path());
-    children.filter(|dir| dir.join(".git").exists()).filter_map(|dir| read(&dir)).collect()
+    // A clone on its way (`clone::staging`) is no repository yet.
+    let staged = |dir: &PathBuf| {
+        dir.file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(ottospace_core::clone::STAGING))
+    };
+    children.filter(|dir| !staged(dir) && dir.join(".git").exists()).filter_map(|dir| read(&dir)).collect()
 }
 
 /// The repository at `dir`. A linked worktree (its `.git` is a file) reads as a repository with
