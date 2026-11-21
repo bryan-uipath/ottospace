@@ -4161,6 +4161,8 @@ impl Workspace {
                 "wheels": self.wheel.over,
                 "wheel_entries": self.wheel.entries,
                 "wheels_passed": self.wheel.passed,
+                // Terminal cells drawn as shapes (box drawing, blocks), not font glyphs.
+                "cell_art": terminal::art_cells(),
             })),
             // Test runs only: each press in an app a sneak label asked for, `[pane, path]`; else null.
             "app_presses": std::env::var_os("OTTOSPACE_E2E").map(|_| &self.sneak_reads.presses),
