@@ -3598,15 +3598,25 @@ impl Workspace {
         // Closed, only the sessions that tasks still follow are looked at, and only their files.
         let Some(poller) = &mut self.sessions else { return };
         let model = &self.model;
-        poller.ask(open, || model.followed_sessions(), model.worked_sessions(), now, day_start(now));
+        let waiting = model.features.on(Feature::SessionWaits);
+        let terminals = &self.terminals;
+        let panes = || pane_runners(terminals);
+        poller.ask(open, || model.followed_sessions(), model.worked_sessions(), waiting, panes, now, day_start(now));
         let (read, stopped) = (poller.take(), poller.stopped());
-        let (mut found, mut seen, mut worked) = (None, None, Vec::new());
+        let (mut found, mut seen, mut worked, mut in_panes) = (None, None, Vec::new(), None);
         for read in read {
             match read {
                 sessions::Read::Found(list) => found = Some(list),
                 sessions::Read::Seen(list) => seen = Some(list),
                 sessions::Read::Work(list) => worked.extend(list),
+                sessions::Read::InPanes(list) => in_panes = Some(list),
             }
+        }
+        if let Some(found) = in_panes.filter(|_| waiting) {
+            // The time too: a session's turn is counted from it.
+            self.dispatch(Action::Tick { now }, Origin::System, window, cx);
+            self.dispatch(Action::SessionsInPanes { found }, Origin::System, window, cx);
+            cx.notify();
         }
         for (work, cwd) in worked {
             self.dispatch(Action::SessionWork { work, cwd }, Origin::System, window, cx);
@@ -6378,7 +6388,11 @@ impl Workspace {
             .top(px(3.5))
             .child(button("session-adopt", "Track", "Track as a task"))
             .child(button("session-hide", "Hide", "Hide"));
-        let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
+        let color = match (row.waits_for, row.active) {
+            (Some(_), _) => theme::task(Group::NeedsYou),
+            (None, true) => theme::task(Group::Running),
+            (None, false) => theme::BORDER_STRONG,
+        };
         let (runner, id, card) = (row.runner.clone(), row.id.clone(), row.clone());
         sidebar_row(ElementId::Name(format!("session:{key}").into()), selected)
             .group("session-row")
@@ -8185,6 +8199,27 @@ pub(crate) fn row_meta(text: impl Into<SharedString>) -> Div {
 /// quiet. Hover and selection mark it.
 fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
     ui::list_row(id, ui::Row::Dim, ui::State::focus(selected))
+}
+
+/// Each terminal pane with an agent runner in front of its shell: the first process found below
+/// the shell, at most three levels down, whose program is a runner's (`RunnerId::of_program`).
+fn pane_runners(terminals: &HashMap<PaneId, Terminal>) -> Vec<sessions::PaneProc> {
+    use ottospace_mac::process;
+    let mut found = Vec::new();
+    for (pane, terminal) in terminals {
+        let mut queue = vec![(terminal.shell_pid() as i32, 0)];
+        while let Some((pid, depth)) = queue.pop() {
+            let arg0 = process::args(pid).and_then(|args| args.into_iter().next());
+            if let Some(runner) = arg0.as_deref().and_then(ottospace_core::runner::RunnerId::of_program) {
+                found.extend(process::cwd(pid).map(|cwd| (*pane, runner, pid as u32, PathBuf::from(cwd))));
+                break;
+            }
+            if depth < 3 {
+                queue.extend(process::children(pid).into_iter().map(|child| (child, depth + 1)));
+            }
+        }
+    }
+    found
 }
 
 /// The time now, in milliseconds since 1970. The core has no clock: actions carry this.

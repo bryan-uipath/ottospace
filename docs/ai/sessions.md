@@ -333,6 +333,63 @@ check on every `StartAgent`:
 Known gap: Codex records no process, so an idle Codex session open in another terminal is
 resumed.
 
+## Waiting on the user
+
+A `claude` or `codex` typed in a terminal pane is a watched session. Flag `session_waits`
+(Experimental) makes "this terminal session needs you" one notion, shown one way for every
+runner (owner, 2026-11-20): per-runner differences live in `RunnerSpec` only.
+
+**The common floor (every runner).** Each sessions round (5 s open, 20 s closed) the shell finds
+each terminal pane with a runner's CLI in front of its shell (`RunnerId::of_program`, the first
+argument's name, up to three levels below the shell) and that CLI's session: the one its process
+record names (`Disk::held`), else the one last active of those started in the folder it runs in.
+`Action::SessionsInPanes` (System only). Once its file has been quiet `session_quiet_minutes`, the
+rule adopted tasks follow, it needs you: "needs you · your turn" (`InPane::needs`).
+
+**A runner that says why (`Disk::waits`).** Faster and more specific, never different in kind:
+it needs you at once with the reason, "needs you · permission", "question" or "input". Claude Code
+2.1.329 (read from its bundle; checked against a made-up record only) writes `status: waiting`
+and `waitingFor` in `sessions/<pid>.json`: `permission prompt`, `sandbox request`, `worker
+request`, `goal proposal` (permission), `input needed` (question), `dialog open` (one the user
+opened: no wait). The record must hold (`holds`). No question text is in it. A version that
+changes the words reads as no reason: the floor still applies.
+
+**Where it shows.** A task adopted from it needs you with it; one no task has counts in the status
+bar's `needs you`, its Elsewhere row's dot takes the needs-you colour, and ⌘J, with no task
+needing you, focuses its pane (only the user's ⌘J; a row's click never changes the tab). Known
+gaps: two CLIs of one runner in one folder share the session last active; a session outside
+our panes is not seen.
+
+**Hooks: slice 2.** Verified 2026-11-20 (code.claude.com/docs/en/hooks,
+/settings; learn.chatgpt.com Codex config pages):
+
+- Claude Code: `Notification` (matchers `permission_prompt`, fired after about 6 s, and
+  `idle_prompt`, `elicitation_dialog`, `agent_needs_input`), `PermissionRequest` (`tool_name`,
+  `tool_input`), `Stop` (`last_assistant_message`), `UserPromptSubmit`. Every hook gets
+  `session_id`, `transcript_path`, `cwd`, `hook_event_name` on stdin, runs with Claude Code's
+  environment (an `OTTOSPACE_PANE` exported by ottospace's terminal reaches it) and **outside the
+  Bash sandbox**, so it can reach the socket where a sandboxed tool shell cannot. Hooks merge
+  across user, project, local and `--settings` (file or JSON), and are reloaded live. An
+  interactive session holds every hook back until the folder is trusted; `-p` and SDK runs do
+  not ask, so a repository's `.claude/settings.json` hooks run there unasked.
+- Codex: `notify = [argv]` runs on `agent-turn-complete` only, the JSON as one argument
+  (`thread-id`, `turn-id`, `cwd`, `last-assistant-message`); no approval event. Codex hooks
+  exist behind `features.hooks` (`hooks.json`, project ones only when trusted); their event list
+  was not checked.
+
+Decided (owner, 2026-11-20), slices to come:
+
+1. **Install**: one palette command, the user's alone, with a full preview of every file and
+   entry, and a matching Remove: user-level files only, entries marked as ottospace's, never a
+   project file, never replacing an existing Codex `notify`.
+2. **Trust**: one request, `session_waiting {session, kind, text?}`, answered only with
+   `$OTTOSPACE_PANE` and that pane's own pass, and only for the session of the CLI in that pane.
+   It marks that session waiting or not: no task, no typing, no focus. `text` is untrusted:
+   control characters stripped, 200 characters at most, drawn quoted. A repository's own hook
+   can at most say its own session waits.
+3. **Decisions**: a card for a terminal session says why it waits and offers "Go to the pane".
+   No answering from the card: that types into a terminal, as strong as a shell.
+
 ## Privacy
 
 Session files hold prompts, source code, command output and whatever secrets passed through.

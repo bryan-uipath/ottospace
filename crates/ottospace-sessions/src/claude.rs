@@ -7,6 +7,7 @@ use std::io;
 use std::path::{Component, Path, PathBuf};
 
 use ottospace_core::runner::RunnerId;
+use ottospace_core::sessions::WaitsFor;
 use serde_json::Value;
 
 use crate::cache::Cache;
@@ -174,6 +175,15 @@ impl SessionReader for Claude {
         self.tail(session).model
     }
 
+    fn process(&self, pid: u32) -> Option<crate::Process> {
+        let mut records = self.config_dirs.iter().flat_map(|config| records(config));
+        // Of two records of one pid (a reused pid, a second config dir), the one written last.
+        let mut mine: Vec<_> = records.by_ref().filter(|(_, holder, _)| holder.pid == pid).collect();
+        mine.sort_by_key(|(_, holder, _)| holder.recorded);
+        let (id, holder, record) = mine.pop()?;
+        Some(crate::Process { waits_for: waits_for(&record), id, recorded: holder.recorded })
+    }
+
     /// The name the user gave the session (`custom-title`), else the one Claude Code's own model
     /// gave it (`ai-title`): the last of each near the end of the transcript, where both are repeated.
     fn title(&self, session: &SessionRef) -> Option<String> {
@@ -238,19 +248,46 @@ impl SessionReader for Claude {
 /// Claude Code's process records of one config dir: session id → each (process, busy). Two
 /// records may name one session: every one is kept, so one of a dead process hides no live one.
 fn live(config: &Path) -> HashMap<String, Vec<(crate::Holder, Option<bool>)>> {
-    let Ok(files) = fs::read_dir(config.join("sessions")) else { return HashMap::new() };
-    let records = files.flatten().filter(|f| f.path().extension().is_some_and(|e| e == "json"));
     let mut live: HashMap<String, Vec<_>> = HashMap::new();
+    for (id, holder, record) in records(config) {
+        let busy = record["status"].as_str().map(|s| s == "busy");
+        live.entry(id).or_default().push((holder, busy));
+    }
+    live
+}
+
+/// Each process record of one config dir (`sessions/<pid>.json`), as (session id, holder, record).
+fn records(config: &Path) -> Vec<(String, crate::Holder, Value)> {
+    let Ok(files) = fs::read_dir(config.join("sessions")) else { return Vec::new() };
+    let records = files.flatten().filter(|f| f.path().extension().is_some_and(|e| e == "json"));
+    let mut out = Vec::new();
     for file in records {
         let record = jsonl::small(&file.path(), RECORD_MOST).and_then(|text| serde_json::from_str::<Value>(&text).ok());
         let Some(record) = record else { continue };
         let pid = record["pid"].as_u64().and_then(|pid| u32::try_from(pid).ok());
-        let (Some(pid), Some(id)) = (pid, record["sessionId"].as_str()) else { continue };
-        let busy = record["status"].as_str().map(|s| s == "busy");
+        let (Some(pid), Some(id)) = (pid, record["sessionId"].as_str().filter(|id| station::is_name(id))) else {
+            continue;
+        };
         let holder = crate::Holder { pid, recorded: record["updatedAt"].as_u64() };
-        live.entry(id.to_string()).or_default().push((holder, busy));
+        out.push((id.to_string(), holder, record));
     }
-    live
+    out
+}
+
+/// What a record's `status: "waiting"` waits for, by its `waitingFor` (Claude Code 2.1.329). A
+/// dialog the user opened (`dialog open`) waits on nobody. Another word: some input.
+fn waits_for(record: &Value) -> Option<WaitsFor> {
+    if record["status"] != "waiting" {
+        return None;
+    }
+    match record["waitingFor"].as_str() {
+        Some("dialog open") => None,
+        Some("permission prompt" | "sandbox request" | "worker request" | "goal proposal") => {
+            Some(WaitsFor::Permission)
+        }
+        Some("input needed") => Some(WaitsFor::Question),
+        _ => Some(WaitsFor::Input),
+    }
 }
 
 /// Where and when a transcript's session started.

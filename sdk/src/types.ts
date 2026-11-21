@@ -666,6 +666,8 @@ export interface SessionRow {
   quoted_title: string | null;
   /** The model in short: `opus-4.7`, `gpt-6`. */
   model: string | null;
+  /** Why it needs you, while it runs in a terminal pane (flag `session_waits`): its runner's reason, or `turn` once quiet. */
+  waits_for: "permission" | "question" | "input" | "turn" | null;
 }
 
 /** An app that is not running, in the Apps section. */

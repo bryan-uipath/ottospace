@@ -132,7 +132,8 @@ impl Model {
 
     pub fn agents(&self) -> Agents {
         let Segments { needs_you, running, .. } = Segments::of(&self.tasks.inbox());
-        Agents { working: running, needs_you }
+        // A session in a terminal that waits on you counts as a task that needs you.
+        Agents { working: running, needs_you: needs_you + self.waits_unadopted().count() }
     }
 }
 
