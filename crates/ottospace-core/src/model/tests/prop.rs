@@ -163,6 +163,29 @@ impl Gen<'_> {
         Action::SlotHosted { pane, kind: (!self.rng.one_in(5)).then_some(kind) }
     }
 
+    /// The next step of the user's ⌘E into a waiting slot: focus one, open the picker on a window
+    /// of its app, choose it, then the shell's `Open` of what it hosted.
+    fn slot_pick(&mut self) -> Action {
+        let focused = self.m.focused.and_then(|id| Some((id, self.m.slots.get(&id)?)));
+        let waits = focused.filter(|(id, _)| matches!(self.m.pane(*id).map(|p| &p.kind), Some(Kind::Slot { .. })));
+        let window = self.rng.pick(&[1, 2, 10, 11, 12]);
+        match (waits, self.m.slot_pick) {
+            (_, Some(id)) => {
+                let run = self.m.slots.get(&id);
+                let (bundle, name) = run.map(|run| (run.bundle.clone(), run.name.clone())).unwrap_or_default();
+                let kind = Kind::App { window, title: format!("{HOSTED} w1"), bundle, name };
+                Action::Open { kind, axis: Axis::Right, beside: None }
+            }
+            (Some(_), None) if self.m.picker.is_some() => Action::PickerChoose { index: Some(0) },
+            (Some((_, run)), None) => {
+                let pick =
+                    PickItem::Window { app: run.name.clone(), window, title: format!("{PICKED} w1"), pane: None };
+                Action::OpenPicker { axis: Axis::Right, new_tab: false, items: vec![pick] }
+            }
+            (None, None) => Action::Focus { pane: self.slot_pane() },
+        }
+    }
+
     /// How much a clipboard holds: nothing, a word, lines, a command that would run.
     fn amount(&mut self) -> Amount {
         Amount::of(self.rng.pick(&["", "ls", "a\nb", "rm -rf build\n", "é\r\n\r\n"]))
@@ -1859,7 +1882,7 @@ const MAKERS: &[Make] = &[
 
 /// A slot's actions, also picked one time in 8 while there is a slot: among all the others, the
 /// chain from a look to an offer to a fill would hardly ever be met.
-const SLOT_MAKERS: [Make; 16] = [
+const SLOT_MAKERS: [Make; 17] = [
     |g| Action::SlotMake { pane: g.pane(), pid: g.rng.below(3) as i32, slot: g.slot() },
     |g| Action::SlotClear { pane: g.slot_pane() },
     |g| Action::SlotAccept { pane: g.slot_pane() },
@@ -1892,6 +1915,7 @@ const SLOT_MAKERS: [Make; 16] = [
     },
     |_| Action::SlotDialogClose,
     |_| Action::SlotDialogKeep,
+    |g| g.slot_pick(),
 ];
 
 /// Displays and folds, also picked now and then once there are displays.
@@ -3786,6 +3810,13 @@ impl Run {
             let gone = now.is_none() && m.features.on(Feature::Slots) && !closed_with(m, &action, &closing_was, *id);
             ensure!(!gone || origin != Origin::Socket, "{origin:?}'s {action:?} cleared slot {id}");
             ensure!(!gone || m.pane(*id).is_none() || users, "{origin:?}'s {action:?} cleared slot {id}");
+            // A window of its own app keeps it a slot: only Clear makes it an app pane (an app's quit then closed it).
+            let own = matches!(m.pane(*id).map(|p| &p.kind), Some(Kind::App { bundle, name, .. })
+                if crate::marks::same_app((bundle.as_deref(), name), (run.bundle.as_deref(), &run.name)));
+            ensure!(
+                !gone || !own || matches!(action, Action::SlotClear { .. }),
+                "{action:?} ended slot {id} with its app in it"
+            );
             let Some(now) = now else { continue };
             ensure!(users || now.slot == run.slot, "{origin:?}'s {action:?} changed slot {id}");
             ensure!(
@@ -3795,6 +3826,9 @@ impl Run {
             let filled = run.status != crate::slot::Status::Filled && now.status == crate::slot::Status::Filled;
             let hosted = origin == Origin::System
                 && matches!(action, Action::SlotHosted { .. } | Action::Adopt { seen: Some(_), .. });
+            // Or the user's pick of its own app's window (⌘E into it), as the shell opens it.
+            let hosted =
+                hosted || (users && own && matches!(action, Action::Open { .. } | Action::NewWindowCame { .. }));
             ensure!(!filled || hosted, "{origin:?}'s {action:?} filled slot {id}");
             // An adopted window goes straight in only as Away's return: a new one waits for a look.
             let adopted = matches!(action, Action::Adopt { .. });
@@ -8037,6 +8071,24 @@ fn seed_977_no_pane_is_dropped_into_a_closing_workspace() {
         by(Origin::System, Action::Open { kind: readme, axis: Axis::Down, beside: None }),
         Action::OpenRepo { path: "/code/canvas".into(), axis: Axis::Down }.into(),
         by(Origin::System, Action::DropPane { source: 10, target: 6, zone: Zone::Center }),
+    ])
+    .unwrap();
+}
+
+/// The owner's lost Zoom slots: the user's ⌘E of its own app's window into a waiting slot fills
+/// it and it stays a slot (it ended it, and the app's quit then closed the plain pane).
+#[test]
+fn the_users_pick_of_its_apps_window_fills_a_slot() {
+    let app = |window| Kind::App { window, title: format!("{HOSTED} w1"), bundle: None, name: "app".into() };
+    let pick = PickItem::Window { app: "app".into(), window: 2, title: format!("{PICKED} w1"), pane: None };
+    replay(&[
+        Action::Open { kind: app(1), axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        slot_make(1, 1, "{\"select\":{}}").sent_by(Origin::User),
+        Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System),
+        Action::OpenPicker { axis: Axis::Right, new_tab: false, items: vec![pick] }.sent_by(Origin::User),
+        Action::PickerChoose { index: Some(0) }.sent_by(Origin::User),
+        Action::Open { kind: app(2), axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::WindowGone { pane: 1, app_running: false, at: 0 }.sent_by(Origin::System),
     ])
     .unwrap();
 }

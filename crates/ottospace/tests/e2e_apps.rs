@@ -1605,6 +1605,18 @@ fn take_offer(otto: &Proc, window: u64) {
     click(&named(&found, &id).unwrap_or_else(|| panic!("no {id}: {found:?}")));
 }
 
+/// The user's click on the control named `id`, found by its sneak label.
+fn user_click_control(otto: &Proc, id: &str) {
+    let reply = otto.call(json!({"cmd": "sneak"}));
+    otto.call(json!({"cmd": "key", "keys": "escape"}));
+    let targets = reply["sneak"]["targets"].as_array().cloned().unwrap_or_default();
+    let target = targets.iter().find(|t| t["source"]["id"] == id).unwrap_or_else(|| panic!("no {id}: {targets:?}"));
+    let [x, y] = middle(["x", "y", "w", "h"].map(|key| target["frame"][key].as_f64().unwrap_or_default()));
+    for action in ["down", "up"] {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": x, "y": y, "as": "user"}));
+    }
+}
+
 /// Hosts the canary's first window and waits for it to park. Returns the parking spot.
 fn host_and_park(otto: &Proc) -> [f64; 2] {
     let reply = otto.call(json!({"cmd": "open_app", "name": CANARY}));
@@ -3095,4 +3107,40 @@ fn new_window_hosts_an_owned_window_that_closes_with_its_pane_and_asks_if_unsave
     key("enter");
     wait_for("the owned window closed", || (windows() == 1).then_some(()));
     assert_eq!(owned(), None);
+}
+
+/// The owner's report: "when Zoom closed, I lost all my slots". Its windows were picked into its
+/// slots with ⌘E, which ended each slot, so its quit closed the panes. A window of the slot's own
+/// app picked into it fills it; the app quitting leaves it waiting for the app (absent).
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn a_window_picked_into_its_apps_slot_fills_it_and_the_apps_quit_leaves_it_waiting() {
+    let mut canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-slot", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = otto_for(&canary, "otto-slot", &[("OTTOSPACE_FEATURES", "slots")]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let slot = || state()["state"]["slots"]["1"]["status"].clone();
+    host_and_park(&otto);
+    otto.call(json!({"cmd": "slot_make", "pane": 1, "slot": {"select": {}}}));
+    assert_eq!(slot(), "filled");
+    // Give Back: it waits.
+    user_click_control(&otto, "slot-dots:1");
+    user_click_control(&otto, "slot-dialog:give-back");
+    assert_eq!(state()["state"]["panes"][0]["kind"]["type"], "slot");
+    // ⌘E, the canary, its window: the user's pick fills the slot, which stays one.
+    otto.call(json!({"cmd": "picker"}));
+    otto.call(json!({"cmd": "picker_query", "query": CANARY}));
+    let reply = otto.call(json!({"cmd": "picker_choose"}));
+    let rows = reply["picker_rows"].as_array().cloned().unwrap_or_default();
+    let at = rows.iter().position(|row| row["type"] == "window").unwrap_or_else(|| panic!("no window row: {reply}"));
+    for _ in 0..at {
+        otto.call(json!({"cmd": "key", "keys": "down", "as": "user"}));
+    }
+    otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    wait_for("the slot filled by the pick", || (slot() == "filled").then_some(()));
+    assert_eq!(state()["state"]["panes"].as_array().map(Vec::len), Some(1), "{}", state());
+    // The canary quits: the pane stays, the slot waits for its app.
+    canary.child.kill().expect("kill the canary");
+    wait_for("the slot absent", || (slot() == "absent").then_some(()));
+    assert_eq!(state()["state"]["panes"][0]["kind"]["type"], "slot", "{}", state());
 }

@@ -67,7 +67,11 @@ impl Run {
     }
 
     fn of(&self, look: &Look) -> bool {
-        same_app((self.bundle.as_deref(), &self.name), (look.bundle.as_deref(), &look.name))
+        self.of_app((look.bundle.as_deref(), &look.name))
+    }
+
+    fn of_app(&self, app: (Option<&str>, &str)) -> bool {
+        same_app((self.bundle.as_deref(), &self.name), app)
     }
 
     /// It waits again from now: windows open now are not new to it.
@@ -371,10 +375,32 @@ impl Model {
         }
     }
 
-    /// Slot `id` that waits ends: its pane is empty, for what the user picked.
-    pub(super) fn slot_end(&mut self, id: PaneId) {
-        if self.slots.remove(&id).is_some() {
-            self.slot_emptied(id);
+    /// The user picked `kind` into slot `id` that waits, for its pane to take. A window of the
+    /// slot's own app fills it, and it stays a slot (Zoom's quitting leaves it waiting); else it ends.
+    pub(super) fn slot_picked(&mut self, id: PaneId, kind: &Kind) {
+        let Some(run) = self.slots.get(&id) else { return };
+        let window = match kind {
+            Kind::App { bundle, name, window, .. } if run.of_app((bundle.as_deref(), name)) => *window,
+            _ => {
+                self.slots.remove(&id);
+                return self.slot_emptied(id);
+            }
+        };
+        // A window is in one pane at most: another holds it, and the slot keeps waiting.
+        if self.panes.iter().any(|p| matches!(p.kind, Kind::App { window: w, .. } if w == window)) {
+            return;
+        }
+        // Its process, for a return while Away; a window no look listed yet keeps the last, as `slot_fill` does.
+        let pid = self.slot_looks.iter().flat_map(|look| &look.windows).find(|seen| seen.window == window);
+        let pid = pid.map(|seen| seen.pid);
+        let Some(run) = self.slots.get_mut(&id) else { return };
+        (run.away, run.offered, run.known, run.pending) = (None, None, None, None);
+        run.pid = pid.or(run.pid);
+        // The user's own choice: passed over no more.
+        run.declined.remove(&window);
+        // Empty for `open` to fill; the slot stays.
+        if let Some(pane) = self.panes.iter_mut().find(|p| p.id == id && matches!(p.kind, Kind::Slot { .. })) {
+            pane.kind = Kind::Empty;
         }
     }
 
@@ -1390,5 +1416,103 @@ mod tests {
         m.update(Action::Focus { pane: 2 });
         m.update(Action::SlotDialogOpen { pane: 2, look: Look::default() });
         assert_eq!(m.enter_accepts(), None);
+    }
+
+    /// The owner's report: Zoom's windows picked into its slots (⌘E), then Zoom quit, and the panes
+    /// closed: the pick had ended each slot. A window of its own app fills a slot, which waits for
+    /// the app (Absent) when it quits, and offers its windows when it starts again.
+    #[test]
+    fn an_app_picked_into_its_slots_then_quitting_leaves_each_waiting_for_it() {
+        let mut m = Model::default();
+        for (pane, title) in [(1, "One"), (2, "Two"), (3, "Three")] {
+            m.update(Action::Open { kind: meetings(pane, title), axis: Right, beside: None });
+            m.update(Action::SlotMake { pane, pid: 7, slot: Slot::default() });
+            m.update(system(Action::WindowGone { pane, app_running: true, at: 0 }));
+        }
+        m.update(system(Action::SlotTick { at: slot::AWAY_MS }));
+        m.update(system(look(vec![seen(7, 11, "a"), seen(7, 12, "b"), seen(7, 13, "c")])));
+        // Not this one, then picked anyway: the user's pick wins.
+        m.update(Action::SlotDecline { pane: 1 });
+        // The user's pick into each: its app's window fills it; it stays a slot.
+        for (pane, window) in [(1, 11), (2, 12), (3, 13)] {
+            pick_into(&mut m, pane, "Meetings", meetings(window, "x"));
+            assert_eq!(m.pane(pane).map(|p| p.kind.clone()), Some(meetings(window, "x")));
+            assert_eq!(status(&m, pane), Some(Status::Filled), "slot {pane}");
+        }
+        assert!(m.slots[&1].declined.is_empty());
+        // Its window goes while the app runs, and one of the same process comes back: it goes in.
+        m.update(system(Action::WindowGone { pane: 1, app_running: true, at: 0 }));
+        let back = vec![seen(7, 12, "b"), seen(7, 13, "c"), seen(7, 14, "a")];
+        assert_eq!(hosts(&m.update(system(look(back)))), [(1, 14)]);
+        m.update(system(Action::SlotHosted { pane: 1, kind: Some(meetings(14, "a")) }));
+        assert_eq!(status(&m, 1), Some(Status::Filled));
+        // A window it opened as the meeting ended, offered on a slot's chip.
+        m.update(system(Action::WindowOffered { pane: 3, seen: seen(7, 9, "Ended"), why: "x".into() }));
+        // The process lingers for the first window's report, not the others'.
+        for (pane, running) in [(1, true), (2, false), (3, false)] {
+            m.update(system(Action::WindowGone { pane, app_running: running, at: 0 }));
+        }
+        let gone = Look { bundle: Some(BUNDLE.into()), name: "Meetings".into(), ..Default::default() };
+        m.update(system(Action::SlotWindows { look: gone }));
+        m.update(system(Action::SlotTick { at: 2 * slot::AWAY_MS }));
+        assert_eq!(m.panes.len(), 3);
+        for pane in 1..=3 {
+            assert_eq!(status(&m, pane), Some(Status::Absent), "slot {pane}");
+        }
+        // Started again (another process): each offers one of its windows, and takes it on Bring it here.
+        m.update(system(look(vec![seen(8, 21, "a"), seen(8, 22, "b"), seen(8, 23, "c")])));
+        for (pane, window) in [(1, 21), (2, 22), (3, 23)] {
+            assert_eq!(m.slot_offer(pane).map(|s| s.window), Some(window), "slot {pane}");
+            m.update(Action::SlotAccept { pane });
+            m.update(system(Action::SlotHosted { pane, kind: Some(meetings(window, "x")) }));
+            assert_eq!(status(&m, pane), Some(Status::Filled), "slot {pane}");
+        }
+        // Another app's window picked into a slot still ends it.
+        m.update(system(Action::WindowGone { pane: 1, app_running: true, at: 0 }));
+        let other =
+            Kind::App { window: 50, title: "x".into(), bundle: Some("com.example.other".into()), name: "Other".into() };
+        pick_into(&mut m, 1, "Other", other.clone());
+        assert_eq!((m.slots.contains_key(&1), m.pane(1).map(|p| p.kind.clone())), (false, Some(other)));
+    }
+
+    /// The user's ⌘E into slot `pane`: `app`'s window, then the shell's `Open` of what it hosted.
+    fn pick_into(m: &mut Model, pane: PaneId, app: &str, kind: Kind) {
+        let Kind::App { window, .. } = kind else { return };
+        m.update(Action::Focus { pane });
+        let pick = crate::model::PickItem::Window { app: app.into(), window, title: "x".into(), pane: None };
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![pick] });
+        m.update(Action::PickerChoose { index: Some(0) });
+        m.update(Action::Open { kind, axis: Right, beside: None });
+    }
+
+    /// "New window" picked into a slot fills it, but the slot owns no window: given back and
+    /// another brought in, closing the pane leaves that window open.
+    #[test]
+    fn a_new_window_picked_into_a_slot_is_not_owned() {
+        let mut m = waiting(Matching::Manual);
+        m.update(Action::Focus { pane: 2 });
+        let new =
+            crate::model::PickItem::NewWindow { app: "Meetings".into(), bundle: Some(BUNDLE.into()), menu_item: true };
+        m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![new] });
+        m.update(Action::PickerChoose { index: Some(0) });
+        m.update(Action::NewWindowCame { kind: meetings(40, "Incident new") });
+        assert_eq!((status(&m, 2), m.pane(2).map(|p| p.owned)), (Some(Status::Filled), Some(false)));
+        // No look listed it yet: the slot keeps the process it had.
+        assert_eq!(m.slots[&2].pid, Some(7));
+        m.update(Action::SlotGiveBack { pane: 2 });
+        m.update(system(look(vec![seen(7, 41, "Incident other")])));
+        m.update(Action::SlotAccept { pane: 2 });
+        m.update(system(Action::SlotHosted { pane: 2, kind: Some(meetings(41, "Incident other")) }));
+        let effects = m.update(Action::Close { pane: Some(2) });
+        assert!(!effects.iter().any(|e| matches!(e, Effect::CloseWindow { .. })), "{effects:?}");
+    }
+
+    /// Another pane holds the picked window already: the slot keeps waiting, one window one pane.
+    #[test]
+    fn a_pick_of_a_window_another_pane_holds_leaves_the_slot_waiting() {
+        let mut m = waiting(Matching::Manual);
+        m.update(Action::Open { kind: meetings(11, "Incident a"), axis: Right, beside: None });
+        pick_into(&mut m, 2, "Meetings", meetings(11, "Incident a"));
+        assert!(matches!(m.pane(2).map(|p| &p.kind), Some(Kind::Slot { .. })));
     }
 }
