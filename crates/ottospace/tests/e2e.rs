@@ -9478,8 +9478,8 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
-/// A session's conversation opened from Elsewhere, then the Tasks section closed (nothing is
-/// listed): Resume session still shows and goes on with it, read first. Its file gone, the
+/// A session's conversation opened from Elsewhere, hidden, then the Tasks section closed (nothing
+/// is listed): Resume session still shows and goes on with it, read first. Its file gone, the
 /// drawer says why instead of a bare "cannot".
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
@@ -9511,6 +9511,9 @@ fn a_session_opened_before_the_section_closed_resumes_or_says_why_not() {
     });
     let shown = otto.user_click(at(otto.control(&format!("session:claude:{idle}")), 0.3, 0.3));
     assert_eq!(shown["state"]["talk"]["task"], json!({"runner": "claude", "id": idle}), "{shown}");
+    // Hidden from Elsewhere: out of the list, and its open tab still goes on with it.
+    let hidden = otto.call(json!({"cmd": "session_hide", "runner": "claude", "id": idle}));
+    assert_eq!(hidden["sessions_bar"]["count"], 0, "{}", hidden["sessions_bar"]);
 
     // The section closed: nothing listed, and no dead end.
     otto.call(json!({"cmd": "section", "section": "tasks"}));

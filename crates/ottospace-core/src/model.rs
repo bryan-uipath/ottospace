@@ -7376,7 +7376,7 @@ impl Model {
             // else as read for a resume (the Tasks section closed).
             Subject::Session { runner, id } => {
                 let session = self.facts(runner, id).flatten().filter(|s| !self.in_use(s));
-                let session = session.filter(|_| !self.session_kept_out(runner, id))?;
+                let session = session.filter(|_| !self.tasks.adopted(runner, id))?;
                 Some((resume(runner, id)?, Some(self.resume_dir(session)?)))
             }
             // Its worktree is being made: it starts there once it is (`worktree_made`).
@@ -7415,16 +7415,11 @@ impl Model {
         takes.then(|| agents::Start::Resume { runner, session: id.into() })
     }
 
-    /// True if the user hid the session from Elsewhere, or a task adopted it.
-    fn session_kept_out(&self, runner: &str, id: &str) -> bool {
-        self.hidden.iter().any(|(r, i)| (r.as_str(), i.as_str()) == (runner, id)) || self.tasks.adopted(runner, id)
-    }
-
     /// A session's conversation not listed (the Tasks section is closed) nor read yet: a resume
     /// reads it first (`ReadSession`), then goes on with it if it can.
     fn session_unread(&self, subject: &Subject) -> bool {
         let Subject::Session { runner, id } = subject else { return false };
-        let can = Self::resume_start(runner, id).is_some() && !self.session_kept_out(runner, id);
+        let can = Self::resume_start(runner, id).is_some() && !self.tasks.adopted(runner, id);
         can && self.facts(runner, id).is_none()
     }
 
@@ -7501,9 +7496,6 @@ impl Model {
         }
         if !agents::is_uuid(id) {
             return Some(format!("its session id is not one {} can resume", spec.display));
-        }
-        if self.hidden.iter().any(|(r, i)| (r.as_str(), i.as_str()) == (runner, id)) {
-            return Some("it is hidden from Elsewhere".into());
         }
         match self.facts(runner, id)? {
             None => Some("its session file is in no listed repository now: gone, or moved".into()),
@@ -7642,12 +7634,11 @@ impl Model {
                 Some(task) => task.materials_dir().map(str::to_string),
                 None => return,
             },
-            // Or its space is still open, the section closed since (not hidden): a resume reads it first.
+            // Or its space is still open (the section closed, or it was hidden since): a resume reads it first.
             Subject::Session { runner, id }
                 if self.session(runner, id).is_some()
                     || self.agent_runs(&subject)
-                    || (!self.session_kept_out(runner, id)
-                        && self.spaces.iter().any(|s| s.of == Owner::of(&subject))) =>
+                    || (!self.tasks.adopted(runner, id) && self.spaces.iter().any(|s| s.of == Owner::of(&subject))) =>
             {
                 None
             }
@@ -15597,10 +15588,9 @@ mod tests {
             assert_eq!(open(&mut m, "claude", id), [], "{id}");
             assert_eq!(m.talk_note().as_deref(), Some(why));
         }
-        // Not listed (hidden, never read): nothing opens.
-        m.update(Action::SessionHide { runner: "codex".into(), id: BUSY.into() });
+        // Never read: nothing opens.
         let before = m.talk.clone();
-        assert_eq!((open(&mut m, "codex", BUSY), open(&mut m, "claude", "nope")), (vec![], vec![]));
+        assert_eq!(open(&mut m, "claude", "nope"), []);
         assert_eq!(m.talk, before);
     }
 
@@ -15639,6 +15629,30 @@ mod tests {
         m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
         assert_eq!(m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() }), []);
         assert_eq!(m.talk, None);
+    }
+
+    /// Hiding a session only takes it out of Elsewhere: its tab, already open, still goes on with
+    /// it (Resume and Take over). Nothing unhides it: it stays out of the list after.
+    #[test]
+    fn a_hidden_sessions_open_tab_still_goes_on_with_it() {
+        let mut m = conversations();
+        let idle = of_session("claude", IDLE);
+        m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+        m.update(Action::SessionHide { runner: "claude".into(), id: IDLE.into() });
+        assert!(!m.sessions_bar().rows.iter().any(|row| row.id == IDLE));
+        assert_eq!((m.talk_note(), m.talk_resumes(), m.take_over_ready(&idle)), (None, Some(true), true));
+        let resumes = [resumed(idle.clone(), "claude", IDLE, "/code/app/crates/core")];
+        assert_eq!(m.update(Action::TalkStart), resumes);
+        m.update(Action::AgentStarted { task: idle.clone(), session: None, at: 1 }.sent_by(Origin::System));
+        let found = m.found.iter().map(|s| Found { active: s.id == IDLE, ..s.clone() }).collect();
+        m.update(Action::SetSessions { found, day: 0 }.sent_by(Origin::System));
+        assert!(!m.sessions_bar().rows.iter().any(|row| row.id == IDLE), "still hidden");
+        // Closed and reopened from its tab, unlisted too: read first, then gone on with.
+        m.update(Action::TaskStop { id: idle.clone() });
+        m.update(Action::AgentExited { task: idle.clone() }.sent_by(Origin::System));
+        m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
+        let read = Effect::ReadSession { runner: "claude".into(), id: IDLE.into() };
+        assert_eq!(m.update(Action::TalkStart), [read]);
     }
 
     /// Our own agent just stopped: what its session's file shows (written lately, a process
