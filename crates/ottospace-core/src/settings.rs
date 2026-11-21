@@ -218,6 +218,9 @@ pub struct Developer {
     /// `plinths`, `tint`, `labels`, `blend` (`scene::Look`). Not documented for users.
     #[serde(default)]
     pub city_look: crate::scene::Look,
+    /// The code city's buildings solid, not glass: for comparing. Not documented for users.
+    #[serde(default)]
+    pub city_opaque: bool,
 }
 
 /// One of `calendar_colors`: a title that holds `match` (case ignored) takes `color`.

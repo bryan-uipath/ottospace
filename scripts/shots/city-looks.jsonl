@@ -1,7 +1,7 @@
 # The code city's looks (`developer.city_look`), an experiment for the owner to pick from: each look
 # over code-city's small repository (`app`, 31 files; city-looks/ is a link to code-city/, listed by
 # its settings) and a made-up tree of 2,000 (`big`), as a repository's tab after its terminal closed.
-# `print` gives each picture's render time.
+# Buildings are glass; `-opaque` is the solid one, for comparing. `print` gives each render time.
 {"env": {"OTTOSPACE_FEATURES": "code_city"}}
 {"tree": "repos/big", "files": 2000}
 {"cmd": "repo_add", "path": "{ROOT}/repos/big"}
@@ -12,6 +12,11 @@
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "app-terraces"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"terraces\", \"city_opaque\": true}}\n"}
+{"until": "city.glass", "is": false, "timeout_ms": 30000}
+{"settle": 500}
+{"print": "city.render_us"}
+{"shot": "app-terraces-opaque"}
 {"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"plinths\"}}\n"}
 {"until": "city.look", "is": "plinths", "timeout_ms": 30000}
 {"settle": 500}
@@ -40,6 +45,11 @@
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "big-terraces"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"terraces\", \"city_opaque\": true}}\n"}
+{"until": "city.glass", "is": false, "timeout_ms": 30000}
+{"settle": 500}
+{"print": "city.render_us"}
+{"shot": "big-terraces-opaque"}
 {"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"plinths\"}}\n"}
 {"until": "city.look", "is": "plinths", "timeout_ms": 30000}
 {"settle": 500}

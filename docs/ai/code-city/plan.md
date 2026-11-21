@@ -164,6 +164,10 @@ Windows). It replaces the 2D plan this note first recommended.
   brighter the outer they are), `blend` (lower plinths, tint, names to the third tier). One
   picture each, as before: a look costs nothing per frame. Shots: `city-looks`. The owner
   picks one; it becomes the drawing and the rest go.
+- **Glass** (the owner's word, 2026-11-21: "a little more transparent"): buildings' faces are 80%
+  opaque, their edges whole, in every look; a second pipeline blends them after the solid
+  boxes, farthest first, writing no depth, so the order is fixed and nothing flickers as a camera
+  moves. `developer.city_opaque` draws them solid, for comparing.
 
 Why not paths (the "Oblique" alternative this note first named): GPUI has no depth buffer, so
 every building would be three paths painted back to front each frame, 15,000 paths at 5,000
