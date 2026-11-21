@@ -7881,6 +7881,8 @@ impl Workspace {
             | Mode::Talk => ("", ""),
             Mode::App => ("APP", app_hint.as_str()),
             Mode::Visual => ("SELECT", "esc"),
+            // The Apps filter's field has the keys, not the rows: it shows itself.
+            Mode::List if self.model.app_lists.filtering => ("", "esc"),
             Mode::List => ("LIST", "esc"),
             // Sneak turned the overlay off, and it stays off: say how to get it back.
             Mode::Sneak if self.model.sneak.as_ref().is_some_and(|sneak| sneak.hid_overlay) => {

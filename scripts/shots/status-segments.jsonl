@@ -15,5 +15,5 @@
 {"shot":"segments"}
 # Selecting terminal text (⌘⇧C): the bar says SELECT where NORMAL was.
 {"cmd":"key","keys":"cmd-shift-c"}
-{"sleep_ms":500}
+{"until":"mode","is":"visual"}
 {"shot":"select"}

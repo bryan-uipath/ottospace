@@ -246,7 +246,7 @@ a click that would put it aside waits too.
   Files left out (a name too long, one with a line break) are counted in the same place.
 
 **The quit question.** ⌘Q, Quit in the menu and the window's red close button all ask the same
-question (status chip `QUIT?`). A quit ends every terminal and agent, and loses every draft not
+question. A quit ends every terminal and agent, and loses every draft not
 sent. Its box has a section for each, only when it has rows: "Quitting ends these:" (`pane 2 ·
 cargo`, `agent · Fix the login`) and "Not sent yet" (`Unsent message · Fix the login`, `New task, not
 started`, `Capture draft · Slack`, `Unsent answer · <task>`, `Unsent side question · <task>` (btw), `Message open in your editor · <task>`).
