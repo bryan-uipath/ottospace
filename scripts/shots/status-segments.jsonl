@@ -13,3 +13,7 @@
 {"until":"calendar.updated"}
 {"sleep_ms":1500}
 {"shot":"segments"}
+# Selecting terminal text (⌘⇧C): the bar says SELECT where NORMAL was.
+{"cmd":"key","keys":"cmd-shift-c"}
+{"until":"mode","is":"visual"}
+{"shot":"select"}

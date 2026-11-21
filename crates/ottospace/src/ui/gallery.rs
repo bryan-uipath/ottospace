@@ -45,7 +45,7 @@ fn pills() -> Div {
     let keys =
         [(false, false, "key"), (true, false, "key lit"), (false, true, "key small"), (true, true, "key small lit")]
             .map(|(lit, small, name)| case(name, super::pill("⌘", Pill::Key { lit, small })));
-    let modes = [("LIST", Mode::List), ("SNEAK", Mode::Sneak), ("APP", Mode::App)]
+    let modes = [("LIST", Mode::List), ("SELECT", Mode::Visual), ("APP", Mode::App)]
         .map(|(text, mode)| case("mode", super::pill(text, Pill::Mode(theme::accent(mode)))));
     group("pill", keys.into_iter().chain(modes))
 }
