@@ -144,8 +144,9 @@ Windows). It replaces the 2D plan this note first recommended.
 - **Hover: a beam** (the owner's word, 2026-11-20: "a straight-up beam with a dot that shows the
   filename"; the owner's city's PR beams, bright under the avatar and fading toward the ground).
   The user's pointer over a building raises a thin beam straight up from its top's middle, a
-  fixed height in the world (`scene::BEAM`, 0.15 of the plan's depth, lower where the picture's
-  top is nearer: `Scene::beam`, tested), so it stays vertical under any camera; a dot at its
+  fixed height in the world (the city's highest top, at least `scene::BEAM`, 0.2 of the plan's
+  depth: a city of few, tall towers has tall beams; lower where the picture's top is nearer:
+  `Scene::beam`, tested), so it stays vertical under any camera; a dot at its
   end, and the file's path beside the dot, cut in the middle if long. Over a district, the
   same from its plate with the folder's path. The hit is the core's ray; GPUI draws the beam
   between the two projected points, faint at the box and brightest at the dot, fading in over
