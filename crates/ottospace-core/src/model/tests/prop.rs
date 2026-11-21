@@ -1081,6 +1081,14 @@ const MAKERS: &[Make] = &[
     |_| Action::PaletteOpen,
     |_| Action::PaletteTasks,
     |_| Action::PaletteFeatures,
+    |_| Action::PaletteGoTo,
+    |_| Action::GoToDrill,
+    |_| Action::GoToBack,
+    |g| Action::GoToFiles {
+        folder: g.repo_path(),
+        paths: g.rng.coin().then(|| g.names(&["a.rs", "src/b.rs", "\u{202e}c", ""], 4)),
+        cut: g.rng.coin(),
+    },
     |g| Action::PaletteMove { delta: g.delta() },
     |g| Action::PaletteChoose { index: g.rng.coin().then(|| g.index(50)) },
     |_| Action::ClosePalette,
@@ -2025,6 +2033,8 @@ fn selects_tab(action: &Action) -> bool {
             | Action::WorkbookReopen { .. }
             | Action::ListUndo
             | Action::ListChoose { .. }
+            // Go to's ↵: a place's own row's step.
+            | Action::PaletteChoose { .. }
             | Action::MarkType { .. }
             | Action::MarkSubmit
             | Action::CaptureBack
@@ -2590,6 +2600,16 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(palette.selected < matches.max(1), "the palette selects {} of {matches}", palette.selected);
         ensure!(!boxed && !m.keys && m.visual.is_none() && m.live.is_none(), "the palette is open with {:?}", m.mode());
         ensure!(matches!(m.mode(), Mode::Palette | Mode::Confirm), "the palette is open in {:?} mode", m.mode());
+        // Go-to never lists a place that went, and a drill never outlives its place.
+        if let Some(goto) = &palette.goto {
+            let gone = goto.places.iter().find(|row| !m.place_exists(&row.place));
+            ensure!(gone.is_none(), "go-to lists {gone:?}, gone");
+            let drill = goto.drill.as_ref().map(|drill| &drill.row.place);
+            ensure!(
+                drill.is_none_or(|place| goto.places.iter().any(|row| row.place == *place)),
+                "a drill into {drill:?}"
+            );
+        }
     }
     // The text field is the picker's filter, else the new-task box's line; with neither open
     // there is none. It has the keyboard in their modes only, and not under the key reference.
@@ -4349,6 +4369,9 @@ impl Run {
             Action::PaletteOpen
                 | Action::PaletteTasks
                 | Action::PaletteFeatures
+                | Action::PaletteGoTo
+                | Action::GoToDrill
+                | Action::GoToBack
                 | Action::PaletteMove { .. }
                 | Action::PaletteChoose { .. }
                 | Action::ClosePalette
@@ -5162,6 +5185,11 @@ impl Run {
                 }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
+                }
+                // Files are listed only for the user's go-to, in a listed checkout.
+                Effect::ListFiles { folder } => {
+                    let goto = matches!(action, Action::GoToDrill | Action::FieldEdit { .. });
+                    ensure!(user && goto && m.repo_listed(folder), "{origin:?}'s {action:?} listed {folder:?}")
                 }
                 // The list is read again only for a folder an agent's session moved into, and a while after.
                 Effect::ReadRepos => {
@@ -8585,6 +8613,21 @@ fn seed_42535_a_drafts_task_starts_where_the_user_is() {
         .into(),
         Action::OpenRepo { path: notes(), axis: Axis::Down }.into(),
         Action::ComposeSubmit { open: true }.into(),
+    ])
+    .unwrap();
+}
+
+/// Go to's ↵ on a checkout: its Repos row's click selects the space made for it.
+#[test]
+fn seed_240_go_tos_choice_selects_the_places_tab() {
+    let worktree = Worktree { name: "My Project".into(), path: "/code/app-2".into(), branch: None };
+    let repos =
+        vec![Repo { name: "canvas".into(), path: "/code/app-2".into(), branch: None, worktrees: vec![worktree] }];
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::SetRepos { repos }.sent_by(Origin::System),
+        Action::PaletteGoTo.sent_by(Origin::User),
+        Action::PaletteChoose { index: None }.sent_by(Origin::User),
     ])
     .unwrap();
 }

@@ -27,6 +27,7 @@ pub mod fly;
 #[cfg(test)]
 mod fuzz;
 pub mod gist;
+pub mod goto;
 pub mod home;
 pub mod hosted;
 pub mod ics;

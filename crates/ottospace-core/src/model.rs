@@ -9,7 +9,7 @@ use crate::calendar::{self, Calendar};
 use crate::capture::{self, Content, Facts, Tool};
 use crate::capture_model::Collection;
 use crate::clip::{self, Clip};
-use crate::commands::{self, Command, FeatureChoice, Palette, TaskChoice};
+use crate::commands::{self, Command, FeatureChoice, Palette, TaskChoice, View};
 use crate::complete::{self, Candidate, Dropdown, Enter, Row};
 use crate::compose::{self, Draft};
 use crate::edit::{Edit, Field, Motion};
@@ -781,6 +781,19 @@ pub enum Action {
     PaletteTasks,
     /// Features…: the palette, listing the flags to turn on or off. Only the user's.
     PaletteFeatures,
+    /// Go to (⌘P): the palette, listing places, then a place's files. Only the user's.
+    PaletteGoTo,
+    /// Tab in go-to: into the highlighted place's files.
+    GoToDrill,
+    /// Out of a place's files, to the places again.
+    GoToBack,
+    /// The files the shell read in `folder` (relative paths; `None`: git could not list them;
+    /// `cut`: there were more). The shell's alone.
+    GoToFiles {
+        folder: String,
+        paths: Option<Vec<String>>,
+        cut: bool,
+    },
     /// Move the palette's highlight down (positive) or up; it wraps.
     PaletteMove {
         delta: i32,
@@ -2340,6 +2353,7 @@ impl Action {
             | Action::OpenPicker { .. }
             | Action::PaletteOpen
             | Action::PaletteTasks
+            | Action::PaletteGoTo
             | Action::PaletteFeatures
             | Action::InspectorFilter { on: true }
             | Action::OpenCompose { .. }
@@ -2414,10 +2428,13 @@ impl Action {
             | Action::PickerChoose { .. }
             | Action::ClosePicker
             | Action::PaletteMove { .. }
+            | Action::GoToDrill
+            | Action::GoToBack
             | Action::PaletteChoose { .. }
             | Action::ClosePalette
             | Action::InspectorOpen { .. }
             | Action::InspectorRead { .. }
+            | Action::GoToFiles { .. }
             | Action::InspectorFailed { .. }
             | Action::InspectorClose
             | Action::InspectorFold { .. }
@@ -2844,12 +2861,16 @@ impl Action {
             | Action::ClosePicker
             | Action::PaletteOpen
             | Action::PaletteTasks
+            | Action::PaletteGoTo
             | Action::PaletteFeatures
             | Action::PaletteMove { .. }
+            | Action::GoToDrill
+            | Action::GoToBack
             | Action::PaletteChoose { .. }
             | Action::ClosePalette
             | Action::InspectorOpen { .. }
             | Action::InspectorRead { .. }
+            | Action::GoToFiles { .. }
             | Action::InspectorFailed { .. }
             | Action::InspectorClose
             | Action::InspectorFold { .. }
@@ -3371,6 +3392,10 @@ pub enum Effect {
     Run {
         command: Command,
     },
+    /// List the files of the checkout at `folder` for go-to: `GoToFiles` with them.
+    ListFiles {
+        folder: String,
+    },
     /// Host a window of this app: the one titled `title`, else as `marks::pick_window` says; an
     /// app that is not running is started. `into`: the empty pane it fills (`Action::Fill`),
     /// else a new pane (`Action::Open` along `axis`). `mark`: the pane mark to bind to that pane.
@@ -3558,6 +3583,7 @@ pub mod chat;
 pub mod city;
 pub mod editor;
 pub mod finish;
+pub mod goto;
 pub mod offers;
 pub mod overlay;
 mod pick;
@@ -4662,8 +4688,11 @@ impl Model {
             // in it or chooses. Nor does a client close it from under the user.
             Action::PaletteOpen
             | Action::PaletteTasks
+            | Action::PaletteGoTo
             | Action::PaletteFeatures
             | Action::PaletteMove { .. }
+            | Action::GoToDrill
+            | Action::GoToBack
             | Action::PaletteChoose { .. }
             | Action::ClosePalette => Some(commands::USERS_ALONE),
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "palette") => {
@@ -4681,6 +4710,7 @@ impl Model {
             Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
                 Some(inspect::USERS_ALONE)
             }
+            Action::GoToFiles { .. } if origin == Origin::Socket => Some(goto::SHELLS_READ),
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "inspector") => {
                 Some(inspect::USERS_ALONE)
             }
@@ -4761,6 +4791,7 @@ impl Model {
             action,
             Action::PaletteOpen
                 | Action::PaletteTasks
+                | Action::PaletteGoTo
                 | Action::PaletteFeatures
                 | Action::InspectorFilter { on: true }
                 | Action::InspectorOpen { .. }
@@ -4949,6 +4980,7 @@ impl Model {
         self.settle_row_menu();
         self.settle_reorder();
         self.settle_bug(&mut effects);
+        self.settle_goto();
         self.settle_listen();
         self.settle_overlays(overlays, &mut effects);
         // After the overlays: an opened sidebar's list takes the keyboard, a viewer's count goes.
@@ -5109,6 +5141,7 @@ impl Model {
                     | Action::OpenPicker { .. }
                     | Action::PaletteOpen
                     | Action::PaletteTasks
+                    | Action::PaletteGoTo
                     | Action::PaletteFeatures
                     | Action::OpenCompose { .. }
                     | Action::QuickOpen { .. }
@@ -5782,10 +5815,11 @@ impl Model {
                     }
                 }
                 Some("palette") => {
-                    if let Some(palette) = &mut self.palette
-                        && palette.query.apply(edit)
-                    {
+                    let Some(palette) = &mut self.palette else { return };
+                    let (before, selected) = (palette.query.text().to_string(), palette.selected);
+                    if palette.query.apply(edit) {
                         palette.selected = 0;
+                        self.goto_typed(&before, selected, effects);
                     }
                 }
                 Some("picker") => {
@@ -6280,8 +6314,18 @@ impl Model {
                 });
                 let hidden = self.hidden_commands();
                 let query = Field::new("", MAX_FILTER);
-                self.palette = Some(Palette { query, selected: 0, tasks, features, hidden });
+                self.palette = Some(Palette { query, selected: 0, tasks, features, hidden, goto: None });
             }
+            Action::PaletteGoTo => {
+                self.act(Action::PaletteOpen, effects);
+                let goto = self.goto_places();
+                if let Some(palette) = &mut self.palette {
+                    palette.goto = Some(goto);
+                }
+            }
+            Action::GoToDrill => self.goto_drill(effects),
+            Action::GoToBack => self.goto_back(),
+            Action::GoToFiles { folder, paths, cut } => self.goto_files(folder, paths, cut),
             Action::PaletteMove { delta } => {
                 if let Some(palette) = &mut self.palette {
                     let count = palette.count() as i64;
@@ -6293,6 +6337,10 @@ impl Model {
             Action::PaletteChoose { index } => {
                 let Some(mut palette) = self.palette.take() else { return };
                 let at = index.unwrap_or(palette.selected);
+                if matches!(palette.view(), View::Places | View::Files) {
+                    self.palette = Some(palette);
+                    return self.goto_choose(at, effects);
+                }
                 // Listing spaces: the tab on show moves to the end of the chosen one's tabs.
                 if let Some(tasks) = &palette.tasks {
                     match palette.task_matches().get(at).map(|choice| choice.to.clone()) {
@@ -10043,12 +10091,16 @@ mod tests {
         Action::ClosePicker,
         Action::PaletteOpen,
         Action::PaletteTasks,
+        Action::PaletteGoTo,
         Action::PaletteFeatures,
         Action::PaletteMove { .. },
+        Action::GoToDrill,
+        Action::GoToBack,
         Action::PaletteChoose { .. },
         Action::ClosePalette,
         Action::InspectorOpen { .. },
         Action::InspectorRead { .. },
+        Action::GoToFiles { .. },
         Action::InspectorFailed { .. },
         Action::InspectorClose,
         Action::InspectorFold { .. },
@@ -10402,7 +10454,11 @@ mod tests {
             Action::ClosePicker,
             Action::PaletteOpen,
             Action::PaletteTasks,
+            Action::PaletteGoTo,
             Action::PaletteFeatures,
+            Action::GoToDrill,
+            Action::GoToBack,
+            Action::GoToFiles { folder: text(), paths: Some(vec![text()]), cut: false },
             Action::PaletteMove { delta: 1 },
             Action::PaletteChoose { index: None },
             Action::ClosePalette,
@@ -10872,16 +10928,22 @@ mod tests {
     /// A move in the palette: the user's alone. Opening it takes the keyboard, so a mode in its
     /// way says its own reason first.
     fn in_palette(action: &Action) -> bool {
-        matches!(action, Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette)
-            || matches!(
-                action,
-                Action::InspectorOpen { .. }
-                    | Action::InspectorClose
-                    | Action::InspectorFold { .. }
-                    | Action::InspectorSelect { .. }
-                    | Action::InspectorMove { .. }
-                    | Action::InspectorFilter { on: false }
-            )
+        matches!(
+            action,
+            Action::PaletteMove { .. }
+                | Action::PaletteChoose { .. }
+                | Action::ClosePalette
+                | Action::GoToDrill
+                | Action::GoToBack
+        ) || matches!(
+            action,
+            Action::InspectorOpen { .. }
+                | Action::InspectorClose
+                | Action::InspectorFold { .. }
+                | Action::InspectorSelect { .. }
+                | Action::InspectorMove { .. }
+                | Action::InspectorFilter { on: false }
+        )
     }
 
     #[test]
@@ -10898,6 +10960,166 @@ mod tests {
         assert!(m.inspector.is_some());
         m.update(Action::OpenCompose { text: "fix".into() });
         assert_eq!((m.inspector.is_none(), m.compose_line().cloned()), (true, Some("fix".into())));
+    }
+
+    /// Go-to's rows as listed for its query: each name.
+    fn goto_rows(m: &Model) -> Vec<String> {
+        let Some(palette) = &m.palette else { return Vec::new() };
+        let Some(goto) = &palette.goto else { return Vec::new() };
+        match &goto.drill {
+            Some(_) => goto.rows.clone(),
+            None => goto.place_matches(palette.query.text()).into_iter().map(|(_, row)| row.name.clone()).collect(),
+        }
+    }
+
+    fn go_type(m: &mut Model, text: &str) -> Vec<Effect> {
+        m.update(Action::FieldEdit { edit: Edit::Insert(text.into()) })
+    }
+
+    /// Two workspaces of the Repos list's checkouts, `app` on show, and a task that needs the user.
+    fn goto_places() -> Model {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        m.update(Action::RepoClick { path: "/code/app-2".into(), axis: Right });
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Right });
+        let assign = Assign::default();
+        m.update(Action::TaskAdd { title: "fix login".into(), priority: 2, state: State::NeedsYou, tab: None, assign });
+        m
+    }
+
+    #[test]
+    fn go_to_lists_places_the_last_used_first_the_current_last_for_the_user_alone() {
+        let mut m = goto_places();
+        assert!(m.update(Action::PaletteGoTo.sent_by(Origin::Socket)).is_empty());
+        assert!(m.palette.is_none());
+        m.update(Action::PaletteGoTo);
+        assert_eq!(m.mode(), Mode::Palette);
+        // app-2's workspace was selected before; then the rest in their sections' order; the
+        // workspace on show and its checkout last.
+        assert_eq!(goto_rows(&m), ["app-2", "app-2", "fix login", "app", "app"]);
+        go_type(&mut m, "fix");
+        assert_eq!(goto_rows(&m), ["fix login"]);
+        // A client types nothing, moves nothing, chooses nothing.
+        m.update(Action::GoToDrill.sent_by(Origin::Socket));
+        assert!(m.update(Action::PaletteChoose { index: None }.sent_by(Origin::Socket)).is_empty());
+        assert!(m.palette.is_some());
+        // ↵: as the task's row does, its conversation.
+        m.update(Action::PaletteChoose { index: None });
+        assert_eq!(
+            (m.palette.is_none(), m.talk.as_ref().map(|talk| talk.task.clone())),
+            (true, Some(Subject::Task(1)))
+        );
+    }
+
+    #[test]
+    fn go_to_goes_to_a_checkout_as_its_repos_row_does() {
+        let mut m = goto_places();
+        m.update(Action::PaletteGoTo);
+        go_type(&mut m, "app-2");
+        m.update(Action::PaletteMove { delta: 1 });
+        m.update(Action::PaletteChoose { index: None });
+        let shown = m.tabs[m.active].space.clone();
+        assert_eq!((m.palette.is_none(), m.space_worktree(&shown)), (true, Some("/code/app-2")));
+    }
+
+    #[test]
+    fn tab_or_a_slash_goes_into_a_places_files_and_back_returns_to_the_places() {
+        let mut m = goto_places();
+        m.update(Action::PaletteGoTo);
+        // A task with no folder: Tab goes nowhere.
+        go_type(&mut m, "fix");
+        assert!(m.update(Action::GoToDrill).is_empty());
+        assert_eq!(m.palette.as_ref().map(Palette::view), Some(commands::View::Places));
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        go_type(&mut m, "app-2");
+        let asked = m.update(Action::GoToDrill);
+        assert_eq!(asked, [Effect::ListFiles { folder: "/code/app-2".into() }]);
+        assert_eq!((m.palette.as_ref().map(Palette::view), goto_rows(&m).len()), (Some(commands::View::Files), 0));
+        // Until the files come the list is empty; a client's list is refused.
+        let files = |paths: &[&str]| Action::GoToFiles {
+            folder: "/code/app-2".into(),
+            paths: Some(paths.iter().map(|path| path.to_string()).collect()),
+            cut: false,
+        };
+        m.update(files(&["evil.rs"]).sent_by(Origin::Socket));
+        assert!(goto_rows(&m).is_empty());
+        m.update(files(&["src/main.rs", "README.md", "src/lib.rs"]).sent_by(Origin::System));
+        go_type(&mut m, "lib");
+        assert_eq!(goto_rows(&m), ["src/lib.rs"]);
+        // Back: the place query again. Into the same place again: its files are not read again.
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        m.update(Action::GoToBack);
+        assert_eq!(
+            m.palette.as_ref().map(|p| (p.view(), p.query.text().to_string())),
+            Some((commands::View::Places, "app-2".into()))
+        );
+        // `/` typed goes into the highlighted place, and the file query follows.
+        assert!(go_type(&mut m, "/").is_empty());
+        go_type(&mut m, "main");
+        assert_eq!(goto_rows(&m), ["src/main.rs"]);
+        // ↵ opens the file in a viewer, there.
+        m.update(Action::PaletteChoose { index: None });
+        let viewer = m.panes.iter().find_map(|pane| match &pane.kind {
+            Kind::File { path } => Some(path.clone()),
+            _ => None,
+        });
+        assert_eq!((m.palette.is_none(), viewer), (true, Some("/code/app-2/src/main.rs".into())));
+    }
+
+    #[test]
+    fn a_place_and_a_file_typed_in_one_go_go_in_when_the_place_is_clearly_best() {
+        let mut m = goto_places();
+        m.update(Action::PaletteGoTo);
+        // "app" names two places equally: the slash stays a letter.
+        go_type(&mut m, "app/x");
+        assert_eq!(m.palette.as_ref().map(Palette::view), Some(commands::View::Places));
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        let asked = go_type(&mut m, "app-2/ma");
+        assert_eq!(asked, [Effect::ListFiles { folder: "/code/app-2".into() }]);
+        assert_eq!(m.palette.as_ref().map(|p| p.query.text().to_string()), Some("ma".into()));
+    }
+
+    #[test]
+    fn a_failed_read_says_so_and_a_task_drills_into_its_checkout_as_it_is_now() {
+        let mut m = goto_places();
+        m.update(Action::PaletteGoTo);
+        go_type(&mut m, "app-2");
+        m.update(Action::GoToDrill);
+        let failed = Action::GoToFiles { folder: "/code/app-2".into(), paths: None, cut: false };
+        m.update(failed.sent_by(Origin::System));
+        let goto = m.palette.as_ref().and_then(|p| p.goto.as_ref()).expect("go to");
+        assert_eq!(goto.files_of("/code/app-2"), Some(&crate::goto::Files::Unread(goto::NOT_READ)));
+    }
+
+    #[test]
+    fn a_gt_sign_lists_the_commands_and_deleting_it_the_places_again() {
+        let mut m = goto_places();
+        m.update(Action::PaletteGoTo);
+        go_type(&mut m, ">next tab");
+        let palette = m.palette.as_ref().expect("open");
+        assert_eq!((palette.view(), palette.matches().first()), (commands::View::Commands, Some(&Command::NextTab)));
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        assert_eq!(m.palette.as_ref().map(Palette::view), Some(commands::View::Places));
+        go_type(&mut m, ">next tab");
+        assert_eq!(m.update(Action::PaletteChoose { index: None }), [Effect::Run { command: Command::NextTab }]);
+    }
+
+    #[test]
+    fn a_place_that_goes_leaves_go_to_and_ends_a_drill_into_it() {
+        let mut m = goto_places();
+        m.update(Action::PaletteGoTo);
+        go_type(&mut m, "app-2");
+        // Its checkout's row, under its workspace's.
+        m.update(Action::PaletteMove { delta: 1 });
+        m.update(Action::GoToDrill);
+        // The worktree is no longer listed: it leaves the list, and the drill ends.
+        let only = Repo { worktrees: vec![], ..listed().remove(0) };
+        m.update(Action::SetRepos { repos: vec![only] });
+        let palette = m.palette.as_ref().expect("open");
+        assert_eq!((palette.view(), palette.query.text()), (commands::View::Places, "app-2"));
+        assert!(palette.goto.as_ref().is_some_and(|goto| {
+            goto.places.iter().all(|row| row.place != crate::goto::Place::Checkout("/code/app-2".into()))
+        }));
     }
 
     #[test]
@@ -10956,7 +11178,14 @@ mod tests {
     }
 
     fn action_is_palettes(action: &Action) -> bool {
-        matches!(action, Action::PaletteMove { .. } | Action::PaletteChoose { .. } | Action::ClosePalette)
+        matches!(
+            action,
+            Action::PaletteMove { .. }
+                | Action::PaletteChoose { .. }
+                | Action::ClosePalette
+                | Action::GoToDrill
+                | Action::GoToBack
+        )
     }
 
     /// Every action from every origin. The origin decides, not the action: only the user's own
@@ -11048,6 +11277,7 @@ mod tests {
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
                         Some(inspect::USERS_ALONE)
                     }
+                    Action::GoToFiles { .. } if origin == Origin::Socket => Some(goto::SHELLS_READ),
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),
@@ -17439,6 +17669,7 @@ mod tests {
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
                         Some(inspect::USERS_ALONE)
                     }
+                    Action::GoToFiles { .. } if origin == Origin::Socket => Some(goto::SHELLS_READ),
                     Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
                     Action::KeyUsed { .. } | Action::ResetKeyUse => Some(key_use::USERS_ALONE),
                     Action::RestoreKeyUse { .. } if origin == Origin::Socket => Some(key_use::READ_ALONE),

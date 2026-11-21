@@ -111,6 +111,7 @@ import type {
   Picker,
   Palette,
   PaletteRow,
+  GoToRow,
   PaletteFeature,
   PaletteTask,
   Inspector,
@@ -1529,6 +1530,16 @@ function paletteRow(value: unknown, at: string): PaletteRow {
   };
 }
 
+function goToRow(value: unknown, at: string): GoToRow {
+  const o = fields(value, at);
+  return {
+    place: orNull(str)(o.place, `${at}.place`),
+    name: orNull(str)(o.name, `${at}.name`),
+    detail: orNull(str)(o.detail, `${at}.detail`),
+    file: orNull(str)(o.file, `${at}.file`),
+  };
+}
+
 function running(value: unknown, at: string): Running {
   const o = fields(value, at);
   return {
@@ -2160,6 +2171,7 @@ export function snapshot(value: unknown): Snapshot {
     copied: orNull(str)(o.copied, "copied"),
     picker_rows: orNull(list(pickItem))(o.picker_rows, "picker_rows"),
     palette_rows: orNull(list(paletteRow))(o.palette_rows, "palette_rows"),
+    goto_rows: orNull(list(goToRow))(o.goto_rows, "goto_rows"),
     inspector: orNull(inspector)(o.inspector, "inspector"),
     field: orNull(field)(o.field, "field"),
     inbox: list(inboxRow)(o.inbox, "inbox"),

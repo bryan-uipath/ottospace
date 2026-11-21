@@ -12,7 +12,7 @@
 {"settle":500}
 {"shot":"agent"}
 {"cmd":"key","keys":"escape","as":"user"}
-{"cmd":"key","keys":"cmd-p","as":"user"}
+{"cmd":"key","keys":"cmd-shift-p","as":"user"}
 {"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
 {"cmd":"key","keys":"enter","as":"user"}
 {"until":"drawer.native.chats.1.transcript.live","is":false}

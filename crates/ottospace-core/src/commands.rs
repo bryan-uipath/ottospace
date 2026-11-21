@@ -5,6 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::edit::Field;
 use crate::features::Feature;
+use crate::goto::GoTo;
 use crate::model::Owner;
 
 /// Why a client's request to the palette is refused.
@@ -180,6 +181,19 @@ pub struct Palette {
     /// The commands of features that are off: not listed.
     #[serde(skip)]
     pub hidden: Vec<Command>,
+    /// Go to (⌘P): places, then a file; a query starting `>` lists the commands. Never in the state.
+    #[serde(skip)]
+    pub goto: Option<GoTo>,
+}
+
+/// What the palette lists.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum View {
+    Commands,
+    Tasks,
+    Features,
+    Places,
+    Files,
 }
 
 /// A flag Features… lists, and whether it is on: choosing it turns it the other way.
@@ -197,12 +211,24 @@ pub struct TaskChoice {
 }
 
 impl Palette {
-    /// The commands the query matches; none while it lists tasks.
+    pub fn view(&self) -> View {
+        match (&self.tasks, &self.features, &self.goto) {
+            (Some(_), ..) => View::Tasks,
+            (_, Some(_), _) => View::Features,
+            (.., Some(goto)) if goto.drill.is_some() => View::Files,
+            (.., Some(_)) if !self.query.text().starts_with('>') => View::Places,
+            _ => View::Commands,
+        }
+    }
+
+    /// The commands the query matches (in go-to, after its `>`); none while it lists anything else.
     pub fn matches(&self) -> Vec<Command> {
-        if self.tasks.is_some() || self.features.is_some() {
+        if self.view() != View::Commands {
             return Vec::new();
         }
-        rank(self.query.text()).into_iter().filter(|command| !self.hidden.contains(command)).collect()
+        let text = self.query.text();
+        let query = if self.goto.is_some() { text.strip_prefix('>').unwrap_or(text) } else { text };
+        rank(query).into_iter().filter(|command| !self.hidden.contains(command)).collect()
     }
 
     /// The flags the query matches, by id, title or description, best first, ties in their order.
@@ -229,9 +255,11 @@ impl Palette {
 
     /// How many rows it shows.
     pub fn count(&self) -> usize {
-        match (&self.tasks, &self.features) {
-            (Some(_), _) => self.task_matches().len(),
-            (_, Some(_)) => self.feature_matches().len(),
+        match (self.view(), &self.goto) {
+            (View::Tasks, _) => self.task_matches().len(),
+            (View::Features, _) => self.feature_matches().len(),
+            (View::Places, Some(goto)) => goto.place_matches(self.query.text()).len(),
+            (View::Files, Some(goto)) => goto.rows.len(),
             _ => self.matches().len(),
         }
     }
@@ -258,7 +286,7 @@ pub fn rank(query: &str) -> Vec<Command> {
 }
 
 /// A query as `score` takes it: lowercase, no spaces.
-fn letters(query: &str) -> Vec<char> {
+pub(crate) fn letters(query: &str) -> Vec<char> {
     query.chars().filter(|c| !c.is_whitespace()).flat_map(char::to_lowercase).collect()
 }
 

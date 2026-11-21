@@ -1021,6 +1021,14 @@ export interface PaletteRow {
   stage_rect: Rect | null;
 }
 
+/** A row of go-to: a place (`place`: `workspace`, `checkout` or `task`; its name and detail), or a file (a path in the place's folder). */
+export interface GoToRow {
+  place: string | null;
+  name: string | null;
+  detail: string | null;
+  file: string | null;
+}
+
 /** A terminal a quit would end something in. */
 export interface Running {
   pane: PaneId;
@@ -1751,6 +1759,8 @@ export interface Snapshot {
   picker_rows: PickItem[] | null;
   /** The command palette's rows as drawn, best match first, or null while it is closed. */
   palette_rows: PaletteRow[] | null;
+  /** Go to's rows as listed (⌘P): places, or a place's files. Null outside a test run, and while it lists commands. */
+  goto_rows: GoToRow[] | null;
   /** The accessibility inspector, or null: counts and roles only, never the app's text. */
   inspector: Inspector | null;
   /** The open text field, or null. `state.compose` and `state.picker.query` stay its text. */

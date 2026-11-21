@@ -1,6 +1,6 @@
 # Palette ▸ Features…: the pointer on a flag's flask, its stage in the tooltip.
 {"cmd":"split","kind":"empty"}
-{"cmd":"key","keys":"cmd-p f e a t u r e s enter","as":"user"}
+{"cmd":"key","keys":"cmd-shift-p f e a t u r e s enter","as":"user"}
 {"hover":{"rect":"palette_rows.0.stage_rect"}}
 {"sleep_ms":1200}
 {"shot":"hover"}

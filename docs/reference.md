@@ -48,6 +48,7 @@ running, and the rest of the design is not built: see the
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | Scrolling over an app pane you are not in enters it (`APP`), as a click does, and that first scroll reaches the app | Verified on CI (`e2e-apps`): the wheel enters, the window comes up under the pointer and the canary receives the first scroll |
 | [Command palette](#command-palette) (⌘⇧P): every command of the menu bar by name, with its key; a Developer group | Works today |
+| [Go to](#go-to) (⌘P): a workspace, a listed checkout or a task by name, then a file in its folder | Works today |
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
@@ -107,7 +108,8 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌃⌘F | Fill the whole display, over the menu bar and the Dock; again to restore. The window's green button (Window ▸ Zoom, a title bar double-click when the system's setting is Zoom) and the expand button at the top row's right do the same: there is no zoom to the visible frame, and no native full screen, which would put ottospace on a Space of its own where apps' windows cannot follow. While ottospace is in front the bars stay away until the pointer reaches their edge. In an app pane the app's menu bar and the Dock come back, over ottospace's top row and bottom edge: nothing moves, and the app's window stops at the Dock's top. Dragging the window ends it. On at quit, on at the next start (`layout.json`); only your own key, click, menu or palette turns it on. [Measured](ai/fill-display.md) |
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | The keys, by what you are doing, the ones you have not learned first; in list or visual mode that mode's own keys come first. A bar under a key shows how much you use it. Keys you use often fold into `Known · n` at the bottom: a click or ↵ opens it. A key unused for about eight days comes back up. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
-| ⌘⇧P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘⇧P closes. ⌘P opens it too, for now |
+| ⌘⇧P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘⇧P closes |
+| ⌘P | [Go to](#go-to): a place by name, Tab or `/` for its files, `>` for the commands |
 | ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
@@ -459,7 +461,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
 
 ## Command palette
 
-⌘⇧P (⌘P too, for now), or View ▸ Command Palette…, opens a box with every command of the menu bar that needs no
+⌘⇧P, or View ▸ Command Palette…, opens a box with every command of the menu bar that needs no
 argument: its group (Panes, Tabs, Tasks, Workspace, Marks, View, Developer, App), its name and its
 key. Type to filter: the letters in order, ignoring case and spaces (`tr` finds Terminal Right);
 a word's first letter and letters side by side rank first, then a group's name (`dev` lists the
@@ -508,6 +510,28 @@ Editor (⌃G), Open or Collapse the Drawer (⌘⇧R), Stop the Agent (the drawer
 Agent Dial (⌘⇧A), each for
 the conversation the drawer shows. ⌘⇧P while you type in the conversation opens the palette over
 it: the agent gets no key while it is open, and when it closes the keyboard goes back to it.
+
+## Go to
+
+⌘P, or View ▸ Go to Place or File…, opens one list of places: the workspaces, each checkout the
+Repos section lists (a repository's own folder and its worktrees, with the branch) and the tasks
+not done (needs-you first). Each row has its section's icon, its name and a muted detail: a
+workspace's default folder, a checkout's folder or repository and branch, a task's state. With
+nothing typed, the places selected most recently come first and the one on show last. Type to
+filter, as in the command palette, by name, then by name and detail. ↵ or a click goes there as
+the place's own row does: a workspace opens, a checkout's Repos row is clicked, a task's
+conversation opens.
+
+Tab, or `/` typed after a place's name, goes into the highlighted place's folder: its name over
+the list, and the files git lists there (tracked, and new ones it does not ignore), by path.
+`app/login` in one go goes into `app` when it is clearly the best match. ↵ opens the file in a
+viewer in that place, going there first. ⌫ with nothing typed, or Esc, goes back to the places; Esc
+again closes. Files are read only for a checkout the Repos section lists, off the main thread, once
+while the box is open: the first 50,000 (the title says so when there are more). A place with no
+such folder (a workspace with none, a task with no checkout) has no files.
+
+`>` as the first character lists the commands, as ⌘⇧P does; deleting it lists the places again.
+Go to is the user's, as the command palette is.
 
 ## The agent chip
 
