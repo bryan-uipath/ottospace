@@ -137,6 +137,14 @@ pub struct Stopping {
     terminal: Option<crate::terminal::Terminal>,
     native: Option<Native>,
     since: Instant,
+    /// The TUI's job when its shell runs it (`Terminal::job`): it is gone only once that is.
+    job: Option<i32>,
+}
+
+/// Sends `signal` to process group `group`. False: no process is in it.
+fn signal_group(group: i32, signal: i32) -> bool {
+    // SAFETY: plain integers.
+    unsafe { libc::killpg(group, signal) == 0 }
 }
 
 /// How long a hung-up TUI has to end before it is killed.
@@ -145,25 +153,29 @@ const HANG_UP_MS: u128 = 3000;
 impl Stopping {
     /// Hangs up on the TUI, kills the structured process's group (its tools with it).
     pub fn new(terminal: Option<crate::terminal::Terminal>, mut native: Option<Native>) -> Self {
+        let job = terminal.as_ref().and_then(crate::terminal::Terminal::job);
         if let Some(terminal) = &terminal {
             terminal.signal(libc::SIGHUP);
         }
+        job.map(|group| signal_group(group, libc::SIGHUP));
         if let Some(native) = &mut native {
             // Stopped, its pass goes now: its file too, though its stdout may stay open.
             native.pass = None;
             let _ = native.driver.kill();
         }
-        Self { terminal, native, since: Instant::now() }
+        Self { terminal, native, since: Instant::now(), job }
     }
 
     /// True once every process of it has exited. A TUI that ignores the hang-up is killed.
     fn gone(&mut self) -> bool {
+        let late = self.since.elapsed().as_millis() > HANG_UP_MS;
         let terminal = self.terminal.as_ref().is_none_or(|terminal| {
-            if self.since.elapsed().as_millis() > HANG_UP_MS {
+            if late {
                 terminal.signal(libc::SIGKILL);
             }
             terminal.exited()
         });
+        let job = self.job.is_none_or(|group| !signal_group(group, if late { libc::SIGKILL } else { 0 }));
         let native = match &self.native {
             None => true,
             Some(native) => native.driver.events().try_iter().any(|said| matches!(said, Said::Exited { .. })),
@@ -171,7 +183,7 @@ impl Stopping {
         if native {
             self.native = None;
         }
-        terminal && self.native.is_none()
+        terminal && job && self.native.is_none()
     }
 }
 

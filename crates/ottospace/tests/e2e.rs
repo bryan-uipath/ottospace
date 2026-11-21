@@ -9274,7 +9274,7 @@ fn a_runners_command_from_the_settings_starts_its_agent_in_either_view() {
     // It writes `$MARK` and its arguments, one a line, to `<view>.argv`, then echoes what it is sent.
     let record = root.join("record");
     let script = format!(
-        "#!/bin/sh\n{{ printf '%s\\n' \"$MARK\"; printf '%s\\n' \"$@\"; }} > '{}'.$VIEW\necho 'fake claude ready'\nexec cat\n",
+        "#!/bin/sh\n{{ printf '%s\\n' \"$MARK\"; printf '%s\\n' \"$@\"; }} > '{0}'.$VIEW.part && mv '{0}'.$VIEW.part '{0}'.$VIEW\necho 'fake claude ready'\nexec cat\n",
         record.display()
     );
     std::fs::write(bin.join("claude"), script).unwrap();

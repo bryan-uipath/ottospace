@@ -96,7 +96,8 @@ pub(crate) fn program(name: &str) -> Result<String, String> {
 
 /// What the login shell runs for an agent: its script, positional parameters and variables
 /// (`agents::shell_run`). `command`: `agent_commands`' text for the runner. In a test run the
-/// program is its stand-in, and a command finds the stand-ins first on its `PATH`.
+/// program is its stand-in, and a command's `PATH` is the stand-ins and the system's alone:
+/// a stand-in missing never finds an agent the user installed.
 pub(crate) fn shell_run(
     name: &str,
     args: &[String],
@@ -105,9 +106,7 @@ pub(crate) fn shell_run(
     let program = program(name)?;
     let (script, argv) = agents::shell_run(&program, args, command);
     let stand_ins = std::path::Path::new(&program).parent().filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some());
-    let path = stand_ins
-        .filter(|_| command.is_some())
-        .map(|dir| ("PATH", format!("{}:{}", dir.display(), std::env::var("PATH").unwrap_or_default())));
+    let path = stand_ins.filter(|_| command.is_some()).map(|dir| ("PATH", format!("{}:/usr/bin:/bin", dir.display())));
     Ok((script, argv, path))
 }
 

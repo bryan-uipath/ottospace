@@ -433,6 +433,12 @@ impl Settings {
                 named
             });
         }
+        // Its text may be private: a wrong shape is said without it.
+        let commands = keys.get("agent_commands");
+        if commands.is_some_and(|c| !c.as_object().is_some_and(|map| map.values().all(serde_json::Value::is_string))) {
+            keys.remove("agent_commands");
+            wrong.push("agent_commands: each runner's command as text: { \"claude\": \"ja claude\" }".into());
+        }
         // So does a flag that is wrong: the other flags stay. A retired one is dropped, and only
         // warned of (`retired_flags`): it is no mistake.
         if let Some(flags) = keys.get_mut("features").and_then(serde_json::Value::as_object_mut) {
@@ -521,6 +527,11 @@ impl Watch {
         self.restart = restart_keys(started, &settings);
         self.retired = settings.calendar_window_hours.is_some().then_some(RETIRED);
         Some(settings)
+    }
+
+    /// What was read at start, key by key (`Settings::read`). `None`: nothing was read yet.
+    pub fn started(&self) -> Option<&Settings> {
+        self.started.as_ref()
     }
 
     pub fn errors(&self) -> usize {
@@ -1002,11 +1013,13 @@ mod tests {
             (r#"{ "agent_commands": { "gemini": "ja gemini" }, "sessions": false }"#, r#""gemini" is not `claude`"#),
             (r#"{ "agent_commands": { "codex": " " }, "sessions": false }"#, "codex's command must be one line"),
             (r#"{ "agent_commands": { "claude": "ja\nclaude" }, "sessions": false }"#, "claude's command must be"),
-            (r#"{ "agent_commands": { "claude": ["ja", "claude"] }, "sessions": false }"#, "invalid type"),
+            (r#"{ "agent_commands": { "claude": ["ja", "claude"] }, "sessions": false }"#, "as text"),
+            (r#"{ "agent_commands": "TOKEN=private claude", "sessions": false }"#, "as text"),
         ] {
             let (settings, wrong) = Settings::read(text);
             assert_eq!((settings.agent_commands, settings.sessions, wrong.len()), (None, Some(false), 1), "{text}");
             assert!(wrong[0].starts_with("agent_commands: ") && wrong[0].contains(said), "{wrong:?}");
+            assert!(!wrong[0].contains("private"), "its text is never said: {wrong:?}");
         }
     }
 

@@ -9622,7 +9622,13 @@ impl Model {
     /// `settings.json` read again: right, what applies as the app runs is told again; wrong,
     /// the last good settings stay. The toast says which (`settings_line`).
     fn settings_read(&mut self, text: &str, written: bool, effects: &mut Vec<Effect>) {
+        let first = self.settings_file.started().is_none();
         let settings = self.settings_file.read(text, written);
+        // At start what is right key by key applies, as the shell's own settings do: a wrong key
+        // elsewhere must not start the plain program (another account, for `ja claude`).
+        if let Some(started) = self.settings_file.started().filter(|_| first && settings.is_none()) {
+            self.agent_commands = agent_commands(started);
+        }
         // A dismissed line that is fixed, or says something else now, is dismissed no more.
         let line = self.settings_file.line();
         use crate::notice::Kind::{SettingsProblem, SettingsRestart, SettingsRetired};
@@ -9641,9 +9647,7 @@ impl Model {
         let shows = settings.conversation_view.unwrap_or(crate::settings::DEFAULT_VIEW);
         let default = settings.default_agent.clone();
         self.act(Action::SetAgents { claude, codex, default, shows }, effects);
-        let commands = settings.agent_commands.iter().flatten();
-        self.agent_commands =
-            commands.filter_map(|(name, text)| Some((RunnerId::named(name)?, text.clone()))).collect();
+        self.agent_commands = agent_commands(&settings);
         let (notify, links_only) = (settings.calendar_notify.unwrap_or(true), settings.calendar_notify_for);
         let links_only = links_only == Some(crate::settings::NotifyFor::Links);
         let (hide_free, colors) = (settings.calendar_hide_free.unwrap_or(false), settings.color_rules());
@@ -10130,6 +10134,12 @@ impl Model {
             talk.keys = false;
         }
     }
+}
+
+/// `agent_commands` by runner: the settings checked each key.
+fn agent_commands(settings: &crate::settings::Settings) -> std::collections::BTreeMap<RunnerId, String> {
+    let commands = settings.agent_commands.iter().flatten();
+    commands.filter_map(|(name, text)| Some((RunnerId::named(name)?, text.clone()))).collect()
 }
 
 #[cfg(test)]
@@ -15953,6 +15963,14 @@ mod tests {
         read(&mut m, "{}".into());
         m.update(line("again"));
         assert_eq!(command(started(&mut m, Action::TaskTalk { id: 3 })), None);
+        // At start, a wrong key elsewhere does not undo it; a wrong file later keeps the last good.
+        let mut m = Model::default();
+        read(&mut m, serde_json::json!({"agent_commands": {"claude": MINE}, "typo": true}).to_string());
+        m.update(line("first"));
+        assert_eq!(command(started(&mut m, Action::TaskTalk { id: 1 })), Some(MINE.into()));
+        read(&mut m, "{,}".into());
+        m.update(line("second"));
+        assert_eq!(command(started(&mut m, Action::TaskTalk { id: 2 })), Some(MINE.into()));
     }
 
     /// The Tasks section closed: a session's conversation keeps the name and badge it had.

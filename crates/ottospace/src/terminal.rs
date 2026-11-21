@@ -1018,6 +1018,13 @@ fn cut_history<T>(term: &Term<T>, from: Line, rows: Vec<(String, bool)>) -> Vec<
 impl Terminal {
     /// Sends `signal` to the program it runs (SIGHUP to hang up, SIGKILL to end it), keeping the
     /// terminal to see when the program is gone (`exited`).
+    /// The process group in front, if not the program's own: a job of its shell, as an agent
+    /// started by `agent_commands`' text, whose shell does not exec it.
+    pub fn job(&self) -> Option<i32> {
+        let group = self.pty.as_ref().and_then(|pty| process::foreground(pty.as_fd()))?;
+        (group != self.child as i32).then_some(group)
+    }
+
     pub fn signal(&self, signal: i32) {
         if !self.exited() {
             // SAFETY: plain integers; the child is ours and not reaped while `exited` is false.
