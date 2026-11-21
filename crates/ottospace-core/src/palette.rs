@@ -35,14 +35,28 @@ pub fn queried(index: usize) -> u32 {
     }
 }
 
+/// Faint text (SGR 2): its colour two thirds of the way from `bg` to `fg`, e.g. white on black
+/// `0xaaaaaa`. Toward the cell's own background, so dim text on a coloured one stays readable.
+pub fn dim(fg: u32, bg: u32) -> u32 {
+    let mix = |shift: u32| ((fg >> shift & 0xff) * 2 + (bg >> shift & 0xff)) / 3 << shift;
+    mix(16) | mix(8) | mix(0)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{BACKGROUND, FOREGROUND, queried, xterm};
+    use super::{BACKGROUND, FOREGROUND, dim, queried, xterm};
 
     #[test]
     fn a_query_is_answered_with_the_colours_drawn() {
         assert_eq!((queried(1), queried(196)), (xterm(1), 0xff0000));
         assert_eq!((queried(256), queried(257), queried(258)), (FOREGROUND, BACKGROUND, FOREGROUND));
+    }
+
+    #[test]
+    fn dim_text_is_two_thirds_of_the_way_to_its_background() {
+        assert_eq!(dim(0xffffff, 0x000000), 0xaaaaaa);
+        assert_eq!(dim(0x00ff00, 0x0000ff), 0x00aa55);
+        assert_eq!(dim(0x123456, 0x123456), 0x123456);
     }
 
     #[test]
