@@ -193,7 +193,8 @@ Design note: `docs/ai/attention/plan.md`.
     building's rect), `lit_tops` (the middle of each one's top), `labels`, `failed` (why there is
     no picture), `reads`, `renders`, `paints`, `render_us`, `hovered` (the beam of the box under
     the user's pointer: `file`, `lit`, `beam` its foot and dot `[x0, y0, x1, y1]`, `beacon` its label's rect; null with
-    none), `lit_beams` (each lit building's beam drawn, as `beam`). `counts.city_reads`: the reads, a city on show or not;
+    none), `lit_beams` (each lit building's beam drawn, as `beam`), `look` (the picture's
+    `developer.city_look`). `counts.city_reads`: the reads, a city on show or not;
     `counts.city_beam_frames`: the frames the hovered beam's fade asked for (none under Reduce Motion). Never a path or a name.
     Null outside a test run and while none is on show. `OTTOSPACE_CITY_NO_GPU` (read only under
     `OTTOSPACE_E2E`) stands for a machine with no GPU: every picture fails, the lattice stays.

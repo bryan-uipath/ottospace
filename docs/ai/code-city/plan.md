@@ -155,6 +155,16 @@ Windows). It replaces the 2D plan this note first recommended.
   none. Text colour, never amber: amber is the beacon of "needs you" (below). A lit building
   has a steady, thinner beam in its task's colour, no label.
 
+- **Hierarchy, an experiment** (the owner's word, 2026-11-21: "make folders and hierarchy more
+  visible"). Five looks, picked by `developer.city_look` (not a user's setting; `scene::Look`),
+  each tested to keep the plan: `terraces` (as built, the default), `plinths` (each tier three
+  times as high, more beside a few tall towers, its top edge lit and its sides' edges dim),
+  `tint` (each top-level district and all on it a hue of its own, outlined stronger, streets
+  between districts twice as wide), `labels` (districts named to the fourth tier, larger and
+  brighter the outer they are), `blend` (lower plinths, tint, names to the third tier). One
+  picture each, as before: a look costs nothing per frame. Shots: `city-looks`. The owner
+  picks one; it becomes the drawing and the rest go.
+
 Why not paths (the "Oblique" alternative this note first named): GPUI has no depth buffer, so
 every building would be three paths painted back to front each frame, 15,000 paths at 5,000
 files; a rendered picture costs one image a frame however large the city.

@@ -1662,6 +1662,8 @@ export interface CityDrawn {
   paints: number;
   /** How long the last picture took: scene, render and read back, in microseconds. */
   render_us: number | null;
+  /** How the picture drew folders (`developer.city_look`): null with none. */
+  look: "terraces" | "plinths" | "tint" | "labels" | "blend" | null;
   /** The beam of the box under the user's pointer: a file's or a district's, lit, its label. */
   hovered: CityHovered | null;
 }

@@ -25,6 +25,7 @@ below; a folder scripts/shots/<name>/ beside it is copied into the instance's ow
   {"sleep_ms":700}            wait (motion while recording)
   {"write":"home/settings.json","text":"{}"}   a file in the instance's own folder, as an editor saves it
   {"tree":"repos/big","files":2000}   a made-up git repository there: nested folders, most files small
+  {"fixtures":"code-city"}    another scenario's folder copied in, as its own is at the start
   {"record":"start"}          with --record: what the recording covers (default: all of it)
   {"controls":true}           print the named controls on screen (for writing scenarios)
   {"print":"repos_bar"}       print a part of the state (for writing scenarios)
@@ -493,6 +494,8 @@ def run_scenario(binary, scenario, out, record=False):
                 os.replace(path + ".new", path)
             elif "tree" in step:
                 made_up_tree(os.path.join(inst.root, step["tree"]), step["files"])
+            elif "fixtures" in step:
+                copy_fixtures(step["fixtures"], inst.root)
             elif "record" in step:
                 if record and step["record"] == "start" and not recording:
                     recording = start_recording()

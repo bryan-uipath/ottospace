@@ -3,6 +3,8 @@
 //! shape. The shell renders it; the core decides what stands where, how tall, and where the
 //! camera is. Design: `docs/ai/code-city/plan.md`, "Drawing".
 
+use serde::{Deserialize, Serialize};
+
 use crate::atlas::Atlas;
 
 /// The plan is this much wider than deep, as the atlas cuts it.
@@ -46,6 +48,69 @@ const MARGIN: f32 = 0.04;
 /// (plan units: the plan is 1 deep): in a city of few files towers are tall, and so are beams.
 const BEAM: f32 = 0.2;
 
+/// How folders are drawn: an experiment for the owner to pick from (`developer.city_look`, not a
+/// user's setting); the pick becomes the only look and the rest go.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Deserialize, Serialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Look {
+    /// As built: terraces a step lighter per tier, the outer two tiers named.
+    #[default]
+    Terraces,
+    /// Each district a slab three times as high (more in a city of tall towers), its top edge
+    /// lit, its sides' edges dim.
+    Plinths,
+    /// Each top-level district and all on it a hue of its own, outlined stronger, wider streets.
+    Tint,
+    /// Every district to the fourth tier named, larger and brighter the outer it is.
+    Labels,
+    /// Plinths two thirds as high, tint, and names to the third tier.
+    Blend,
+}
+
+impl Look {
+    /// A tier's lift, times the terraces' (a plinth's also times its city's towers: `scene_as`).
+    fn lift(self) -> f32 {
+        match self {
+            Look::Plinths => 3.,
+            Look::Blend => 2.,
+            _ => 1.,
+        }
+    }
+
+    /// Districts are this many streets apart.
+    fn district_street(self) -> f32 {
+        match self {
+            Look::Tint => 3.,
+            Look::Blend => 2.5,
+            _ => DISTRICT_STREET,
+        }
+    }
+
+    /// Districts named on their plates: to this tier.
+    pub fn named_tiers(self) -> usize {
+        match self {
+            Look::Labels => 4,
+            Look::Blend => 3,
+            _ => 2,
+        }
+    }
+
+    /// Each top-level district in a hue of its own.
+    pub fn tinted(self) -> bool {
+        matches!(self, Look::Tint | Look::Blend)
+    }
+
+    /// A district's top edge lit, its sides' edges dim.
+    pub fn rims(self) -> bool {
+        matches!(self, Look::Plinths | Look::Blend)
+    }
+
+    /// Names sized and lit by tier.
+    pub fn graded_names(self) -> bool {
+        matches!(self, Look::Labels | Look::Blend)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
     /// The ground under everything.
@@ -66,6 +131,8 @@ pub struct Block {
     pub kind: Kind,
     /// The atlas place it stands for (an index into `Atlas::places`); none for the ground.
     pub place: Option<usize>,
+    /// The top-level district it is (or stands in), counted from 0; none outside every district.
+    pub district: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -84,6 +151,7 @@ pub struct Camera {
 pub struct Scene {
     pub blocks: Vec<Block>,
     pub camera: Option<Camera>,
+    pub look: Look,
 }
 
 /// A building's height, 0 to 1, from a file's size: the owner's city's `buildingHeight`
@@ -93,9 +161,9 @@ pub(crate) fn height(bytes: u64) -> f32 {
     (2. + 6. * (1. + lines / 10.).log2()).clamp(2., 60.) / 60.
 }
 
-/// The top of a district at `depth` (0: the ground).
-fn terrace(depth: usize) -> f32 {
-    (0..depth).map(|at| LIFTS.get(at).copied().unwrap_or(LIFT_MIN) * UNIT).sum()
+/// The top of a district at `depth` (0: the ground), each lift `lift` times the terraces'.
+fn terrace(depth: usize, lift: f32) -> f32 {
+    (0..depth).map(|at| LIFTS.get(at).copied().unwrap_or(LIFT_MIN) * UNIT * lift).sum()
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -198,7 +266,7 @@ fn frame(blocks: &[Block], aspect: f32) -> Option<Camera> {
     if blocks.is_empty() || aspect.is_nan() || aspect <= 0. {
         return None;
     }
-    let all = Block { min: lo, max: hi, kind: Kind::Ground, place: None };
+    let all = Block { min: lo, max: hi, kind: Kind::Ground, place: None, district: None };
     let target = [(lo[0] + hi[0]) / 2., 0., (lo[2] + hi[2]) / 2.];
     let (pitch, yaw) = (PITCH.to_radians(), YAW.to_radians());
     // From the camera to the target: down by the pitch, into the plan turned by the yaw.
@@ -265,6 +333,7 @@ struct Room {
     from: Area,
     to: Area,
     tier: usize,
+    district: Option<usize>,
 }
 
 /// The city of `atlas` for a picture `aspect` wide to 1 tall. `lit`: places (by id) an agent is
@@ -277,11 +346,19 @@ struct Room {
 /// terrace, and any building between the camera and a lit one's top is cut down to below the
 /// sight line: a lit building is never hidden.
 pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
-    let ground = Block { min: [0., -0.01, 0.], max: [WIDE, 0., 1.], kind: Kind::Ground, place: None };
+    scene_as(atlas, lit, aspect, Look::default())
+}
+
+/// `scene`, its folders drawn in `look`.
+pub fn scene_as(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, look: Look) -> Scene {
+    let ground = Block { min: [0., -0.01, 0.], max: [WIDE, 0., 1.], kind: Kind::Ground, place: None, district: None };
     let mut blocks = vec![ground];
     // A typical lot's side: e.g. 0.24 for 28 files, 0.018 for 5,000 (where the constants rule).
     let lot = (WIDE / atlas.places.iter().filter(|p| !p.group).count().max(1) as f32).sqrt();
     let (tallest, street) = (TALLEST.max(lot * TOWER), STREET.max(lot * LOT_STREET));
+    // A plinth keeps its height beside a few tall towers.
+    let lift = look.lift() * if look.rims() { (tallest / TALLEST).min(1.5) } else { 1. };
+    let terrace = |tier: usize| terrace(tier, lift);
     // How many children each group has: a group's are the places after it one deeper, up to
     // the next place no deeper than it.
     let mut children = vec![0usize; atlas.places.len()];
@@ -298,7 +375,8 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
         }
     }
     let whole = Area { x0: 0., z0: 0., x1: WIDE, z1: 1. };
-    let root = Room { depth: 0, from: whole, to: whole.shrunk(street), tier: 0 };
+    let root = Room { depth: 0, from: whole, to: whole.shrunk(street), tier: 0, district: None };
+    let mut districts = 0;
     let mut rooms = vec![root];
     let mut highest = 0f32;
     let mut buildings = Vec::new();
@@ -312,15 +390,20 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
         let lot = parent.from.map(from, parent.to);
         let floor = terrace(parent.tier);
         if place.group {
-            let mut room = Room { depth: place.depth, from, to: lot, tier: parent.tier };
+            let mut room = Room { depth: place.depth, from, to: lot, tier: parent.tier, district: parent.district };
             if children[i] != 1 && lot.short() >= LEAST_DISTRICT {
-                let plate = lot.shrunk((street * DISTRICT_STREET).min(lot.short() / 4.));
+                let plate = lot.shrunk((street * look.district_street()).min(lot.short() / 4.));
                 let to = plate.shrunk(street.min(plate.short() * KERB));
-                room = Room { depth: place.depth, from, to, tier: parent.tier + 1 };
+                // A district on the ground is a top-level one: the next number.
+                let district = parent.district.or_else(|| {
+                    districts += 1;
+                    Some(districts - 1)
+                });
+                room = Room { depth: place.depth, from, to, tier: parent.tier + 1, district };
                 let top = terrace(room.tier);
                 highest = highest.max(top);
                 let (min, max) = ([plate.x0, floor, plate.z0], [plate.x1, top, plate.z1]);
-                blocks.push(Block { min, max, kind: Kind::Plate(room.tier), place: Some(i) });
+                blocks.push(Block { min, max, kind: Kind::Plate(room.tier), place: Some(i), district });
             }
             rooms.push(room);
             continue;
@@ -335,15 +418,16 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
             max: [lot.x1 - sx, top, lot.z1 - sz],
             kind,
             place: Some(i),
+            district: parent.district,
         });
     }
     for block in buildings.iter_mut().filter(|b| matches!(b.kind, Kind::Lit(_))) {
         block.max[1] = block.max[1].max(highest + LIT_ABOVE);
     }
     blocks.extend(buildings);
-    let Some(camera) = frame(&blocks, aspect) else { return Scene { blocks, camera: None } };
+    let Some(camera) = frame(&blocks, aspect) else { return Scene { blocks, camera: None, look } };
     clear_sight(&mut blocks, camera.eye, highest + LIT_ABOVE);
-    Scene { blocks, camera: Some(camera) }
+    Scene { blocks, camera: Some(camera), look }
 }
 
 impl Scene {
@@ -494,8 +578,9 @@ mod tests {
                 .collect();
             trees.push(atlas(&repo(&files)));
         }
-        for atlas in &trees {
-            let s = scene(atlas, &[], 1.6);
+        let looks = [Look::Terraces, Look::Plinths, Look::Tint, Look::Labels, Look::Blend];
+        for (atlas, look) in trees.iter().flat_map(|atlas| looks.map(|look| (atlas, look))) {
+            let s = scene_as(atlas, &[], 1.6, look);
             // The district each place stands in: its nearest group ancestor with a plate.
             let parent_plate = |i: usize| {
                 let depth = atlas.places[i].depth;
@@ -558,6 +643,43 @@ mod tests {
         }
     }
 
+    /// Every look keeps the plan: the same boxes over the same places. Plinths stand higher, a
+    /// tint's districts further apart; each box of a top-level district carries its number, a
+    /// file in the root none.
+    #[test]
+    fn a_look_draws_the_same_places_its_own_way() {
+        let atlas = city(&[
+            ("a/x.rs", 900),
+            ("a/b/y.rs", 900),
+            ("a/b/z.rs", 900),
+            ("c/w.rs", 900),
+            ("c/v.rs", 900),
+            ("r.rs", 9),
+        ]);
+        let plain = scene(&atlas, &[], 1.6);
+        let top = |s: &Scene| {
+            s.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).map(|b| b.max[1]).fold(0., f32::max)
+        };
+        let gap = |s: &Scene| {
+            let (a, c) = (plate(s, &atlas, "a").unwrap(), plate(s, &atlas, "c").unwrap());
+            (c.min[0] - a.max[0]).max(a.min[0] - c.max[0]).max(c.min[2] - a.max[2]).max(a.min[2] - c.max[2])
+        };
+        for look in [Look::Plinths, Look::Tint, Look::Labels, Look::Blend] {
+            let s = scene_as(&atlas, &[], 1.6, look);
+            let places = |s: &Scene| s.blocks.iter().map(|b| (b.place, b.district)).collect::<Vec<_>>();
+            assert_eq!(places(&s), places(&plain), "{look:?}");
+            assert_eq!(s.look, look);
+            assert_eq!(top(&s) > top(&plain), look.rims(), "{look:?}");
+            assert_eq!(gap(&s) > gap(&plain), look.tinted(), "{look:?}");
+        }
+        let district = |id: &str| {
+            let place = atlas.places.iter().position(|p| p.id == id);
+            plain.blocks.iter().find(|b| b.place == place).unwrap().district
+        };
+        assert_eq!((district("a"), district("a/b"), district("a/b/y.rs")), (Some(0), Some(0), Some(0)));
+        assert_eq!((district("c"), district("c/v.rs"), district("r.rs")), (Some(1), Some(1), None));
+    }
+
     /// A folder with one child is no district: `a` and `a/b` hold only `a/b/c`, which is the
     /// first tier. Its districts are a tier apart by the owner's lifts.
     #[test]
@@ -567,7 +689,7 @@ mod tests {
         assert!(plate(&s, &atlas, "a").is_none() && plate(&s, &atlas, "a/b").is_none());
         let (c, z) = (plate(&s, &atlas, "a/b/c").unwrap(), plate(&s, &atlas, "a/b/c/z").unwrap());
         assert_eq!((c.kind, z.kind), (Kind::Plate(1), Kind::Plate(2)));
-        assert_eq!((c.min[1], c.max[1], z.max[1]), (0., terrace(1), terrace(2)));
+        assert_eq!((c.min[1], c.max[1], z.max[1]), (0., terrace(1, 1.), terrace(2, 1.)));
     }
 
     /// The ray through a point of the picture meets what is drawn there: a building's top, a

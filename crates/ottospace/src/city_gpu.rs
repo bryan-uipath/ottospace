@@ -4,7 +4,7 @@
 //! paint. Run
 //! on a thread of its own; a still picture, made again only when the scene or its size changes.
 
-use ottospace_core::scene::{Block, Kind, Scene};
+use ottospace_core::scene::{Block, Kind, Look, Scene};
 use ottospace_core::theme;
 
 /// The picture, `width` × `height` pixels, BGRA, rows packed.
@@ -17,8 +17,9 @@ pub struct Picture {
 const SAMPLES: u32 = 4;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
-/// Per box: its corners (min, max), its top's colour, 1 if it glows (lit), its edges' colour.
-const STRIDE: u64 = 13 * 4;
+/// Per box: its corners (min, max), its top's colour, 1 if it glows (lit), its edges' colour,
+/// and how bright its sides' edges are, a share of its top's.
+const STRIDE: u64 = 14 * 4;
 
 const SHADER: &str = r#"
 struct Frame { matrix: mat4x4<f32>, eye: vec4<f32>, fog: vec4<f32>, background: vec4<f32>, light: vec4<f32> };
@@ -34,6 +35,7 @@ struct Out {
     @location(5) @interpolate(flat) edge: vec3<f32>,
     // The axis the face is across: 0 x, 1 y, 2 z.
     @location(6) @interpolate(flat) axis: u32,
+    @location(7) @interpolate(flat) sides: f32,
 };
 
 // A cube's 36 corners (two triangles a face) and each face's normal: -x, +x, -y, +y, -z, +z.
@@ -51,7 +53,7 @@ const NORMALS = array<vec3<f32>, 6>(
 );
 
 @vertex
-fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>, @location(3) edge: vec3<f32>) -> Out {
+fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>, @location(3) edge: vec3<f32>, @location(4) sides: f32) -> Out {
     let world = lo + (hi - lo) * CORNERS[FACES[i]];
     let normal = NORMALS[i / 6u];
     // Sides darker than the top: ambient, and a light from above to one side.
@@ -66,6 +68,7 @@ fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi
     out.hi = hi;
     out.edge = edge;
     out.axis = i / 12u;
+    out.sides = sides;
     return out;
 }
 
@@ -85,7 +88,9 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
         }
     }
     let line = (1. - smoothstep(0.25, 1.1, to_edge)) * smoothstep(4., 10., size);
-    let colour = mix(in.colour, in.edge, line);
+    // A side's edges (any face but the top and bottom) dimmed: a plinth's lit rim.
+    let edge = select(in.edge * in.sides, in.edge, in.axis == 1u);
+    let colour = mix(in.colour, edge, line);
     // Fog: from nothing at `fog.x` from the eye to `fog.z` at `fog.y`.
     let far = clamp((distance(in.world, frame.eye.xyz) - frame.fog.x) / (frame.fog.y - frame.fog.x), 0., 1.);
     return vec4(mix(colour, frame.background.rgb, far * frame.fog.z * (1. - in.lit)), 1.);
@@ -97,10 +102,35 @@ fn rgb(hex: u32) -> [f32; 3] {
     [c.r, c.g, c.b]
 }
 
-/// A box's top colour and its edges'. Four tones, quiet behind the hints: the background, the
-/// ground (streets), districts (a step lighter per tier, edged in a dim primary that fades with
-/// the tier) and buildings (edged lighter).
-fn colour(kind: Kind) -> ([f32; 3], [f32; 3]) {
+/// Hues of top-level districts in a tinted look, in degrees: one each, round again past eight.
+const HUES: [f32; 8] = [195., 265., 30., 140., 330., 55., 225., 95.];
+
+fn hsl(hue: f32, s: f32, l: f32) -> [f32; 3] {
+    let c = gpui::Rgba::from(gpui::hsla(hue / 360., s, l, 1.));
+    [c.r, c.g, c.b]
+}
+
+/// A box's top colour and its edges', in `look`. Four tones, quiet behind the hints: the
+/// background, the ground (streets), districts (a step lighter per tier, edged in a dim primary
+/// that fades with the tier) and buildings (edged lighter). A tinted look gives each top-level
+/// district's plates and buildings its hue, edged stronger; plinths edge every tier bright.
+fn colour(block: &Block, look: Look) -> ([f32; 3], [f32; 3]) {
+    let hue = block.district.filter(|_| look.tinted()).map(|d| HUES[d % HUES.len()]);
+    match (block.kind, hue) {
+        (Kind::Plate(tier), Some(h)) => {
+            let tier = tier.clamp(1, 5) as f32 - 1.;
+            (hsl(h, 0.28, 0.15 + 0.025 * tier), hsl(h, 0.6, 0.58 - 0.06 * tier))
+        }
+        (Kind::Building, Some(h)) => (hsl(h, 0.14, 0.34), hsl(h, 0.25, 0.64)),
+        (Kind::Plate(tier), None) if look.rims() => {
+            let tier = tier.clamp(1, 5) as u32 - 1;
+            (rgb(0x1f2632 + 0x06080a * tier), rgb(0x56cde8))
+        }
+        _ => plain(block.kind),
+    }
+}
+
+fn plain(kind: Kind) -> ([f32; 3], [f32; 3]) {
     match kind {
         Kind::Ground => (rgb(0x111115), rgb(0x111115)),
         Kind::Plate(tier) => {
@@ -150,7 +180,8 @@ impl Gpu {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3];
+        let attributes =
+            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3, 4 => Float32];
         let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             label: Some("city"),
             layout: Some(&pipeline_layout),
@@ -236,7 +267,7 @@ impl Gpu {
         frame.extend([-0.45, 1., -0.3, 0.]);
         let uniform = buffer(device, &frame, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
         self.queue.write_buffer(&uniform, 0, &bytes(&frame));
-        let boxes: Vec<f32> = scene.blocks.iter().flat_map(instance).collect();
+        let boxes: Vec<f32> = scene.blocks.iter().flat_map(|b| instance(b, scene.look)).collect();
         let instances = buffer(device, &boxes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST);
         self.queue.write_buffer(&instances, 0, &bytes(&boxes));
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -303,11 +334,12 @@ impl Gpu {
     }
 }
 
-fn instance(block: &Block) -> [f32; 13] {
-    let ([r, g, b], edge) = colour(block.kind);
+fn instance(block: &Block, look: Look) -> [f32; 14] {
+    let ([r, g, b], edge) = colour(block, look);
     let (lo, hi) = (block.min, block.max);
     let glows = if matches!(block.kind, Kind::Lit(_)) { 1. } else { 0. };
-    [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2]]
+    let sides = if look.rims() && matches!(block.kind, Kind::Plate(_)) { 0.25 } else { 1. };
+    [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2], sides]
 }
 
 fn bytes(values: &[f32]) -> Vec<u8> {
@@ -345,19 +377,22 @@ mod tests {
             let plan = atlas::atlas(&atlas::repo(&files));
             let laid = started.elapsed();
             let lit = [(plan.places.iter().rev().find(|p| !p.group).unwrap().id.as_str(), 0xff6467)];
-            let started = std::time::Instant::now();
-            let scene = ottospace_core::scene::scene(&plan, &lit, 1.6);
-            let built = started.elapsed();
-            let (w, h) = (1600, 1000);
-            let started = std::time::Instant::now();
-            let picture = gpu.render(&scene, w, h).unwrap();
-            let rendered = started.elapsed();
-            println!(
-                "{count} files: layout {laid:.1?}, scene {built:.1?} ({} boxes), render and read back {w}×{h} {rendered:.1?}",
-                scene.blocks.len()
-            );
-            if let Some(dir) = std::env::var_os("CITY_PICTURE") {
-                std::fs::write(std::path::Path::new(&dir).join(format!("city-{count}.bmp")), bmp(&picture)).unwrap();
+            for look in [Look::Terraces, Look::Plinths, Look::Tint, Look::Labels, Look::Blend] {
+                let started = std::time::Instant::now();
+                let scene = ottospace_core::scene::scene_as(&plan, &lit, 1.6, look);
+                let built = started.elapsed();
+                let (w, h) = (1600, 1000);
+                let started = std::time::Instant::now();
+                let picture = gpu.render(&scene, w, h).unwrap();
+                let rendered = started.elapsed();
+                println!(
+                    "{count} files, {look:?}: layout {laid:.1?}, scene {built:.1?} ({} boxes), render and read back {w}×{h} {rendered:.1?}",
+                    scene.blocks.len()
+                );
+                if let Some(dir) = std::env::var_os("CITY_PICTURE") {
+                    let name = format!("city-{count}-{look:?}.bmp");
+                    std::fs::write(std::path::Path::new(&dir).join(name), bmp(&picture)).unwrap();
+                }
             }
         }
     }

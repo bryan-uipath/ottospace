@@ -2165,6 +2165,7 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     renders: num(o.renders, `${at}.renders`),
     paints: num(o.paints, `${at}.paints`),
     render_us: orNull(num)(o.render_us, `${at}.render_us`),
+    look: orNull(oneOf(["terraces", "plinths", "tint", "labels", "blend"] as const, "a city look"))(o.look, `${at}.look`),
     hovered: orNull(cityHovered)(o.hovered, `${at}.hovered`),
   };
 }
