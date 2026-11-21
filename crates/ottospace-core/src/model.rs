@@ -6245,8 +6245,13 @@ impl Model {
             }
             Action::SessionAdopt { runner, id } => {
                 if let Some(session) = self.session(&runner, &id).cloned() {
-                    // A session at work is a task that runs; an idle one is one saved for later.
-                    let state = if session.active { State::Running } else { State::Captured };
+                    // A session at work is a task that runs; an idle one is one saved for later;
+                    // one that waits on the user (`session_waits`) needs them.
+                    let state = match (self.waiting(&runner, &id), session.active) {
+                        (Some(_), _) => State::NeedsYou,
+                        (None, true) => State::Running,
+                        (None, false) => State::Captured,
+                    };
                     let task = self.file(self.session_name(&session), 3, state);
                     // The listed checkout, not where in it the session started: a task opens a
                     // terminal in its repository, and its tag names it.
@@ -9243,12 +9248,16 @@ impl Model {
     }
 
     /// The terminal pane of the tab on show a listed session runs in: its wait's, else
-    /// `session_pane`'s guess. A row's click never changes the tab; ⌘J may (`wait_pane`).
+    /// `session_pane`'s guess. A row's click never changes the tab; ⌘J may.
     fn found_pane(&self, session: &Found) -> Option<PaneId> {
         let shown = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
         let wait = self.in_panes.iter().find(|at| (&at.runner, &at.id) == (&session.runner, &session.id));
         let wait = wait.filter(|at| self.in_pane_live(at) && self.features.on(Feature::SessionWaits)).map(|at| at.pane);
-        wait.filter(|pane| shown.contains(pane)).or_else(|| self.session_pane(session))
+        match wait {
+            // Known, in another tab: no guess at a terminal on show.
+            Some(pane) => shown.contains(&pane).then_some(pane),
+            None => self.session_pane(session),
+        }
     }
 
     /// The Elsewhere group as drawn, at the time of the last `Tick`: sessions found that are
@@ -16478,6 +16487,27 @@ mod tests {
         m.update(Action::SessionsInPanes { found: vec![at(None)] }.sent_by(Origin::System));
         m.update(Action::SetSessions { found: found(true), day: 0 }.sent_by(Origin::System));
         assert_eq!(state(&m), State::Running);
+    }
+
+    #[test]
+    fn a_session_adopted_while_it_waits_is_a_task_that_needs_you() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        term(&mut m);
+        let now = 1_000_000;
+        m.update(Action::Tick { now }.sent_by(Origin::System));
+        m.update(Action::SetSessions { found: vec![session("claude", "s1", "/code/app", true, now)], day: 0 });
+        let waits = sessions::InPane {
+            pane: 1,
+            runner: "claude".into(),
+            id: "s1".into(),
+            last_activity: Some(now),
+            waits_for: Some(sessions::WaitsFor::Permission),
+        };
+        m.update(Action::SessionsInPanes { found: vec![waits] }.sent_by(Origin::System));
+        assert_eq!(m.agents().needs_you, 1);
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "s1".into() });
+        assert_eq!((m.tasks.list[0].state, m.agents().needs_you), (State::NeedsYou, 1), "still counted, once");
     }
 
     #[test]

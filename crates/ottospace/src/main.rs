@@ -8201,13 +8201,13 @@ fn list_row(id: impl Into<ElementId>, selected: bool) -> Stateful<Div> {
     ui::list_row(id, ui::Row::Dim, ui::State::focus(selected))
 }
 
-/// Each terminal pane with an agent runner in front of its shell: the first process found below
-/// the shell, at most three levels down, whose program is a runner's (`RunnerId::of_program`).
+/// Each terminal pane with an agent runner in front of its shell: the first process found from
+/// the foreground job's leader, at most three levels down, whose program is a runner's (`RunnerId::of_program`).
 fn pane_runners(terminals: &HashMap<PaneId, Terminal>) -> Vec<sessions::PaneProc> {
     use ottospace_mac::process;
     let mut found = Vec::new();
     for (pane, terminal) in terminals {
-        let mut queue = vec![(terminal.shell_pid() as i32, 0)];
+        let mut queue: Vec<(i32, u32)> = terminal.front_pid().map(|pid| (pid, 0)).into_iter().collect();
         while let Some((pid, depth)) = queue.pop() {
             let arg0 = process::args(pid).and_then(|args| args.into_iter().next());
             if let Some(runner) = arg0.as_deref().and_then(ottospace_core::runner::RunnerId::of_program) {

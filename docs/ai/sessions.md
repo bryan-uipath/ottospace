@@ -341,7 +341,7 @@ runner (owner, 2026-11-20): per-runner differences live in `RunnerSpec` only.
 
 **The common floor (every runner).** Each sessions round (5 s open, 20 s closed) the shell finds
 each terminal pane with a runner's CLI in front of its shell (`RunnerId::of_program`, the first
-argument's name, up to three levels below the shell) and that CLI's session: the one its process
+argument's name, the foreground job or up to three levels below it; a suspended job is not) and that CLI's session: the one its process
 record names (`Disk::held`), else the one last active of those started in the folder it runs in.
 `Action::SessionsInPanes` (System only). Once its file has been quiet `session_quiet_minutes`, the
 rule adopted tasks follow, it needs you: "needs you · your turn" (`InPane::needs`).

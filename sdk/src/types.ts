@@ -170,7 +170,8 @@ export type Feature =
   | "multi_monitor"
   | "overlay_panels"
   | "decisions"
-  | "code_city";
+  | "code_city"
+  | "session_waits";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** The clone dialog and the clone on its way, in a test run. */

@@ -5567,7 +5567,7 @@ fn features_lists_each_flag_on_two_lines_and_finds_it_by_id_or_name() {
     otto.user_key("f e a t u r e s enter");
     let reply = otto.call(json!({"cmd": "state"}));
     let rows = reply["palette_rows"].as_array().expect("rows").clone();
-    assert_eq!(rows.len(), 9, "{rows:?}");
+    assert_eq!(rows.len(), 10, "{rows:?}");
     // The first row whole (a rect is the part that shows), taller than a command's. Each row
     // followed by another is whole: as much room above its name as below its description, whether
     // that is one line or two (the owner: rows were two lines tall, a one-line one bottom-heavy).
