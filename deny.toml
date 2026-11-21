@@ -47,8 +47,9 @@ wildcards = "deny"
 allow-wildcard-paths = true
 
 [sources]
-# crates.io only: no git dependencies (gpui comes from crates.io).
+# crates.io, and the one git dependency below.
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# gpui 0.2.2 with its patches (Cargo.toml's `[patch.crates-io]`), pinned by commit.
+allow-git = ["https://github.com/bryan-uipath/gpui"]
