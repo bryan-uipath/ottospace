@@ -1512,6 +1512,86 @@ fn a_checkouts_dot_pulses_once_on_a_commit_and_lights_while_a_session_works_ther
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner: "the icons don't really make sense". A space's item on the top row says what goes
+/// on in it, by a checkout dot's rule: a workspace of a worktree lights while a session works there,
+/// its mark breathing (frames only then, none under Reduce Motion); a task that needs you is amber;
+/// a workspace of one app pane shows the app.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_spaces_item_on_the_top_row_lights_while_work_goes_on_in_it() {
+    let home = user_folder("space-indicator", "{}").canonicalize().unwrap();
+    let (app, worktree, claude) = (home.join("src/app"), home.join("src/app-2"), home.join("claude"));
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "c"]);
+    git(&app, &["worktree", "add", "-q", "-b", "fix", "../app-2"]);
+    let dirs = json!({"claude": [claude], "codex": home.join("codex")});
+    let settings = json!({"repos": [app], "sessions": true, "session_dirs": dirs, "restore_layout": false});
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let id = "11111111-1111-4111-8111-111111111111";
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&worktree));
+    let at_work = || {
+        let fixture = format!("claude/projects/-work-app/{id}.jsonl");
+        session_fixture(&fixture, &project.join(format!("{id}.jsonl")), &worktree, Duration::ZERO);
+    };
+    let counts = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"].clone();
+    let space = |o: &Otto, of: &Value| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["spaces"].as_array().unwrap().iter().find(|s| s["of"] == *of).cloned().unwrap_or_default()
+    };
+    // A workspace of the worktree, made by the user's click on its Repos row: idle, nothing breathes.
+    let launch = |name: &str, calm: bool| {
+        let mut env = vec![("OTTOSPACE_HOME", home.to_str().unwrap()), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+        env.extend(calm.then_some(("OTTOSPACE_REDUCE_MOTION", "1")));
+        let otto = Otto::launch_with(name, &env);
+        otto.call(json!({"cmd": "section", "section": "repos"}));
+        let rows = otto
+            .wait_for("the Repos rows", |o| Some(o.drawn()).filter(|s| !s["repos_bar"][0]["rows"][1]["row"].is_null()));
+        let made = otto.user_click(at(rect(&rows["repos_bar"][0]["rows"][1]["row"]), 0.3, 0.5));
+        let book = made["spaces"].as_array().unwrap().iter().find(|s| s["selected"] == true).unwrap()["of"].clone();
+        assert_eq!(book["kind"], "workbook", "{}", made["spaces"]);
+        (otto, book)
+    };
+    let (otto, book) = launch("space-indicator", false);
+    assert_eq!(
+        (&space(&otto, &book)["indicator"], &space(&otto, &book)["glyph"]),
+        (&json!("idle"), &json!({"kind": "name"}))
+    );
+    std::thread::sleep(Duration::from_millis(500));
+    assert_eq!(counts(&otto)["space_pulse_frames"], 0, "nothing works: no frame");
+    // A session at work there: lit, and its mark asks for frames.
+    at_work();
+    otto.wait_for("the workspace to light", |o| (space(o, &book)["indicator"] == "working").then_some(()));
+    otto.wait_for("its breath's frames", |o| (counts(o)["space_pulse_frames"].as_u64()? > 2).then_some(()));
+    // A task that needs you: its item is amber.
+    otto.call(json!({"cmd": "task_add", "title": "ask", "state": "needs_you"}));
+    otto.call(json!({"cmd": "task_open", "id": 1}));
+    let task = json!({"kind": "task", "id": 1});
+    assert_eq!(
+        (&space(&otto, &task)["glyph"], &space(&otto, &task)["indicator"]),
+        (&json!({"kind": "tasks"}), &json!("needs_you"))
+    );
+    // A workspace of one app pane: the app's icon.
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    otto.call(json!({"cmd": "app_fixture", "name": "Zoom Workplace", "user": true}));
+    let state = otto.call(json!({"cmd": "state"}));
+    let selected = state["spaces"].as_array().unwrap().iter().find(|s| s["selected"] == true).cloned().unwrap();
+    assert_eq!(
+        (&selected["glyph"], &selected["indicator"]),
+        (&json!({"kind": "app", "name": "Zoom Workplace"}), &json!("idle"))
+    );
+    drop(otto);
+
+    // Under Reduce Motion: lit, steady, no frame.
+    let (otto, book) = launch("space-indicator-calm", true);
+    at_work();
+    otto.wait_for("the workspace to light", |o| (space(o, &book)["indicator"] == "working").then_some(()));
+    std::thread::sleep(Duration::from_millis(700));
+    assert_eq!(counts(&otto)["space_pulse_frames"], 0);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_folded_repositorys_name_has_a_dot_while_a_checkout_works_or_needs_you() {
@@ -9868,7 +9948,17 @@ fn tabs_and_layout_come_back_after_quitting_and_no_agent_starts() {
     // Workspace's tabs, then the task's space, in their order; the task's tab on show.
     assert_eq!(tab_titles(&after), tab_titles(&before));
     assert_eq!((on_show(&after), &after["state"]["sidebar"]), (json!(1), &json!("tasks")));
-    assert_eq!(after["spaces"], before["spaces"]);
+    // What persists: each space but what goes on in it (its task's live state, read again after the start).
+    let kept = |s: &Value| {
+        let mut spaces = s["spaces"].clone();
+        spaces
+            .as_array_mut()
+            .into_iter()
+            .flatten()
+            .for_each(|space| drop(space.as_object_mut().map(|o| o.remove("indicator"))));
+        spaces
+    };
+    assert_eq!(kept(&after), kept(&before));
     // The drawer shows the task's conversation to go on with; no agent was started.
     let talk = &after["state"]["talk"];
     assert_eq!((&talk["task"], &talk["open"], &talk["keys"]), (&json!(1), &json!(true), &json!(false)), "{talk}");

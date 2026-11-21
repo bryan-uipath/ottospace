@@ -165,9 +165,9 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     capture: { key: null, bar: null, picture: null, encoded: [], pending: 0, dir: null, brief: null },
     bug: { icon: false, report: null, blanked: null, pixels: null, controls: null },
     spaces: [
-      { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" }, kept: true },
-      { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, worktree: "/code/app", glyph: { kind: "app", name: "Notes" }, kept: true },
-      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, worktree: null, glyph: { kind: "tasks" }, kept: true },
+      { of: { kind: "home" }, hidden: false, selected: false, tabs: [], tasks: [], front: null, worktree: null, glyph: { kind: "home" }, indicator: "idle", kept: true },
+      { of: { kind: "workbook", id: 1 }, hidden: false, selected: true, tabs: [0], tasks: [], front: null, worktree: "/code/app", glyph: { kind: "app", name: "Notes" }, indicator: "working", kept: true },
+      { of: { kind: "task", id: 1 }, hidden: true, selected: false, tabs: [1], tasks: [1], front: 1, worktree: null, glyph: { kind: "tasks" }, indicator: "needs_you", kept: true },
     ],
     badges: { "1": "FL" },
     status_bar: {

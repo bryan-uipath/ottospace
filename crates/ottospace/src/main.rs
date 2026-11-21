@@ -41,7 +41,7 @@ use ottospace_core::list::{ListKey, list_key};
 use ottospace_core::marks::{Field, MarkInput, MarkOf, MarkRef, letter};
 use ottospace_core::model::reorder::ReorderItem;
 use ottospace_core::model::zones::RailFocus;
-use ottospace_core::model::{CONFIRM_UP, Glyph, Owner, Space, TabAt};
+use ottospace_core::model::{CONFIRM_UP, Glyph, Owner, Space, TabAt, repo_dots};
 use ottospace_core::notice::{self, Notice};
 use ottospace_core::repos::{Checkout, Repo};
 use ottospace_core::row_menu::MenuOf;
@@ -1198,6 +1198,10 @@ struct Workspace {
     pr_note: Option<&'static str>,
     /// Frames a checkout dot's pulse asked for (the state's `counts.repo_pulse_frames`, test runs).
     repo_pulse_frames: Cell<u64>,
+    /// Frames a working space's mark on the top row asked for (`counts.space_pulse_frames`, test runs).
+    space_pulse_frames: Cell<u64>,
+    /// A redraw for the breath is asked for and not yet done.
+    breath_due: Cell<bool>,
     /// The status bar: the focused folder's checkout, read off the main thread; how its segments
     /// were last shortened; the meeting it last said (`id`, minutes to go, Join), to draw again on a change.
     status_git: status_bar::Reader,
@@ -1809,6 +1813,8 @@ impl Workspace {
             prs: prs::Reader::new(),
             pr_note: None,
             repo_pulse_frames: Cell::default(),
+            space_pulse_frames: Cell::default(),
+            breath_due: Cell::default(),
             status_git: status_bar::Reader::new(),
             city: city::Reader::new(),
             city_drawn: city::Shared::default(),
@@ -4181,6 +4187,9 @@ impl Workspace {
                 // at rest, none under Reduce Motion.
                 "repo_pulses": self.model.head_pulses(),
                 "repo_pulse_frames": self.repo_pulse_frames.get(),
+                // Frames a working space's mark on the top row asked for: none while none works,
+                // none under Reduce Motion.
+                "space_pulse_frames": self.space_pulse_frames.get(),
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
@@ -7265,6 +7274,9 @@ impl Workspace {
         }
         let more = others - badges;
         let dots = self.model.listen_dots();
+        // A working space's mark breathes, slowly and faintly; under Reduce Motion it stays lit.
+        let breath = space_breath(dial::calm());
+        let breathing = Cell::new(false);
         // The heard pane's space left off for room: the count carries its dot.
         let dot_in_more = dots.iter().any(|dot| {
             matches!(dot, ottospace_core::listen::Dot::Space(of)
@@ -7298,7 +7310,17 @@ impl Workspace {
                 // Its tasks' badges, the most urgent first and on top of the next.
                 (Glyph::Tasks, _) => {
                     let tasks = self.model.space_badges(&of);
-                    let badges: Vec<Div> = tasks.iter().take(5).filter_map(|id| self.task_badge(*id, 18.)).collect();
+                    // The first (most urgent) carries the space's activity when no badge drawn says it.
+                    let space = self.model.space_activity(&of);
+                    let badges: Vec<Div> = tasks
+                        .iter()
+                        .take(5)
+                        .enumerate()
+                        .filter_map(|(at, id)| {
+                            let least = if at == 0 { space } else { repo_dots::Activity::Idle };
+                            self.activity_badge(*id, 18., least, breath, &breathing)
+                        })
+                        .collect();
                     // Each 11 points right of the one before; drawn last to first, so the first is on top.
                     let width = 18. + 11. * badges.len().saturating_sub(1) as f32;
                     let placed = badges.into_iter().enumerate().rev();
@@ -7306,15 +7328,16 @@ impl Workspace {
                         placed.map(|(at, badge)| div().absolute().top_0().left(px(11. * at as f32)).child(badge));
                     Some(div().relative().flex_none().w(px(width)).h(px(18.)).children(placed).into_any_element())
                 }
-                // A task's workspace whose tasks are all done draws as a workspace: never blank when small.
-                (_, Owner::Workbook { .. }) | (Glyph::Name, Owner::Task { .. }) => Some(
-                    svg()
-                        .path("icons/workbook.svg")
-                        .size(px(14.))
-                        .flex_none()
-                        .text_color(rgb(theme::MUTED))
-                        .into_any_element(),
-                ),
+                // A workspace, or a task's whose tasks are all done: a quiet dot, lit as a checkout's
+                // while work goes on there. Never blank when small.
+                (_, Owner::Workbook { .. }) | (Glyph::Name, Owner::Task { .. }) => {
+                    let activity = self.model.space_activity(&of);
+                    let working = activity == repo_dots::Activity::Working;
+                    breathing.set(breathing.get() || working && breath.is_some());
+                    let dot = self.activity_dot(repo_dots::Dot { activity, task: None, pulse: None });
+                    let opacity = breath.filter(|_| working).unwrap_or(1.);
+                    Some(div().flex_none().p(px(3.)).opacity(opacity).child(dot).into_any_element())
+                }
                 (_, Owner::Session { .. }) if small => {
                     Some(div().child(ottospace_core::talk::monogram(&self.model.space_title(&of))).into_any_element())
                 }
@@ -7494,7 +7517,7 @@ impl Workspace {
         let lights = (TRAFFIC_LIGHTS - left).max(0.);
         // The row sits below the selected space: a shadow at its foot, which only that space covers.
         let below = inner_shade(false, 7.).left(px(lights));
-        div()
+        let row = div()
             .h(px(TOP_BAR))
             .flex_none()
             .relative()
@@ -7550,7 +7573,21 @@ impl Workspace {
             .children(more)
             .child(new_space)
             .children(chip)
-            .child(self.render_top_buttons(cx))
+            .child(self.render_top_buttons(cx));
+        // A mark breathes: a redraw in 66 ms (15 a second is smooth for a 2.4 s breath, and not a
+        // frame of the whole window at the display's rate), none once none does.
+        if breathing.get() && !self.breath_due.replace(true) {
+            self.space_pulse_frames.set(self.space_pulse_frames.get() + 1);
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(Duration::from_millis(66)).await;
+                let _ = this.update(cx, |this, cx| {
+                    this.breath_due.set(false);
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+        row
     }
 
     /// New tab and split buttons: a new empty tab, or the picker for that split. Then Fill the
@@ -7998,6 +8035,15 @@ fn midnight_of(now: u64, offset_at: impl Fn(i64) -> i64) -> u64 {
     let local = now as i64 + now_offset;
     let date = local - local.rem_euclid(86_400_000);
     (date - offset_at(date - now_offset)).max(0) as u64
+}
+
+/// The opacity of a working space's mark now: 1 to 0.4 and back every 2.4 s. None under Reduce
+/// Motion: it stays lit. A test run's stays at 0.7, so its pictures repeat.
+fn space_breath(calm: bool) -> Option<f32> {
+    const PERIOD: u64 = 2_400;
+    let turn = (now_ms() % PERIOD) as f32 / PERIOD as f32;
+    let still = std::env::var_os("OTTOSPACE_E2E").is_some();
+    (!calm).then(|| if still { 0.7 } else { 0.7 + 0.3 * (turn * std::f32::consts::TAU).cos() })
 }
 
 fn now_ms() -> u64 {

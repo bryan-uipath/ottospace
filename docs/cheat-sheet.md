@@ -94,7 +94,9 @@ The badge on an app is how many windows it has open. A new window of a hosted ap
 A workspace is a named set of tabs, for a context that comes back. A new one is temporary (its
 name muted and italic) until it gets a task, a repository, a name or Keep; kept, it is kept between runs and
 listed in the Workspaces section whether it is open or not. The first item of the top row is
-Home, a house: it holds no pane. What you open there (a pane, ⌘T, a Repos row) gets a new
+Home, a house: it holds no pane. Each item after it says what goes on in it: a task's badge
+breathes while its agent works and is amber while it needs you; a workspace shows its one app's
+icon, else a dot, lit while a session works in its worktree. What you open there (a pane, ⌘T, a Repos row) gets a new
 workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace selected last.
 
 | I want to | Do |
