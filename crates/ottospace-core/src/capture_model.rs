@@ -37,6 +37,13 @@ pub struct Collection {
     pub facts: Vec<Facts>,
     #[serde(skip)]
     next: u32,
+    /// The box's own (✎): no bar opens, its captures are pills in the box, ↵ after marking goes
+    /// back to it. One the capture key started in the bar is not.
+    #[serde(skip)]
+    pub boxed: bool,
+    /// While the box's ✎ marks up: the first capture of this round. Esc drops it and those after.
+    #[serde(skip)]
+    pub round: Option<u32>,
 }
 
 impl Collection {
@@ -72,9 +79,20 @@ impl Model {
         self.compose.is_some() && self.capture.as_ref().is_none_or(|draft| draft.typing)
     }
 
-    /// The new-task line is in its box over the workspace, not in the bar.
+    /// The new-task line is in its box over the workspace, not in the bar (the box's own ✎
+    /// draft stays in it).
     pub fn compose_modal(&self) -> bool {
-        self.compose.is_some() && self.capture.is_none()
+        self.compose.is_some() && self.capture.as_ref().is_none_or(|bar| bar.boxed && bar.annotating.is_none())
+    }
+
+    /// The draft in the right bar: the capture key's, not the box's own ✎ draft.
+    pub fn bar_draft(&self) -> Option<&Collection> {
+        self.capture.as_ref().filter(|bar| !bar.boxed)
+    }
+
+    /// The box's ✎ is marking up: the box is tucked away.
+    pub fn pen_marking(&self) -> bool {
+        self.capture.as_ref().is_some_and(|bar| bar.boxed && bar.annotating.is_some())
     }
 
     /// The capture being annotated.
@@ -158,9 +176,13 @@ impl Model {
             self.compose = Some(Field::new("", MAX_TITLE));
             self.compose_reset();
         }
-        // A draft is no box of the drawer: its task goes where the user is, also once filed. Nor
-        // a quick note: its pills are not the draft's.
-        (self.compose_to, self.quick) = (None, None);
+        // The box's ✎: the draft is the box's, which stays as it was (where it goes, a quick note).
+        let boxed = std::mem::take(&mut self.compose_pen) && self.capture.as_ref().is_none_or(|bar| bar.boxed);
+        // A draft in the bar is no box of the drawer: its task goes where the user is, also once
+        // filed. Nor a quick note: its pills are not the draft's.
+        if !boxed && self.capture.as_ref().is_none_or(|bar| !bar.boxed) {
+            (self.compose_to, self.quick) = (None, None);
+        }
         let at = self.now;
         let bar = self.capture.get_or_insert_with(|| Collection {
             draft,
@@ -172,6 +194,8 @@ impl Model {
             word,
             facts: Vec::new(),
             next: 0,
+            boxed,
+            round: None,
         });
         bar.facts = facts;
         bar.stop_annotating();
@@ -179,6 +203,9 @@ impl Model {
             (Some(pane), Some(source)) if bar.materials.len() < MAX_MATERIALS => {
                 bar.next += 1;
                 let n = bar.next;
+                if bar.boxed {
+                    bar.round = bar.round.or(Some(n));
+                }
                 let marks = Marks::default();
                 bar.materials.push(Material { n, pane, source, marks, content: None, picture: None, stale: false, at });
                 (bar.annotating, bar.typing) = (Some(n), false);
@@ -223,6 +250,12 @@ impl Model {
 
     /// The draft was filed as task `id`: its captures are the task's, with a brief.
     pub(crate) fn capture_keep(&mut self, id: TaskId, effects: &mut Vec<Effect>) {
+        self.capture_keep_noted(id, None, effects);
+    }
+
+    /// The same, for a quick note with captures (its ✎): what it was filed with goes in the same
+    /// brief, and the task is a note too.
+    pub(crate) fn capture_keep_noted(&mut self, id: TaskId, note: Option<capture::Note>, effects: &mut Vec<Effect>) {
         let Some(mut bar) = self.capture.take() else { return };
         bar.stop_annotating();
         let Some(task) = self.tasks.get(id).filter(|_| !bar.materials.is_empty()).cloned() else {
@@ -232,7 +265,11 @@ impl Model {
         let Some(dir) = crate::tasks::materials_dir(id, &bar.word) else {
             return effects.push(Effect::CaptureDropped { draft: bar.draft, material: None });
         };
-        let brief = capture::brief(&task, &bar.materials, self.open_now(&bar.facts), bar.images, &bar.word);
+        let mut brief = capture::brief(&task, &bar.materials, self.open_now(&bar.facts), bar.images, &bar.word);
+        if let Some(note) = note {
+            brief.note = capture::note_brief(&task, note, &bar.word).note;
+            self.tasks.note(id, dir.clone());
+        }
         self.tasks.attach(id, bar.materials.iter().map(|m| format!("{dir}/{}.json", m.n)).collect());
         effects.push(Effect::CaptureKept { draft: bar.draft, dir, brief: Box::new(brief) });
     }
@@ -278,6 +315,23 @@ impl Model {
         action
     }
 
+    /// The box's ✎ round ends: ↵ (`keep`) goes back to the box with what was marked, Esc with
+    /// nothing of this round; the line is as it was either way.
+    pub(crate) fn pen_done(&mut self, keep: bool, effects: &mut Vec<Effect>) {
+        let Some(bar) = self.capture.as_mut().filter(|bar| bar.boxed) else { return };
+        bar.stop_annotating();
+        bar.typing = true;
+        let round = bar.round.take();
+        if !keep && let Some(first) = round {
+            let dropped: Vec<u32> = bar.materials.iter().map(|m| m.n).filter(|n| *n >= first).collect();
+            for n in dropped {
+                bar.remove(n);
+                effects.push(Effect::CaptureDropped { draft: bar.draft.clone(), material: Some(n) });
+            }
+        }
+        self.leave(effects);
+    }
+
     /// What must hold after every action: a draft has its title; a picture is annotated only
     /// while its pane is on show and not live; the way back leads to a pane that is there; a
     /// brief shows only with its task's tabs.
@@ -285,6 +339,11 @@ impl Model {
         let (shown, live) = (self.shown(), self.live);
         if self.compose.is_none() {
             self.capture_drop(effects);
+        }
+        // The box's draft with nothing in it, not marking up: gone, the box as it was.
+        if let Some(bar) = self.capture.take_if(|bar| bar.boxed && bar.materials.is_empty() && bar.annotating.is_none())
+        {
+            effects.push(Effect::CaptureDropped { draft: bar.draft, material: None });
         }
         if let Some(bar) = &mut self.capture
             && let Some(n) = bar.annotating
@@ -940,5 +999,122 @@ mod tests {
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!(m.tasks.get(1).map(|task| task.title.as_str()), Some("mine too"));
         assert_eq!(m.refusal(&edit, Origin::Socket), None);
+    }
+
+    /// The box over a terminal and an app, `overlay_panels` on, with "fix the cart" typed.
+    fn boxed() -> Model {
+        let mut m = terminal_and_app();
+        let features = crate::features::Features::all().with(crate::features::Feature::OverlayPanels, true);
+        m.update(Action::SetFeatures { features }.sent_by(Origin::System));
+        m.update(Action::OpenCompose { text: String::new() });
+        typed(&mut m, "fix the cart");
+        m
+    }
+
+    /// The box's ✎: the shell is asked for the capture key's capture, which is then the box's.
+    fn pen(m: &mut Model) {
+        assert_eq!(m.update(Action::ComposePen), [Effect::PenStart]);
+        start(m, None);
+    }
+
+    fn kept(effects: &[Effect]) -> Option<&capture::Brief> {
+        effects.iter().find_map(|effect| match effect {
+            Effect::CaptureKept { brief, .. } => Some(brief.as_ref()),
+            _ => None,
+        })
+    }
+
+    /// ✎ tucks the box away and marks up the pane in use; ↵ is the box again, centred, the line
+    /// as typed, the capture a pill with its crop; ↵ there files the task with its brief.
+    #[test]
+    fn the_boxs_pen_marks_up_a_pane_and_comes_back_to_the_box() {
+        let mut m = boxed();
+        assert!(m.compose_centred());
+        pen(&mut m);
+        assert_eq!((m.mode(), m.pen_marking(), m.compose_centred()), (Mode::Annotate, true, false));
+        // A press on the panes is a mark: the box is not dismissed by it.
+        m.update(Action::OverlayDismiss);
+        assert!(m.pen_marking() && m.compose.is_some());
+        assert_eq!(m.compose_host(), Some(crate::model::Host::Drawer), "no bar opens");
+        drag(&mut m, [0.2, 0.2], [0.4, 0.5]);
+        m.update(Action::AnnotateLeave { title: true });
+        assert_eq!(
+            (m.mode(), m.pen_marking(), m.compose_centred(), title(&m)),
+            (Mode::Compose, false, true, Some("fix the cart"))
+        );
+        assert_eq!(bar(&m).materials.len(), 1);
+        // The pill's crop: what was marked, a little wider.
+        let crop = capture::crop(shapes(&m, 1)).expect("a crop");
+        assert!((crop[0] - 0.16).abs() < 1e-9 && (crop[2] - 0.28).abs() < 1e-9, "{crop:?}");
+        let effects = m.update(Action::ComposeSubmit { open: false });
+        let brief = kept(&effects).expect("its brief");
+        assert_eq!((brief.materials.len(), brief.materials[0].crop), (1, Some(crop)));
+        assert_eq!(m.tasks.list.last().map(|task| task.title.as_str()), Some("fix the cart"));
+        assert!(m.capture.is_none() && m.compose.is_none());
+    }
+
+    /// Esc while marking up: back to the box with nothing of that round, the line intact. × on a
+    /// pill drops its capture; with none left the box has no draft.
+    #[test]
+    fn esc_in_the_pen_attaches_nothing_and_a_pill_s_x_drops_its_capture() {
+        let mut m = boxed();
+        pen(&mut m);
+        drag(&mut m, [0.1, 0.1], [0.3, 0.3]);
+        m.update(Action::AnnotateLeave { title: false });
+        assert_eq!((m.capture.is_none(), title(&m), m.compose_centred()), (true, Some("fix the cart"), true));
+        // A round kept, then a second dropped: the first stays.
+        pen(&mut m);
+        drag(&mut m, [0.1, 0.1], [0.3, 0.3]);
+        m.update(Action::AnnotateLeave { title: true });
+        pen(&mut m);
+        let effects = m.update(Action::AnnotateLeave { title: false });
+        assert!(
+            effects.contains(&Effect::CaptureDropped { draft: "draft-1".into(), material: Some(2) }),
+            "{effects:?}"
+        );
+        assert_eq!(bar(&m).materials.iter().map(|m| m.n).collect::<Vec<_>>(), [1]);
+        m.update(Action::CaptureRemove { material: 1 });
+        assert_eq!((m.capture.is_none(), title(&m)), (true, Some("fix the cart")));
+    }
+
+    /// Only the user's ✎ starts one; a client's capture stays refused. Over a draft in the bar
+    /// the ✎ does nothing: that draft is the capture key's.
+    #[test]
+    fn only_the_users_pen_starts_a_capture() {
+        let mut m = boxed();
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(m.refusal(&Action::ComposePen, origin), Some(capture::USERS_ALONE));
+            assert_eq!(m.update(Action::ComposePen.sent_by(origin)), []);
+        }
+        let theirs = Action::CaptureStart {
+            pane: None,
+            draft: "d".into(),
+            word: "k3f9a2c41b7d".into(),
+            facts: facts(),
+            images: true,
+        };
+        assert!(m.refusal(&theirs, Origin::Socket).is_some());
+        start(&mut m, None);
+        m.update(Action::AnnotateLeave { title: true });
+        assert_eq!((m.compose_host(), m.update(Action::ComposePen)), (Some(crate::model::Host::Bar), vec![]));
+    }
+
+    /// The quick note with a ✎ capture: one brief holds both, the note's pills and the capture.
+    #[test]
+    fn a_quick_note_files_its_pens_capture_with_its_pills() {
+        let mut m = boxed();
+        m.update(Action::CloseCompose.sent_by(Origin::System));
+        m.update(Action::CloseCompose);
+        m.update(Action::QuickOpen { now: 1, word: "q7f9a2c41b7d".into(), transcript: None });
+        typed(&mut m, "look at this");
+        pen(&mut m);
+        drag(&mut m, [0.5, 0.5], [0.6, 0.6]);
+        m.update(Action::AnnotateLeave { title: true });
+        assert!(m.quick_pills().is_some(), "still the quick note");
+        let effects = m.update(Action::ComposeEnter);
+        let brief = kept(&effects).expect("one brief");
+        assert_eq!((brief.materials.len(), brief.note.is_some()), (1, true));
+        let task = m.tasks.list.last().expect("filed");
+        assert_eq!((task.title.as_str(), task.note.is_some(), task.materials.len()), ("look at this", true, 1));
     }
 }

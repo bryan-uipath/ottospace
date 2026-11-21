@@ -1021,7 +1021,8 @@ impl Workspace {
     /// The draft in the right bar: the new-task line as its title, then what was collected.
     /// The workspace stays in use beside it.
     pub(crate) fn render_draft(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let bar = self.model.capture.as_ref()?;
+        // The box's own ✎ draft is in the box, not here.
+        let bar = self.model.bar_draft()?;
         let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
         let key = KEY.get().map(|key| format!(" ({})", key_label(key))).unwrap_or_default();
         let rows: Vec<AnyElement> =
@@ -1181,7 +1182,8 @@ impl Workspace {
     pub(crate) fn capture_snapshot(&self) -> serde_json::Value {
         let bar = self.model.capture.as_ref();
         let shown = self.model.brief.filter(|_| bar.is_none()).and_then(|id| self.briefs.get(&id));
-        let open = bar.is_some() || shown.is_some();
+        // The box's own ✎ draft opens no bar.
+        let open = self.model.bar_draft().is_some() || shown.is_some();
         let mut encoded: Vec<u32> = self.shots.iter().filter(|(_, shot)| shot.png.is_some()).map(|(n, _)| *n).collect();
         encoded.sort_unstable();
         serde_json::json!({

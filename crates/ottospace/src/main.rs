@@ -538,6 +538,7 @@ impl AssetSource for Assets {
             "icons/apps.svg" => Some(include_bytes!("../assets/icons/apps.svg")),
             "icons/robot.svg" => Some(include_bytes!("../assets/icons/robot.svg")),
             "icons/home.svg" => Some(include_bytes!("../assets/icons/home.svg")),
+            "icons/pen.svg" => Some(include_bytes!("../assets/icons/pen.svg")),
             "icons/workbook.svg" => Some(include_bytes!("../assets/icons/workbook.svg")),
             "icons/tasks.svg" => Some(include_bytes!("../assets/icons/tasks.svg")),
             "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
@@ -2245,6 +2246,12 @@ impl Workspace {
                 Effect::SaveTasksView { view } => {
                     if let Err(why) = config::save_value("tasks_view", &serde_json::json!(view)) {
                         self.broke(format!("{}{why}", Self::NOT_WRITTEN));
+                    }
+                }
+                // The box's ✎: the capture key's capture, for the box. Only the user's ✎ asks.
+                Effect::PenStart => {
+                    if let Err(why) = self.capture_pane(None, Origin::User, window, cx) {
+                        self.broke(why);
                     }
                 }
                 Effect::SaveDefaultAgent { agent } => {
@@ -4292,7 +4299,16 @@ impl Workspace {
             // Where the open box's controls were drawn, by id (`compose-attach`, `compose-sheet`): sneak
             // mode does not label them while the line has the keyboard. Null outside a test run.
             "compose_rects": std::env::var_os("OTTOSPACE_E2E").filter(|_| self.model.compose.is_some()).map(|_| {
-                let ids = ["compose-attach", "compose-sheet", "compose-edge", "compose-start", "picker:#", "picker:>", "picker:@"];
+                let ids = [
+                    "compose-attach",
+                    "compose-pen",
+                    "compose-sheet",
+                    "compose-edge",
+                    "compose-start",
+                    "picker:#",
+                    "picker:>",
+                    "picker:@",
+                ];
                 let mut drawn = ids.iter().filter_map(|id| Some((id.to_string(), rect(self.controls.bounds(id)?)))).collect::<BTreeMap<_, _>>();
                 // The open picker's list.
                 if self.model.picker_menu().is_some() {

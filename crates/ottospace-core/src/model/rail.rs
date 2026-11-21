@@ -87,14 +87,14 @@ impl Model {
     pub fn drawer_collapsed(&self) -> bool {
         let talk = self.talk.as_ref().is_some_and(|talk| talk.open);
         let boxed = self.compose.is_some() || self.welcome_shown();
-        let elsewhere = self.inspector.is_some() || self.capture.is_some() || self.brief.is_some();
+        let elsewhere = self.inspector.is_some() || self.bar_draft().is_some() || self.brief.is_some();
         !(self.listen.shown || talk || boxed || elsewhere)
     }
 
     /// The selected item while the drawer's place shows it: not while collapsed, nor while the
     /// inspector, a capture's draft or the new-task box is there. What the rail lifts.
     pub fn rail_shown(&self) -> Option<RailItem> {
-        let taken = self.inspector.is_some() || self.capture.is_some();
+        let taken = self.inspector.is_some() || self.bar_draft().is_some();
         let boxed = self.compose.is_some() || self.welcome_shown();
         let talk = self.talk.as_ref().is_some_and(|talk| talk.open);
         self.rail_selected().filter(|item| match item {

@@ -1122,6 +1122,9 @@ pub enum Action {
     },
     /// ⌥↵ in the agent list: the highlighted agent becomes `default_agent`. Only the user's.
     ComposeDefault,
+    /// The box's ✎, or its key (⌘⇧M): mark up a pane for the task, the capture key's way, and come
+    /// back to the box. The shell then starts the capture (`Effect::PenStart`). Only the user's.
+    ComposePen,
     /// Files or folders dropped on the box, picked or pasted: each goes in at the cursor as a
     /// `/path` word. `home`: the user's folder, so paths inside it are written `~/..`.
     ComposeAttach {
@@ -2580,6 +2583,7 @@ impl Action {
             | Action::ComposePicker { .. }
             | Action::ComposePickerStep { .. }
             | Action::ComposeDefault
+            | Action::ComposePen
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -3052,6 +3056,7 @@ impl Action {
             | Action::ComposePicker { .. }
             | Action::ComposePickerStep { .. }
             | Action::ComposeDefault
+            | Action::ComposePen
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -3364,6 +3369,9 @@ pub enum Effect {
     SaveDefaultAgent {
         agent: String,
     },
+    /// The user's ✎ in the new-task box: start a capture of the pane in use, as the capture key
+    /// does (`Action::CaptureStart`), for the box.
+    PenStart,
     /// The pinned or hidden apps changed: make these changes to `apps` and `apps_hidden` in
     /// the settings file, as it is then.
     SaveApps {
@@ -3926,6 +3934,9 @@ pub struct Model {
     /// The picker whose list is open (`#`, `>`, `@`), and the row ↑ ↓ went to, by name.
     #[serde(skip)]
     compose_picker: Option<(char, Option<String>)>,
+    /// The user's ✎ asked for a capture: the next `CaptureStart` is the box's (`capture_start`).
+    #[serde(skip)]
+    pub(crate) compose_pen: bool,
     /// The new-task line a conversation's opening put aside: back when the box opens empty.
     #[serde(skip)]
     compose_kept: Option<KeptDraft>,
@@ -4255,6 +4266,7 @@ impl Default for Model {
             compose_worktree: false,
             compose_sheet: false,
             compose_picker: None,
+            compose_pen: false,
             compose_kept: None,
             compose_to: None,
             compose_talked: false,
@@ -4795,6 +4807,7 @@ impl Model {
             Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
             Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
             Action::ComposeDefault => Some(pickers::DEFAULT_USERS),
+            Action::ComposePen => Some(capture::USERS_ALONE),
             // Nor types in, files or closes the user's quick note: its pills are the user's to keep.
             action if self.quick.is_some() && self.drafts(action) => Some(quick::QUICK_USERS),
             Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
@@ -4994,6 +5007,7 @@ impl Model {
             | Action::ComposePicker { .. }
             | Action::ComposePickerStep { .. }
             | Action::ComposeDefault
+            | Action::ComposePen
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -5040,7 +5054,7 @@ impl Model {
         // request while it is open.) The box does not open under the key reference
         // or in visual mode.
         // A draft in the right bar is not a box: the workspace stays in use beside it.
-        let modal = self.compose.is_some() && self.capture.is_none();
+        let modal = self.compose_modal();
         // The palette opens over nothing that has the keyboard, and holds it as the picker does.
         let opens = matches!(
             action,
@@ -5426,6 +5440,10 @@ impl Model {
         }
         // The capture key is the user's "now": what lies over the workspace gives way to it.
         // (Visual mode ends after the picture is asked for: see `capture_start`.)
+        // The ✎'s ask holds only for the capture the shell starts for it next.
+        if !matches!(action, Action::CaptureStart { .. } | Action::ComposePen) {
+            self.compose_pen = false;
+        }
         if user && matches!(action, Action::CaptureStart { .. }) {
             (self.keys, self.picker, self.palette) = (false, None, None);
         }
@@ -6248,6 +6266,12 @@ impl Model {
             Action::ComposePicker { mark } => self.picker_toggle(mark),
             Action::ComposePickerStep { delta } => self.picker_step(delta),
             Action::ComposeDefault => self.picker_make_default(effects),
+            // From the box, and not over a draft in the bar: the capture key's draft is the bar's.
+            Action::ComposePen if self.composing() && self.capture.as_ref().is_none_or(|bar| bar.boxed) => {
+                self.compose_pen = true;
+                effects.push(Effect::PenStart);
+            }
+            Action::ComposePen => {}
             Action::ComposePick { mark, name } => self.compose_pick(mark, name),
             Action::ComposeAttach { paths, home, unreadable } => {
                 // A name the line cannot hold (a line break in it) or one too long to keep
@@ -7160,6 +7184,7 @@ impl Model {
             Action::AnnotateRedo => drop(self.marks_mut().map(capture::Marks::redo)),
             Action::AnnotateRemove => drop(self.marks_mut().map(capture::Marks::remove)),
             Action::AnnotateNote { keep } => drop(self.marks_mut().map(|marks| marks.end_note(keep))),
+            Action::AnnotateLeave { title } if self.pen_marking() => self.pen_done(title, effects),
             Action::AnnotateLeave { title } => {
                 if let Some(draft) = self.capture.as_mut().filter(|draft| draft.annotating.is_some()) {
                     draft.stop_annotating();
@@ -7416,6 +7441,8 @@ impl Model {
             Action::TalkToggle if self.by_user && !self.drawer_collapsed() && self.capture.is_none() => {
                 self.fold_drawer(effects)
             }
+            // A press on the panes while the box's ✎ marks up is a mark, not a click outside.
+            Action::OverlayDismiss if self.pen_marking() => {}
             Action::OverlayDismiss => self.overlay_dismiss(effects),
             // Reopened as it was collapsed: the transcript, or the box (its line back).
             Action::TalkToggle
@@ -8074,7 +8101,8 @@ impl Model {
     /// Where the new-task box is drawn: in the right bar while a draft is collected there; else in
     /// place on the home screen while it shows, else over the workspace. `None`: it is not open.
     pub fn compose_host(&self) -> Option<Host> {
-        let host = if self.capture.is_some() { Host::Bar } else { Host::Drawer };
+        // The box's own ✎ draft keeps it the drawer's.
+        let host = if self.capture.as_ref().is_some_and(|bar| !bar.boxed) { Host::Bar } else { Host::Drawer };
         self.compose.as_ref().map(|_| host)
     }
 
@@ -8108,7 +8136,8 @@ impl Model {
     /// `overlay_panels` on. Still the drawer's box to every rule (`compose_host`); ↵ grows it into the drawer.
     /// Not while the user's editor has its line (⌃G), nor once nothing is open: the drawer has it then.
     pub fn compose_centred(&self) -> bool {
-        let drawers = self.edits_compose() || self.welcome();
+        // Nor while its ✎ marks up: it is tucked away.
+        let drawers = self.edits_compose() || self.welcome() || self.pen_marking();
         self.compose_centred && self.overlays() && self.compose_host() == Some(Host::Drawer) && !drawers
     }
 
@@ -10757,6 +10786,7 @@ mod tests {
         Action::ComposePicker { .. },
         Action::ComposePickerStep { .. },
         Action::ComposeDefault,
+        Action::ComposePen,
         Action::ComposeAttach { .. },
         Action::ComposeRef { .. },
         Action::ComposePick { .. },
@@ -11142,6 +11172,7 @@ mod tests {
             Action::ComposePicker { mark: Some('@') },
             Action::ComposePickerStep { delta: -1 },
             Action::ComposeDefault,
+            Action::ComposePen,
             Action::ComposeAttach { paths: Vec::new(), home: None, unreadable: 0 },
             Action::ComposeRef { target: Pointed::Tab(1) },
             Action::ComposePick { mark: '>', name: None },
@@ -11975,6 +12006,7 @@ mod tests {
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
                     Action::ComposeDefault => Some(pickers::DEFAULT_USERS),
+                    Action::ComposePen => Some(capture::USERS_ALONE),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::WorktreeDelete { .. } => Some(crate::repos::DELETE_USERS),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
@@ -18946,6 +18978,7 @@ mod tests {
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
                     Action::ComposeDefault => Some(pickers::DEFAULT_USERS),
+                    Action::ComposePen => Some(capture::USERS_ALONE),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::WorktreeDelete { .. } => Some(crate::repos::DELETE_USERS),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),

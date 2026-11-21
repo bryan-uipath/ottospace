@@ -463,6 +463,11 @@ impl Workspace {
             ("home", "terminal", _) => Action::Split { axis: Axis::Right, kind: Kind::Terminal },
             // The box's "? tags" and its +.
             ("compose-sheet", _, _) => Action::ComposeSheet,
+            ("compose-pen", _, _) => Action::ComposePen,
+            ("snapshot", n, _) => {
+                let Ok(material) = n.parse() else { return true };
+                Action::CaptureRemove { material }
+            }
             ("compose-attach", _, _) => {
                 self.pick_files(window, cx);
                 return true;

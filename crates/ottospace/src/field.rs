@@ -270,7 +270,7 @@ impl Workspace {
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
                     // The draft's title in the bar takes the keyboard by a click on it.
-                    if of == "compose" && this.model.capture.is_some() && !this.model.compose_keys() {
+                    if of == "compose" && this.model.bar_draft().is_some() && !this.model.compose_keys() {
                         this.dispatch(Action::CaptureTitle, this.input, window, cx);
                     }
                     this.drawn_of(of).borrow_mut().pointer_y = event.position.y;

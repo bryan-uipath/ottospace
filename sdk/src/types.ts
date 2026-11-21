@@ -1856,7 +1856,7 @@ export interface Snapshot {
   compose_menu_bounds: Rect | null;
   /** Where each tag's cap in the box's tags' sheet was drawn, by its key (`#`, `>`, `p1`); a click on one types its mark. Empty while the sheet is put away; null with the box closed. */
   compose_tags: Record<string, Rect> | null;
-  /** Test runs only: where the open box's controls were drawn, by id (`compose-attach`, `compose-sheet`, `compose-edge`, `compose-start`, `picker:#`, `picker:>`, `picker:@`, `picker-list`). Null otherwise. */
+  /** Test runs only: where the open box's controls were drawn, by id (`compose-attach`, `compose-pen`, `compose-sheet`, `compose-edge`, `compose-start`, `picker:#`, `picker:>`, `picker:@`, `picker-list`). Null otherwise. */
   compose_rects: Record<string, Rect> | null;
   /** The folder taken from a path's dropdown that the task's agent will run in, as the line has it (`~/notes/`), or null. */
   compose_folder: string | null;

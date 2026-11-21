@@ -125,7 +125,9 @@ impl Model {
         }
         let line = self.compose_line().cloned().unwrap_or_default();
         let Some(quick) = self.quick.clone() else { return };
-        let Some(id) = self.file_titled(&line, None, None) else { return };
+        // Its ✎'s captures name it when nothing is typed, as a draft's do.
+        let named = self.capture_title().filter(|_| self.draft(&line).title.is_empty());
+        let Some(id) = self.file_titled(&line, None, named) else { return };
         // Its project, unless the line names one: the line is filed as typed.
         let task = self.tasks.get(id).filter(|task| task.project.is_none()).map(|task| task.repo.clone());
         if let (Some(repo), Some(project)) = (task, quick.project.clone()) {
@@ -133,16 +135,19 @@ impl Model {
         }
         self.compose = None;
         self.compose_reset();
-        self.keep_note(id, &quick, effects);
+        let note = self.quick_note(&quick);
+        match self.capture.is_some() {
+            true => self.capture_keep_noted(id, Some(note), effects),
+            false => self.keep_note(id, note, &quick.word, effects),
+        }
         if open && self.by_user {
             self.talk_to(Subject::Task(id), true, effects);
             self.act(Action::TaskGo { id: Some(id) }, effects);
         }
     }
 
-    /// What the pills left on point at, kept in the task's own folder with its brief.
-    fn keep_note(&mut self, id: TaskId, quick: &Quick, effects: &mut Vec<Effect>) {
-        let Some(dir) = tasks::materials_dir(id, &quick.word) else { return };
+    /// What the pills left on point at.
+    fn quick_note(&self, quick: &Quick) -> Note {
         let mut note = Note { filed: quick.now, ..Note::default() };
         for pill in &quick.pills {
             match pill {
@@ -151,8 +156,14 @@ impl Model {
                 Pill::Front { of } => note.front = Some(self.space_title(of)),
             }
         }
+        note
+    }
+
+    /// The note, kept in the task's own folder with its brief.
+    fn keep_note(&mut self, id: TaskId, note: Note, word: &str, effects: &mut Vec<Effect>) {
+        let Some(dir) = tasks::materials_dir(id, word) else { return };
         let Some(task) = self.tasks.note(id, dir.clone()).cloned() else { return };
-        let brief = capture::note_brief(&task, note, &quick.word);
+        let brief = capture::note_brief(&task, note, word);
         effects.push(Effect::NoteKept { dir, brief: Box::new(brief) });
     }
 }

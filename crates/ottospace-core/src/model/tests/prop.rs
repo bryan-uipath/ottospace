@@ -1264,6 +1264,7 @@ const MAKERS: &[Make] = &[
     |g| Action::ComposePicker { mark: g.rng.pick(&[None, Some('#'), Some('>'), Some('@'), Some('/')]) },
     |g| Action::ComposePickerStep { delta: g.delta() },
     |_| Action::ComposeDefault,
+    |_| Action::ComposePen,
     |g| {
         // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
         // one too long, one that is no path.
@@ -5352,6 +5353,13 @@ impl Run {
                 // The settings file is the user's.
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
+                }
+                // The box's ✎ asks the shell for a capture: the user's alone, as the capture key is.
+                Effect::PenStart => {
+                    ensure!(
+                        user && matches!(action, Action::ComposePen) && m.compose_pen,
+                        "{origin:?}'s {action:?} started the pen"
+                    )
                 }
                 Effect::SaveDefaultAgent { agent } => {
                     let held = m.default_agent.as_deref() == Some(agent.as_str());

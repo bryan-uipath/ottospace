@@ -111,7 +111,7 @@ impl Model {
     /// aside), but a capture's draft: the user's work in progress. What the toggle opens again is kept.
     pub(super) fn fold_drawer(&mut self, effects: &mut Vec<Effect>) {
         // Nor while the user's editor writes the open box's line (⌃G): its save would find no box.
-        if self.drawer_collapsed() || self.capture.is_some() || (self.overlays() && self.edits_compose()) {
+        if self.drawer_collapsed() || self.bar_draft().is_some() || (self.overlays() && self.edits_compose()) {
             return;
         }
         // Folded: no Esc in the sidebar hands the keyboard back to it.

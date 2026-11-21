@@ -38,6 +38,26 @@ agent with the brief (see Next).
    right bar. A terminal opened in a task's tab has `OTTOSPACE_TASK`, and
    `{"cmd":"task_brief"}` returns the brief.
 
+## From the box: ✎
+
+The new-task box and the quick note (⌘⇧N) have ✎ beside + (key: ⌘⇧M while the box's line has
+the keyboard). It is the capture key's capture, started for the box (`Action::ComposePen`, then
+`Effect::PenStart`, then the shell's `CaptureStart`): the user's alone, as the capture key is;
+the core refuses a `ComposePen` of any other origin, and still refuses their `CaptureStart`.
+
+- The box tucks away to a line at the top that says the keys; the pane in use freezes in
+  annotate mode as above. No bar opens: the draft is the box's (`Collection::boxed`). A click on
+  another pane captures that one too, in the same round.
+- ↵ goes back to the box, centred, its line as typed. Each capture is a pill in its field: the
+  part marked, cropped from the picture (`capture::crop`: the marks' bounding box, 4 % wider each
+  side, within the picture), where it is from and how many marks; × on it drops that capture.
+- Esc goes back to the box with nothing of that round attached; captures of earlier rounds stay.
+  With none left the box has no draft.
+- Filing is as for a draft: the whole picture, the annotated one and the text under the marks go
+  into the task's brief, quoted and labelled untrusted; each material's `crop` is in it too. In the
+  quick note one brief holds both the capture and what the note was filed with.
+- ✎ does nothing while a draft is in the bar: that draft is the capture key's.
+
 ## The picture is the material
 
 Decided (Bryan, on apps that expose little to accessibility): "ocr should be fine, and most

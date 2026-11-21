@@ -160,7 +160,7 @@ impl Model {
             return;
         }
         let (field, limit) = match &target {
-            Target::Compose if self.capture.is_none() => (self.compose.as_mut(), crate::tasks::MAX_TITLE),
+            Target::Compose if self.bar_draft().is_none() => (self.compose.as_mut(), crate::tasks::MAX_TITLE),
             Target::Chat(subject) if self.keeps_draft(subject) => {
                 (self.chat_mut(subject).map(|chat| &mut chat.draft), super::chat::MAX_DRAFT)
             }

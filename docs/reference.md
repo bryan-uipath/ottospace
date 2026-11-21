@@ -169,7 +169,7 @@ While the quit question is over a field, nothing edits it.
 **The new-task box.** ⌘N and the Tasks section's `+` open it in the drawer,
 beside the workspace (centred over the panes with `overlay_panels`). Top to bottom: the line,
 its question as the placeholder; inside its field what it will point at (a folder taken from a
-path's dropdown, the quick note's pills) and its bottom edge: + (attach files, ⌘O), the pickers
+path's dropdown, the quick note's pills) and its bottom edge: + (attach files, ⌘O), ✎ (mark up a pane for the task, ⌘⇧M: see below), the pickers
 and Start ↵. Each picker shows what ↵ will use, with its sigil: `#project`, `>app · main` (where
 the agent starts: a repository, the workspace's folder, or "no repository"), `@claude` (the
 `default_agent` from the start, so ↵ needs no choice). A click on one, or Tab with no tag to
@@ -206,6 +206,7 @@ a click that would put it aside waits too.
 | ↑ / ↓ or ⌃P / ⌃N | Move over the dropdown's rows. With no dropdown: to the line's start or end |
 | Esc | Closes the dropdown. With no dropdown open: closes the box |
 | ⌘O, or `+ file` | The system's file picker: what is chosen goes into the line as `/path` words |
+| ⌘⇧M, or ✎ | Mark up a pane for the task: the box tucks away, the pane in use freezes, and you circle (drag), box (⇧-drag), draw (⌥-drag) or comment (click) on it, the [capture key](#capture)'s way; a click on another pane takes it too. ↵ is the box again with each capture as a pill (the part marked, cropped); × on a pill drops it; Esc comes back with nothing of that round. The pictures and the text under the marks go into the task's brief as untrusted context. In the quick note too |
 | ⌥⌘N, or `this checkout` / `new worktree` | Where the task works, when the box offers a choice (below): its workspace's checkout (the default), or a new worktree |
 | ⌥-click on a tab or a pane | Puts its `^reference` into the line. The tab is not selected, the pane not focused. While ⌥ is held the tab or pane under the pointer is outlined |
 
