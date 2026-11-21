@@ -9478,6 +9478,74 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A session's conversation opened from Elsewhere, then the Tasks section closed (nothing is
+/// listed): Resume session still shows and goes on with it, read first. Its file gone, the
+/// drawer says why instead of a bare "cannot".
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_session_opened_before_the_section_closed_resumes_or_says_why_not() {
+    let root = support::temp(&format!("ottospace-e2e-session-unlisted-{}", std::process::id()));
+    let (bin, repos, sessions) = (root.join("bin"), root.join("repos"), root.join("sessions"));
+    fake_agents(&bin, &sessions);
+    fake_repo(&repos.join("app"));
+    let repo = repos.join("app").canonicalize().unwrap();
+    let below = repo.join("crates/core");
+    std::fs::create_dir_all(&below).unwrap();
+    // A made-up idle session, started below the repository two hours ago.
+    let idle = "11111111-1111-4111-8111-111111111111";
+    let claude = sessions.join("claude");
+    let file = claude.join("projects").join(ottospace_sessions::claude::slug(&below)).join(format!("{idle}.jsonl"));
+    let fixture = "claude/projects/-work-app/11111111-1111-4111-8111-111111111111.jsonl";
+    session_fixture(fixture, &file, &below, Duration::from_secs(2 * 3600));
+    let settings =
+        json!({"repos": repos_in(&repos), "session_dirs": {"claude": [claude]}, "conversation_view": "terminal"});
+    let home = user_folder("session-unlisted", &settings.to_string());
+    let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+    let otto = Otto::launch_with("session-unlisted", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.call(json!({"cmd": "task_group", "heading": "sessions"}));
+    otto.call(json!({"cmd": "sessions_range", "range": "all"}));
+    otto.wait_for("the session to be read", |o| {
+        (o.call(json!({"cmd": "state"}))["sessions_bar"]["count"] == 1).then_some(())
+    });
+    let shown = otto.user_click(at(otto.control(&format!("session:claude:{idle}")), 0.3, 0.3));
+    assert_eq!(shown["state"]["talk"]["task"], json!({"runner": "claude", "id": idle}), "{shown}");
+
+    // The section closed: nothing listed, and no dead end.
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let state = otto.wait_for("nothing listed", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (state["sessions_bar"]["count"] == 0).then_some(state)
+    });
+    assert_eq!(state["drawer"]["note"], Value::Null, "{}", state["drawer"]);
+    let reading = otto.user_start();
+    assert_eq!(reading["state"]["talk"]["task"]["id"], idle, "{reading}");
+    let argv = otto.wait_for("claude --resume, read first", |_| agent_argv(&bin, "claude"));
+    assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
+
+    // Stopped, and its file gone: read again on Resume, and the drawer says why nothing starts.
+    std::fs::remove_file(bin.join("claude.argv")).unwrap();
+    otto.wait_for("its agent running", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["agents"] != json!([])).then_some(())
+    });
+    otto.user_click(at(otto.control("talk:talk-stop"), 0.5, 0.5));
+    otto.wait_for("its process gone", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["agents"] == json!([])).then_some(())
+    });
+    std::fs::remove_file(&file).unwrap();
+    otto.user_start();
+    let note = otto.wait_for("the drawer to say why", |o| {
+        let note = o.call(json!({"cmd": "state"}))["drawer"]["note"].clone();
+        note.is_string().then_some(note)
+    });
+    assert_eq!(note, "its session file is in no listed repository now: gone, or moved");
+    assert!(agent_argv(&bin, "claude").is_none(), "nothing more was started");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The window's buttons sit at its top left, 80 points wide and as tall as the tab strip (28).
 /// Every rail cell is as tall as a section's header; the first starts where the strip ends.
 #[test]

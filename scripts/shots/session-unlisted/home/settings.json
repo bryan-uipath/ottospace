@@ -1,0 +1,1 @@
+{"repos": ["{ROOT}/repos/app"], "sessions": true, "conversation_view": "native", "restore_layout": false, "sessions_range": "all", "session_dirs": {"claude": ["{ROOT}/sessions/claude"]}}
