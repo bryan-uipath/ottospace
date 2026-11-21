@@ -1,0 +1,14 @@
+# The status bar's agents with one at work in a terminal (a made-up Claude Code session, no task's)
+# beside a task that runs: `● 2 working · 1 in a terminal`; the hover of its part lists it.
+{"cmd":"task_new","line":"Rework the export retry plan"}
+{"cmd":"task_set_state","id":1,"state":"running"}
+{"cmd":"section","section":"tasks"}
+{"until":"sessions_bar.total"}
+{"cmd":"task_group","heading":"sessions"}
+{"until":"sessions_bar.rows.0"}
+{"settle":1000}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"bar"}
+{"hover":"status:terminal"}
+{"settle":1500}
+{"shot":"hover"}
