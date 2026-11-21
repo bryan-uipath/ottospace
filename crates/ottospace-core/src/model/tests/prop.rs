@@ -178,8 +178,14 @@ impl Gen<'_> {
             }
             (Some(_), None) if self.m.picker.is_some() => Action::PickerChoose { index: Some(0) },
             (Some((_, run)), None) => {
-                let pick =
-                    PickItem::Window { app: run.name.clone(), window, title: format!("{PICKED} w1"), pane: None };
+                let pick = PickItem::Window {
+                    app: run.name.clone(),
+                    window,
+                    title: format!("{PICKED} w1"),
+                    pane: None,
+                    frame: Default::default(),
+                    subrole: String::new(),
+                };
                 Action::OpenPicker { axis: Axis::Right, new_tab: false, items: vec![pick] }
             }
             (None, None) => Action::Focus { pane: self.slot_pane() },
@@ -8080,7 +8086,14 @@ fn seed_977_no_pane_is_dropped_into_a_closing_workspace() {
 #[test]
 fn the_users_pick_of_its_apps_window_fills_a_slot() {
     let app = |window| Kind::App { window, title: format!("{HOSTED} w1"), bundle: None, name: "app".into() };
-    let pick = PickItem::Window { app: "app".into(), window: 2, title: format!("{PICKED} w1"), pane: None };
+    let pick = PickItem::Window {
+        app: "app".into(),
+        window: 2,
+        title: format!("{PICKED} w1"),
+        pane: None,
+        frame: Default::default(),
+        subrole: String::new(),
+    };
     replay(&[
         Action::Open { kind: app(1), axis: Axis::Right, beside: None }.sent_by(Origin::User),
         slot_make(1, 1, "{\"select\":{}}").sent_by(Origin::User),
