@@ -16251,16 +16251,18 @@ fn every_empty_place_with_a_folder_draws_its_city() {
     let two = *pane_ids(&reply).last().unwrap();
     let both = otto.bounds(&[one, two]);
     assert_eq!((both[0][2], both[0][3]), (both[1][2], both[1][3]), "two panes of one size");
-    // The picture of their size, shared: one kept, as large as the pane in pixels.
+    // The picture of their size, shared: one kept, as large as the pane in pixels. As numbers:
+    // the picture's size is whole (`324`), a scaled bound a float (`324.0`), never equal as JSON.
     let size = |c: &Value| {
-        let b = &c["bounds"];
-        let scale = c["scale"].as_f64().unwrap_or(1.);
-        json!([(b[2].as_f64().unwrap_or(0.) * scale).round(), (b[3].as_f64().unwrap_or(0.) * scale).round()])
+        let (b, scale) = (&c["bounds"], c["scale"].as_f64().unwrap_or(1.));
+        let px = |v: &Value| (v.as_f64().unwrap_or(0.) * scale).round();
+        let picture = c["picture"].as_array().map(|p| p.iter().map(|v| v.as_f64().unwrap_or(-1.)).collect::<Vec<_>>());
+        picture == Some(vec![px(&b[2]), px(&b[3])])
     };
     let shared = otto.wait_for("one picture for both", |o| {
         // The shared picture reports either pane as its place.
         let on_either = |c: &Value| c["on"] == json!({"pane": one}) || c["on"] == json!({"pane": two});
-        Some(city(o)).filter(|c| on_either(c) && c["pictures"] == json!(1) && c["picture"] == size(c))
+        Some(city(o)).filter(|c| on_either(c) && c["pictures"] == json!(1) && size(c))
     });
     assert_eq!(shared["reads"].as_u64(), reads, "the files are read once per folder");
     assert!(shared["renders"].as_u64() > Some(renders), "drawn again at their size");
@@ -16382,7 +16384,8 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     otto.call(json!({"cmd": "split"}));
     assert_eq!(city(&otto), Value::Null);
     otto.call(json!({"cmd": "close"}));
-    let again = otto.wait_for("the city back", |o| Some(city(o)).filter(|city| !city.is_null()));
+    // Its picture is made again for the tab (none is kept for a place gone): wait for it.
+    let again = otto.wait_for("the city back", |o| Some(city(o)).filter(|city| !city["picture"].is_null()));
     assert_eq!(again["lit"], lit["lit"]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
