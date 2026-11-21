@@ -704,7 +704,8 @@ fn screen_of<T: EventListener>(term: &Term<T>, rows: usize) -> Screen {
         let hidden = cell.c == '\t' || cell.flags.contains(Flags::HIDDEN);
         let c = if hidden { ' ' } else { cell.c };
         // Its zero-width characters: a combining accent, an emoji's joiner or presentation selector.
-        let zero_width = cell.zerowidth().filter(|_| !hidden);
+        // A cell with an underline colour has an empty list: none.
+        let zero_width = cell.zerowidth().filter(|z| !hidden && !z.is_empty());
         let (col, wide) = (cell.point.column.0, cell.flags.contains(Flags::WIDE_CHAR));
         let alone = !c.is_ascii() || wide || zero_width.is_some();
         match row.last_mut() {
@@ -1276,16 +1277,16 @@ mod tests {
     fn dim_strikethrough_and_underline_styles_are_drawn() {
         let fg = palette::FOREGROUND;
         let plain = |text: &str| (text.to_string(), fg, false, None);
-        let styled = term(40, 2, "a\x1b[2mdim\x1b[0m\x1b[9mx\x1b[0m\x1b[4:3;58:2::255:0:0mc\x1b[4:2;59md\x1b[0m.");
+        let styled = term(40, 2, "a\x1b[2mdim\x1b[0m\x1b[9mx\x1b[0m\x1b[4:3;58:2::255:0:0mcu\x1b[4:2;59md\x1b[0m.");
         assert_eq!(
             spans(&styled),
             [
                 plain("a"),
                 ("dim".into(), palette::dim(fg, palette::BACKGROUND), false, None),
                 ("x".into(), fg, true, None),
-                ("c".into(), fg, false, Some(Underline { curly: true, color: Some(0xff0000) })),
+                ("cu".into(), fg, false, Some(Underline { curly: true, color: Some(0xff0000) })), // one run
                 ("d".into(), fg, false, Some(Underline { curly: false, color: None })),
-                plain(&format!(".{}", " ".repeat(32))), // the rest of the 40 columns
+                plain(&format!(".{}", " ".repeat(31))), // the rest of the 40 columns
             ]
         );
         // Dim reversed text dims toward its new background.
