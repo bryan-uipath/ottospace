@@ -100,6 +100,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.sessionsRange({ range: "week" }),
   (c) => c.compose({ text: "a draft" }),
   (c) => c.composeDrop({ paths: ["/tmp/a.txt"] }),
+  (c) => c.composeDrop({ paths: ["/tmp/a b.txt"], pane: 1 }),
   (c) => c.taskPop(),
   (c) => c.taskOpen({ id: 1 }),
   (c) => c.capture({ pane: 1, history: true }),

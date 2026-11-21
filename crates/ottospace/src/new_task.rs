@@ -95,8 +95,7 @@ impl Workspace {
     /// the cursor as a path word.
     pub fn compose_attach(&mut self, paths: &[PathBuf], origin: Origin, window: &Window, cx: &mut Context<Self>) {
         // A name that is not text cannot be in the line: the core is told how many were left out.
-        let named: Vec<String> = paths.iter().filter_map(|path| path.to_str().map(str::to_string)).collect();
-        let unreadable = paths.len() - named.len();
+        let (named, unreadable) = crate::dropped_names(paths);
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         self.dispatch(Action::ComposeAttach { paths: named, home, unreadable }, origin, window, cx);
     }

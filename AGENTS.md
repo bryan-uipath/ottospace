@@ -164,6 +164,9 @@ Design note: `docs/ai/attention/plan.md`.
     `place` (`workspace`, `checkout`, `task`), `name` and `detail`, or each `file` (a path in the
     place's folder); `palette_rows` is null meanwhile. Null outside a test run: a file's path is in
     no other state.
+  - `compose_drop` with `"pane"`: files dropped on that pane as the user's own drop (`Action::PaneDrop`:
+    a terminal types the quoted paths). Outside a test run only the user drops files; `type` is a
+    client's way to type.
   - State field `overflow`: each scroll area laid out (not a terminal), also one that fits, and which of its edges
     fade (`top`/`bottom`, the tab row's `left`/`right`). Null outside a test run.
   - State field `terminals[n].styled`: each span on show drawn with a style (`row`, `text`, `fg` with

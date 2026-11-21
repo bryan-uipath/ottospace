@@ -2111,6 +2111,7 @@ impl Workspace {
             let hint = div().flex_1().min_w_0().text_xs().text_color(rgb(theme::MUTED)).child(hint);
             div().flex().items_center().gap_2().child(hint).children(btw)
         });
+        let takes_drops = field.is_some();
         div()
             .flex_none()
             .px_3()
@@ -2120,6 +2121,15 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_1()
+            // Files from Finder, while the message can be written: their paths go into it, quoted.
+            .when(takes_drops, |composer| {
+                composer.drag_over::<gpui::ExternalPaths>(|style, _, _, _| style.bg(rgb(theme::SELECTED))).on_drop(
+                    cx.listener(|this, dropped: &gpui::ExternalPaths, window, cx| {
+                        let (paths, unreadable) = crate::dropped_names(dropped.paths());
+                        drop(this.dispatch(Action::TalkDrop { paths, unreadable }, this.input, window, cx));
+                    }),
+                )
+            })
             .child(
                 div()
                     .flex()

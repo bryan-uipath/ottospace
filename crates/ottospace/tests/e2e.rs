@@ -997,6 +997,55 @@ fn a_terminal_programs_copy_waits_in_its_header_and_only_the_users_click_copies(
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_drop_on_a_terminal_types_the_quoted_paths_and_no_return() {
+    let otto = Otto::launch("terminal-drop");
+    otto.call(json!({"cmd": "split"}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let lines = |o: &Otto| state(o)["terminals"]["1"]["lines"].clone();
+    let shown = |o: &Otto, line: &str| lines(o).as_array()?.iter().any(|l| l.as_str() == Some(line)).then_some(());
+    // The test's stand-in for a drag from Finder, as the user's own drop on pane 1.
+    let drop = |paths: &[&str]| otto.call(json!({"cmd": "compose_drop", "pane": 1, "paths": paths}));
+
+    // Into `cat`: the quoted paths, typed, and no line break: cat has printed nothing back yet.
+    otto.call(json!({"cmd": "type", "text": "clear; echo cat-$((1+1)); cat\r"}));
+    otto.wait_for("cat", |o| shown(o, "cat-2"));
+    drop(&["/tmp/a b", "/tmp/it's"]);
+    otto.wait_for("the paths typed", |o| shown(o, "'/tmp/a b' '/tmp/it'\\''s'"));
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    let rows: Vec<String> =
+        lines(&otto).as_array().unwrap().iter().filter_map(|l| l.as_str().map(str::to_string)).collect();
+    assert_eq!(
+        rows.iter().filter(|l| l.contains("/tmp/a b")).count(),
+        1,
+        "typed once, not echoed back by cat: {rows:?}"
+    );
+    otto.call(json!({"cmd": "key", "keys": "ctrl-c"}));
+
+    // At a prompt, a name with a quote is one argument to a command the user runs with ↵.
+    otto.call(json!({"cmd": "type", "text": "clear; printf '<%s>\\n' "}));
+    drop(&["/tmp/it's here"]);
+    otto.call(json!({"cmd": "type", "text": "\r"}));
+    otto.wait_for("the name back whole", |o| shown(o, "</tmp/it's here>"));
+
+    // A name with a line break types nothing, and the pane says so.
+    otto.call(json!({"cmd": "type", "text": "clear\r"}));
+    let reply = drop(&["/tmp/a\nrm -rf ~"]);
+    assert_eq!(reply["state"]["clip"]["text"], ottospace_core::clip::DROP_REFUSED);
+    assert!(!lines(&otto).as_array().unwrap().iter().any(|l| l.as_str().is_some_and(|l| l.contains("/tmp/a"))));
+
+    // A program that asked for bracketed paste (2004) gets the paths as a paste.
+    let script = "stty -echo -icanon min 1 time 5; printf '\\033[?2004h'; echo ready-$((2+1)); \
+                  r=$(dd bs=64 count=1 2>/dev/null); printf '\\033[?2004l'; stty sane; \
+                  echo \"got:$(printf %s \"$r\" | od -An -tx1 | tr -d ' \\n')\"\r";
+    otto.call(json!({"cmd": "type", "text": script}));
+    otto.wait_for("the program to ask", |o| shown(o, "ready-3"));
+    drop(&["/tmp/x"]);
+    // ESC [ 2 0 0 ~ '/tmp/x' and a space, ESC [ 2 0 1 ~.
+    otto.wait_for("a bracketed paste", |o| shown(o, "got:1b5b3230307e272f746d702f7827201b5b3230317e"));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
     let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
     std::fs::create_dir_all(root.join("app-api")).unwrap();

@@ -1307,6 +1307,20 @@ pub enum Action {
         answer: copy_ask::Answer,
         now: u64,
     },
+    /// Files or folders the user dropped from Finder on pane `pane`: a terminal takes the
+    /// keyboard and their paths are typed into it, quoted, with no ↵ (`clip::dropped`). The
+    /// user's alone. `unreadable`: how many names were not text (then nothing is typed).
+    PaneDrop {
+        pane: PaneId,
+        paths: Vec<String>,
+        unreadable: usize,
+    },
+    /// Files or folders the user dropped on the drawer's conversation: their paths go into its
+    /// message at the cursor, quoted as a terminal types them. The user's alone.
+    TalkDrop {
+        paths: Vec<String>,
+        unreadable: usize,
+    },
     /// Replace the marks: with those kept on disk at start, or with this run's merged with
     /// another's (`marks::merge`). `extra`: the file's keys this build does not know.
     RestoreMarks {
@@ -2291,6 +2305,7 @@ impl Action {
         matches!(
             self,
             Action::Split { .. }
+                | Action::PaneDrop { .. }
                 | Action::OpenRepo { .. }
                 | Action::RepoClick { .. }
                 | Action::TaskGo { .. }
@@ -2562,6 +2577,8 @@ impl Action {
             | Action::Paste { .. }
             | Action::CopyAsked { .. }
             | Action::CopyAnswer { .. }
+            | Action::PaneDrop { .. }
+            | Action::TalkDrop { .. }
             | Action::RestoreMarks { .. }
             | Action::Titles { .. }
             | Action::Unfilled { .. }
@@ -3084,6 +3101,8 @@ impl Action {
             | Action::Paste { .. }
             | Action::CopyAsked { .. }
             | Action::CopyAnswer { .. }
+            | Action::PaneDrop { .. }
+            | Action::TalkDrop { .. }
             | Action::EditorOpen
             | Action::EditorKeys { .. }
             | Action::EditorDone { .. }
@@ -3204,6 +3223,12 @@ pub enum Effect {
     },
     /// Put `text` on the clipboard: a program's ask the user answered (`Action::CopyAnswer`).
     CopyText {
+        text: String,
+    },
+    /// Type the paths the user dropped on terminal `pane` (`Action::PaneDrop`), as a paste: bracketed
+    /// when its program asked.
+    TypeDrop {
+        pane: PaneId,
         text: String,
     },
     /// The app pane's real window goes over the pane.
@@ -4551,6 +4576,7 @@ impl Model {
             // A program's copy goes to the clipboard only by the user's answer.
             Action::CopyAnswer { .. } => Some(copy_ask::USERS_ALONE),
             Action::CopyAsked { .. } if origin == Origin::Socket => Some(copy_ask::SHELLS_ALONE),
+            Action::PaneDrop { .. } | Action::TalkDrop { .. } => Some(clip::DROP_USERS),
             Action::QuitConfirm | Action::QuitCancel
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.paste.is_some()) =>
             {
@@ -4919,8 +4945,9 @@ impl Model {
             | Action::MarkEdit { .. }
             | Action::WorkbookEdit { .. }
             | Action::WorktreeEdit { .. }
-            // A click on a pane, an app's among them.
+            // A click on a pane, an app's among them, or files dropped on one.
             | Action::Focus { .. }
+            | Action::PaneDrop { .. }
             | Action::Enter { .. }
             // The toast's "Open settings": the keyboard goes to the editor's tab.
             | Action::EditSettings => Some(true),
@@ -5234,6 +5261,7 @@ impl Model {
             action,
             Action::Split { .. }
                 | Action::Focus { .. }
+                | Action::PaneDrop { .. }
                 | Action::FocusDir { .. }
                 | Action::FocusCycle { .. }
                 | Action::MovePane { .. }
@@ -6638,6 +6666,33 @@ impl Model {
                 if answer != copy_ask::Answer::Dismiss && !waiting.too_large {
                     effects.push(Effect::CopyText { text: waiting.text });
                 }
+            }
+            // A drop on a terminal: it takes the keyboard, and the paths are typed, never run.
+            // A pane on show: the drop landed on it.
+            Action::PaneDrop { pane, paths, unreadable }
+                if self.pane(pane).is_some_and(|p| p.kind == Kind::Terminal)
+                    && self.layout.as_ref().is_some_and(|layout| layout.leaves().contains(&pane)) =>
+            {
+                self.focus(pane, effects);
+                match clip::dropped(&paths).filter(|_| unreadable == 0) {
+                    Some(text) => effects.push(Effect::TypeDrop { pane, text }),
+                    None => {
+                        let said = clip::Clip::new(Some(pane), clip::Verb::Pasted, clip::Amount::default(), self.now);
+                        self.clip = Some(clip::Clip { text: clip::DROP_REFUSED.into(), ..said });
+                    }
+                }
+            }
+            Action::PaneDrop { .. } => {}
+            Action::TalkDrop { paths, unreadable } => {
+                // Whole or not at all: a path cut short by the message's limit would be another.
+                let fits = |text: &String| self.talk_draft().is_some_and(|field| field.fits(field.selection(), text));
+                let refused = match clip::dropped(&paths).filter(|_| unreadable == 0) {
+                    Some(text) if fits(&text) => return self.talk_edit(crate::edit::Edit::Insert(text)),
+                    Some(_) => clip::DROP_NO_ROOM,
+                    None => clip::DROP_REFUSED,
+                };
+                let said = clip::Clip::new(None, clip::Verb::Pasted, clip::Amount::default(), self.now);
+                self.clip = Some(clip::Clip { text: refused.into(), ..said });
             }
             Action::Copied { pane, verb, amount } => {
                 self.clip = Some(Clip::new(pane.filter(|id| self.pane(*id).is_some()), verb, amount, self.now));
@@ -10294,6 +10349,8 @@ mod tests {
         Action::Paste { .. },
         Action::CopyAsked { .. },
         Action::CopyAnswer { .. },
+        Action::PaneDrop { .. },
+        Action::TalkDrop { .. },
         Action::RestoreMarks { .. },
         Action::Titles { .. },
         Action::Unfilled { .. },
@@ -10658,6 +10715,8 @@ mod tests {
             Action::Paste { pane: 1, amount: Default::default() },
             Action::CopyAsked { pane: 1, text: text(), now: 0 },
             Action::CopyAnswer { pane: 1, ask: 1, answer: copy_ask::Answer::Copy, now: 0 },
+            Action::PaneDrop { pane: 1, paths: vec![text()], unreadable: 0 },
+            Action::TalkDrop { paths: vec![text()], unreadable: 0 },
             Action::RestoreMarks { marks: Vec::new(), extra: Extra::new() },
             Action::Titles { titles: Vec::new() },
             Action::Unfilled { pane: 1, why: text() },
@@ -11368,6 +11427,7 @@ mod tests {
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
                     Action::CopyAnswer { .. } => Some(copy_ask::USERS_ALONE),
                     Action::CopyAsked { .. } if origin == Origin::Socket => Some(copy_ask::SHELLS_ALONE),
+                    Action::PaneDrop { .. } | Action::TalkDrop { .. } => Some(clip::DROP_USERS),
                     Action::EditSettings => Some(SETTINGS_USERS),
                     Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
@@ -17628,6 +17688,34 @@ mod tests {
         assert_eq!(m.focus_terminal(true), None);
     }
 
+    /// Files dropped on a terminal: it takes the keyboard and types their paths, quoted, with no ↵.
+    /// Only the user's drop; a name with a line break types nothing and says so.
+    #[test]
+    fn a_drop_on_a_terminal_types_its_paths_and_gives_it_the_keyboard() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let drop = |pane, path: &str| Action::PaneDrop { pane, paths: vec![path.into()], unreadable: 0 };
+        assert_eq!(m.refusal(&drop(1, "/tmp/a"), Origin::Socket), Some(clip::DROP_USERS));
+        assert_eq!(m.update(drop(1, "/tmp/a").sent_by(Origin::Socket)), []);
+        assert_eq!(m.focused, Some(2));
+        let typed = m.update(drop(1, "/tmp/it's here"));
+        assert!(typed.contains(&Effect::TypeDrop { pane: 1, text: "'/tmp/it'\\''s here' ".into() }), "{typed:?}");
+        assert_eq!(m.focused, Some(1), "the pane under the drop takes the keyboard");
+        let refused = m.update(drop(2, "/tmp/a\nrm -rf ~"));
+        assert!(!refused.iter().any(|e| matches!(e, Effect::TypeDrop { .. })), "{refused:?}");
+        assert_eq!(m.clip.as_ref().map(|clip| (clip.pane, clip.text.as_str())), Some((Some(2), clip::DROP_REFUSED)));
+        let unreadable = Action::PaneDrop { pane: 2, paths: vec!["/tmp/a".into()], unreadable: 1 };
+        assert!(!m.update(unreadable).iter().any(|e| matches!(e, Effect::TypeDrop { .. })));
+        // A pane that is no terminal takes nothing.
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        assert_eq!(m.update(drop(3, "/tmp/a")), []);
+        // Beside the open new-task box, as a click on the pane: it takes the drop.
+        m.update(Action::OpenCompose { text: String::new() });
+        let typed = m.update(drop(1, "/tmp/b"));
+        assert!(typed.contains(&Effect::TypeDrop { pane: 1, text: "'/tmp/b' ".into() }), "{typed:?}");
+    }
+
     #[test]
     fn only_the_users_paste_reaches_a_terminal() {
         let mut m = Model::default();
@@ -17857,6 +17945,7 @@ mod tests {
                     Action::Paste { .. } => Some(clip::USERS_ALONE),
                     Action::CopyAnswer { .. } => Some(copy_ask::USERS_ALONE),
                     Action::CopyAsked { .. } if origin == Origin::Socket => Some(copy_ask::SHELLS_ALONE),
+                    Action::PaneDrop { .. } | Action::TalkDrop { .. } => Some(clip::DROP_USERS),
                     Action::EditSettings => Some(SETTINGS_USERS),
                     Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")

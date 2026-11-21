@@ -344,9 +344,12 @@ pub enum Request {
     },
     /// For tests (`test_refusal`): files or folders dropped on the open new-task box, as a
     /// drag from Finder drops them: `{"cmd":"compose_drop","paths":["/tmp/a.txt"]}`. Each goes
-    /// into the line at the cursor as a `/path` word.
+    /// into the line at the cursor as a `/path` word. With `"pane"`: dropped on that pane instead,
+    /// as the user's own drop (a terminal types the paths, quoted).
     ComposeDrop {
         paths: Vec<String>,
+        #[serde(default)]
+        pane: Option<PaneId>,
     },
     /// Opens the space of the first task that needs the user. The reply is
     /// `{"ok":true,"task":{..},"opened":true}`; `"task":null` if nothing needs the user, and
