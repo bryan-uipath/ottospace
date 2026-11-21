@@ -3665,6 +3665,10 @@ impl Run {
             }
             _ => false,
         };
+        // So does ↵ in a picker's list: it takes the row.
+        let takes = takes
+            || (matches!(action, Action::ComposeSubmit { open: false } | Action::ComposeEnter)
+                && m.picker_menu().is_some());
         // While the bar asks before discarding, ↵ is the answer: it files nothing.
         let answers = m.capture.as_ref().is_some_and(|draft| draft.asked);
         let submits = matches!(action, Action::ComposeSubmit { .. });
@@ -6496,6 +6500,17 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// ⇧↵ with a picker's list open took its row, as ↵ does, and the check took it for a lost task.
+#[test]
+fn seed_667_enter_in_a_pickers_list_takes_its_row() {
+    replay(&[
+        Action::OpenCompose { text: "deploy @codex-gpt-6-astra x".into() }.into(),
+        Action::ComposePicker { mark: Some('@') }.sent_by(Origin::Socket),
+        Action::ComposeSubmit { open: false }.into(),
+    ])
+    .unwrap();
+}
 
 /// ⇧Tab's step through the box's pickers added a huge `delta` and overflowed: one step, whatever it is.
 #[test]
