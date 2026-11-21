@@ -4868,8 +4868,9 @@ impl Model {
             | Action::MarkEdit { .. }
             | Action::WorkbookEdit { .. }
             | Action::WorktreeEdit { .. }
-            // A click on a pane, an app's among them.
+            // A click on a pane, an app's among them, or files dropped on one.
             | Action::Focus { .. }
+            | Action::PaneDrop { .. }
             | Action::Enter { .. }
             // The toast's "Open settings": the keyboard goes to the editor's tab.
             | Action::EditSettings => Some(true),
@@ -6562,13 +6563,17 @@ impl Model {
                 }
             }
             Action::PaneDrop { .. } => {}
-            Action::TalkDrop { paths, unreadable } => match clip::dropped(&paths).filter(|_| unreadable == 0) {
-                Some(text) => self.talk_edit(crate::edit::Edit::Insert(text)),
-                None => {
-                    let said = clip::Clip::new(None, clip::Verb::Pasted, clip::Amount::default(), self.now);
-                    self.clip = Some(clip::Clip { text: clip::DROP_REFUSED.into(), ..said });
-                }
-            },
+            Action::TalkDrop { paths, unreadable } => {
+                // Whole or not at all: a path cut short by the message's limit would be another.
+                let fits = |text: &String| self.talk_draft().is_some_and(|field| field.fits(field.selection(), text));
+                let refused = match clip::dropped(&paths).filter(|_| unreadable == 0) {
+                    Some(text) if fits(&text) => return self.talk_edit(crate::edit::Edit::Insert(text)),
+                    Some(_) => clip::DROP_NO_ROOM,
+                    None => clip::DROP_REFUSED,
+                };
+                let said = clip::Clip::new(None, clip::Verb::Pasted, clip::Amount::default(), self.now);
+                self.clip = Some(clip::Clip { text: refused.into(), ..said });
+            }
             Action::Copied { pane, verb, amount } => {
                 self.clip = Some(Clip::new(pane.filter(|id| self.pane(*id).is_some()), verb, amount, self.now));
             }
@@ -17299,6 +17304,10 @@ mod tests {
         // A pane that is no terminal takes nothing.
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         assert_eq!(m.update(drop(3, "/tmp/a")), []);
+        // Beside the open new-task box, as a click on the pane: it takes the drop.
+        m.update(Action::OpenCompose { text: String::new() });
+        let typed = m.update(drop(1, "/tmp/b"));
+        assert!(typed.contains(&Effect::TypeDrop { pane: 1, text: "'/tmp/b' ".into() }), "{typed:?}");
     }
 
     #[test]

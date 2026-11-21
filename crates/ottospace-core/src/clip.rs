@@ -12,6 +12,7 @@ pub const USERS_ALONE: &str = "only the user pastes their clipboard";
 /// Files dropped from Finder are the user's own act: no client types a path this way (`type` is theirs).
 pub const DROP_USERS: &str = "only the user drops files";
 /// What a pane or the message box says when a drop types nothing.
+pub const DROP_NO_ROOM: &str = "Nothing added: the message has no room for the dropped paths";
 pub const DROP_REFUSED: &str = "Nothing typed: a dropped name holds a control character, or is not text";
 
 /// How long the title strip and the status bar say "Copied 3 lines".
