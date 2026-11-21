@@ -6,6 +6,7 @@ use gpui::{
     AnyElement, AppContext, Context, InteractiveElement, IntoElement, MouseButton, ParentElement,
     StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, rgb,
 };
+use ottospace_core::copy_ask::{self, Answer};
 use ottospace_core::layout::Axis;
 use ottospace_core::model::offers::Offer;
 use ottospace_core::model::offers::Placed;
@@ -330,8 +331,82 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A program's ask to copy (OSC 52) in its terminal's header: who, how much, what of it the
+    /// preview leaves out, and Copy · Always for this pane · ×. Only the user's click copies, on
+    /// the ask they saw, once it has been on show a moment (`copy_ask`): until then Copy is dim.
+    pub(crate) fn copy_header(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let ask = self.model.copy_asks.get(&pane)?;
+        let id = ask.id;
+        // Not named: the program in front now may not be the one that asked (it exited, or wrote
+        // from the background).
+        let amount = if ask.chars == 1 { "1 character".into() } else { format!("{} characters", grouped(ask.chars)) };
+        let p = copy_ask::preview(&ask.text, 24);
+        let what = match (ask.too_large, p.blank) {
+            (true, _) => "A program here wanted to copy over 100 KB: refused".to_string(),
+            (false, true) => format!("A program here wants to copy {amount} of blank space"),
+            (false, false) => {
+                format!("A program here wants to copy {amount} “{}{}”", p.shown, if p.partial { "…" } else { "" })
+            }
+        };
+        // What a paste would do that the preview cannot show: never cut, however narrow the pane.
+        let mut warnings = Vec::new();
+        if !ask.too_large && p.lines > 1 {
+            warnings.push(format!("{} lines", grouped(p.lines)));
+        }
+        if !ask.too_large && p.ends_with_newline {
+            warnings.push("ends with a newline".to_string());
+        }
+        let warning =
+            (!warnings.is_empty()).then(|| div().flex_none().text_color(rgb(theme::SNEAK)).child(warnings.join(" · ")));
+        let send = |answer| {
+            cx.listener(move |this: &mut Self, _: &gpui::ClickEvent, window: &mut Window, cx| {
+                this.offer_send(Action::CopyAnswer { pane, ask: id, answer, now: crate::loop_ms() }, window, cx)
+            })
+        };
+        let colour = if ask.ready(crate::loop_ms()) { theme::PRIMARY } else { theme::MUTED };
+        let buttons = (!ask.too_large).then(|| {
+            [
+                self.offer_button(format!("copy:{pane}.{id}"), "Copy", colour).on_click(send(Answer::Copy)),
+                self.offer_button(format!("copy-always:{pane}.{id}"), "Always for this pane", colour)
+                    .on_click(send(Answer::Always)),
+            ]
+        });
+        let dismiss = self.offer_button(format!("copy-dismiss:{pane}.{id}"), "×", theme::MUTED);
+        let chip = div()
+            .flex()
+            .min_w_0()
+            .items_center()
+            .gap_1()
+            .px_1()
+            .rounded_sm()
+            .border_1()
+            .border_color(rgb(theme::BORDER_STRONG))
+            .child(cut_text(what).text_color(rgb(theme::MUTED)))
+            .children(warning)
+            .children(buttons.into_iter().flatten())
+            .child(dismiss.on_click(send(Answer::Dismiss)));
+        Some(chip.into_any_element())
+    }
+
+    /// A sneak label on a copy ask's pill (`copy:<pane>.<ask>`). False: not one of its controls.
+    fn click_copy(&mut self, kind: &str, name: &str, window: &Window, cx: &mut Context<Self>) -> bool {
+        let answer = match kind {
+            "copy" => Answer::Copy,
+            "copy-always" => Answer::Always,
+            "copy-dismiss" => Answer::Dismiss,
+            _ => return false,
+        };
+        let parsed = name.split_once('.').and_then(|(pane, ask)| Some((pane.parse().ok()?, ask.parse().ok()?)));
+        let Some((pane, ask)) = parsed else { return false };
+        self.offer_send(Action::CopyAnswer { pane, ask, answer, now: crate::loop_ms() }, window, cx);
+        true
+    }
+
     /// A sneak label (or a click) on the chip. False: not one of its controls.
     pub(crate) fn click_offer(&mut self, kind: &str, name: &str, window: &Window, cx: &mut Context<Self>) -> bool {
+        if self.click_copy(kind, name, window, cx) {
+            return true;
+        }
         let Ok(id) = name.parse::<u32>() else { return false };
         match kind {
             "offer-close" => self.close_pane(id, window, cx),
@@ -457,4 +532,17 @@ impl Workspace {
         }
         Ok(())
     }
+}
+
+/// `1240` → `1,240`.
+fn grouped(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, digit) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i) % 3 == 0 {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
 }

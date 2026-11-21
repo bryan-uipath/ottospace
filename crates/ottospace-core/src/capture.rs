@@ -667,6 +667,23 @@ pub fn shows(c: char) -> bool {
             | '\u{fff9}'..='\u{fffb}'
             | '\u{e0000}'..='\u{e007f}'
             | '\u{e0100}'..='\u{e01ef}'
+            // Format characters: Arabic number signs, Khmer and Mongolian ones, Egyptian and
+            // shorthand format controls, musical ones.
+            | '\u{600}'..='\u{605}'
+            | '\u{6dd}'
+            | '\u{70f}'
+            | '\u{890}'..='\u{891}'
+            | '\u{8e2}'
+            | '\u{17b4}'..='\u{17b5}'
+            | '\u{180b}'..='\u{180f}'
+            | '\u{fff0}'..='\u{fff8}'
+            | '\u{110bd}'
+            | '\u{110cd}'
+            | '\u{13430}'..='\u{1343f}'
+            | '\u{1bca0}'..='\u{1bca3}'
+            | '\u{1d173}'..='\u{1d17a}'
+            | '\u{e0080}'..='\u{e00ff}'
+            | '\u{e01f0}'..='\u{e0fff}'
     );
     !c.is_control() && !hidden
 }

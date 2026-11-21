@@ -3,6 +3,7 @@
 // Keys the types do not name are dropped, so a test can compare the result with the raw reply.
 
 import type {
+  CopyAsk,
   AppWindow,
   Display,
   TabOut,
@@ -1755,10 +1756,22 @@ function workbookOffer(value: unknown, at: string): "deleted" | "updated" | "clo
   throw wrong(at, "deleted, updated or closed", value);
 }
 
+function copyAsk(value: unknown, at: string): CopyAsk {
+  const o = fields(value, at);
+  return {
+    id: num(o.id, `${at}.id`),
+    at: num(o.at, `${at}.at`),
+    chars: num(o.chars, `${at}.chars`),
+    too_large: bool(o.too_large, `${at}.too_large`),
+  };
+}
+
 function model(value: unknown, at: string): Model {
   const o = fields(value, at);
   return {
     panes: list(pane)(o.panes, `${at}.panes`),
+    copy_asks: map(copyAsk)(o.copy_asks, `${at}.copy_asks`),
+    copy_always: list(num)(o.copy_always, `${at}.copy_always`),
     tabs: list(tab)(o.tabs, `${at}.tabs`),
     active: orNull(num)(o.active, `${at}.active`),
     layout: orNull(layout)(o.layout, `${at}.layout`),

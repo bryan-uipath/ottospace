@@ -19,6 +19,7 @@ pub mod clip;
 pub mod commands;
 pub mod complete;
 pub mod compose;
+pub mod copy_ask;
 pub mod diff;
 pub mod edit;
 pub mod empty;

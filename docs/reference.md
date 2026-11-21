@@ -1112,6 +1112,13 @@ characters (`│ ╭ █ ▛ ░`) are drawn as shapes that fill their cell, so 
 gaps between rows. Double lines (`═ ║`) are the font's.
 A program that asks for the kitty keyboard protocol (Claude Code does) gets it: ⇧↵, ⌃↵ and Esc
 reach it as their own keys (flags 1 and 4), so ⇧↵ makes a new line there instead of sending.
+A program that asks to set the clipboard (OSC 52) copies nothing by itself: its pane's header shows
+`A program here wants to copy 1,240 characters “…” · 3 lines · Copy · Always for this pane · ×`, and only your
+click copies, on the ask you saw: a newer ask has its own pill, and its Copy is dim and does nothing
+for half a second. The preview is the first line, cut short with `…` when it is not the whole text,
+with invisible or reordering characters as `�`; the pill also says how many lines and whether the text
+ends with a newline. Always lasts while that pane does. Over 100 KB is refused (the pill says so). A
+program asking to read the clipboard gets no answer.
 Its header names its directory, and the program in front of the shell while one runs:
 `app-api · cargo test`. An app pane's header shows the app's icon and the window's title; an
 empty pane's, nothing.

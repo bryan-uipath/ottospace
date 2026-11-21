@@ -2325,6 +2325,8 @@ impl Workspace {
                         terminal.paste(&text);
                     }
                 }
+                // The user answered a program's ask to copy.
+                Effect::CopyText { text } => self.clipboard.copy(text.clone(), cx),
                 Effect::ForgetLayout => self.forget_layout(),
                 // An agent moved into a folder the list does not hold yet: a worktree just made.
                 Effect::ReadRepos => {
@@ -4809,16 +4811,34 @@ impl Workspace {
     }
 
     fn sync_terminals(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let mut redraw = false;
-        let mut exited = Vec::new();
+        let (mut redraw, mut exited, mut asks) = (false, Vec::new(), Vec::new());
         for (id, terminal) in &mut self.terminals {
             if let Some(bounds) = self.cells.get(id) {
                 terminal.fit(bounds.get().size, self.cell);
             }
             redraw |= terminal.take_dirty();
+            if let Some(text) = terminal.take_copy_ask() {
+                asks.push((*id, text));
+            }
             if terminal.exited() {
                 exited.push(*id);
             }
+        }
+        // A program asked to set the clipboard: the core holds it for the user (`copy_ask`), timed
+        // by the loop's clock, which no clock change moves.
+        let mut waiting = false;
+        for (pane, text) in asks {
+            self.dispatch(Action::CopyAsked { pane, text, now: loop_ms() }, Origin::System, window, cx);
+            waiting |= self.model.copy_asks.get(&pane).is_some_and(|ask| !ask.too_large);
+        }
+        // Its Copy wakes once the guard has passed: drawn again then.
+        if waiting {
+            cx.spawn(async move |this, cx| {
+                let guard = ottospace_core::copy_ask::GUARD_MS + 20;
+                cx.background_executor().timer(Duration::from_millis(guard)).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
         }
         for id in exited {
             trace::record("terminal_exit", serde_json::json!({ "pane": id }));
@@ -6965,6 +6985,8 @@ impl Workspace {
             .children(self.agent_header(id, cx))
             // A window its app opened by itself, floating: offered here, with why it is in no pane.
             .children(self.offer_header(id, cx))
+            // A program's ask to copy: it waits here for the user's Copy, Always or ×.
+            .children(self.copy_header(id, cx))
             // `fit` and × never shrink, so they stay in the header however narrow the pane.
             .child(
                 // The task of its tab: the same badge as on the bar.
