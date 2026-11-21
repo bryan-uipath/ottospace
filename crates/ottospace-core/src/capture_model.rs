@@ -350,6 +350,10 @@ impl Model {
             && bar.material(n).is_none_or(|m| !shown.contains(&m.pane) || live == Some(m.pane))
         {
             bar.stop_annotating();
+            // The box's ✎ round ends with it: the box is back, its line takes the keys.
+            if bar.boxed {
+                (bar.typing, bar.round) = (true, None);
+            }
         }
         self.back_to = self.back_to.filter(|pane| self.pane(*pane).is_some());
         self.settle_brief();
@@ -1014,6 +1018,8 @@ mod tests {
     /// The box's ✎: the shell is asked for the capture key's capture, which is then the box's.
     fn pen(m: &mut Model) {
         assert_eq!(m.update(Action::ComposePen), [Effect::PenStart]);
+        // The shell ticks before it starts the capture: the ✎'s ask holds.
+        m.update(Action::Tick { now: 1 }.sent_by(Origin::System));
         start(m, None);
     }
 
@@ -1046,7 +1052,9 @@ mod tests {
         // The pill's crop: what was marked, a little wider.
         let crop = capture::crop(shapes(&m, 1)).expect("a crop");
         assert!((crop[0] - 0.16).abs() < 1e-9 && (crop[2] - 0.28).abs() < 1e-9, "{crop:?}");
-        let effects = m.update(Action::ComposeSubmit { open: false });
+        // Start (⌘↵, the button) starts it, as without a capture.
+        let effects = m.update(Action::ComposeSubmit { open: true });
+        assert!(effects.iter().any(|e| matches!(e, Effect::StartAgent { .. })), "{effects:?}");
         let brief = kept(&effects).expect("its brief");
         assert_eq!((brief.materials.len(), brief.materials[0].crop), (1, Some(crop)));
         assert_eq!(m.tasks.list.last().map(|task| task.title.as_str()), Some("fix the cart"));
@@ -1075,6 +1083,10 @@ mod tests {
         assert_eq!(bar(&m).materials.iter().map(|m| m.n).collect::<Vec<_>>(), [1]);
         m.update(Action::CaptureRemove { material: 1 });
         assert_eq!((m.capture.is_none(), title(&m)), (true, Some("fix the cart")));
+        // Its pane closes while it is marked: the round ends, the box is back with its keys.
+        pen(&mut m);
+        m.update(Action::Close { pane: Some(1) });
+        assert_eq!((m.pen_marking(), m.mode(), m.compose_keys()), (false, Mode::Compose, true));
     }
 
     /// Only the user's ✎ starts one; a client's capture stays refused. Over a draft in the bar

@@ -5396,7 +5396,7 @@ impl Model {
             // The same for the draft in the bar, which can be added while the picker, the key
             // reference or visual mode has the keyboard: the task is filed, the view stays.
             Action::ComposeSubmit { open: true }
-                if self.capture.is_some() && self.waits(&Action::TaskGo { id: None }).is_some() =>
+                if self.bar_draft().is_some() && self.waits(&Action::TaskGo { id: None }).is_some() =>
             {
                 Action::ComposeSubmit { open: false }
             }
@@ -5440,10 +5440,6 @@ impl Model {
         }
         // The capture key is the user's "now": what lies over the workspace gives way to it.
         // (Visual mode ends after the picture is asked for: see `capture_start`.)
-        // The ✎'s ask holds only for the capture the shell starts for it next.
-        if !matches!(action, Action::CaptureStart { .. } | Action::ComposePen) {
-            self.compose_pen = false;
-        }
         if user && matches!(action, Action::CaptureStart { .. }) {
             (self.keys, self.picker, self.palette) = (false, None, None);
         }
@@ -8156,7 +8152,7 @@ impl Model {
         (self.menu, self.compose_refs, self.compose_note) = (Menu::default(), Vec::new(), None);
         (self.path_shown, self.compose_folder, self.compose_worktree) = (None, None, false);
         (self.compose_centred, self.quick, self.compose_sheet) = (false, None, false);
-        self.compose_picker = None;
+        (self.compose_picker, self.compose_pen) = (None, false);
     }
 
     /// The folder the user took from the dropdown, as the line has it (`~/notes/`), while a word

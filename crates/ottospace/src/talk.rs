@@ -906,7 +906,8 @@ impl Workspace {
     /// drags to set its width.
     pub(crate) fn render_drawer(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         // The box centred over the panes: the drawer is drawn again once it leaves.
-        if self.model.compose_centred() {
+        // Nor while its ✎ marks up: the panes are what is marked.
+        if self.model.compose_centred() || self.model.pen_marking() {
             return None;
         }
         let drawer = if self.model.editor_shown() && self.model.compose.is_some() {

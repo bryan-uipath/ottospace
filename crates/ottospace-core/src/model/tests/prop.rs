@@ -5500,7 +5500,9 @@ impl Run {
                     let text = capture::markdown(brief);
                     let last = capture::fence_lines(&brief.fence).1;
                     let ends = text.lines().filter(|line| **line == last).count();
-                    ensure!(ends == brief.materials.len() + 1, "a quoted block of the brief ends twice, or not at all");
+                    // One block a capture, one for what is open, one for a quick note's note.
+                    let blocks = brief.materials.len() + 1 + usize::from(brief.note.is_some());
+                    ensure!(ends == blocks, "a quoted block of the brief ends twice, or not at all");
                     self.shell.kept.retain(|kept| kept.0 != *draft);
                 }
                 // The window's picture: let go when its report goes; filed by the user's Send, with
