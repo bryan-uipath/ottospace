@@ -1261,6 +1261,9 @@ const MAKERS: &[Make] = &[
     // Every mark a cap types, and one no cap does.
     |g| Action::ComposeTag { mark: g.rng.pick(&['#', '>', '@', '/', '$', '^', 'p']) },
     |_| Action::ComposeSheet,
+    |g| Action::ComposePicker { mark: g.rng.pick(&[None, Some('#'), Some('>'), Some('@'), Some('/')]) },
+    |g| Action::ComposePickerStep { delta: g.delta() },
+    |_| Action::ComposeDefault,
     |g| {
         // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
         // one too long, one that is no path.
@@ -2794,6 +2797,9 @@ fn check(m: &Model) -> Result<(), String> {
     // One line under an open box says what ↵ does; the tags' sheet only while asked for.
     ensure!(m.compose_status().is_some() == m.compose.is_some(), "an open box with no status line, or the reverse");
     ensure!(m.compose_hint().is_none() || m.compose_sheet, "the tags' sheet shows unasked");
+    // A picker's list and the tag's dropdown never both; a list only of a picker the box shows.
+    ensure!(m.picker_menu().is_none() || m.dropdown().is_none(), "a picker's list and the dropdown at once");
+    ensure!(m.picker_menu().is_none_or(|menu| m.compose_pickers().contains(&menu.mark)), "a list of no picker");
     if let Some((of, field)) = m.open_field() {
         let most = match of {
             "compose" => MAX_TITLE,
@@ -5327,6 +5333,13 @@ impl Run {
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
                 }
+                Effect::SaveDefaultAgent { agent } => {
+                    let held = m.default_agent.as_deref() == Some(agent.as_str());
+                    ensure!(
+                        user && matches!(action, Action::ComposeDefault) && held,
+                        "{origin:?} wrote default_agent {agent:?}"
+                    )
+                }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
                 }
@@ -6483,6 +6496,16 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// ⇧Tab's step through the box's pickers added a huge `delta` and overflowed: one step, whatever it is.
+#[test]
+fn seed_255_a_picker_step_is_one_step() {
+    replay(&[
+        Action::OpenCompose { text: "fix".into() }.sent_by(Origin::Socket),
+        Action::ComposePickerStep { delta: i32::MAX }.into(),
+    ])
+    .unwrap();
+}
 
 /// ⌘⇧N over the palette opened the quick box under it: it waits, as ⌘N's box does.
 #[test]

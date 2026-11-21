@@ -4329,6 +4329,76 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The box's pickers (`overlay_panels`, centred): the default agent shows at once, a typed tag fills
+/// its picker, each list is reached by keys alone, and the bottom row (+, the pickers, Start) is
+/// one line, a long name cut, at CI's window and at the default. The quick note has no agent or
+/// repository, and its line says what its ↵ does.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_boxs_pickers_show_the_choice_and_its_bottom_row_is_one_line() {
+    let root = compose_fixture("pickers");
+    for size in ["1024x674", "1400x900"] {
+        let env =
+            [("OTTOSPACE_REPOS", root.to_str().unwrap()), OVERLAYS[0], OVERLAYS[1], ("OTTOSPACE_E2E_WINDOW", size)];
+        let otto = Otto::launch_with(&format!("pickers-{size}"), &env);
+        overlay_panes(&otto);
+        let open = otto.user_key("cmd-n");
+        let choices = &open["compose_choices"];
+        assert_eq!(
+            (&open["compose_centred"], &choices["agent"], &choices["default"]),
+            (&json!(true), &json!("claude"), &json!(true))
+        );
+        // Tags typed fill their pickers.
+        otto.user_key("f i x space i t space > f l o w - a p p space # a - p r o j e c t - w i t h - a - v e r y - l o n g - n a m e space");
+        let typed = otto.wait_for("the tags to be read", |o| {
+            Some(o.call(json!({"cmd": "state"}))).filter(|r| r["compose_read"] == true)
+        });
+        let choices = &typed["compose_choices"];
+        assert_eq!(choices["project"], "a-project-with-a-very-long-name", "{choices}");
+        assert!(choices["place"].as_str().is_some_and(|place| place.starts_with("flow-app")), "{choices}");
+        // One line: each control of the edge inside its row, none past its end.
+        let row = rect(&typed["compose_rects"]["compose-edge"]);
+        for id in ["compose-attach", "picker:#", "picker:>", "picker:@", "compose-start"] {
+            let r = rect(&typed["compose_rects"][id]);
+            let inside =
+                r[1] >= row[1] - 0.5 && r[1] + r[3] <= row[1] + row[3] + 0.5 && r[0] + r[2] <= row[0] + row[2] + 0.5;
+            assert!(inside, "{id} {r:?} is out of the row {row:?} at {size}");
+        }
+        // Keys only: Tab to each list (#, >, @), ↓ to the next agent, ↵ takes it into the line.
+        for mark in ["#", ">", "@"] {
+            assert_eq!(otto.user_key("tab")["compose_picker"]["mark"], mark);
+        }
+        let list = otto.user_key("down");
+        let at = list["compose_picker"]["selected"].as_u64().unwrap_or_default() as usize;
+        let agent = list["compose_picker"]["rows"][at]["name"].as_str().unwrap_or_default().to_string();
+        assert!(
+            list["compose_status"].as_str().is_some_and(|said| said.starts_with(&format!("↵ takes @{agent}"))),
+            "{}",
+            list["compose_status"]
+        );
+        let taken = otto.user_key("enter");
+        assert!(field(&taken).0.contains(&format!("@{agent} ")), "{}", field(&taken).0);
+        // The line says what ↵ will do with it, and the plan is that.
+        let said = taken["compose_status"].as_str().unwrap_or_default().to_string();
+        assert!(said.starts_with(&format!("↵ starts @{agent} in flow-app")), "{said}");
+        assert_eq!(taken["compose_plan"]["agent"], json!(agent));
+        // ⇧↵, as the line says: for later, with that agent.
+        let filed = otto.user_key("shift-enter");
+        let tasks = filed["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
+        assert_eq!(tasks.last().map(|task| task["agent"].clone()), Some(json!(agent)));
+        // The quick note: its field and its button, no agent or repository.
+        let quick = otto.user_key("cmd-shift-n");
+        assert_eq!((&quick["compose_choices"], quick["quick_pills"].is_array()), (&Value::Null, true));
+        let drawn = quick["compose_rects"].as_object().cloned().unwrap_or_default();
+        assert!(drawn.contains_key("compose-start") && !drawn.keys().any(|id| id.starts_with("picker:")), "{drawn:?}");
+        assert_eq!(
+            quick["compose_status"],
+            "Type what needs doing, then ↵ files it for later · ⌘↵ starts it now · Esc"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The box's one line says ↵ starts the task in the workspace on show.
 fn binds(reply: &Value) -> bool {
     reply["compose_status"]
@@ -4344,13 +4414,27 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     // Nothing open: the drawer shows its new task by itself, the center what goes there.
     let state = otto.call(json!({"cmd": "state"}));
     assert_eq!((&state["welcome"], &state["compose_host"]), (&json!(true), &Value::Null));
-    for control in ["drawer:new_task", "home:open_app", "home:terminal", "pick:@codex"] {
+    for control in ["drawer:new_task", "home:open_app", "home:terminal"] {
         otto.control(control);
     }
-    // A pick fills the line: the box opens with the agent in it, and says what ↵ will do.
-    let reply = otto.click(at(otto.control("pick:@codex"), 0.5, 0.5), 1);
+    // The box opens with the default agent on its picker: ↵ needs no choice.
+    let reply = otto.click(at(otto.control("drawer:new_task"), 0.5, 0.5), 1);
     assert_eq!((reply["mode"].as_str(), reply["compose_host"].as_str()), (Some("compose"), Some("drawer")));
-    assert_eq!(field(&reply).0, "@codex ");
+    let choices = &reply["compose_choices"];
+    assert_eq!((&choices["agent"], &choices["default"]), (&json!("claude"), &json!(true)), "{choices}");
+    // The agent's picker opens its list on the default; a row taken goes into the line as its tag.
+    let reply = otto.click(at(rect(&reply["compose_rects"]["picker:@"]), 0.5, 0.5), 1);
+    let rows: Vec<String> = reply["compose_picker"]["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|r| r["name"].as_str().map(String::from))
+        .collect();
+    assert_eq!((rows.first().map(String::as_str), &reply["compose_picker"]["selected"]), (Some("claude"), &json!(0)));
+    let codex = rows.iter().position(|name| name == "codex").expect("codex in the list");
+    key(&vec!["down"; codex].join(" "));
+    let reply = key("enter");
+    assert_eq!((field(&reply).0.as_str(), &reply["compose_picker"]), ("@codex ", &Value::Null));
     // What `@codex` names is read a moment later.
     let reply = otto.wait_for("the tags to be read", |o| {
         Some(o.call(json!({"cmd": "state"}))).filter(|r| r["compose_read"] == true)

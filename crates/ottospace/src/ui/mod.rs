@@ -216,6 +216,36 @@ pub(crate) fn well(d: Div, accent: u32) -> Div {
         .child(shade)
 }
 
+/// A picker in the new-task box's edge: what is chosen (`@claude`, `>app · main`), ▾. One line:
+/// a long one is cut with … ; `open` while its list shows. The caller adds its click and its list.
+pub(crate) fn picker(
+    id: impl Into<ElementId>,
+    label: impl Into<SharedString>,
+    accent: u32,
+    open: bool,
+) -> Stateful<Div> {
+    let d = div()
+        .id(id)
+        .relative()
+        .flex()
+        .flex_shrink()
+        .min_w(px(48.))
+        .max_w(px(220.))
+        .items_center()
+        .gap(px(theme::SPACE_1))
+        .h(px(theme::CONTROL))
+        .px(px(theme::SPACE_2))
+        .rounded(px(theme::RADIUS_SM))
+        .bg(rgb(if open { theme::BORDER_STRONG } else { theme::SELECTED }))
+        .text_size(px(theme::TEXT_XS))
+        .text_color(rgb(theme::TEXT))
+        .whitespace_nowrap()
+        .cursor_pointer()
+        .child(div().min_w_0().truncate().text_color(rgb(accent)).child(label.into()))
+        .child(div().flex_none().text_color(rgb(theme::MUTED)).child("▾"));
+    states(d, State::Rest, |s| s.bg(rgb(theme::BORDER_STRONG)), None)
+}
+
 /// An attachment in the new-task box (a meeting, the workspace in front, a folder): its label in a
 /// quiet fill, `accent` its text's colour (none: the text's). The caller adds its × and click.
 pub(crate) fn chip(text: impl Into<SharedString>, accent: Option<u32>) -> Div {

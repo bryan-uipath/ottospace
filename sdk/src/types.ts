@@ -1837,8 +1837,10 @@ export interface Snapshot {
   compose_status: string | null;
   /** The tag hint, while the box's tags' sheet shows ("? tags", ⌘/); null otherwise. */
   compose_hint: string | null;
-  /** The drawer's one-click picks: repository names and agent names. */
-  compose_picks: { wheres: string[]; whos: string[] };
+  /** What the box's pickers show: the project (null: none), where ↵ starts the agent (`app · main`, a folder; null: the home folder), the agent, and whether it is `default_agent`. Null without pickers (the box closed, the quick note). */
+  compose_choices: { project: string | null; place: string | null; agent: string; default: boolean } | null;
+  /** The open picker's list (`mark` `#`, `>` or `@`), as `compose_menu`; null with none open. */
+  compose_picker: ComposeMenu | null;
   /** Where the box offers a choice of where the task works: in its checkout, or (`new`, the user's choice) a new worktree of the repository `repo` on `branch`. Null where there is no repository to make one of. */
   compose_worktree: { new: boolean; repo: string; branch: string } | null;
   /** Where the open box's ↵ starts its task: the space it was opened in (or the user switched it to), its name, and whether that is not the space on show (the box then says so, with Switch). Null while the box is closed. */
@@ -1850,7 +1852,7 @@ export interface Snapshot {
   compose_menu_bounds: Rect | null;
   /** Where each tag's cap in the box's tags' sheet was drawn, by its key (`#`, `>`, `p1`); a click on one types its mark. Empty while the sheet is put away; null with the box closed. */
   compose_tags: Record<string, Rect> | null;
-  /** Test runs only: where the open box's controls were drawn, by id (`compose-attach`, `compose-sheet`). Null otherwise. */
+  /** Test runs only: where the open box's controls were drawn, by id (`compose-attach`, `compose-sheet`, `compose-edge`, `compose-start`, `picker:#`, `picker:>`, `picker:@`, `picker-list`). Null otherwise. */
   compose_rects: Record<string, Rect> | null;
   /** The folder taken from a path's dropdown that the task's agent will run in, as the line has it (`~/notes/`), or null. */
   compose_folder: string | null;

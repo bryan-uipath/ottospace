@@ -158,7 +158,8 @@ impl Workspace {
         drop(marks);
         // The centred new-task box is the drawer's: a click in it is no click outside.
         // So is one in its dropdown, which may hang past it.
-        let menu = self.model.dropdown().is_some() && self.field.borrow().menu.contains(&event.position);
+        let listed = self.model.dropdown().is_some() || self.model.picker_menu().is_some();
+        let menu = listed && self.field.borrow().menu.contains(&event.position);
         let boxed = self.model.compose_centred()
             && (menu || self.controls.bounds("new-task-centred").is_some_and(|b| b.contains(&event.position)));
         if !over && !boxed {

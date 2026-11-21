@@ -467,15 +467,10 @@ impl Workspace {
                 self.pick_files(window, cx);
                 return true;
             }
-            ("pick", _, _) => {
-                let mut chars = name.chars();
-                let Some(mark) = chars.next() else { return true };
-                let rest = chars.as_str();
-                if self.model.compose.is_none() {
-                    self.new_task(window, cx);
-                }
-                Action::ComposePick { mark, name: (!rest.is_empty()).then(|| rest.to_string()) }
-            }
+            // The box's pickers: a list opens, as a click does; this checkout or a new worktree.
+            ("picker", _, _) => Action::ComposePicker { mark: name.chars().next() },
+            ("pick", "worktree", _) => Action::ComposeWorktree { new: None },
+            ("compose-start", _, _) => Action::ComposeEnter,
             _ => return false,
         };
         self.dispatch(action, self.input, window, cx);

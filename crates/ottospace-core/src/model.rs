@@ -1111,6 +1111,17 @@ pub enum Action {
     /// "? tags" under the box, or ⌘/ while its line has the keyboard: the sheet of the tags a line
     /// may hold shows, or goes.
     ComposeSheet,
+    /// A click on a picker in the box's edge (`#`, `>`, `@`): its list opens, or closes if open.
+    /// `None` closes any.
+    ComposePicker {
+        mark: Option<char>,
+    },
+    /// ⇧Tab with no tag to finish: the picker before (Tab, `ComposeComplete`, the one after).
+    ComposePickerStep {
+        delta: i32,
+    },
+    /// ⌥↵ in the agent list: the highlighted agent becomes `default_agent`. Only the user's.
+    ComposeDefault,
     /// Files or folders dropped on the box, picked or pasted: each goes in at the cursor as a
     /// `/path` word. `home`: the user's folder, so paths inside it are written `~/..`.
     ComposeAttach {
@@ -2566,6 +2577,9 @@ impl Action {
             | Action::ComposeHere
             | Action::ComposeTag { .. }
             | Action::ComposeSheet
+            | Action::ComposePicker { .. }
+            | Action::ComposePickerStep { .. }
+            | Action::ComposeDefault
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -3035,6 +3049,9 @@ impl Action {
             | Action::ComposeHere
             | Action::ComposeTag { .. }
             | Action::ComposeSheet
+            | Action::ComposePicker { .. }
+            | Action::ComposePickerStep { .. }
+            | Action::ComposeDefault
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -3342,6 +3359,10 @@ pub enum Effect {
     /// The user picked how the Tasks section groups: write `tasks_view` in the settings file.
     SaveTasksView {
         view: TasksView,
+    },
+    /// The user's ⌥↵ in the box's agent list: write `default_agent` in the settings file.
+    SaveDefaultAgent {
+        agent: String,
     },
     /// The pinned or hidden apps changed: make these changes to `apps` and `apps_hidden` in
     /// the settings file, as it is then.
@@ -3735,6 +3756,7 @@ pub mod goto;
 pub mod offers;
 pub mod overlay;
 mod pick;
+pub mod pickers;
 pub mod quick;
 pub mod quit;
 pub mod reorder;
@@ -3901,6 +3923,9 @@ pub struct Model {
     /// The tags' sheet shows under the box ("? tags", ⌘/).
     #[serde(skip)]
     compose_sheet: bool,
+    /// The picker whose list is open (`#`, `>`, `@`), and the row ↑ ↓ went to, by name.
+    #[serde(skip)]
+    compose_picker: Option<(char, Option<String>)>,
     /// The new-task line a conversation's opening put aside: back when the box opens empty.
     #[serde(skip)]
     compose_kept: Option<KeptDraft>,
@@ -4229,6 +4254,7 @@ impl Default for Model {
             compose_theirs: false,
             compose_worktree: false,
             compose_sheet: false,
+            compose_picker: None,
             compose_kept: None,
             compose_to: None,
             compose_talked: false,
@@ -4768,6 +4794,7 @@ impl Model {
             Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
             Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
             Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
+            Action::ComposeDefault => Some(pickers::DEFAULT_USERS),
             // Nor types in, files or closes the user's quick note: its pills are the user's to keep.
             action if self.quick.is_some() && self.drafts(action) => Some(quick::QUICK_USERS),
             Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
@@ -4964,6 +4991,9 @@ impl Model {
             | Action::ComposeWorktree { .. }
             | Action::ComposeTag { .. }
             | Action::ComposeSheet
+            | Action::ComposePicker { .. }
+            | Action::ComposePickerStep { .. }
+            | Action::ComposeDefault
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -6107,6 +6137,8 @@ impl Model {
                 Some("talk") => self.talk_edit(edit),
                 Some("btw") => self.btw_edit(edit),
                 Some(_) => {
+                    // Typing goes on in the line: a picker's list closes.
+                    self.compose_picker = None;
                     if let Some(exact) = self.spelled_out(&edit) {
                         // A space after a name that is one of the rows takes that row.
                         self.accept(exact);
@@ -6117,17 +6149,18 @@ impl Model {
                 }
                 None => {}
             },
-            Action::ComposeComplete => {
-                if let Some(menu) = self.dropdown().filter(|menu| !menu.rows.is_empty()) {
-                    self.accept(menu.selected.unwrap_or(0));
-                }
-            }
+            Action::ComposeComplete => match self.dropdown().filter(|menu| !menu.rows.is_empty()) {
+                Some(menu) => self.accept(menu.selected.unwrap_or(0)),
+                // No tag to finish: the next picker's list.
+                None => self.picker_step(1),
+            },
             Action::ComposeAccept { index } => self.accept(index),
             Action::ComposeFolderClear => self.compose_folder = None,
             Action::ComposeWorktree { new } if self.composing() && self.compose_worktree().is_some() => {
                 self.compose_worktree = new.unwrap_or(!self.compose_worktree);
             }
             Action::ComposeWorktree { .. } => {}
+            Action::ComposeMove { delta } if self.picker_menu().is_some() => self.picker_move(delta),
             Action::ComposeMove { delta } => match self.dropdown().filter(|menu| !menu.rows.is_empty()) {
                 Some(menu) => {
                     let to = complete::moved(menu.selected, delta, menu.rows.len());
@@ -6145,7 +6178,9 @@ impl Model {
             // Under the key reference the box is hidden: Esc is the reference's there.
             Action::ComposeEscape if self.compose.is_some() && !self.composing() => {}
             Action::ComposeEscape => {
-                if self.dropdown().is_some() {
+                if self.picker_menu().is_some() {
+                    self.compose_picker = None;
+                } else if self.dropdown().is_some() {
                     self.menu = Menu { key: self.menu_key(), dismissed: true, moved: None };
                 } else if let Some(draft) = &mut self.capture {
                     // The draft's title: Esc is the bar's ×, and "no" to its question.
@@ -6208,6 +6243,9 @@ impl Model {
             Action::ComposeTag { .. } => {}
             Action::ComposeSheet if self.composing() => self.compose_sheet = !self.compose_sheet,
             Action::ComposeSheet => {}
+            Action::ComposePicker { mark } => self.picker_toggle(mark),
+            Action::ComposePickerStep { delta } => self.picker_step(delta),
+            Action::ComposeDefault => self.picker_make_default(effects),
             Action::ComposePick { mark, name } => self.compose_pick(mark, name),
             Action::ComposeAttach { paths, home, unreadable } => {
                 // A name the line cannot hold (a line break in it) or one too long to keep
@@ -8087,6 +8125,7 @@ impl Model {
         (self.menu, self.compose_refs, self.compose_note) = (Menu::default(), Vec::new(), None);
         (self.path_shown, self.compose_folder, self.compose_worktree) = (None, None, false);
         (self.compose_centred, self.quick, self.compose_sheet) = (false, None, false);
+        self.compose_picker = None;
     }
 
     /// The folder the user took from the dropdown, as the line has it (`~/notes/`), while a word
@@ -8265,13 +8304,14 @@ impl Model {
     /// The line's tag of `mark` becomes `name` (one the picks offer), or goes: every word that
     /// is such a tag is taken out, and the new one added at the end.
     fn compose_pick(&mut self, mark: char, name: Option<String>) {
-        let picks = self.compose_picks();
-        let offered = match mark {
-            '>' => &picks.wheres,
-            '@' => &picks.whos,
-            _ => return,
-        };
-        if name.as_ref().is_some_and(|name| !offered.contains(name)) {
+        if !matches!(mark, '#' | '>' | '@') {
+            return;
+        }
+        // Only a name its picker lists.
+        if name
+            .as_ref()
+            .is_some_and(|name| !self.picker_rows(mark).iter().any(|row| row.name == *name && row.kind != "none"))
+        {
             return;
         }
         let Some(field) = self.compose.as_mut() else { return };
@@ -8327,6 +8367,16 @@ impl Model {
         // A draft's "Discard?": ↵ discards it (`capture_model`), Esc keeps it; a list's row first.
         if self.capture.as_ref().is_some_and(|draft| draft.asked) && self.enter() == Enter::Add {
             return Some("↵ discards the capture · Esc keeps it".into());
+        }
+        // A picker's list: ↵ takes its row; in the agent's, ⌥↵ makes it the default.
+        if let Some(menu) = self.picker_menu() {
+            let row = menu.selected.and_then(|at| menu.rows.get(at)).filter(|row| row.kind != "none");
+            let name = row.map_or_else(
+                || format!("no {}", if menu.mark == '#' { "project" } else { "repository" }),
+                |row| format!("{}{}", menu.mark, row.name),
+            );
+            let default = if self.picker_default().is_some() { " · ⌥↵ makes it the default" } else { "" };
+            return Some(format!("↵ takes {name}{default} · Esc closes the list"));
         }
         if let Some(menu) = self.dropdown() {
             match self.enter() {
@@ -8459,7 +8509,8 @@ impl Model {
     /// The completion dropdown of the new-task box, while it is open: the cursor is in a tag,
     /// the line has the keyboard, nothing is selected, and Esc has not closed it for this tag.
     pub fn dropdown(&self) -> Option<Dropdown> {
-        if !self.composing() {
+        // A picker's list is open in its place.
+        if !self.composing() || self.compose_picker.is_some() {
             return None;
         }
         let field = self.compose.as_ref()?;
@@ -8541,6 +8592,9 @@ impl Model {
     /// What ↵ does: while the dropdown shows rows it never adds a half-typed tag. It takes the
     /// highlighted row, unless the word is that name already (then there is nothing to finish).
     pub fn enter(&self) -> Enter {
+        if let Some(menu) = self.picker_menu() {
+            return menu.selected.map_or(Enter::Wait, Enter::Take);
+        }
         match self.dropdown() {
             Some(menu) if menu.stale && !menu.rows.is_empty() => Enter::Wait,
             // A name with no room is taken too: `accept` says so, and the line stays.
@@ -8563,6 +8617,9 @@ impl Model {
     /// part: the line stays, and the box says so. A folder the user takes is where the task's
     /// agent will run. Rows still being read again are not taken.
     fn accept(&mut self, index: usize) {
+        if self.picker_menu().is_some() {
+            return self.picker_take(index);
+        }
         let Some(menu) = self.dropdown().filter(|menu| !menu.stale) else { return };
         let Some(row) = menu.rows.get(index) else { return };
         let Some((word, text)) = self.taking(index) else {
@@ -10668,6 +10725,9 @@ mod tests {
         Action::ComposeHere,
         Action::ComposeTag { .. },
         Action::ComposeSheet,
+        Action::ComposePicker { .. },
+        Action::ComposePickerStep { .. },
+        Action::ComposeDefault,
         Action::ComposeAttach { .. },
         Action::ComposeRef { .. },
         Action::ComposePick { .. },
@@ -11050,6 +11110,9 @@ mod tests {
             Action::ComposeHere,
             Action::ComposeTag { mark: '>' },
             Action::ComposeSheet,
+            Action::ComposePicker { mark: Some('@') },
+            Action::ComposePickerStep { delta: -1 },
+            Action::ComposeDefault,
             Action::ComposeAttach { paths: Vec::new(), home: None, unreadable: 0 },
             Action::ComposeRef { target: Pointed::Tab(1) },
             Action::ComposePick { mark: '>', name: None },
@@ -11882,6 +11945,7 @@ mod tests {
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
+                    Action::ComposeDefault => Some(pickers::DEFAULT_USERS),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::WorktreeDelete { .. } => Some(crate::repos::DELETE_USERS),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
@@ -15226,6 +15290,118 @@ mod tests {
             (m.compose_plan(), m.update(Action::ComposePick { mark: '>', name: Some("app".into()) })),
             (None, vec![])
         );
+    }
+
+    /// The pickers show the default agent at once, follow a typed tag, and write theirs into the
+    /// line: one source, two ways in.
+    #[test]
+    fn the_pickers_show_the_default_agent_and_follow_the_line_both_ways() {
+        let mut m = composing();
+        let choices = |m: &Model| m.compose_choices().expect("pickers");
+        let c = choices(&m);
+        assert_eq!((c.project, c.place, c.agent.as_str(), c.default), (None, None, "claude", true));
+        assert_eq!(m.compose_pickers(), ['#', '>', '@']);
+        // A typed tag fills its picker, and the picker's list opens on it.
+        keys(&mut m, "fix zoom >app #canvas ");
+        let c = choices(&m);
+        assert_eq!((c.project.as_deref(), c.place.as_deref()), (Some("canvas"), Some("app")));
+        m.update(Action::ComposePicker { mark: Some('>') });
+        let menu = m.picker_menu().expect("the repository list");
+        let names: Vec<&str> = menu.rows.iter().map(|row| row.name.as_str()).collect();
+        assert_eq!((names, menu.selected), (vec!["no repository", "app", "app-2"], Some(1)));
+        // A row taken goes into the line as its tag, in place of the other; the list closes.
+        m.update(Action::ComposeAccept { index: 2 });
+        assert_eq!((line(&m), m.picker_menu()), ("fix zoom #canvas >app-2 ", None));
+        assert_eq!(choices(&m).place.as_deref(), Some("app-2"));
+        // "no project" takes the tag out.
+        m.update(Action::ComposePicker { mark: Some('#') });
+        m.update(Action::ComposeAccept { index: 0 });
+        assert_eq!((line(&m), choices(&m).project), ("fix zoom >app-2 ", None));
+        // A click on the open one closes it; typing closes it too.
+        m.update(Action::ComposePicker { mark: Some('@') });
+        m.update(Action::ComposePicker { mark: Some('@') });
+        assert!(m.picker_menu().is_none());
+        m.update(Action::ComposePicker { mark: Some('@') });
+        keys(&mut m, "x");
+        assert!(m.picker_menu().is_none());
+        // The quick note has none.
+        m.update(Action::CloseCompose);
+        assert_eq!(m.compose_choices(), None);
+    }
+
+    /// Keys only: Tab steps through the pickers' lists and back to the line, ↓ moves, ↵ takes, and
+    /// the one line says what ↵ will take. ⇧Tab goes back.
+    #[test]
+    fn each_picker_is_reached_and_taken_from_the_keys() {
+        let mut m = composing();
+        keys(&mut m, "fix zoom");
+        let open = |m: &Model| m.picker_menu().map(|menu| menu.mark);
+        m.update(Action::ComposeComplete);
+        assert_eq!(
+            (open(&m), m.compose_status().as_deref()),
+            (Some('#'), Some("↵ takes no project · Esc closes the list"))
+        );
+        m.update(Action::ComposeComplete);
+        assert_eq!(open(&m), Some('>'));
+        m.update(Action::ComposeMove { delta: 1 });
+        assert_eq!(m.compose_status().as_deref(), Some("↵ takes >app · Esc closes the list"));
+        m.update(Action::ComposeEnter);
+        assert_eq!((line(&m), open(&m), m.tasks.list.len()), ("fix zoom >app ", None, 4), "taken, nothing filed");
+        // To the agent's: ⇧Tab from the line goes to the last.
+        m.update(Action::ComposePickerStep { delta: -1 });
+        assert_eq!(open(&m), Some('@'));
+        let said = "↵ takes @claude · ⌥↵ makes it the default · Esc closes the list";
+        assert_eq!(m.compose_status().as_deref(), Some(said));
+        m.update(Action::ComposeMove { delta: 1 });
+        m.update(Action::ComposeEnter);
+        assert_eq!(line(&m), "fix zoom >app @claude-fable-5-2 ");
+        // Tab past the last is the line again; Esc closes a list, the box stays.
+        m.update(Action::ComposePickerStep { delta: -1 });
+        m.update(Action::ComposeComplete);
+        assert_eq!(open(&m), None);
+        m.update(Action::ComposeComplete);
+        m.update(Action::ComposeEscape);
+        assert_eq!((open(&m), m.composing()), (None, true));
+        // ↵ with no list open does what the line says.
+        let said = m.compose_status().unwrap_or_default();
+        assert!(said.starts_with("↵ starts @claude-fable-5-2 in app"), "{said}");
+        let effects = m.update(Action::ComposeEnter);
+        assert!(matches!(effects[..], [Effect::StartAgent { .. }]), "{effects:?}");
+    }
+
+    /// ⌥↵ in the agent list makes the highlighted one the default, written as the user's own act;
+    /// a client's is refused, and a saved agent is never the default.
+    #[test]
+    fn the_users_alt_enter_in_the_agent_list_makes_the_default() {
+        let mut m = composing();
+        keys(&mut m, "fix @codex ");
+        m.update(Action::ComposePicker { mark: Some('@') });
+        assert_eq!(m.refusal(&Action::ComposeDefault, Origin::Socket), Some(pickers::DEFAULT_USERS));
+        assert_eq!(m.update(Action::ComposeDefault.sent_by(Origin::Socket)), []);
+        let effects = m.update(Action::ComposeDefault);
+        assert_eq!(effects, [Effect::SaveDefaultAgent { agent: "codex".into() }]);
+        // The default needs no tag: it leaves the line, and the picker still shows it.
+        let c = m.compose_choices().expect("pickers");
+        assert_eq!((line(&m), c.agent.as_str(), c.default), ("fix ", "codex", true));
+        // A saved agent: ⌥↵ does nothing, and the line does not offer it.
+        let names = compose::Names { agents: vec!["claude".into(), "codex".into(), "ana".into()], skills: vec![] };
+        m.update(Action::SetKnown {
+            line: String::new(),
+            typing: None,
+            names: Some(names),
+            paths: vec![],
+            entries: vec![],
+        });
+        m.update(Action::ComposePicker { mark: Some('@') });
+        let last = m.picker_menu().map_or(0, |menu| menu.rows.len() - 1);
+        m.update(Action::ComposeMove { delta: last as i32 + 1 });
+        m.update(Action::ComposeMove { delta: -1 });
+        assert_eq!(
+            m.picker_menu().and_then(|menu| menu.selected.map(|at| menu.rows[at].name.clone())).as_deref(),
+            Some("ana")
+        );
+        assert_eq!((m.picker_default(), m.update(Action::ComposeDefault)), (None, vec![]));
+        assert!(!m.compose_status().unwrap_or_default().contains("⌥↵"));
     }
 
     #[test]
@@ -18712,6 +18888,7 @@ mod tests {
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
+                    Action::ComposeDefault => Some(pickers::DEFAULT_USERS),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
                     Action::WorktreeDelete { .. } => Some(crate::repos::DELETE_USERS),
                     Action::LocalDay { .. } if origin == Origin::Socket => Some(finish::DAY_SHELLS),
