@@ -6,8 +6,11 @@
 {"tree": "repos/big", "files": 2000}
 {"cmd": "repo_add", "path": "{ROOT}/repos/big"}
 {"until": "repos_bar.1"}
+{"cmd": "section", "section": "repos"}
 {"cmd": "open_repo", "path": "{ROOT}/repos/app"}
 {"cmd": "close"}
+{"cmd": "key", "keys": "escape", "as": "user"}
+{"settle": 800}
 {"until": "city.look", "is": "terraces", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
@@ -39,6 +42,8 @@
 {"shot": "app-blend"}
 {"cmd": "open_repo", "path": "{ROOT}/repos/big"}
 {"cmd": "close"}
+{"cmd": "key", "keys": "escape", "as": "user"}
+{"settle": 800}
 {"until": "city.places", "is": 2096, "timeout_ms": 60000}
 {"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"terraces\"}}\n"}
 {"until": "city.look", "is": "terraces", "timeout_ms": 30000}
