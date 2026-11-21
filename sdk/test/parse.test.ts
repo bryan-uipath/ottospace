@@ -125,6 +125,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     compose_menu: null,
     compose_menu_bounds: null,
     compose_tags: null,
+    compose_rects: null,
     compose_folder: null,
     compose_pointing: null,
     compose_note: null,

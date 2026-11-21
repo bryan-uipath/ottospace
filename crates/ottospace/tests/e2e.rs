@@ -4109,7 +4109,7 @@ fn the_users_enter_with_the_dropdown_open_completes_the_tag_and_starts_nothing()
     );
     // The tags show only when asked for: "? tags". A cap types its mark, and its dropdown opens.
     assert_eq!((&reply["compose_hint"], &reply["compose_tags"]), (&Value::Null, &json!({})));
-    let reply = otto.user_click(at(otto.control("compose-sheet"), 0.5, 0.5));
+    let reply = otto.user_click(at(rect(&reply["compose_rects"]["compose-sheet"]), 0.5, 0.5));
     assert!(reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")));
     let reply = otto.user_click(at(rect(&reply["compose_tags"][">"]), 0.5, 0.5));
     assert_eq!(
@@ -4170,7 +4170,11 @@ fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
     );
     assert_eq!(reply["compose_plan"]["dir"], "~/notes/2026/");
     // The pane is in the workspace made for it (Home holds none): ↵ starts it there.
-    assert_eq!(reply["compose_status"], "↵ starts claude in ~/notes/2026/, in this workspace · ⇧↵ later · Esc");
+    // Once the folder's own rows are read: until then ↵ waits for the list.
+    let said = "↵ starts @claude in ~/notes/2026/, in this workspace · ⇧↵ later · Esc";
+    otto.wait_for("↵ to start the agent there", |o| {
+        (o.call(json!({"cmd": "state"}))["compose_status"] == said).then_some(())
+    });
     // Esc closes the list and leaves the text as typed.
     let reply = key("escape");
     assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("plan my week ~/notes/2026/", &Value::Null));
@@ -4314,7 +4318,10 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     let plan = json!({"agent": "codex", "starts": true, "dir": null, "branch": null});
     assert_eq!(reply["compose_plan"], plan);
     // One line says what ↵ does; the tags only on demand.
-    assert_eq!(reply["compose_status"], json!("↵ starts codex in your home folder · ⇧↵ later · Esc"));
+    assert_eq!(
+        reply["compose_status"],
+        json!("Type what needs doing, then ↵ starts @codex in your home folder · ⇧↵ later · Esc")
+    );
     assert_eq!(reply["compose_hint"], Value::Null);
     // Typing goes into it; ⇧↵ files the task for later and the box closes. A task is open now:
     // the drawer goes.
@@ -4330,7 +4337,7 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     assert_eq!(reply["compose_host"], "drawer");
     assert_eq!(
         reply["compose_status"],
-        "Type what needs doing, then ↵ starts claude in your home folder · ⇧↵ later · Esc"
+        "Type what needs doing, then ↵ starts @claude in your home folder · ⇧↵ later · Esc"
     );
     let reply = otto.user_key("cmd-/");
     assert!(
@@ -8078,7 +8085,7 @@ fn a_repos_click_makes_a_workspace_of_its_worktree_where_terminals_and_tasks_sta
     // A task started there: its agent in the default worktree.
     otto.user_key("cmd-n");
     let typed = otto.user_key("o n e");
-    assert_eq!(typed["compose_status"], "↵ starts claude in app-2 on fix/zoom, in this workspace · ⇧↵ later · Esc");
+    assert_eq!(typed["compose_status"], "↵ starts @claude in app-2 on fix/zoom, in this workspace · ⇧↵ later · Esc");
     otto.user_key("enter");
     let started = |dir: String| {
         let bin = bin.clone();
@@ -8161,7 +8168,7 @@ fn the_new_task_box_makes_a_new_worktree_and_starts_the_task_there() {
     assert_eq!(reply["compose_worktree"]["new"], false, "a client chose: {}", reply["compose_worktree"]);
     let chosen = otto.user_key("cmd-alt-n");
     assert_eq!(chosen["compose_worktree"]["new"], true);
-    let said = "↵ starts claude in a new worktree of app on fix-the-zoom, in this workspace · ⇧↵ later · Esc";
+    let said = "↵ starts @claude in a new worktree of app on fix-the-zoom, in this workspace · ⇧↵ later · Esc";
     assert_eq!(chosen["compose_status"], said);
 
     // ↵: the worktree is made, the agent starts there, the workspace's default follows it.

@@ -18,7 +18,7 @@
 {"cmd":"key","keys":"cmd-/","as":"user"}
 {"settle":300}
 {"shot":"tags-sheet"}
-{"click":"compose-sheet"}
+{"click":{"rect":"compose_rects.compose-sheet"}}
 # Tags typed: a project and a priority, read out of the title.
 {"cmd":"key","keys":"space # a u t h space p 2 space","as":"user"}
 {"settle":500}

@@ -609,6 +609,8 @@ mod tests {
         let mut m = terminal_and_app();
         start(&mut m, None);
         assert_eq!((m.update(Action::CaptureCancel), bar(&m).asked), (vec![], true));
+        // The box's one line says what ↵ does now.
+        assert_eq!(m.compose_status().as_deref(), Some("↵ discards the capture · Esc keeps it"));
         assert_eq!(m.update(Action::ComposeSubmit { open: false }), [dropped(None)]);
         assert!(m.capture.is_none() && m.compose.is_none() && m.tasks.list.is_empty());
         // Esc says no, and so does ×. Typing is no answer: the question goes.

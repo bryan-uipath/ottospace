@@ -58,6 +58,13 @@ fn chips() -> Div {
     group("chip", cases)
 }
 
+/// Depth: a lifted dialog with a well in it.
+fn depth() -> Div {
+    let well = super::well(div().h(px(36.)), theme::COMPOSE);
+    let dialog = super::lifted(div().w(px(260.)).p(px(theme::SPACE_3))).child(well);
+    group("lifted, well", [case("dialog", dialog)])
+}
+
 fn rows() -> Div {
     let width = |d: gpui::Stateful<Div>| div().w(px(220.)).child(d);
     let rows = [("normal", Row::Normal), ("dim", Row::Dim)].map(|(name, row)| {
@@ -195,6 +202,7 @@ pub(crate) fn view() -> Div {
         .child(buttons())
         .child(pills())
         .child(chips())
+        .child(depth())
         .child(tips())
         .child(filter_rows());
     let right = div()

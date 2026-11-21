@@ -2282,6 +2282,7 @@ export function snapshot(value: unknown): Snapshot {
     compose_menu: orNull(composeMenu)(o.compose_menu, "compose_menu"),
     compose_menu_bounds: orNull(rect)(o.compose_menu_bounds, "compose_menu_bounds"),
     compose_tags: orNull(map(rect))(o.compose_tags, "compose_tags"),
+    compose_rects: orNull(map(rect))(o.compose_rects, "compose_rects"),
     compose_folder: orNull(str)(o.compose_folder, "compose_folder"),
     compose_pointing: orNull(rect)(o.compose_pointing, "compose_pointing"),
     compose_note: orNull(str)(o.compose_note, "compose_note"),

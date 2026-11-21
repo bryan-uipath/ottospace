@@ -134,7 +134,9 @@ impl Workspace {
     /// The tab or pane drawn at a window position: what an ⌥-click there would reference.
     /// Nothing under the box's own panel: that click is the box's.
     fn pointed_at(&self, position: Point<Pixels>) -> Option<(Pointed, Bounds<Pixels>)> {
-        if self.field.borrow().over_panel(position) {
+        // Nor under its dropdown, which may hang past it.
+        let menu = self.model.dropdown().is_some() && self.field.borrow().menu.contains(&position);
+        if menu || self.field.borrow().over_panel(position) {
             return None;
         }
         let tab = self.model.tabs.iter().find_map(|tab| {
@@ -293,6 +295,7 @@ impl Workspace {
             .absolute()
             .left(indent.max(px(0.)))
             .w(px(MENU_WIDTH))
+            .max_w_full()
             .py_1()
             .flex()
             .flex_col()
@@ -408,16 +411,7 @@ impl Workspace {
             .border_t_1()
             .border_color(rgb(theme::BORDER))
             .child(attach);
-        let field = div()
-            .flex()
-            .flex_col()
-            .rounded(px(dialog::INNER_RADIUS))
-            .bg(rgb(theme::BACKGROUND))
-            .border_1()
-            .border_color(rgb(theme::COMPOSE))
-            .child(line)
-            .children(attached)
-            .child(edge);
+        let field = ui::well(div().flex().flex_col(), theme::COMPOSE).child(line).children(attached).child(edge);
         let sheet_open = self.model.compose_hint().is_some();
         let tags = ui::button(
             "compose-sheet",
@@ -441,7 +435,8 @@ impl Workspace {
             .gap_2()
             .text_xs()
             .text_color(rgb(theme::MUTED))
-            .child(div().flex_1().min_w_0().child(self.model.compose_status().unwrap_or_default()))
+            // One line, whatever it says: what is under it never moves.
+            .child(div().flex_1().min_w_0().truncate().child(self.model.compose_status().unwrap_or_default()))
             .child(tags);
         let sheet = sheet_open.then(|| self.tag_caps(cx));
         div()
@@ -520,7 +515,7 @@ impl Workspace {
     /// The box centred over the dimmed panes (`Model::compose_centred`), `width` points wide: the
     /// drawer's picks and lines, then the line. Its bounds are where ↵'s grow starts (`fly.rs`).
     pub(crate) fn render_new_task_centred(&self, width: f32, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
-        dialog::panel(theme::COMPOSE)
+        ui::lifted(div())
             .id("new-task-centred")
             .relative()
             .w(px(width))
