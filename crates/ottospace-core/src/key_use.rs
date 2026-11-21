@@ -63,7 +63,6 @@ pub enum Binding {
     #[serde(alias = "zoom")]
     FillDisplay,
     Palette,
-    GoTo,
     ShowKeys,
     EditSettings,
     Hide,
@@ -114,7 +113,6 @@ pub const ALL: &[Binding] = &[
     Binding::SneakMode,
     Binding::FillDisplay,
     Binding::Palette,
-    Binding::GoTo,
     Binding::ShowKeys,
     Binding::EditSettings,
     Binding::Hide,
@@ -174,7 +172,6 @@ impl Binding {
             | Binding::Copy
             | Binding::Paste
             | Binding::Palette
-            | Binding::GoTo
             | Binding::ReturnKey
             | Binding::CaptureKey => &[],
         }
@@ -226,14 +223,9 @@ impl Binding {
             | B::AgentMenu => Group::Tasks,
             B::Copy | B::Paste => Group::Text,
             B::VisualMode | B::ListMode | B::SneakMode => Group::Modes,
-            B::Palette
-            | B::GoTo
-            | B::ShowKeys
-            | B::EditSettings
-            | B::FillDisplay
-            | B::ReturnKey
-            | B::Hide
-            | B::Quit => Group::App,
+            B::Palette | B::ShowKeys | B::EditSettings | B::FillDisplay | B::ReturnKey | B::Hide | B::Quit => {
+                Group::App
+            }
         }
     }
 
@@ -280,8 +272,7 @@ impl Binding {
             B::VisualMode => "Select text with keys",
             B::ListMode => "Drive the sidebar",
             B::SneakMode => "Click by letter",
-            B::Palette => "Any command by name",
-            B::GoTo => "Go to a place or file",
+            B::Palette => "Go to / any command",
             B::ShowKeys => "This list",
             B::EditSettings => "Settings",
             B::FillDisplay => "Fill the display, over the menu bar and Dock",

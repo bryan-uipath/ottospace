@@ -31,8 +31,9 @@ fn extras() -> [(Binding, Box<dyn gpui::Action>); 4] {
     [
         (Binding::Copy, Box::new(CopySelection)),
         (Binding::Paste, Box::new(PasteText)),
+        // One row for both: go to (⌘P), then the commands (⌘⇧P).
+        (Binding::Palette, Box::new(commands::GoToPlace)),
         (Binding::Palette, Box::new(commands::CommandPalette)),
-        (Binding::GoTo, Box::new(commands::GoToPlace)),
     ]
 }
 
