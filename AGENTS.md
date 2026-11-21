@@ -238,7 +238,9 @@ Design note: `docs/ai/attention/plan.md`.
   same for Done's seal, fold and land (`seal.rs`), and `counts.repo_pulse_frames` for a Repos
   dot's commit pulse; `counts.repo_pulses` counts the pulses (none under Reduce Motion);
   `counts.overlay_frames` for a side overlay's slide out of its rail and back (`overlays.rs`);
-  `counts.shimmer_frames` for a working line's sweep (`ui::shimmer`): none at rest.
+  `counts.shimmer_frames` for a working line's sweep (`ui::shimmer`): none at rest;
+  `counts.space_pulse_frames` for a working space's mark breathing on the top row (none while none
+  works).
 - A feature is done when both loops cover it. Extend `Request` and the state snapshot when a test
   needs to drive or read something new.
 
