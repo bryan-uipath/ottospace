@@ -22,8 +22,8 @@ use alacritty_terminal::tty;
 use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use gpui::{
-    App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, TextRun, UnderlineStyle, Window, fill, font,
-    point, px, rgb, size,
+    App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, StrikethroughStyle, TextRun, UnderlineStyle,
+    Window, fill, font, point, px, rgb, size,
 };
 use ottospace_core::keys::{self, Mods};
 use ottospace_core::terminal::{
@@ -168,14 +168,36 @@ impl Dimensions for Grid {
     }
 }
 
-/// A run of cells on one row that share a style.
+/// A run of cells on one row that share a style. Dim text is already in `fg`.
+#[derive(serde::Serialize)]
 pub struct Span {
     text: String,
     fg: u32,
     bg: Option<u32>,
     bold: bool,
     italic: bool,
-    underline: bool,
+    strike: bool,
+    underline: Option<Underline>,
+}
+
+/// A line under text: wavy for a curly one (SGR 4:3), else straight (double, dotted and dashed
+/// too); in its own colour (SGR 58) or the text's.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+struct Underline {
+    curly: bool,
+    color: Option<u32>,
+}
+
+impl Span {
+    /// Anything but plain text on the default background.
+    fn styled(&self) -> bool {
+        self.fg != palette::FOREGROUND
+            || self.bg.is_some()
+            || self.bold
+            || self.italic
+            || self.strike
+            || self.underline.is_some()
+    }
 }
 
 /// What to paint: styled rows, and the cursor's (row, column) when it is visible.
@@ -692,43 +714,75 @@ impl Terminal {
     }
 
     pub fn screen(&self) -> Screen {
-        let term = self.term.lock();
-        let content = term.renderable_content();
-        let mut rows: Vec<Vec<Span>> = (0..self.grid.rows).map(|_| Vec::new()).collect();
-        let offset = content.display_offset as i32;
-        let selection = content.selection;
-        for cell in content.display_iter {
-            let Some(row) = usize::try_from(cell.point.line.0 + offset).ok().and_then(|r| rows.get_mut(r)) else {
-                continue;
-            };
-            if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
-                continue; // second half of a wide character
-            }
-            let (mut fg, mut bg) = (colour(cell.fg), colour(cell.bg));
-            if cell.flags.contains(Flags::INVERSE) {
-                (fg, bg) = (bg, fg);
-            }
-            let selected = selection.is_some_and(|s| s.contains(cell.point));
-            let bg = if selected { Some(theme::SELECTION) } else { (bg != palette::BACKGROUND).then_some(bg) };
-            let bold = cell.flags.contains(Flags::BOLD);
-            let italic = cell.flags.contains(Flags::ITALIC);
-            let underline = cell.flags.intersects(Flags::ALL_UNDERLINES);
-            let c = if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) { ' ' } else { cell.c };
-            match row.last_mut() {
-                Some(s) if (s.fg, s.bg, s.bold, s.italic, s.underline) == (fg, bg, bold, italic, underline) => {
-                    s.text.push(c)
-                }
-                _ => row.push(Span { text: c.to_string(), fg, bg, bold, italic, underline }),
-            }
-        }
-        let at = content.cursor.point;
-        let shape = content.cursor.shape;
-        let cursor = (shape != CursorShape::Hidden)
-            .then(|| usize::try_from(at.line.0 + offset).ok().map(|row| (row, at.column.0, shape)))
-            .flatten()
-            .filter(|(row, ..)| *row < self.grid.rows); // scrolled back past it
-        Screen { rows, cursor }
+        screen_of(&self.term.lock(), self.grid.rows)
     }
+
+    /// Spans with a style, for a test run's state: `{"row":0,"text":"dim","fg":..}`.
+    /// A row that hides a live pass (`lines`) gives none: its spans would hold the digits.
+    pub fn styled(&self) -> Vec<serde_json::Value> {
+        let (screen, lines) = (self.screen(), self.lines());
+        let whole = |row: usize, spans: &Vec<Span>| {
+            let text: String = spans.iter().map(|s| s.text.as_str()).collect();
+            lines.get(row).is_some_and(|line| text.trim_end() == line)
+        };
+        let rows = screen.rows.iter().enumerate().filter(|(row, spans)| whole(*row, spans));
+        let spans = rows.flat_map(|(row, spans)| spans.iter().filter(|s| s.styled()).map(move |s| (row, s)));
+        let json = |(row, span): (usize, &Span)| {
+            let mut value = serde_json::to_value(span).unwrap_or_default();
+            value["row"] = row.into();
+            value
+        };
+        spans.map(json).collect()
+    }
+}
+
+/// `Terminal::screen`: the `rows` on show, styled, and the cursor.
+fn screen_of<T: EventListener>(term: &Term<T>, rows: usize) -> Screen {
+    let content = term.renderable_content();
+    let mut lines: Vec<Vec<Span>> = (0..rows).map(|_| Vec::new()).collect();
+    let offset = content.display_offset as i32;
+    let selection = content.selection;
+    for cell in content.display_iter {
+        let Some(row) = usize::try_from(cell.point.line.0 + offset).ok().and_then(|r| lines.get_mut(r)) else {
+            continue;
+        };
+        if cell.flags.intersects(Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER) {
+            continue; // second half of a wide character
+        }
+        let (mut fg, mut bg) = (colour(cell.fg), colour(cell.bg));
+        if cell.flags.contains(Flags::INVERSE) {
+            (fg, bg) = (bg, fg);
+        }
+        if cell.flags.contains(Flags::DIM) {
+            fg = palette::dim(fg, bg);
+        }
+        let selected = selection.is_some_and(|s| s.contains(cell.point));
+        let bg = if selected { Some(theme::SELECTION) } else { (bg != palette::BACKGROUND).then_some(bg) };
+        let bold = cell.flags.contains(Flags::BOLD);
+        let italic = cell.flags.contains(Flags::ITALIC);
+        let strike = cell.flags.contains(Flags::STRIKEOUT);
+        let underline = cell.flags.intersects(Flags::ALL_UNDERLINES).then(|| Underline {
+            curly: cell.flags.contains(Flags::UNDERCURL),
+            color: cell.underline_color().map(colour),
+        });
+        let c = if cell.c == '\t' || cell.flags.contains(Flags::HIDDEN) { ' ' } else { cell.c };
+        match row.last_mut() {
+            Some(s)
+                if (s.fg, s.bg, s.bold, s.italic, s.strike, s.underline)
+                    == (fg, bg, bold, italic, strike, underline) =>
+            {
+                s.text.push(c)
+            }
+            _ => row.push(Span { text: c.to_string(), fg, bg, bold, italic, strike, underline }),
+        }
+    }
+    let at = content.cursor.point;
+    let shape = content.cursor.shape;
+    let cursor = (shape != CursorShape::Hidden)
+        .then(|| usize::try_from(at.line.0 + offset).ok().map(|row| (row, at.column.0, shape)))
+        .flatten()
+        .filter(|(row, ..)| *row < rows); // scrolled back past it
+    Screen { rows: lines, cursor }
 }
 
 impl Screen {
@@ -1016,7 +1070,8 @@ pub fn paint(
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (r, spans) in screen.rows.iter().enumerate() {
             let text: String = spans.iter().map(|s| s.text.as_str()).collect();
-            if text.trim_end().is_empty() && spans.iter().all(|s| s.bg.is_none()) {
+            let drawn = |s: &Span| s.bg.is_some() || s.strike || s.underline.is_some();
+            if text.trim_end().is_empty() && !spans.iter().any(drawn) {
                 continue;
             }
             let runs: Vec<TextRun> = spans
@@ -1034,8 +1089,12 @@ pub fn paint(
                         font,
                         color: rgb(s.fg).into(),
                         background_color: s.bg.map(|bg| rgb(bg).into()),
-                        underline: s.underline.then(|| UnderlineStyle { thickness: px(1.), color: None, wavy: false }),
-                        strikethrough: None,
+                        underline: s.underline.map(|u| UnderlineStyle {
+                            thickness: px(1.),
+                            color: u.color.map(|c| rgb(c).into()),
+                            wavy: u.curly,
+                        }),
+                        strikethrough: s.strike.then(|| StrikethroughStyle { thickness: px(1.), color: None }),
                     }
                 })
                 .collect();
@@ -1214,6 +1273,32 @@ mod tests {
             format!("{}x{}", size.num_cols * size.cell_width, size.num_lines * size.cell_height)
         });
         assert_eq!(answer(&Event::TextAreaSizeRequest(reply), Some([783.2, 432.])).as_deref(), Some("783x432"));
+
+    /// Spans of row 0 as (text, fg, strike, underline).
+    fn spans(term: &Term<VoidListener>) -> Vec<(String, u32, bool, Option<Underline>)> {
+        let screen = screen_of(term, term.screen_lines());
+        screen.rows[0].iter().map(|s| (s.text.clone(), s.fg, s.strike, s.underline)).collect()
+    }
+
+    /// The styles the grid keeps are drawn: dim, strikethrough, a curly underline in its own colour.
+    #[test]
+    fn dim_strikethrough_and_underline_styles_are_drawn() {
+        let fg = palette::FOREGROUND;
+        let plain = |text: &str| (text.to_string(), fg, false, None);
+        let styled = term(40, 2, "a\x1b[2mdim\x1b[0m\x1b[9mx\x1b[0m\x1b[4:3;58:2::255:0:0mc\x1b[4:2;59md\x1b[0m.");
+        assert_eq!(
+            spans(&styled),
+            [
+                plain("a"),
+                ("dim".into(), palette::dim(fg, palette::BACKGROUND), false, None),
+                ("x".into(), fg, true, None),
+                ("c".into(), fg, false, Some(Underline { curly: true, color: Some(0xff0000) })),
+                ("d".into(), fg, false, Some(Underline { curly: false, color: None })),
+                plain(&format!(".{}", " ".repeat(32))), // the rest of the 40 columns
+            ]
+        );
+        // Dim reversed text dims toward its new background.
+        assert_eq!(spans(&term(4, 1, "\x1b[2;7mr"))[0].1, palette::dim(palette::BACKGROUND, fg));
     }
 
     /// What clients read keeps a cell's zero-width characters: a combining accent, a joiner.

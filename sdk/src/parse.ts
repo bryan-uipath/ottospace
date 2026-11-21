@@ -150,6 +150,7 @@ import type {
   TaskState,
   TasksBar,
   Terminal,
+  StyledSpan,
   Truncated,
   WaitReply,
   Worktree,
@@ -1922,7 +1923,27 @@ function terminal(value: unknown, at: string): Terminal {
     selection: orNull(str)(o.selection, `${at}.selection`),
     selection_range: orNull(range)(o.selection_range, `${at}.selection_range`),
     visual_cursor: orNull(pair)(o.visual_cursor, `${at}.visual_cursor`),
+    styled: orNull(list(styledSpan))(o.styled, `${at}.styled`),
   };
+}
+
+function styledSpan(value: unknown, at: string): StyledSpan {
+  const o = fields(value, at);
+  return {
+    row: num(o.row, `${at}.row`),
+    text: str(o.text, `${at}.text`),
+    fg: num(o.fg, `${at}.fg`),
+    bg: orNull(num)(o.bg, `${at}.bg`),
+    bold: bool(o.bold, `${at}.bold`),
+    italic: bool(o.italic, `${at}.italic`),
+    strike: bool(o.strike, `${at}.strike`),
+    underline: orNull(underline)(o.underline, `${at}.underline`),
+  };
+}
+
+function underline(value: unknown, at: string): { curly: boolean; color: number | null } {
+  const o = fields(value, at);
+  return { curly: bool(o.curly, `${at}.curly`), color: orNull(num)(o.color, `${at}.color`) };
 }
 
 function frame(value: unknown, at: string): Frame {

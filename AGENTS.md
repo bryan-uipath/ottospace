@@ -162,6 +162,8 @@ Design note: `docs/ai/attention/plan.md`.
     (null outside a test run) lists each press a label asked for.
   - State field `overflow`: each scroll area laid out (not a terminal), also one that fits, and which of its edges
     fade (`top`/`bottom`, the tab row's `left`/`right`). Null outside a test run.
+  - State field `terminals[n].styled`: each span on show drawn with a style (`row`, `text`, `fg` with
+    dim already in it, `bg`, `bold`, `italic`, `strike`, `underline` `{curly, color}`). Null outside a test run.
   - State field `repos_bar[n].name_cut`: a repository's name as drawn in its heading (`cut_text`), its box
     (`room`) and its shaped width (`drawn`). Null outside a test run.
   - State field `offer_rects`: where an offer chip's words (`words:<pane>`) and their tooltip (`tip`,
