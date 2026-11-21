@@ -262,7 +262,8 @@ impl Workspace {
     /// The rows as drawn, for the state snapshot: each command's id, name, group and key. While
     /// it lists spaces: Move Tab to…'s id, the space's title, "Move to" and no key. A flag's row
     /// adds its description, stage and whether it is on. `rect`, `group_rect` (null: no group
-    /// column) and `stage_rect` (null: no stage icon): where they were drawn.
+    /// column), `stage_rect` (null: no stage icon) and `text_rect` (a flag's title over its
+    /// description; null otherwise): where they were drawn.
     pub fn palette_rows(&self, cx: &App) -> Option<serde_json::Value> {
         let palette = self.model.palette.as_ref()?;
         if matches!(palette.view(), View::Places | View::Files) {
@@ -284,6 +285,7 @@ impl Workspace {
                 "rect": drawn("row", at),
                 "group_rect": drawn("group", at),
                 "stage_rect": drawn("stage", at),
+                "text_rect": drawn("text", at),
             })
         };
         Some(palette_items(palette, &keymap.borrow()).into_iter().enumerate().map(row).collect())
@@ -479,11 +481,13 @@ pub(crate) fn flag_row(row: gpui::Stateful<gpui::Div>, i: usize, choice: &Featur
     let (state, colour) = if choice.on { ("On", theme::PRIMARY) } else { ("Off", theme::MUTED) };
     // The title's line: the icon and On or Off sit level with it.
     let line = || div().h(px(ui::TITLE_LINE)).flex_none().flex().items_center();
-    row.h(px(ui::TWO_LINE_ROW))
+    // As tall as its lines, padded alike above and below: a one-line description, a shorter row.
+    let text = ui::two_lines(title, feature.description()).flex_1().relative().child(note("text", i));
+    row.h_auto()
         .py(px(theme::SPACE_1_5))
         .items_start()
         .child(line().w(px(theme::ICON_SM)).children(stage_icon(i, feature.stage())))
-        .child(ui::two_lines(title, feature.description()).flex_1())
+        .child(text)
         .child(line().w(px(24.)).justify_end().text_xs().text_color(rgb(colour)).child(state))
 }
 

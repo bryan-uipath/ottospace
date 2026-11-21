@@ -1017,10 +1017,11 @@ export interface PaletteRow {
   description: string | null;
   stage: string | null;
   on: boolean | null;
-  /** Where the row, its group column and its stage icon were drawn; null: not drawn. */
+  /** Where the row, its group column, its stage icon and a flag's title over its description were drawn; null: not drawn. */
   rect: Rect | null;
   group_rect: Rect | null;
   stage_rect: Rect | null;
+  text_rect: Rect | null;
 }
 
 /** A row of go-to: a place (`place`: `workspace`, `checkout` or `task`; its name and detail), or a file (a path in the place's folder). */

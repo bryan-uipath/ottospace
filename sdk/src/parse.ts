@@ -1533,6 +1533,7 @@ function paletteRow(value: unknown, at: string): PaletteRow {
     rect: orNull(rect)(o.rect, `${at}.rect`),
     group_rect: orNull(rect)(o.group_rect, `${at}.group_rect`),
     stage_rect: orNull(rect)(o.stage_rect, `${at}.stage_rect`),
+    text_rect: orNull(rect)(o.text_rect, `${at}.text_rect`),
   };
 }
 

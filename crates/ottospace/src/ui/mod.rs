@@ -218,11 +218,9 @@ pub(crate) fn list_row(id: impl Into<ElementId>, row: Row, state: State) -> Stat
     }
 }
 
-/// A two-line row's title line, and the row's height: the title over a description of at most two
-/// lines (`two_lines`), padded as a filter row.
+/// A two-line row's title line: the title over a description of at most two lines (`two_lines`).
 pub(crate) const TITLE_LINE: f32 = 18.;
 const DESCRIPTION_LINE: f32 = 15.;
-pub(crate) const TWO_LINE_ROW: f32 = 2. * theme::SPACE_1_5 + TITLE_LINE + theme::SPACE_0_5 + 2. * DESCRIPTION_LINE;
 
 /// A row's title over its description, smaller and muted, wrapping to two lines at most (VS Code's
 /// settings list). e.g. "Marks" over "Name a pane or a tab, and go back to it with a letter".
