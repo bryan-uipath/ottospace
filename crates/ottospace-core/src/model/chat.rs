@@ -1200,6 +1200,12 @@ mod tests {
         m.update(drop(&["/tmp/a\nb"]));
         assert_eq!(m.chat(&one).map(|chat| chat.draft.text()), Some("look at '/tmp/a.png' '/tmp/it'\\''s' "));
         assert_eq!(m.clip.as_ref().map(|clip| clip.text.as_str()), Some(crate::clip::DROP_REFUSED));
+        // No room for the whole quoted path: nothing goes in, never part of it.
+        let before = m.chat(&one).map(|chat| chat.draft.text().to_string());
+        let long = format!("/tmp/{}", "x".repeat(super::MAX_DRAFT));
+        m.update(Action::TalkDrop { paths: vec![long], unreadable: 0 });
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text().to_string()), before);
+        assert_eq!(m.clip.as_ref().map(|clip| clip.text.as_str()), Some(crate::clip::DROP_NO_ROOM));
     }
 
     #[test]
