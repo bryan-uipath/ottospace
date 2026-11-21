@@ -8,6 +8,7 @@ use serde::Serialize;
 use super::{Effect, Model};
 use crate::agents;
 use crate::complete::{self, Dropdown, Row};
+use crate::compose;
 use crate::runner::RunnerId;
 
 /// Why a client's ⌥↵ in the agent list is refused: it writes the user's settings.
@@ -78,11 +79,15 @@ impl Model {
             '>' => std::iter::once(none("no repository")).chain(named("repo")).collect(),
             '@' => {
                 let mut names = self.compose_picks().whos;
-                for saved in self.known.names.agents.iter() {
-                    if !names.iter().any(|name| name.eq_ignore_ascii_case(saved)) {
-                        names.push(saved.clone());
+                // The saved agents, and a model typed that no list has: still the one chosen.
+                let typed = self.picker_current('@');
+                for name in self.known.names.agents.iter().chain([&typed]) {
+                    if !names.iter().any(|seen| seen.eq_ignore_ascii_case(name)) {
+                        names.push(name.clone());
                     }
                 }
+                // Only a name that reads back as the tag (no space in it).
+                names.retain(|name| compose::taggable('@', name));
                 let default = self.default_agent();
                 let detail = |name: &str| match name.eq_ignore_ascii_case(default) {
                     true => "default".into(),
@@ -100,10 +105,14 @@ impl Model {
         let (mark, moved) = self.compose_picker.as_ref().filter(|_| self.composing())?;
         let rows = self.picker_rows(*mark);
         let current = self.picker_current(*mark);
-        let at = |name: &str| rows.iter().position(|row| row.name.eq_ignore_ascii_case(name) && !row.name.is_empty());
+        // The row moved to by its exact name (`Foo` and `foo` are two projects); the line's own by
+        // its name, then whatever its case.
+        let exact = |name: &str| rows.iter().position(|row| row.name == name && row.kind != NONE);
+        let alike = |name: &str| rows.iter().position(|row| row.name.eq_ignore_ascii_case(name) && row.kind != NONE);
         let none = rows.iter().position(|row| row.kind == NONE);
-        let mine = if current.is_empty() { none } else { at(&current) };
-        let selected = moved.as_deref().and_then(at).or(mine).or((!rows.is_empty()).then_some(0));
+        let mine = if current.is_empty() { none } else { exact(&current).or_else(|| alike(&current)) };
+        let moved = moved.as_deref().map(|name| if name.is_empty() { none } else { exact(name) });
+        let selected = moved.flatten().or(mine).or((!rows.is_empty()).then_some(0));
         Some(Dropdown { mark: *mark, typed: String::new(), start: 0, rows, selected, note: None, stale: false })
     }
 
@@ -137,9 +146,12 @@ impl Model {
     pub(super) fn picker_move(&mut self, delta: i32) {
         let Some(menu) = self.picker_menu() else { return };
         let to = complete::moved(menu.selected, delta, menu.rows.len());
-        let name = to.and_then(|at| menu.rows.get(at)).map(|row| row.name.clone());
+        // The none row by no name: a project may be called "no project".
+        let name = to
+            .and_then(|at| menu.rows.get(at))
+            .map(|row| if row.kind == NONE { String::new() } else { row.name.clone() });
         if let Some((_, moved)) = &mut self.compose_picker {
-            *moved = name.filter(|name| !name.is_empty()).or(Some(String::new()));
+            *moved = name;
         }
     }
 

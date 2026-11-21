@@ -6223,6 +6223,8 @@ impl Model {
                 if !self.composing() => {}
             Action::ComposeTag { .. } if !self.composing() => {}
             Action::ComposeTag { mark } if TAG_KEYS.iter().any(|(key, _)| key.chars().eq([mark])) => {
+                // A mark typed: its dropdown, not a picker's list.
+                self.compose_picker = None;
                 // In place of the selection, spaced from the words either side: `fix|bug` becomes
                 // `fix >|bug`, so taking a row replaces no word of the user's. One undo step, whole.
                 let Some(field) = &mut self.compose else { return };
@@ -8316,7 +8318,11 @@ impl Model {
         }
         let Some(field) = self.compose.as_mut() else { return };
         // Only words that are such a tag go, each with the space after it; the rest is as typed.
-        let tag = |word: &str| word.strip_prefix(mark).is_some_and(|rest| compose::taggable(mark, rest));
+        // A tag a clause's punctuation ends (`#canvas,`) is one too, as the line reads it.
+        let tag = |word: &str| {
+            let word = word.trim_end_matches([',', '.', ';', ':', '!', '?']);
+            word.strip_prefix(mark).is_some_and(|rest| compose::taggable(mark, rest))
+        };
         let mut text: String = field.text().split_inclusive(' ').filter(|piece| !tag(piece.trim_end())).collect();
         if let Some(name) = name {
             if !text.is_empty() && !text.ends_with(' ') {
@@ -8325,8 +8331,9 @@ impl Model {
             text.push_str(&format!("{mark}{name} "));
         }
         let all = 0..field.text().len();
-        if field.fits(all.clone(), &text) {
-            field.splice(all, &text);
+        match field.fits(all.clone(), &text) {
+            true => field.splice(all, &text),
+            false => self.compose_note = Some("no room in the line for that name".into()),
         }
     }
 
@@ -15324,6 +15331,14 @@ mod tests {
         m.update(Action::ComposePicker { mark: Some('@') });
         keys(&mut m, "x");
         assert!(m.picker_menu().is_none());
+        // A tag a comma ends goes with "no project"; a model typed that no list has is kept.
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        keys(&mut m, "fix #canvas, @claude-opus-9 ");
+        m.update(Action::ComposePicker { mark: Some('#') });
+        m.update(Action::ComposeAccept { index: 0 });
+        m.update(Action::ComposePicker { mark: Some('@') });
+        m.update(Action::ComposeEnter);
+        assert_eq!((line(&m), choices(&m).project), ("fix @claude-opus-9 ", None));
         // The quick note has none.
         m.update(Action::CloseCompose);
         assert_eq!(m.compose_choices(), None);

@@ -303,8 +303,14 @@ impl Workspace {
     /// A list of rows that floats over the box, `MENU_WIDTH` wide at most: the tag's dropdown, or
     /// a picker's. The caller places it. Where it is drawn is kept, so a click on it is the box's.
     fn menu_list(&self, menu: &Dropdown, cx: &mut Context<Self>) -> Div {
-        let rows = menu.rows.iter().enumerate().map(|(i, row)| self.dropdown_row(i, row, menu, cx).into_any_element());
-        let note = menu.note.clone().map(|note| {
+        // At most `MAX_ROWS`, as many as the dropdown's, around the highlighted one: a long list of
+        // projects stays in the window, and ↑ ↓ bring the rest into view.
+        let most = complete::MAX_ROWS;
+        let from = menu.selected.unwrap_or(0).saturating_sub(most - 1).min(menu.rows.len().saturating_sub(most));
+        let shown = menu.rows.iter().enumerate().skip(from).take(most);
+        let rows = shown.map(|(i, row)| self.dropdown_row(i, row, menu, cx).into_any_element());
+        let more = menu.rows.len().saturating_sub(most);
+        let note = menu.note.clone().or_else(|| (more > 0).then(|| format!("{more} more: ↑ ↓"))).map(|note| {
             div().h(px(ROW)).px_2().flex().items_center().text_xs().text_color(rgb(theme::MUTED)).child(note)
         });
         let drawn = self.field.clone();
