@@ -185,6 +185,28 @@ pub fn resume(runner: RunnerId, session: &str) -> Option<Command> {
     is_uuid(session).then(|| Command { program: cli.program, args: vec![cli.resume.to_string(), session.to_string()] })
 }
 
+/// What the user's login shell runs for an agent, and its positional parameters: `exec "$@"`
+/// with the program and its arguments. With `agent_commands`' text for the runner (`ja claude`):
+/// that text is read by the shell, so an alias works, and the arguments follow it, never read.
+pub fn shell_run(program: &str, args: &[String], command: Option<&str>) -> (&'static str, Vec<String>) {
+    match command {
+        None => ("exec \"$@\"", std::iter::once(program.to_string()).chain(args.iter().cloned()).collect()),
+        Some(text) => (
+            "ottospace_command=$1; shift; eval \"$ottospace_command\"' \"$@\"'",
+            std::iter::once(text.to_string()).chain(args.iter().cloned()).collect(),
+        ),
+    }
+}
+
+impl Start {
+    pub fn runner(&self) -> RunnerId {
+        match self {
+            Start::New(launch) => launch.runner,
+            Start::Resume { runner, .. } => *runner,
+        }
+    }
+}
+
 /// An agent started whose runner names its own session (`SessionId::Found`): its id is looked for.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Seek {
@@ -413,6 +435,17 @@ mod tests {
             (args(RunnerId::named("codex")), args(RunnerId::named("ana"))),
             (Some(("codex", format!("resume {uuid}"))), None)
         );
+    }
+
+    #[test]
+    fn a_runners_command_replaces_its_program_and_its_arguments_are_never_read() {
+        let args = vec!["--resume".to_string(), "a b; rm -rf ~".to_string()];
+        let (script, argv) = shell_run("claude", &args, None);
+        assert_eq!((script, argv), ("exec \"$@\"", vec!["claude".into(), args[0].clone(), args[1].clone()]));
+        // The shell reads the command alone; the arguments stay its positional parameters.
+        let (script, argv) = shell_run("claude", &args, Some("ja claude"));
+        assert_eq!(argv, ["ja claude", "--resume", "a b; rm -rf ~"]);
+        assert_eq!(script, "ottospace_command=$1; shift; eval \"$ottospace_command\"' \"$@\"'");
     }
 
     #[test]

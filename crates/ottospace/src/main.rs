@@ -2109,10 +2109,10 @@ impl Workspace {
         let mut agents: Vec<Action> = Vec::new();
         for effect in effects {
             match effect {
-                Effect::StartAgent { task, start, cwd, brief } => {
+                Effect::StartAgent { task, start, cwd, brief, command } => {
                     // Before the program starts: a session it writes cannot say it began earlier.
                     let at = now_ms();
-                    match self.start_agent(task, start, cwd.as_deref(), brief.as_deref()) {
+                    match self.start_agent(task, start, cwd.as_deref(), brief.as_deref(), command.as_deref()) {
                         Ok(session) => agents.push(Action::AgentStarted { task: task.clone(), session, at }),
                         Err(why) => {
                             self.broke(format!("agent: {why}"));

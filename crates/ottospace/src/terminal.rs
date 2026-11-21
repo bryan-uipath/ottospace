@@ -274,14 +274,12 @@ impl Terminal {
         Self::start(shell, vars, cwd, history)
     }
 
-    /// Runs `program` with `args` through the user's login shell, for its `PATH`:
-    /// `$SHELL -lic 'exec "$@"' ottospace-agent <program> <args…>`. The script is fixed text;
-    /// the program and each argument are positional parameters, never read by the shell.
+    /// Runs an agent through the user's login shell, for its `PATH` and aliases:
+    /// `$SHELL -lic <script> ottospace-agent <argv…>`, as `agents::shell_run` makes them. The
+    /// script is fixed text; each argument is a positional parameter, never read by the shell.
     /// With `$OTTOSPACE_SHELL` (tests), that shell runs it without reading a profile.
-    pub fn run(program: &str, args: &[String], vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
-        let mut argv = vec![program.to_string()];
-        argv.extend(args.iter().cloned());
-        Self::script("exec \"$@\"", "ottospace-agent", argv, vars, cwd)
+    pub fn run(script: &str, argv: Vec<String>, vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
+        Self::script(script, "ottospace-agent", argv, vars, cwd)
     }
 
     /// Runs the user's editor on `file`, as `run` runs a program: `$VISUAL`, else `$EDITOR`,

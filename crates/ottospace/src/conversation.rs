@@ -289,6 +289,7 @@ impl Workspace {
         start: &Start,
         cwd: Option<&str>,
         brief: Option<&str>,
+        command_text: Option<&str>,
     ) -> Result<Option<String>, String> {
         let (runner, begin, session, model, prompt) = match start {
             Start::New(launch) => {
@@ -311,7 +312,7 @@ impl Workspace {
         let (argv, wire) =
             ottospace_agents::structured(runner, Path::new(dir.unwrap_or("/")), model.as_deref(), &begin)
                 .ok_or("no structured command for this agent")?;
-        let program = crate::talk::program(argv.program)?;
+        let (script, argv, path) = crate::talk::shell_run(argv.program, &argv.args, command_text)?;
         // As the terminal runs it: the user's login shell finds the program, which gets its
         // arguments as positional parameters. The script is fixed text.
         let (shell, flags) = match std::env::var("OTTOSPACE_SHELL") {
@@ -320,7 +321,8 @@ impl Workspace {
             Err(_) => (crate::terminal::login_shell(), "-lic"),
         };
         let mut command = Command::new(shell);
-        command.args([flags, "exec \"$@\"", "ottospace-agent", &program]).args(&argv.args);
+        command.args([flags, script, "ottospace-agent"]).args(&argv);
+        command.envs(path);
         if let Some(dir) = dir {
             command.current_dir(dir);
         }
