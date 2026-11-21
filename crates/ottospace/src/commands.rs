@@ -386,7 +386,9 @@ impl Workspace {
                     dialog::filter_row(("place", i), i == selected)
                         .child(icon.text_color(rgb(theme::MUTED)))
                         .child(crate::cut_text(row.name.clone()).flex_1())
-                        .child(div().max_w(px(240.)).text_xs().text_color(rgb(theme::MUTED)).child(row.detail.clone()))
+                        .child(
+                            crate::cut_text(row.detail.clone()).max_w(px(240.)).text_xs().text_color(rgb(theme::MUTED)),
+                        )
                         .on_click(choose(i))
                         .into_any_element()
                 });
