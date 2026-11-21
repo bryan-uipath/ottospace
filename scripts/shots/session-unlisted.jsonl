@@ -14,6 +14,6 @@
 {"cmd":"section","section":"tasks"}
 {"until":"sessions_bar.rows.1"}
 {"click":"session:claude:plain","at":[0.3,0.3]}
-{"until":"drawer.note"}
+{"until":"drawer.note","is":"its session id is not one Claude Code can resume","timeout_ms":60000}
 {"settle":800}
 {"shot":"why"}

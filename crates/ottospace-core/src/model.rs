@@ -7449,7 +7449,7 @@ impl Model {
             return None;
         }
         let start = self.agent_start(subject).map(|(start, _)| matches!(start, agents::Start::Resume { .. }));
-        start.or(self.session_unread(subject).then_some(true))
+        start.or_else(|| self.session_unread(subject).then_some(true))
     }
 
     /// Why the drawer has no agent for the conversation it is on, if that is so: for the shell to say.
@@ -15614,7 +15614,7 @@ mod tests {
             m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
             let idle = of_session("claude", IDLE);
             // No dead end: Resume session shows, and nothing says it cannot.
-            assert_eq!((m.talk_note(), m.talk_resumes()), (None, Some(true)));
+            assert_eq!((m.talk_note(), m.talk_resumes(), m.take_over_ready(&idle)), (None, Some(true), true));
             let read = Effect::ReadSession { runner: "claude".into(), id: IDLE.into() };
             assert_eq!(m.update(Action::TalkStart), [read]);
             assert!(m.talk_live(&idle) && m.talk_note().is_none());

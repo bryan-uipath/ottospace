@@ -466,6 +466,8 @@ impl Model {
     pub fn take_over_ready(&self, subject: &Subject) -> bool {
         let idle =
             self.session_of(subject).and_then(|(r, i)| self.facts(&r, &i).flatten()).is_some_and(|s| !self.in_use(s));
+        // Not listed nor read (the Tasks section closed): the click reads it first.
+        let idle = idle || self.session_unread(subject);
         let can = self.runner_of(subject).is_some_and(|r| r.spec().attach.take_over_when_idle == Support::Yes);
         can && idle && !self.agent_runs(subject)
     }
