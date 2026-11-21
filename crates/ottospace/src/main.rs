@@ -98,6 +98,7 @@ mod finish;
 mod float_panel;
 mod fly;
 mod give_back;
+mod goto;
 mod highlight;
 mod home;
 mod inspector;
@@ -851,9 +852,8 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-e", PickPane, None),
         KeyBinding::new("cmd-shift-e", PickPaneDown, None),
         KeyBinding::new("cmd-/", ShowKeys, None),
-        // ⌘⇧P first: the menus and key reference show it. ⌘P goes to go-to later.
         KeyBinding::new("cmd-shift-p", commands::CommandPalette, None),
-        KeyBinding::new("cmd-p", commands::CommandPalette, None),
+        KeyBinding::new("cmd-p", commands::GoToPlace, None),
         KeyBinding::new("cmd-,", commands::EditSettings, None),
         KeyBinding::new("cmd-w", ClosePane, None),
         KeyBinding::new("cmd-alt-left", FocusLeft, None),
@@ -1204,6 +1204,8 @@ struct Workspace {
     /// The code city behind a task's empty tab: its files, read off the main thread, and what
     /// the last frame drew of it.
     city: city::Reader,
+    /// Go to's file lists, read off the main thread.
+    goto_files: goto::Reader,
     city_drawn: city::Shared,
     city_painter: city::Painter,
     status_fit: Cell<ottospace_core::status_bar::Fit>,
@@ -1493,6 +1495,7 @@ impl Workspace {
                         cx.notify();
                     }
                     this.take_tags(window, cx);
+                    this.take_files(window, cx);
                     this.store_layout(false);
                     this.store_key_use(false);
                     if ticks.every(15, 0) {
@@ -1811,6 +1814,7 @@ impl Workspace {
             repo_pulse_frames: Cell::default(),
             status_git: status_bar::Reader::new(),
             city: city::Reader::new(),
+            goto_files: goto::Reader::new(),
             city_drawn: city::Shared::default(),
             city_painter: city::Painter::new(),
             status_fit: Cell::default(),
@@ -2268,6 +2272,7 @@ impl Workspace {
                 Effect::Activate { id } => self.activate(id, window, cx),
                 Effect::FillDisplay { on } => self.fill_display(*on, window, cx),
                 Effect::Run { command } => self.run_command(*command, window, cx),
+                Effect::ListFiles { folder } => self.list_files(folder),
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
                 Effect::HostWindow { mark, bundle, name, title, into, axis, launch } => {
                     let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
@@ -4047,6 +4052,7 @@ impl Workspace {
             "picker_rows": self.model.picker.as_ref().map(Picker::matches),
             // The command palette's rows as drawn, or null: each `command`, `name`, `group` and `key`.
             "palette_rows": self.palette_rows(cx),
+            "goto_rows": self.goto_rows(),
             // The text field that has the keyboard (the new-task box's line or the picker's
             // filter), or null: its text, cursor and selection.
             "field": self.field_snapshot(),

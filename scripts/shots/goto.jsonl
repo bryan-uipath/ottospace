@@ -1,0 +1,15 @@
+# Go to (⌘P): one list of places (workspaces, listed checkouts, tasks), then a place's files.
+# goto/repos/app is a made-up repository (`_git`: an empty one; git lists its files as new).
+# Then `>`: the commands, as ⌘⇧P lists them.
+{"cmd":"task_new","line":"fix the login loop"}
+{"cmd":"key","keys":"cmd-p","as":"user"}
+{"until":"goto_rows.0"}
+{"shot":"places"}
+{"cmd":"key","keys":"a p p tab","as":"user"}
+{"until":"goto_rows.6"}
+{"shot":"files"}
+{"cmd":"key","keys":"l o g","as":"user"}
+{"shot":"files-typed"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"cmd":"key","keys":"backspace backspace backspace > s p l","as":"user"}
+{"shot":"commands"}

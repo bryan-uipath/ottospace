@@ -8,7 +8,7 @@
 {"click":"talk:talk-start"}
 {"until":"drawer.native.chats.1.replies","len":1}
 {"click":"talk"}
-{"cmd":"key","keys":"cmd-p","as":"user"}
+{"cmd":"key","keys":"cmd-shift-p","as":"user"}
 {"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
 {"cmd":"key","keys":"enter","as":"user"}
 {"until":"drawer.native.chats.1.transcript.live","is":false}

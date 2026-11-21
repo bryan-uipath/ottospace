@@ -98,22 +98,46 @@ impl Reader {
     }
 }
 
-/// The plan of the checkout at `dir`: the files git lists there (tracked, and new ones it does
-/// not ignore), each with its size. Hardened as the status bar's read (`child::git_read`), and
-/// only in a folder that, resolved, is one of `roots` (`status_bar::reads_changes`). A link is
-/// no file, and nothing under a folder that is a link is one: nothing outside the checkout is
-/// looked at. `None`: no city.
+/// The plan of the checkout at `dir` (`checkout_files`). `None`: no city.
 fn read(dir: &Path, roots: &[String]) -> Option<Atlas> {
+    let (files, _) = checkout_files(dir, roots, MOST_FILES, MOST_BYTES, true)?;
+    (!files.is_empty()).then(|| atlas::atlas(&atlas::repo(&files)))
+}
+
+/// The files git lists in the checkout at `dir` (tracked, and new ones it does not ignore), each
+/// with its size: at most `most`, and true if there were more (or more than `most_bytes` of
+/// names); `whole`: a list that was cut is none. Hardened as the status bar's read
+/// (`child::git_read`), and only in a folder that, resolved, is one of `roots`
+/// (`status_bar::reads_changes`). A link is no file, and nothing under a folder that is a link is
+/// one: nothing outside the checkout is looked at. `None`: not such a checkout, or git failed or
+/// took too long.
+pub(crate) fn checkout_files(
+    dir: &Path,
+    roots: &[String],
+    most: usize,
+    most_bytes: u64,
+    whole: bool,
+) -> Option<(Vec<(String, u64)>, bool)> {
     let top =
         dir.canonicalize().ok().filter(|top| top.to_str().is_some_and(|top| status_bar::reads_changes(top, roots)))?;
     let mut list = crate::child::git_read(&top);
     list.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
     let late = std::time::Instant::now() + TIMEOUT;
-    let said = crate::child::run(list, TIMEOUT, MOST_BYTES).ok().filter(|said| said.ok)?;
-    let names: Vec<&str> = said.out.split('\0').filter(|name| !name.is_empty()).collect();
-    if said.out.len() as u64 >= MOST_BYTES || names.len() > MOST_FILES {
+    let said = crate::child::run(list, TIMEOUT, most_bytes).ok()?;
+    // Cut at `most_bytes`: git stops on the closed pipe, and the last name may be half of one.
+    let full = said.out.len() as u64 >= most_bytes;
+    if !said.ok && !full {
         return None;
     }
+    let mut names: Vec<&str> = said.out.split('\0').filter(|name| !name.is_empty()).collect();
+    if full {
+        names.pop();
+    }
+    let cut = full || names.len() > most;
+    if cut && whole {
+        return None;
+    }
+    names.truncate(most);
     // Each folder on the way, asked once: a real folder, not a link to one elsewhere.
     let mut folders: HashMap<&Path, bool> = HashMap::new();
     let real = |folder: &Path| std::fs::symlink_metadata(top.join(folder)).is_ok_and(|at| at.is_dir());
@@ -131,7 +155,7 @@ fn read(dir: &Path, roots: &[String]) -> Option<Atlas> {
             files.push((name.to_string(), file.len()));
         }
     }
-    (!files.is_empty()).then(|| atlas::atlas(&atlas::repo(&files)))
+    Some((files, cut))
 }
 
 /// A picture asked for: the folder, its plan, the lit files (place ids, colours) and the size

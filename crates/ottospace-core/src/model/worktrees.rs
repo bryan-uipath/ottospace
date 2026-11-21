@@ -309,7 +309,7 @@ impl Model {
     }
 
     /// How lately a space was selected: higher is later; never, 0.
-    fn picked(&self, of: &Owner) -> usize {
+    pub(super) fn picked(&self, of: &Owner) -> usize {
         self.last_spaces.iter().rposition(|last| last == of).map_or(0, |at| at + 1)
     }
 

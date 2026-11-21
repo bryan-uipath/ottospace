@@ -35,9 +35,10 @@ ottospace            # opens on the Repos list
 | Hide ottospace | ⌘H |
 | Quit | ⌘Q, or the window's close button. Asks first while a terminal or an agent runs ("Quitting ends these:") or a draft has words ("Not sent yet"; click a row to go to it): ↵, Q or ⌘Q again quits; Esc, any other key or shortcut cancels and does nothing else. Shells at a prompt and drafts of only spaces do not count. Dock ▸ Quit and logout do not ask |
 | Start empty next time | File ▸ Start Fresh. Otherwise the tabs, splits, the tab on show and the drawer come back after quitting (`restore_layout`) |
-| Find an action by name | ⌘P: type part of its name, ↵ runs it. Or the menu bar |
+| Find an action by name | ⌘⇧P: type part of its name, ↵ runs it. Or the menu bar |
+| Go to a workspace, checkout, task or file | ⌘P: type part of its name, ↵ goes there. Tab or `/` lists its files; ↵ opens one. `>` for commands |
 | Edit the settings | ⌘, (Open Settings): `settings.json` in your editor, in a tab of its own |
-| See what an app exposes to accessibility | Focus its pane, ⌘P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
+| See what an app exposes to accessibility | Focus its pane, ⌘⇧P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
 | Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |
 | Switch task or workspace (top row) | ⌘⌃1 … ⌘⌃9 · ⌘⌃] ⌘⌃[ |
 | Go to Home (the house, first on the top row) | ⌘⌃1, or Go to Home in the palette |
@@ -60,7 +61,7 @@ ottospace            # opens on the Repos list
 | Use it from the keyboard | ⌘⌃E (the open section, else Apps, or with it off the first), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | Close and open the section, or ⌘⌃E: Apps and Repos are read when they open |
 | Add something | + in the bar's header: a new task in Tasks, a new empty workspace in Workspaces, a repository in Repos (pick its folder, or one inside it; it goes at the end of `repos` in the settings) |
-| Add a repository | Repos lists only what you add: its +, "+ Add a repository" while it is empty, a folder dropped on it, or ⌘P ▸ Add Folder to Repos (the focused terminal's folder, else the tab's task's) |
+| Add a repository | Repos lists only what you add: its +, "+ Add a repository" while it is empty, a folder dropped on it, or ⌘⇧P ▸ Add Folder to Repos (the focused terminal's folder, else the tab's task's) |
 | Stop listing a repository | Point at its name in Repos: the trash. Nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it). A folder of repositories from older settings is one folded group: its trash takes it off whole |
 | New worktree | Point at a repository's name in Repos: +, type a branch, ↵. It goes in `~/.ottospace/worktrees/<repo>/<branch>` (`worktrees_dir`) and opens as a terminal tab |
 | Delete a worktree | Right-click its row in Repos: Delete worktree…, then ↵ (Esc keeps it). Its folder goes, its branch stays; git keeps one with changes, and the notice says why. Close its terminals, and mark its task done or dismiss it, first |
@@ -71,7 +72,7 @@ ottospace            # opens on the Repos list
 
 ## Apps
 
-The Apps section is behind the `apps_section` flag, off by default: turn it on in ⌘P ▸ Features….
+The Apps section is behind the `apps_section` flag, off by default: turn it on in ⌘⇧P ▸ Features….
 Without it, ⌘E puts an app in a pane.
 
 | I want to | Do |
@@ -120,7 +121,7 @@ folder. Kept in `~/.ottospace/workbooks`.
 ## Marks
 
 A mark is a named way back to a pane or a whole tab. It is kept between runs. Marks are behind
-the `marks` flag, off by default: turn it on in ⌘P ▸ Features….
+the `marks` flag, off by default: turn it on in ⌘⇧P ▸ Features….
 
 | I want to | Do |
 |---|---|
@@ -251,7 +252,7 @@ setting takes its default.
 
 `apps`: the pinned apps, by name or bundle path. `apps_hidden`: Dock apps not to suggest. Pin, Unpin and Hide in Apps write these two and leave the rest of the file as it is. `suggest_dock_apps`: `false` lists no Dock apps.
 
-`features`: [feature flags](reference.md#features), each `true` or `false`; ⌘P ▸ Features… writes them. A flag is temporary and about readiness; a preference is a normal setting.
+`features`: [feature flags](reference.md#features), each `true` or `false`; ⌘⇧P ▸ Features… writes them. A flag is temporary and about readiness; a preference is a normal setting.
 
 `capture_key`: the key that captures the pane in use (`"off"` for none). `capture`: `keep_images` `false` writes no picture; `ax` `false` reads no accessibility tree for a capture.
 

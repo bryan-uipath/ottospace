@@ -272,7 +272,7 @@ impl Binding {
             B::VisualMode => "Select text with keys",
             B::ListMode => "Drive the sidebar",
             B::SneakMode => "Click by letter",
-            B::Palette => "Any command by name",
+            B::Palette => "Go to / any command",
             B::ShowKeys => "This list",
             B::EditSettings => "Settings",
             B::FillDisplay => "Fill the display, over the menu bar and Dock",

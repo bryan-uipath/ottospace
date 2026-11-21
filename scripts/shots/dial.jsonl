@@ -47,7 +47,7 @@
 {"shot":"closed-tabs"}
 {"cmd":"key","keys":"cmd-shift-w","as":"user"}
 {"cmd":"key","keys":"cmd-shift-r","as":"user"}
-{"cmd":"key","keys":"cmd-p","as":"user"}
+{"cmd":"key","keys":"cmd-shift-p","as":"user"}
 {"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
 {"cmd":"key","keys":"enter","as":"user"}
 {"until":"drawer.native.chats.1.dial.collapsed","is":true}
