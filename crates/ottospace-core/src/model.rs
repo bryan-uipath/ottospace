@@ -4247,6 +4247,13 @@ impl Model {
 
     /// The terminal that ⌘C copies from and ⌘V pastes into: the focused pane, if it is a
     /// terminal and ottospace has the keyboard (no picker, key reference or live app).
+    /// The terminal whose program has the focus (DECSET 1004's in and out): the one with the
+    /// keyboard, while one of ottospace's windows is the active one. Another tab, the drawer, a
+    /// box, a menu or visual mode over the panes, or another app take it.
+    pub fn focus_terminal(&self, window_active: bool) -> Option<PaneId> {
+        self.keyboard_terminal().filter(|_| window_active && !self.holds_keyboard())
+    }
+
     pub fn keyboard_terminal(&self) -> Option<PaneId> {
         let id = self.focused.filter(|_| self.mode() == Mode::Normal && !self.keys)?;
         self.pane(id).filter(|p| p.kind == Kind::Terminal).map(|p| p.id)
@@ -17451,6 +17458,30 @@ mod tests {
         // From no pane, or one that is gone: the status bar alone says it.
         m.update(Action::Copied { pane: Some(9), verb: clip::Verb::Cut, amount: clip::Amount::of("ab") });
         assert_eq!(m.clip.as_ref().map(|c| (c.pane, c.text.as_str())), Some((None, "Cut 2 characters")));
+    }
+
+    #[test]
+    fn a_terminals_program_has_the_focus_while_its_pane_has_the_keyboard_and_the_window_is_active() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        assert_eq!(m.focus_terminal(true), Some(2));
+        assert_eq!(m.focus_terminal(false), None, "another app is in front");
+        m.update(Action::Focus { pane: 1 });
+        assert_eq!(m.focus_terminal(true), Some(1));
+        // Another tab: none of this one's terminals.
+        m.update(Action::NewEmptyTab);
+        assert_eq!(m.focus_terminal(true), None);
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!(m.focus_terminal(true), Some(1));
+        // The key reference over the panes takes the keyboard.
+        m.update(Action::ToggleKeys);
+        assert_eq!(m.focus_terminal(true), None);
+        m.update(Action::ToggleKeys);
+        assert_eq!(m.focus_terminal(true), Some(1));
+        // Visual mode in its own pane: the user selects, the program does not have the keys.
+        m.update(Action::ToggleVisual);
+        assert_eq!(m.focus_terminal(true), None);
     }
 
     #[test]
