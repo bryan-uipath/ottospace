@@ -7,7 +7,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use gpui::{AnyView, Context, Div, FontWeight, Stateful, TextRun, Window, div, prelude::*, px, rems, rgb, svg};
-use ottospace_core::status_bar::{self, Agents, Fit, Meeting, Place, Widths};
+use ottospace_core::status_bar::{self, Agents, Fit, Meeting, Part, Place, Widths};
 use ottospace_core::tasks::Group;
 use ottospace_core::{Action, Kind, theme};
 
@@ -273,17 +273,35 @@ impl Workspace {
     }
 
     fn agents_segment(&self, agents: Agents, short: bool, cx: &mut Context<Self>) -> Stateful<Div> {
-        let parts = agents.parts(short).into_iter().map(|(text, needs)| {
-            let color = match needs {
-                Some(true) => theme::task(Group::NeedsYou),
-                Some(false) => theme::task(Group::Running),
-                None => theme::MUTED,
+        let names = self.model.in_terminal_names().join("\n");
+        let parts = agents.parts(short).into_iter().map(|(text, part)| {
+            let color = match part {
+                Part::NeedsYou => theme::task(Group::NeedsYou),
+                Part::Working | Part::Terminal => theme::task(Group::Running),
+                Part::None => theme::MUTED,
             };
-            div().flex_none().text_color(rgb(color)).child(text)
+            let div = div().flex_none().text_color(rgb(color)).child(text);
+            match part {
+                // Its hover lists them; a click goes to the first, not to what needs you.
+                Part::Terminal => {
+                    let tip = format!("In a terminal:\n{names}");
+                    div.id("status-terminal")
+                        .relative()
+                        .child(self.controls.mark("status:terminal"))
+                        .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            cx.stop_propagation();
+                            this.click_status("terminal", window, cx)
+                        }))
+                        .into_any_element()
+                }
+                _ => div.into_any_element(),
+            }
         });
         // `● 2 working · ● 1 needs you`: a dot between the two, as `Agents::text`.
         let parts = parts.enumerate().flat_map(|(n, part)| {
-            let dot = (n > 0 && !short).then(|| div().flex_none().text_color(rgb(theme::BORDER_STRONG)).child("·"));
+            let dot = (n > 0 && !short)
+                .then(|| div().flex_none().text_color(rgb(theme::BORDER_STRONG)).child("·").into_any_element());
             dot.into_iter().chain([part])
         });
         let tip = format!("{} · ⌘J goes to the next that needs you", agents.text(false));
@@ -321,6 +339,7 @@ impl Workspace {
                 }
             }
             "agents" => self.next_task(window, cx),
+            "terminal" => drop(self.dispatch(Action::TerminalAgentGo, self.input, window, cx)),
             _ => {}
         }
         cx.notify();
@@ -341,12 +360,20 @@ impl Workspace {
         let place = self.status_place();
         let fit = self.status_fit.get();
         let join = self.controls.bounds("status:join").map(crate::rect);
+        let agents = self.model.agents();
         serde_json::json!({
             "mode": drawn(Mark::StatusMode),
             "resting": drawn(Mark::StatusResting),
             "place": place.map(|p| serde_json::json!({ "text": self.place_line(&p, fit.folder_name), "rect": drawn(Mark::StatusPlace) })),
             "meeting": self.status_meeting().map(|_| serde_json::json!({ "rect": drawn(Mark::StatusMeeting), "join": join })),
-            "agents": { "text": self.model.agents().text(fit.agents_short), "rect": drawn(Mark::StatusAgents) },
+            "agents": {
+                "text": agents.text(fit.agents_short),
+                "rect": drawn(Mark::StatusAgents),
+                "working": agents.working,
+                "in_terminal": agents.in_terminal,
+                "needs_you": agents.needs_you,
+                "terminal": self.controls.bounds("status:terminal").map(crate::rect),
+            },
             "shrink": fit.steps(),
         })
     }

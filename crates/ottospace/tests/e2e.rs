@@ -3235,6 +3235,46 @@ fn a_session_in_a_terminal_needs_you_the_same_way_for_every_runner() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn the_status_bar_counts_agents_at_work_in_a_terminal_and_goes_to_them() {
+    // A made-up Claude Code session at work in a listed repository, no task's.
+    let home = user_folder("terminal-agents", "");
+    fake_repo(&home.join("src/app"));
+    let repo = home.canonicalize().unwrap().join("src/app");
+    let claude = home.join("claude");
+    let id = "11111111-1111-4111-8111-111111111111";
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&repo));
+    session_fixture(
+        &format!("claude/projects/-work-app/{id}.jsonl"),
+        &project.join(format!("{id}.jsonl")),
+        &repo,
+        Duration::ZERO,
+    );
+    let dirs = json!({"claude": [claude], "codex": home.join("codex")});
+    let settings =
+        json!({"repos": [home.join("src/app")], "sessions": true, "session_dirs": dirs, "restore_layout": false});
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let otto = Otto::launch_with("terminal-agents", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let agents = |o: &Otto| o.call(json!({"cmd": "state"}))["status_bar"]["agents"].clone();
+    assert_eq!(agents(&otto)["text"], "No agents");
+    // Read while Tasks is open: one working, in a terminal (`● 1` when the bar is narrow).
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let one = otto.wait_for("the session at work", |o| Some(agents(o)).filter(|a| a["in_terminal"] == 1));
+    assert_eq!((&one["working"], &one["needs_you"]), (&json!(1), &json!(0)));
+    assert!(one["text"] == "● 1 working in a terminal" || one["text"] == "● 1", "{one}");
+    // Its part, clicked: its Elsewhere row, unfolded and selected (its pane is not known).
+    let reply = otto.user_click(at(otto.control("status:terminal"), 0.5, 0.5));
+    assert!(reply["state"]["list"].is_u64(), "{reply}");
+    assert_eq!(otto.call(json!({"cmd": "state"}))["sessions_bar"]["collapsed"], false);
+    // A task that runs besides: counted with it, the terminal's part named apart.
+    otto.call(json!({"cmd": "task_new", "line": "made-up task"}));
+    otto.call(json!({"cmd": "task_set_state", "id": 1, "state": "running"}));
+    let two = agents(&otto);
+    assert_eq!((&two["working"], &two["in_terminal"]), (&json!(2), &json!(1)));
+    assert!(two["text"] == "● 2 working · 1 in a terminal" || two["text"] == "● 2", "{two}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
     let home = user_folder("sessions", "");
     fake_repo(&home.join("src/app"));

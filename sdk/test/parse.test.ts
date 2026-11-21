@@ -179,7 +179,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       resting: null,
       place: { text: "~/code/app · main ●", rect: [111, 879, 180, 19] },
       meeting: { rect: [900, 879, 150, 19], join: null },
-      agents: { text: "● 2 working · ● 1 needs you", rect: [1200, 879, 180, 19] },
+      agents: { text: "● 2 working · 1 in a terminal · ● 1 needs you", rect: [1200, 879, 180, 19], working: 2, in_terminal: 1, needs_you: 1, terminal: [1290, 879, 90, 19] },
       shrink: 0,
     },
     calendar: {

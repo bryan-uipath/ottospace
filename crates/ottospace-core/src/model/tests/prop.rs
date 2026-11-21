@@ -1334,6 +1334,7 @@ const MAKERS: &[Make] = &[
         };
         Action::SessionsInPanes { found: (0..g.rng.below(3)).map(|_| at(g)).collect() }
     },
+    |_| Action::TerminalAgentGo,
     |g| {
         let found = (0..g.rng.below(3)).map(|_| g.found()).collect();
         Action::SessionsAtWork { found }
@@ -2180,6 +2181,24 @@ fn check_waits(m: &Model) -> Result<(), String> {
     ensure!(m.features.on(Feature::SessionWaits) || free == 0, "{free} waits counted with the flag off");
     let adopted = m.waits_unadopted().filter(|(at, _)| m.tasks.adopted(&at.runner, &at.id)).count();
     ensure!(adopted == 0, "{adopted} waits of a task's session counted besides its task");
+    // Agents in a terminal are part of the working count, never a task's nor one that waits.
+    let agents = m.agents();
+    let running = crate::tasks::Segments::of(&m.tasks.inbox()).running;
+    ensure!(
+        agents.working == running + agents.in_terminal,
+        "working {} is not {running} + {}",
+        agents.working,
+        agents.in_terminal
+    );
+    let twice = m
+        .in_terminal()
+        .iter()
+        .filter(|s| {
+            m.tasks.adopted(&s.runner, &s.id)
+                || m.waits_unadopted().any(|(at, _)| (&at.runner, &at.id) == (&s.runner, &s.id))
+        })
+        .count();
+    ensure!(twice == 0, "{twice} agents in a terminal counted twice");
     Ok(())
 }
 

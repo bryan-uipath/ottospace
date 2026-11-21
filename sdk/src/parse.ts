@@ -987,8 +987,19 @@ function statusBar(value: unknown, at: string): Snapshot["status_bar"] {
     resting: orNull(rect)(o.resting, `${at}.resting`),
     place: orNull(noticeUndo)(o.place, `${at}.place`),
     meeting: orNull(meeting)(o.meeting, `${at}.meeting`),
-    agents: noticeUndo(o.agents, `${at}.agents`),
+    agents: agentsCount(o.agents, `${at}.agents`),
     shrink: num(o.shrink, `${at}.shrink`),
+  };
+}
+
+function agentsCount(value: unknown, at: string): Snapshot["status_bar"]["agents"] {
+  const o = fields(value, at);
+  return {
+    ...noticeUndo(value, at),
+    working: num(o.working, `${at}.working`),
+    in_terminal: num(o.in_terminal, `${at}.in_terminal`),
+    needs_you: num(o.needs_you, `${at}.needs_you`),
+    terminal: orNull(rect)(o.terminal, `${at}.terminal`),
   };
 }
 

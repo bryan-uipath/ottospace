@@ -109,11 +109,24 @@ pub fn meeting(calendar: &Calendar, now: u64) -> Option<Meeting> {
     Some(Meeting { id: event.id, title: event.title.clone(), in_min, join })
 }
 
-/// Agents in every workspace: tasks that run, and that wait on the user.
+/// Agents in every workspace: tasks that run, and that wait on the user. `working` counts the
+/// sessions at work in a terminal too (`in_terminal`), no task's: each agent is counted once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Agents {
     pub working: usize,
+    pub in_terminal: usize,
     pub needs_you: usize,
+}
+
+/// What a part of the agents says: how it is coloured, and where a click on it goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Part {
+    Working,
+    /// Agents in a terminal: a click goes to the first one.
+    Terminal,
+    NeedsYou,
+    /// `No agents`.
+    None,
 }
 
 /// Whether the bar may run `git status` in the checkout whose top folder is `top` (resolved):
@@ -132,25 +145,40 @@ impl Model {
 
     pub fn agents(&self) -> Agents {
         let Segments { needs_you, running, .. } = Segments::of(&self.tasks.inbox());
+        let in_terminal = self.in_terminal().len();
         // A session in a terminal that waits on you counts as a task that needs you.
-        Agents { working: running, needs_you: needs_you + self.waits_unadopted().count() }
+        Agents { working: running + in_terminal, in_terminal, needs_you: needs_you + self.waits_unadopted().count() }
+    }
+
+    /// The agents in a terminal, as their hover lists them: `Fix the form · claude`, else the
+    /// repository's name for the title.
+    pub fn in_terminal_names(&self) -> Vec<String> {
+        let name = |s: &crate::sessions::Found| s.title.clone().unwrap_or_else(|| self.session_name(s));
+        self.in_terminal().into_iter().map(|s| format!("{} · {}", name(s), s.runner)).collect()
     }
 }
 
 impl Agents {
-    /// Its parts: `● 2 working`, `● 1 needs you` (short: `● 2`, `● 1`), each with whether it
-    /// needs you; none counted: `No agents`, with neither.
-    pub fn parts(&self, short: bool) -> Vec<(String, Option<bool>)> {
-        let part = |n: usize, word: &str, needs: bool| {
+    /// Its parts: `● 2 working`, `● 1 needs you` (short: `● 2`, `● 1`); none counted: `No
+    /// agents`. Agents in a terminal are named only beside a task's: `● 3 working`, `1 in a
+    /// terminal`; or alone: `● 1 working in a terminal`. Short, the total alone.
+    pub fn parts(&self, short: bool) -> Vec<(String, Part)> {
+        let part = |n: usize, word: &str, part: Part| {
             let text = if short { format!("● {n}") } else { format!("● {n} {word}") };
-            (n > 0).then_some((text, Some(needs)))
+            (n > 0).then_some((text, part))
         };
-        let parts: Vec<_> = [part(self.working, "working", false), part(self.needs_you, "needs you", true)]
-            .into_iter()
-            .flatten()
-            .collect();
+        let tasks = self.working - self.in_terminal;
+        let working = match (tasks, self.in_terminal) {
+            (_, 0) => part(self.working, "working", Part::Working),
+            (0, _) => part(self.working, "working in a terminal", Part::Terminal),
+            _ => part(self.working, "working", Part::Working),
+        };
+        let terminal = (!short && tasks > 0 && self.in_terminal > 0)
+            .then(|| (format!("{} in a terminal", self.in_terminal), Part::Terminal));
+        let parts: Vec<_> =
+            [working, terminal, part(self.needs_you, "needs you", Part::NeedsYou)].into_iter().flatten().collect();
         match parts.is_empty() {
-            true => vec![("No agents".into(), None)],
+            true => vec![("No agents".into(), Part::None)],
             false => parts,
         }
     }
@@ -351,17 +379,28 @@ mod tests {
             let add = Action::TaskAdd { title: title.into(), priority: 1, state, tab: None, assign: Assign::default() };
             m.update(add.sent_by(crate::model::Origin::Socket));
         }
-        assert_eq!(m.agents(), Agents { working: 2, needs_you: 1 });
+        assert_eq!(m.agents(), Agents { working: 2, in_terminal: 0, needs_you: 1 });
     }
 
     #[test]
     fn the_agents_say_how_many_run_and_wait_or_that_there_are_none() {
-        let both = Agents { working: 2, needs_you: 1 };
+        let both = Agents { working: 2, in_terminal: 0, needs_you: 1 };
         assert_eq!(both.text(false), "● 2 working · ● 1 needs you");
         assert_eq!(both.text(true), "● 2 ● 1");
-        assert_eq!(both.parts(true), [("● 2".into(), Some(false)), ("● 1".into(), Some(true))]);
-        assert_eq!(Agents { working: 0, needs_you: 3 }.text(false), "● 3 needs you");
-        assert_eq!(Agents::default().parts(false), [("No agents".into(), None)]);
+        assert_eq!(both.parts(true), [("● 2".into(), Part::Working), ("● 1".into(), Part::NeedsYou)]);
+        assert_eq!(Agents { working: 0, in_terminal: 0, needs_you: 3 }.text(false), "● 3 needs you");
+        assert_eq!(Agents::default().parts(false), [("No agents".into(), Part::None)]);
+    }
+
+    #[test]
+    fn agents_in_a_terminal_are_named_apart_only_beside_a_tasks() {
+        let split = Agents { working: 3, in_terminal: 1, needs_you: 1 };
+        assert_eq!(split.text(false), "● 3 working · 1 in a terminal · ● 1 needs you");
+        assert_eq!(split.parts(false)[1], ("1 in a terminal".into(), Part::Terminal));
+        assert_eq!(split.text(true), "● 3 ● 1", "short: the total");
+        let alone = Agents { working: 1, in_terminal: 1, needs_you: 0 };
+        assert_eq!(alone.parts(false), [("● 1 working in a terminal".into(), Part::Terminal)]);
+        assert_eq!(alone.text(true), "● 1");
     }
 
     const WIDE: Widths =
