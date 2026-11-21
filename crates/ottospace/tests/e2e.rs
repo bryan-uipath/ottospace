@@ -844,6 +844,37 @@ fn terminal_runs_a_typed_command() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_program_that_asks_for_the_kitty_keyboard_tells_shift_enter_from_enter() {
+    let otto = Otto::launch("kitty-keys");
+    otto.call(json!({"cmd": "split"}));
+    let lines = |o: &Otto| o.call(json!({"cmd": "state"}))["terminals"]["1"]["lines"].clone();
+    let shown = |o: &Otto, line: &str| lines(o).as_array()?.iter().any(|l| l.as_str() == Some(line)).then_some(());
+    // Pushes the protocol as Claude Code does (`CSI > 5 u`), reads one key with echo off, pops it,
+    // and prints what came in hex: ESC [ 1 3 ; 2 u is `1b5b31333b3275`.
+    // Each round says it is ready with its own number: never the last round's line.
+    let read_key = |round: usize| {
+        format!(
+            "stty -echo -icanon min 1 time 0; printf '\\033[>5u'; echo ready-$((0+{round})); \
+             r=$(dd bs=16 count=1 2>/dev/null); printf '\\033[<u'; stty sane; \
+             echo \"got:$(printf %s \"$r\" | od -An -tx1 | tr -d ' \\n')\"\r"
+        )
+    };
+    for (round, (key, sent)) in
+        [("shift-enter", "got:1b5b31333b3275"), ("escape", "got:1b5b323775")].into_iter().enumerate()
+    {
+        otto.call(json!({"cmd": "type", "text": read_key(round)}));
+        otto.wait_for("the program to ask", |o| shown(o, &format!("ready-{round}")));
+        otto.call(json!({"cmd": "key", "keys": key}));
+        otto.wait_for(sent, |o| shown(o, sent));
+    }
+    // Popped: ↵ is ↵ again, and runs the line.
+    otto.call(json!({"cmd": "type", "text": "echo plain-$((2+2))"}));
+    otto.call(json!({"cmd": "key", "keys": "shift-enter"}));
+    otto.wait_for("a plain return", |o| shown(o, "plain-4"));
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
     let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
     std::fs::create_dir_all(root.join("app-api")).unwrap();

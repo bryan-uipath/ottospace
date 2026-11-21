@@ -1075,6 +1075,8 @@ and `TERM_PROGRAM_VERSION`, whatever terminal started ottospace. When ottospace 
 nor `LC_ALL` (started from the Dock), they get `LANG` from the system's region as UTF-8 (`de_CH.UTF-8`),
 or `en_US.UTF-8` when macOS has no such locale. `scripts/term-probe` prints a test
 card of colours, styles, glyphs and replies, to compare terminals side by side.
+A program that asks for the kitty keyboard protocol (Claude Code does) gets it: ⇧↵, ⌃↵ and Esc
+reach it as their own keys (flags 1 and 4), so ⇧↵ makes a new line there instead of sending.
 Its header names its directory, and the program in front of the shell while one runs:
 `app-api · cargo test`. An app pane's header shows the app's icon and the window's title; an
 empty pane's, nothing.
