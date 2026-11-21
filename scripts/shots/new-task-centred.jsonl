@@ -1,5 +1,6 @@
 # `overlay_panels`: ⌘N's box centred over the dimmed panes (the canvas NewTaskFly); ↵ grows it
-# into the drawer as the task's conversation. With --record, the grow is filmed. Made-up lines.
+# into the drawer as the task's conversation. Empty, typed in, its tags' sheet, tags typed. With
+# --record, the grow is filmed. Made-up lines.
 {"write":"home/settings.json","text":"{\"repos\": [], \"features\": {\"overlay_panels\": true}}\n"}
 {"until":"state.features","is":["overlay_panels"]}
 {"click":"top:new_workspace"}
@@ -8,9 +9,20 @@
 {"cmd":"key","keys":"cmd-d","as":"user"}
 {"cmd":"type","pane":2,"text":"clear; echo right pane: notes\r"}
 {"cmd":"key","keys":"cmd-n","as":"user"}
+{"settle":500}
+{"shot":"empty"}
 {"cmd":"key","keys":"f i x space t h e space l o g i n space l o o p","as":"user"}
 {"settle":500}
 {"shot":"open"}
+# The tags' sheet, on demand (⌘/), then put away by its "? tags".
+{"cmd":"key","keys":"cmd-/","as":"user"}
+{"settle":300}
+{"shot":"tags-sheet"}
+{"click":"compose-sheet"}
+# Tags typed: a project and a priority, read out of the title.
+{"cmd":"key","keys":"space # a u t h space p 2 space","as":"user"}
+{"settle":500}
+{"shot":"typed-tags"}
 {"record":"start"}
 {"cmd":"key","keys":"enter","as":"user"}
 {"sleep_ms":700}

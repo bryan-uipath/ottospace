@@ -461,6 +461,12 @@ impl Workspace {
                 return true;
             }
             ("home", "terminal", _) => Action::Split { axis: Axis::Right, kind: Kind::Terminal },
+            // The box's "? tags" and its +.
+            ("compose-sheet", _, _) => Action::ComposeSheet,
+            ("compose-attach", _, _) => {
+                self.pick_files(window, cx);
+                return true;
+            }
             ("pick", _, _) => {
                 let mut chars = name.chars();
                 let Some(mark) = chars.next() else { return true };

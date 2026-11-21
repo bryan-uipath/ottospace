@@ -4134,8 +4134,9 @@ impl Workspace {
             // What ↵ in the box would do (`agent`, `starts`, `dir`, `branch`), or null; and the
             // drawer's picks: repository names (`wheres`) and agent names (`whos`).
             "compose_plan": self.model.compose_plan(),
-            // The plan's line over the box, null when it is the default; the tag hint, while the box is open.
-            "compose_plan_line": self.model.compose_plan_line(),
+            // The one line under the box: what ↵ does with the line as it is, then the other keys;
+            // null while it is closed. The tag hint, while the box's tags' sheet shows ("? tags", ⌘/).
+            "compose_status": self.model.compose_status(),
             "compose_hint": self.model.compose_hint(),
             "compose_picks": self.model.compose_picks(),
             // Where the open box's ↵ starts its task (`space`, `name`), and whether that is not the
@@ -4155,8 +4156,8 @@ impl Workspace {
             "compose_menu": self.model.dropdown(),
             // Where that dropdown was drawn, or null without one.
             "compose_menu_bounds": self.model.dropdown().map(|_| rect(self.field.borrow().menu)),
-            // Where each tag's cap under the box was drawn, by its key (`#`, `>`, `p1`), or null
-            // with the box closed. A click on one types its mark.
+            // Where each tag's cap in the box's tags' sheet was drawn, by its key (`#`, `>`, `p1`), or
+            // null with the box closed; empty while the sheet is put away. A click on one types its mark.
             "compose_tags": self.model.compose.as_ref().map(|_| {
                 let at = |key: &str| self.controls.bounds(&format!("compose:tag:{key}")).map(|b| (key.to_string(), rect(b)));
                 ottospace_core::model::TAG_KEYS.iter().filter_map(|(key, _)| at(key)).collect::<BTreeMap<_, _>>()

@@ -173,6 +173,25 @@ pub(crate) fn pill(text: impl Into<SharedString>, kind: Pill) -> Div {
     }
 }
 
+/// An attachment in the new-task box (a meeting, the workspace in front, a folder): its label in a
+/// quiet fill, `accent` its text's colour (none: the text's). The caller adds its × and click.
+pub(crate) fn chip(text: impl Into<SharedString>, accent: Option<u32>) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(theme::SPACE_1))
+        .max_w(px(260.))
+        .h(px(theme::CONTROL))
+        .pl(px(theme::SPACE_2))
+        .pr(px(theme::SPACE_0_5))
+        .rounded(px(theme::CONTROL / 2.))
+        .bg(rgb(theme::SELECTED))
+        .text_size(px(theme::TEXT_XS))
+        .text_color(rgb(accent.unwrap_or(theme::TEXT)))
+        .child(div().min_w_0().truncate().child(text.into()))
+}
+
 /// A list row's kind. `Normal`: a sidebar section's row, `ROW` tall, its title in full colour.
 /// `Dim`: a row under a heading (a checkout), muted until the pointer or the keys are on it.
 #[derive(Clone, Copy)]

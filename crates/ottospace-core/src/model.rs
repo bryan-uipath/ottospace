@@ -138,7 +138,6 @@ pub struct Running {
 /// Why a socket client's request is refused under the quit question.
 pub const CONFIRM_UP: &str = "the quit question is up";
 /// What the new-task box says when ↵ would make the selected workspace the task's.
-pub const BINDS: &str = "↵ starts it in this workspace";
 const BINDS_TOO: &str = ", in this workspace";
 /// A `task_brief` with no task to give.
 const NAME_A_TASK: &str = "name a task: {\"cmd\":\"task_brief\",\"id\":7}";
@@ -1098,6 +1097,9 @@ pub enum Action {
     ComposeTag {
         mark: char,
     },
+    /// "? tags" under the box, or ⌘/ while its line has the keyboard: the sheet of the tags a line
+    /// may hold shows, or goes.
+    ComposeSheet,
     /// Files or folders dropped on the box, picked or pasted: each goes in at the cursor as a
     /// `/path` word. `home`: the user's folder, so paths inside it are written `~/..`.
     ComposeAttach {
@@ -2548,6 +2550,7 @@ impl Action {
             | Action::ComposeWorktree { .. }
             | Action::ComposeHere
             | Action::ComposeTag { .. }
+            | Action::ComposeSheet
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -3015,6 +3018,7 @@ impl Action {
             | Action::ComposeWorktree { .. }
             | Action::ComposeHere
             | Action::ComposeTag { .. }
+            | Action::ComposeSheet
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -3877,6 +3881,8 @@ pub struct Model {
     /// The user chose a new worktree for the task in the box (`ComposeWorktree`).
     #[serde(skip)]
     pub(crate) compose_worktree: bool,
+    /// The tags' sheet shows under the box ("? tags", ⌘/).
+    compose_sheet: bool,
     /// The new-task line a conversation's opening put aside: back when the box opens empty.
     #[serde(skip)]
     compose_kept: Option<KeptDraft>,
@@ -4204,6 +4210,7 @@ impl Default for Model {
             compose_note: None,
             compose_theirs: false,
             compose_worktree: false,
+            compose_sheet: false,
             compose_kept: None,
             compose_to: None,
             compose_talked: false,
@@ -4909,6 +4916,10 @@ impl Model {
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "inspector") => {
                 Some(inspect::USERS_ALONE)
             }
+            // ⌘/ in the box's line is its tags' sheet first (`update`).
+            Action::ToggleKeys if self.composing() && !self.keys && !self.compose_sheet => {
+                self.refusal(&Action::ComposeSheet, origin)
+            }
             Action::ToggleKeys if boxed && !self.keys => Some("the picker or the new-task box is open"),
             // For the user it waits, as every pane action does. A client is told why.
             Action::SessionClick { .. } if boxed || self.keys || self.visual.is_some() => {
@@ -4934,6 +4945,7 @@ impl Model {
             | Action::ComposeFolderClear
             | Action::ComposeWorktree { .. }
             | Action::ComposeTag { .. }
+            | Action::ComposeSheet
             | Action::ComposeAttach { .. }
             | Action::ComposeRef { .. }
             | Action::ComposePick { .. }
@@ -5307,6 +5319,8 @@ impl Model {
         let action = match action {
             // In the quick box ↵ files a note: nothing starts.
             Action::ComposeEnter if self.enter() == Enter::Add => Action::ComposeSubmit { open: self.quick.is_none() },
+            // ⌘/ while the box's line has the keyboard: its tags; again, every key.
+            Action::ToggleKeys if self.composing() && !self.keys && !self.compose_sheet => Action::ComposeSheet,
             action => action,
         };
         let action = match action {
@@ -6173,6 +6187,8 @@ impl Model {
                 self.compose_note = None;
             }
             Action::ComposeTag { .. } => {}
+            Action::ComposeSheet if self.composing() => self.compose_sheet = !self.compose_sheet,
+            Action::ComposeSheet => {}
             Action::ComposePick { mark, name } => self.compose_pick(mark, name),
             Action::ComposeAttach { paths, home, unreadable } => {
                 // A name the line cannot hold (a line break in it) or one too long to keep
@@ -6677,8 +6693,8 @@ impl Model {
             Action::ToggleKeys => {
                 self.keys = !self.keys;
                 if self.keys {
-                    // It opens with what is known folded.
-                    self.keys_known_open = false;
+                    // It opens with what is known folded, in place of the box's tags.
+                    (self.keys_known_open, self.compose_sheet) = (false, false);
                     // One overlay at a time, and the overlay needs the keyboard to be dismissed.
                     (self.picker, self.palette) = (None, None);
                     self.leave(effects);
@@ -8026,7 +8042,7 @@ impl Model {
     pub(crate) fn compose_reset(&mut self) {
         (self.menu, self.compose_refs, self.compose_note) = (Menu::default(), Vec::new(), None);
         (self.path_shown, self.compose_folder, self.compose_worktree) = (None, None, false);
-        (self.compose_centred, self.quick) = (false, None);
+        (self.compose_centred, self.quick, self.compose_sheet) = (false, None, false);
     }
 
     /// The folder the user took from the dropdown, as the line has it (`~/notes/`), while a word
@@ -8259,19 +8275,34 @@ impl Model {
         Some(Plan { agent, starts, dir, branch })
     }
 
-    /// The plan said over the box, only when not the default (the default agent, starting, in the
-    /// home folder): `↵ will start codex in app on main`, `↵ files it; nothing starts`.
-    pub fn compose_plan_line(&self) -> Option<String> {
+    /// The one line under the box: what ↵ does with the line as it is, then the other keys. `None`:
+    /// the box is closed. `↵ starts codex in app on main · ⇧↵ later · Esc`, `↵ takes >app · Esc
+    /// closes the list`, `↵ files it for later · ⌘↵ starts it now · Esc`.
+    pub fn compose_status(&self) -> Option<String> {
         let plan = self.compose_plan()?;
-        let default = plan.starts && plan.dir.is_none() && plan.agent.eq_ignore_ascii_case(self.default_agent());
-        // A workspace with something in it is about to be the task's: said, whatever else is.
-        // Not "this workspace" while the box goes to another: its pinned line names that one.
-        let binds = self.compose_binds() && !self.compose_elsewhere();
-        if default {
-            return binds.then(|| BINDS.into());
+        if let Some(menu) = self.dropdown() {
+            match self.enter() {
+                Enter::Wait => return Some("↵ waits for the list · Esc closes it".into()),
+                Enter::Take(row) => {
+                    let name = menu.rows.get(row).map_or("", |row| row.name.as_str());
+                    let name = if menu.mark == '/' { name.to_string() } else { format!("{}{name}", menu.mark) };
+                    let does = match self.taking(row) {
+                        Some(_) => format!("↵ takes {name}"),
+                        None => format!("↵: no room in the line for {name}"),
+                    };
+                    return Some(format!("{does} · Esc closes the list"));
+                }
+                Enter::Add => {}
+            }
+        }
+        // With no title ↵ files nothing (`file_titled`): a draft's captures name one.
+        let untitled = self.compose_line().is_some_and(|line| self.draft(line).title.is_empty());
+        let first = if untitled && self.capture_title().is_none() { "Type what needs doing, then " } else { "" };
+        if self.quick.is_some() {
+            return Some(format!("{first}↵ files it for later · ⌘↵ starts it now · Esc"));
         }
         if !plan.starts {
-            return Some("↵ files it; nothing starts".into());
+            return Some(format!("{first}↵ files it; nothing starts · Esc"));
         }
         let place = match (&plan.dir, &plan.branch, self.compose_worktree().filter(|choice| choice.new)) {
             (Some(_), _, Some(choice)) => format!("in a new worktree of {} on {}", choice.repo, choice.branch),
@@ -8279,14 +8310,16 @@ impl Model {
             (Some(dir), None, None) => format!("in {dir}"),
             (None, ..) => "in your home folder".into(),
         };
-        let takes = if binds { BINDS_TOO } else { "" };
-        Some(format!("↵ will start {} {place}{takes}", plan.agent))
+        // A workspace with something in it is about to be the task's: said, whatever else is.
+        // Not "this workspace" while the box goes to another: its pinned line names that one.
+        let takes = if self.compose_binds() && !self.compose_elsewhere() { BINDS_TOO } else { "" };
+        Some(format!("{first}↵ starts {} {place}{takes} · ⇧↵ later · Esc", plan.agent))
     }
 
-    /// The tags a line may hold, said while the box is open: also once tags are typed, when the
-    /// others are wanted most. The dropdown teaches the rest.
+    /// The tags a line may hold, while the box is open and its sheet shows ("? tags", ⌘/). The
+    /// dropdown teaches the rest.
     pub fn compose_hint(&self) -> Option<&'static str> {
-        self.compose_line().map(|_| TAG_HINT)
+        self.compose_line().filter(|_| self.compose_sheet).map(|_| TAG_HINT)
     }
 
     /// The folder the shell lists next, as typed (`~/`, `./src/`): that of the path at the
@@ -10573,6 +10606,7 @@ mod tests {
         Action::ComposeWorktree { .. },
         Action::ComposeHere,
         Action::ComposeTag { .. },
+        Action::ComposeSheet,
         Action::ComposeAttach { .. },
         Action::ComposeRef { .. },
         Action::ComposePick { .. },
@@ -10953,6 +10987,7 @@ mod tests {
             Action::ComposeWorktree { new: None },
             Action::ComposeHere,
             Action::ComposeTag { mark: '>' },
+            Action::ComposeSheet,
             Action::ComposeAttach { paths: Vec::new(), home: None, unreadable: 0 },
             Action::ComposeRef { target: Pointed::Tab(1) },
             Action::ComposePick { mark: '>', name: None },
@@ -12774,7 +12809,7 @@ mod tests {
         let before = (pane_tabs(&m)[..1].to_vec(), m.layout.clone(), m.focused, m.panes.clone());
         m.update(Action::SpaceSelect { index: 0 });
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
-        assert_eq!((m.joins(), m.compose_plan_line().as_deref()), (None, Some("↵ will start claude in app")));
+        assert_eq!((m.joins(), m.compose_status().as_deref()), (None, Some("↵ starts claude in app · ⇧↵ later · Esc")));
         let effects = m.update(Action::ComposeEnter);
         assert!(matches!(effects[..], [Effect::StartAgent { .. }]), "{effects:?}");
         assert_eq!((m.tab_task(), m.mode(), m.tabs.len()), (Some(1), Mode::Talk, 3));
@@ -12807,7 +12842,10 @@ mod tests {
         let before = (pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.panes.clone());
         assert_eq!(row(&m), [home.clone(), (book.clone(), false, vec![0, 1])]);
         m.update(Action::OpenCompose { text: "fix zoom".into() });
-        assert_eq!(m.compose_plan_line().as_deref(), Some(BINDS));
+        assert_eq!(
+            m.compose_status().as_deref(),
+            Some("↵ starts claude in your home folder, in this workspace · ⇧↵ later · Esc")
+        );
         m.update(Action::ComposeEnter);
         // The workspace is the task's space: where it was on the row, with all its tabs. It is
         // still listed, bound to the task, and its row opens the task's space.
@@ -12945,8 +12983,8 @@ mod tests {
         let mut m = workspace_of_one_task();
         let before = (pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.panes.clone(), row(&m));
         m.update(Action::OpenCompose { text: "second".into() });
-        let said = "↵ will start claude in app, in this workspace";
-        assert_eq!(m.compose_plan_line().as_deref(), Some(said));
+        let said = "↵ starts claude in app, in this workspace · ⇧↵ later · Esc";
+        assert_eq!(m.compose_status().as_deref(), Some(said));
         let effects = m.update(Action::ComposeEnter);
         // No space is made, no pane moves; the new one is in front, in the first one's folder.
         assert_eq!((pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.panes.clone(), row(&m)), before);
@@ -13103,7 +13141,10 @@ mod tests {
         keys(&mut m, "second >ap");
         // "↵ completes" wins: the line does not say it starts here yet.
         assert!(m.enter_completes());
-        assert_eq!((m.compose_binds(), m.compose_plan_line().as_deref()), (false, Some("↵ will start claude in app")));
+        assert_eq!(
+            (m.compose_binds(), m.compose_status().as_deref()),
+            (false, Some("↵ takes >app · Esc closes the list"))
+        );
         m.update(Action::ComposeEnter);
         assert_eq!((m.tasks.list.len(), m.members(&of), m.front(&of), m.composing()), (1, vec![1], Some(1), true));
         m.update(Action::ComposeTag { mark: '#' });
@@ -13188,8 +13229,8 @@ mod tests {
         m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
         term(&mut m);
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
-        let said = "↵ will start claude in app, in this workspace";
-        assert_eq!(m.compose_plan_line().as_deref(), Some(said));
+        let said = "↵ starts claude in app, in this workspace · ⇧↵ later · Esc";
+        assert_eq!(m.compose_status().as_deref(), Some(said));
         let effects = m.update(Action::ComposeEnter);
         let cwd = effects.iter().find_map(|effect| match effect {
             Effect::StartAgent { cwd, .. } => Some(cwd.clone()),
@@ -13224,7 +13265,7 @@ mod tests {
         assert_eq!((m.space(), m.workbooks.list[0].task), (&Owner::Workbook { id: 1 }, None));
         // For later: no.
         m.update(Action::OpenCompose { text: "later".into() });
-        assert_eq!(m.compose_plan_line(), None);
+        assert_eq!(m.compose_status().as_deref(), Some("↵ starts claude in your home folder · ⇧↵ later · Esc"));
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!(m.workbooks.list[0].task, None);
         // The user's ↵: bound, with nothing said, since it takes nothing.
@@ -13383,6 +13424,8 @@ mod tests {
             m.update(action);
             assert_eq!((m.panes.len(), m.tabs.len(), line(&m), m.mode()), (1, 2, "mine", Mode::Compose));
         }
+        // ⌘/ twice: the box's tags, then every key.
+        m.update(Action::ToggleKeys);
         m.update(Action::ToggleKeys);
         for action in [toggle(), open()] {
             m.update(action);
@@ -13604,8 +13647,8 @@ mod tests {
         m.update(Action::RepoClick { path: "/code/app-2".into(), axis: Right });
         m.update(Action::OpenCompose { text: "first".into() });
         assert_eq!(
-            m.compose_plan_line().as_deref(),
-            Some("↵ will start claude in app-2 on fix/login, in this workspace")
+            m.compose_status().as_deref(),
+            Some("↵ starts claude in app-2 on fix/login, in this workspace · ⇧↵ later · Esc")
         );
         let cwd = |effects: &[Effect], id: TaskId| {
             effects.iter().find_map(|effect| match effect {
@@ -13739,8 +13782,8 @@ mod tests {
         }
         m.update(toggle);
         assert_eq!(m.compose_worktree(), choice(true, "fix-the-zoom"));
-        let said = "↵ will start claude in a new worktree of app on fix-the-zoom, in this workspace";
-        assert_eq!(m.compose_plan_line().as_deref(), Some(said));
+        let said = "↵ starts claude in a new worktree of app on fix-the-zoom, in this workspace · ⇧↵ later · Esc";
+        assert_eq!(m.compose_status().as_deref(), Some(said));
         let path = format!("{root}/app/fix-the-zoom");
         let asked = |branch: &str, path: &str| Effect::AddWorktree {
             repo: "/code/app".into(),
@@ -14707,7 +14750,8 @@ mod tests {
         keys(&mut m, " folder");
         // ↵ will start the agent there; the path stays in the title as typed.
         assert_eq!(m.compose_plan().and_then(|plan| plan.dir).as_deref(), Some("~/notes/"));
-        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start claude in ~/notes/, in this workspace"));
+        let said = "↵ starts claude in ~/notes/, in this workspace · ⇧↵ later · Esc";
+        assert_eq!(m.compose_status().as_deref(), Some(said));
         // ↵ at once, before the shell read the line again: the folder is where its listing was.
         m.update(Action::ComposeSubmit { open: false });
         let task = m.tasks.list.last().unwrap();
@@ -15119,36 +15163,47 @@ mod tests {
     }
 
     #[test]
-    fn the_box_says_its_plan_only_off_the_default_and_its_tags_while_open() {
+    fn the_box_says_what_enter_does_in_one_line_and_its_tags_on_demand() {
         let mut m = Model::default();
         m.update(Action::SetRepos { repos: listed() });
-        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, None), "closed");
+        assert_eq!((m.compose_status(), m.compose_hint()), (None, None), "closed");
         m.update(Action::OpenCompose { text: String::new() });
-        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, Some(TAG_HINT)));
-        // Typing, and a row taken, keep the hint; the default agent in the home folder says nothing.
-        keys(&mut m, "fix zoom >");
-        m.update(Action::ComposeComplete);
-        assert_eq!(
-            (line(&m), m.compose_plan_line().is_some(), m.compose_hint()),
-            ("fix zoom >app ", true, Some(TAG_HINT))
-        );
-        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
-        keys(&mut m, "fix zoom");
-        assert_eq!((m.compose_plan_line(), m.compose_hint()), (None, Some(TAG_HINT)));
+        // Empty: what ↵ will do once there is a title. No tags until asked for.
+        let said = "Type what needs doing, then ↵ starts claude in your home folder · ⇧↵ later · Esc";
+        assert_eq!((m.compose_status().as_deref(), m.compose_hint()), (Some(said), None));
+        // The sheet: "? tags" or ⌘/ (the key reference's key) while the line has the keyboard.
+        m.update(Action::ComposeSheet);
+        assert_eq!(m.compose_hint(), Some(TAG_HINT));
+        m.update(Action::ComposeSheet);
+        assert_eq!(m.compose_hint(), None);
+        m.update(Action::ToggleKeys);
+        assert_eq!((m.compose_hint(), m.keys), (Some(TAG_HINT), false));
+        // ⌘/ again: every key, in its place.
+        m.update(Action::ToggleKeys);
+        assert_eq!((m.compose_hint(), m.keys), (None, true));
+        m.update(Action::CloseKeys);
         // Each key of the hint is in its text.
         assert!(TAG_KEYS.iter().all(|(key, word)| TAG_HINT.contains(&format!("{key}{word}")) || *key == "p1"));
-        m.update(Action::ComposePick { mark: '@', name: Some("claude".into()) });
-        assert_eq!(m.compose_plan_line(), None, "the default, named");
-        m.update(Action::ComposePick { mark: '>', name: Some("app".into()) });
-        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start claude in app"));
-        m.update(Action::ComposePick { mark: '>', name: None });
+        // A row to take: ↵ takes it, and the line says so.
+        keys(&mut m, "fix zoom >");
+        assert_eq!(m.compose_status().as_deref(), Some("↵ takes >app · Esc closes the list"));
+        m.update(Action::ComposeComplete);
+        assert_eq!(line(&m), "fix zoom >app ");
+        assert_eq!(m.compose_status().as_deref(), Some("↵ starts claude in app · ⇧↵ later · Esc"));
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        keys(&mut m, "fix zoom");
         m.update(Action::ComposePick { mark: '@', name: Some("codex-gpt-6-astra".into()) });
-        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ will start codex-gpt-6-astra in your home folder"));
+        let said = "↵ starts codex-gpt-6-astra in your home folder · ⇧↵ later · Esc";
+        assert_eq!(m.compose_status().as_deref(), Some(said));
         // A saved agent as the default: ↵ starts nothing, and the box says so.
         m.update(Action::ComposePick { mark: '@', name: None });
         let saved = Some("ana".into());
         m.update(Action::SetAgents { claude: Vec::new(), codex: Vec::new(), default: saved, shows: View::Native });
-        assert_eq!(m.compose_plan_line().as_deref(), Some("↵ files it; nothing starts"));
+        assert_eq!(m.compose_status().as_deref(), Some("↵ files it; nothing starts · Esc"));
+        // Closed, the sheet is gone with it.
+        m.update(Action::CloseCompose);
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!(m.compose_hint(), None);
     }
 
     #[test]

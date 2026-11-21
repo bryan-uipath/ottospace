@@ -2273,7 +2273,7 @@ export function snapshot(value: unknown): Snapshot {
     compose_centred: bool(o.compose_centred, "compose_centred"),
     quick_pills: orNull(list(pillKind))(o.quick_pills, "quick_pills"),
     compose_plan: orNull(composePlan)(o.compose_plan, "compose_plan"),
-    compose_plan_line: orNull(str)(o.compose_plan_line, "compose_plan_line"),
+    compose_status: orNull(str)(o.compose_status, "compose_status"),
     compose_hint: orNull(str)(o.compose_hint, "compose_hint"),
     compose_picks: composePicks(o.compose_picks, "compose_picks"),
     compose_worktree: orNull(composeWorktree)(o.compose_worktree, "compose_worktree"),

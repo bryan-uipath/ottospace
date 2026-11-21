@@ -116,7 +116,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     compose_centred: false,
     quick_pills: null,
     compose_plan: null,
-    compose_plan_line: null,
+    compose_status: null,
     compose_hint: null,
     compose_picks: { wheres: ["app"], whos: ["claude", "codex"] },
     compose_worktree: null,
