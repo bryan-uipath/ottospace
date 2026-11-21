@@ -105,8 +105,12 @@ impl Workspace {
         let shift = closes_up(bounds(path), paths.iter().skip(from + 1).find_map(|p| bounds(p)), |b| b.origin.y);
         let middle =
             |(at, p): (usize, &String)| bounds(p).map(|b| f32::from(b.center().y) - if at > from { shift } else { 0. });
-        let others = paths.iter().enumerate().filter(|(_, p)| *p != path);
-        place_among(&others.map(middle).collect::<Vec<_>>(), y)
+        let others: Vec<Option<f32>> = paths.iter().enumerate().filter(|(_, p)| *p != path).map(middle).collect();
+        // None of the others drawn (scrolled out): where it is, not the top.
+        match others.iter().all(Option::is_none) {
+            true => from,
+            false => place_among(&others, y),
+        }
     }
 
     /// The place on the top row of the space at `from` for the pointer at `x`: the others whose

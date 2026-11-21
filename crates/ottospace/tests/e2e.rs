@@ -7552,8 +7552,6 @@ fn a_repositorys_name_dragged_above_another_moves_it_there_and_in_the_settings()
     otto.user_drag(at(header(&dropped, 1), 0.5, 0.5), at(header(&dropped, 2), 0.5, 0.9));
     assert_eq!(names(&otto.drawn()), ["gamma", "beta", "alpha"]);
     assert_eq!(file()["repos"], json!([dir("gamma"), dir("beta"), dir("alpha")]));
-    drop(otto);
-    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The owner: "if i have a workspace w/o an active task, and i'm focused in it, and I press

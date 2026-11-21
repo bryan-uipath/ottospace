@@ -132,6 +132,8 @@ impl Model {
                 if !move_among(dirs, from, to, &drawn) {
                     return;
                 }
+                // Past an entry not drawn: pinned ones first again, e.g. [P, x, C] with P after x.
+                self.repo_dirs.settle();
                 self.repos = repos::arrange(std::mem::take(&mut self.repos), &self.repo_dirs);
                 self.list = selected.and_then(|row| self.list_rows().iter().position(|r| *r == row)).or(self.list);
                 effects.push(Effect::SaveRepos { dirs: self.repo_dirs.dirs.clone() });
@@ -644,6 +646,12 @@ mod tests {
         assert_eq!(m.reorder().map(|r| r.to), Some(1));
         m.update(Action::ReorderDrop);
         assert_eq!(repo_paths(&m), ["/q", "/p", "/b", "/a"]);
+        // An unpinned entry with nothing found, between: a pinned one still goes before it.
+        let mut m = repos_model(&["!/p", "!/q", "/gone", "/a"]);
+        m.update(Action::SetRepos { repos: m.repos.iter().filter(|r| r.path != "/gone").cloned().collect() });
+        move_repo(&mut m, "/p", 1);
+        let dirs: Vec<&str> = m.repo_dirs.dirs.iter().map(|d| d.path.as_str()).collect();
+        assert_eq!(dirs, ["/q", "/p", "/gone", "/a"]);
     }
 
     #[test]

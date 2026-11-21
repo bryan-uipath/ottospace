@@ -6903,7 +6903,16 @@ impl Workspace {
             .group("repo-name")
             .when(at > 0, |d| d.mt_1())
             .mb_1()
-            .child(words::words("repo-name", selected).top_0().bottom_0().items_center().child(add).children(remove))
+            .child(
+                words::words("repo-name", selected)
+                    .top_0()
+                    .bottom_0()
+                    .items_center()
+                    .child(add)
+                    .children(remove)
+                    // A press on + or the trash is theirs: an unsteady one must not carry the name.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()),
+            )
             .child(mark(&self.marks, Mark::Repo(n)))
             .child(self.controls.mark(format!("repo-fold:{path}")))
             .on_click(cx.listener(move |this, _, window, cx| {
