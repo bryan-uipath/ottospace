@@ -1479,7 +1479,14 @@ mod tests {
     fn pick_into(m: &mut Model, pane: PaneId, app: &str, kind: Kind) {
         let Kind::App { window, .. } = kind else { return };
         m.update(Action::Focus { pane });
-        let pick = crate::model::PickItem::Window { app: app.into(), window, title: "x".into(), pane: None };
+        let pick = crate::model::PickItem::Window {
+            app: app.into(),
+            window,
+            title: "x".into(),
+            pane: None,
+            frame: Default::default(),
+            subrole: String::new(),
+        };
         m.update(Action::OpenPicker { axis: Right, new_tab: false, items: vec![pick] });
         m.update(Action::PickerChoose { index: Some(0) });
         m.update(Action::Open { kind, axis: Right, beside: None });
