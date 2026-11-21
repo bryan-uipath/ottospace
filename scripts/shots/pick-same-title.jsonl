@@ -1,0 +1,7 @@
+# The picker's second step with two windows of one title (Zoom's "Zoom Meeting"): each says what
+# tells it apart, its size here. Made-up apps (pick-same-title/apps.json) stand for running ones.
+{"env":{"OTTOSPACE_PICK_APPS":"{ROOT}/apps.json"}}
+{"cmd":"split"}
+{"cmd":"key","keys":"cmd-e","as":"user"}
+{"cmd":"key","keys":"m e e enter","as":"user"}
+{"shot":"windows"}

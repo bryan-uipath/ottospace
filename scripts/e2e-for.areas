@@ -81,7 +81,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?dial(\.rs|/)                                                      dial
 /src/(.*/)?(capture|capture_model|collect|picture|gist|secrets)(\.rs|/)      capture
 /src/(.*/)?record(\.rs|/)                                                    records_its_own_window
-/src/(.*/)?(pick|apps|new_window|slot|slots|slot_panes|pop_ups|offers|rules|hosted|dialog|app_wheel)(\.rs|/)   picker|apps_section|app_pane|slot|new_window|_window_floats|an_offer_splits|offer_chips
+/src/(.*/)?(pick|apps|new_window|slot|slots|slot_panes|pop_ups|offers|rules|hosted|dialog|app_wheel|same_title)(\.rs|/)   picker|apps_section|app_pane|slot|new_window|_window_floats|an_offer_splits|offer_chips|told_apart_in_the_offer_list
 /src/(.*/)?(agent_mode|ax|ax_debug|inspect|inspector)(\.rs|/)                agent_mode|inspector|sneak_labels_an_apps
 /src/(.*/)?(viewer|markdown|highlight|syntax)(\.rs|/)|^crates/ottospace/tests/fixtures/(markdown|code)/   viewer|markdown|a_code_file|cmd_click|native_conversation|tool_rows
 /src/(.*/)?(displays|out_window|display|fill)(\.rs|/)                        display|folds|draws_on

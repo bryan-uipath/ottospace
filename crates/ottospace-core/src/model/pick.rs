@@ -25,7 +25,8 @@ impl Model {
     ) {
         let window = |w: PickWindow| {
             let pane = self.pane_holding(w.window);
-            PickItem::Window { app: app.clone(), window: w.window, title: w.title, pane }
+            let (window, title, frame, subrole) = (w.window, w.title, w.frame, w.subrole);
+            PickItem::Window { app: app.clone(), window, title, pane, frame, subrole }
         };
         let offered = new_window::recipe(bundle.as_deref(), menu_item).is_some();
         let new = offered.then(|| PickItem::NewWindow { app: app.clone(), bundle, menu_item });
@@ -43,6 +44,23 @@ impl Model {
             app: Some(app),
             ..picker.clone()
         };
+    }
+
+    /// What tells each listed window from another of its title, by window id: drawn, never in
+    /// the state.
+    pub fn picker_details(&self) -> Vec<(u32, String)> {
+        let items = self.picker.as_ref().map_or(&[][..], |picker| &picker.items[..]);
+        let windows: Vec<crate::same_title::Listed> = (items.iter())
+            .filter_map(|item| match item {
+                PickItem::Window { window, title, frame, subrole, .. } => {
+                    Some(crate::same_title::Listed { window: *window, title, frame: *frame, subrole })
+                }
+                _ => None,
+            })
+            .collect();
+        let displays: Vec<_> = self.displays.iter().map(|d| d.frame).collect();
+        let said = crate::same_title::details(&windows, &displays);
+        windows.iter().zip(said).filter_map(|(w, detail)| Some((w.window, detail?))).collect()
     }
 
     /// Whether `PickerChoose { index }` would choose "New window".
@@ -180,7 +198,7 @@ mod tests {
     use crate::new_window;
 
     fn windows() -> Vec<PickWindow> {
-        let window = |window, title: &str| PickWindow { window, title: title.into() };
+        let window = |window, title: &str| PickWindow { window, title: title.into(), ..Default::default() };
         vec![window(7, "Inbox"), window(8, "Docs")]
     }
 
@@ -215,7 +233,7 @@ mod tests {
         assert!(m.picker.is_none());
         // A window with no title is found by the name its row shows.
         chosen(&mut m);
-        let untitled = vec![PickWindow { window: 9, title: "".into() }];
+        let untitled = vec![PickWindow { window: 9, ..Default::default() }];
         m.update(Action::PickerWindows { app: "Chrome".into(), bundle: None, menu_item: true, windows: untitled });
         m.update(Action::PickerQuery { query: "untitled".into() });
         assert_eq!(rows(&m), [(9, String::new(), None)]);
@@ -229,8 +247,15 @@ mod tests {
         let items = vec![PickItem::App { name: "zoom.us".into() }];
         m.update(Action::OpenPicker { axis: Right, new_tab: false, items });
         m.update(Action::PickerChoose { index: None });
-        let window = |window, title: &str| PickWindow { window, title: title.into() };
-        let windows = vec![window(30, "Zoom Workplace"), window(31, "Zoom Meeting"), window(32, "Zoom Meeting")];
+        let window = |window, title: &str, w, h| {
+            let frame = crate::ax::Frame::new(0., 0., w, h);
+            PickWindow { window, title: title.into(), frame, subrole: "AXStandardWindow".into() }
+        };
+        let windows = vec![
+            window(30, "Zoom Workplace", 900., 600.),
+            window(31, "Zoom Meeting", 1280., 800.),
+            window(32, "Zoom Meeting", 320., 240.),
+        ];
         m.update(Action::PickerWindows {
             app: "zoom.us".into(),
             bundle: Some("us.zoom.xos".into()),
@@ -238,6 +263,11 @@ mod tests {
             windows,
         });
         assert_eq!(rows(&m).iter().map(|row| row.0).collect::<Vec<_>>(), [30, 31, 32]);
+        // The two of one title are told apart; the state holds neither title nor detail.
+        let said = [(31, "large · 1280×800".to_string()), (32, "small · 320×240".to_string())];
+        assert_eq!(m.picker_details(), said);
+        let state = serde_json::to_string(&m).unwrap_or_default();
+        assert!(!state.contains("Zoom Meeting") && !state.contains("1280"), "{state}");
         let effects = m.update(Action::PickerChoose { index: Some(3) });
         assert_eq!(effects, [Effect::HostPicked { app: "zoom.us".into(), window: 32, axis: Right, new_tab: false }]);
     }

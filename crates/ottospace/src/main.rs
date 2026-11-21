@@ -746,9 +746,11 @@ enum Mark {
     CentredBox,
     /// A viewer's first marked line: a test run's `marked_rect`.
     ViewerMarked(PaneId),
-    /// An offer chip's words, by pane, and their tooltip: a test run's `offer_rects`.
+    /// An offer chip's words, by pane, their tooltip, and a listed offer's picture by window: a
+    /// test run's `offer_rects`.
     OfferWords(PaneId),
     OfferTip,
+    OfferThumb(u32),
 }
 
 type Marks = Rc<RefCell<HashMap<Mark, Bounds<Pixels>>>>;
@@ -1273,6 +1275,8 @@ struct Workspace {
     gone_since: HashMap<PaneId, u64>,
     /// A test run's fixture windows on offer (`window_fixture`), by id: their titles.
     offer_fixtures: HashMap<u32, String>,
+    /// Pictures of offered windows that share a title, by id, while offered (`pop_ups`).
+    offer_thumbs: HashMap<u32, Arc<gpui::Image>>,
     /// The apps the core asked to look at (`Effect::WatchSlots`), the looks last sent, and a
     /// test run's fixture looks (`slot_windows`).
     slot_watch: Vec<(Option<String>, String)>,
@@ -1859,6 +1863,7 @@ impl Workspace {
             listen_feed: None,
             looks: agent_mode::Looks::default(),
             offer_fixtures: HashMap::new(),
+            offer_thumbs: HashMap::new(),
             gone_since: HashMap::new(),
             slot_watch: Vec::new(),
             slot_seen: Vec::new(),
@@ -4196,12 +4201,14 @@ impl Workspace {
             // what was heard never reaches a client.
             "listen_lines": self.listen_lines(),
             "listen_rects": self.listen_rects(),
-            // Test runs only: where an offer chip's words (`words:<pane>`) and their tooltip
-            // (`tip`, while it shows) were drawn. Never the words. Null outside a test run.
+            // Test runs only: where an offer chip's words (`words:<pane>`), their tooltip (`tip`,
+            // while it shows) and a listed offer's picture (`thumb:<window>`) were drawn. Never the
+            // words. Null outside a test run.
             "offer_rects": std::env::var_os("OTTOSPACE_E2E").map(|_| {
                 let named = |(mark, bounds): (&Mark, &Bounds<Pixels>)| match mark {
                     Mark::OfferWords(pane) => Some((format!("words:{pane}"), rect(*bounds))),
                     Mark::OfferTip => Some(("tip".to_string(), rect(*bounds))),
+                    Mark::OfferThumb(id) => Some((format!("thumb:{id}"), rect(*bounds))),
                     _ => None,
                 };
                 marks.iter().filter_map(named).collect::<BTreeMap<_, _>>()
@@ -8694,6 +8701,7 @@ impl Render for Workspace {
                     | Mark::OfferWords(_)
                     | Mark::OfferTip
                     | Mark::CentredBox
+                    | Mark::OfferThumb(_)
             )
         };
         self.marks.borrow_mut().retain(|mark, _| !drawn_anew(mark));

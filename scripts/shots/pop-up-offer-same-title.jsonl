@@ -1,0 +1,9 @@
+# Two offered windows of one title (Zoom's "Zoom Meeting") and one of its own: in the list each
+# of the two says what tells it apart, beside a picture (a test run's fixture: a box of its shape).
+{"cmd":"split","axis":"right"}
+{"cmd":"app_fixture","name":"Meetings","user":true}
+{"cmd":"window_fixture","pane":2,"title":"Meeting","size":[1280,800]}
+{"cmd":"window_fixture","pane":2,"title":"Meeting","size":[400,600]}
+{"cmd":"window_fixture","pane":2,"title":"Participants","size":[360,600]}
+{"click":"offer-list:2"}
+{"shot":"list"}

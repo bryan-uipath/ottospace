@@ -389,6 +389,11 @@ pub enum PickItem {
         #[serde(skip)]
         title: String,
         pane: Option<PaneId>,
+        /// What tells it from a window of the same title, never in the state.
+        #[serde(skip)]
+        frame: crate::ax::Frame,
+        #[serde(skip)]
+        subrole: String,
     },
     /// An installed app that is not running, by where it is. Choosing it starts it.
     Closed {
@@ -449,11 +454,14 @@ pub struct NewWindowWait {
 }
 
 /// One of an app's windows, as the shell read it for the picker's second step.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct PickWindow {
     /// Its window-server id.
     pub window: u32,
     pub title: String,
+    /// Where it is and its kind: what tells it from a window of the same title (`same_title`).
+    pub frame: crate::ax::Frame,
+    pub subrole: String,
 }
 
 /// The open picker: what a new pane can show, narrowed by what the user typed.
@@ -17038,7 +17046,7 @@ mod tests {
         let items = vec![PickItem::App { name: "Slack".into() }];
         m.update(Action::OpenPicker { axis: Right, new_tab: true, items });
         assert_eq!(m.update(Action::PickerChoose { index: None }), [Effect::PickWindows { app: "Slack".into() }]);
-        let windows = vec![PickWindow { window: 7, title: "general".into() }];
+        let windows = vec![PickWindow { window: 7, title: "general".into(), ..Default::default() }];
         m.update(Action::PickerWindows { app: "Slack".into(), bundle: None, menu_item: true, windows });
         let effects = m.update(Action::PickerChoose { index: Some(1) });
         assert_eq!(effects, [Effect::HostPicked { app: "Slack".into(), window: 7, axis: Right, new_tab: true }]);

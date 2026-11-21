@@ -1027,7 +1027,11 @@ const MAKERS: &[Make] = &[
         };
         let listed: Vec<String> = g.m.picker.iter().flat_map(|picker| &picker.items).filter_map(app).collect();
         let app = g.one_of(&listed, |g| g.name(APPS));
-        let window = |g: &mut Gen| PickWindow { window: g.rng.below(5) as u32, title: g.name(&["general", "w1"]) };
+        let window = |g: &mut Gen| PickWindow {
+            window: g.rng.below(5) as u32,
+            title: g.name(&["general", "w1"]),
+            ..Default::default()
+        };
         let windows = (0..g.rng.below(4)).map(|_| window(g)).collect();
         let bundle = g.rng.coin().then(|| g.name(&["com.google.Chrome", "com.apple.Safari", "com.slack"]));
         Action::PickerWindows { app, bundle, menu_item: g.rng.coin(), windows }
@@ -8446,7 +8450,7 @@ fn seed_33152_a_new_window_for_a_new_tab_shows_its_tab() {
             app: sketch(),
             bundle: Some("com.slack".into()),
             menu_item: true,
-            windows: vec![PickWindow { window: 3, title: "general".into() }],
+            windows: vec![PickWindow { window: 3, title: "general".into(), ..Default::default() }],
         }
         .sent_by(Origin::System),
         Action::PickerChoose { index: None }.into(),

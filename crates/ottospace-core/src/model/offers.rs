@@ -35,6 +35,11 @@ pub struct Offer {
     /// The way the user chose to split it in, once they took it: kept until it is in a pane.
     #[serde(skip)]
     pub split: Option<Axis>,
+    /// Where it is and its kind: what tells it from a window of the same title (`same_title`).
+    #[serde(skip)]
+    pub frame: crate::ax::Frame,
+    #[serde(skip)]
+    pub subrole: String,
 }
 
 /// Where a window that would be offered went: the log's line says so (`Effect::Placed`).
@@ -75,6 +80,21 @@ impl Model {
     /// Every offer of app pane `pane`, newest first: more than one, its chip groups them.
     pub fn offers_at(&self, pane: PaneId) -> Vec<&Offer> {
         self.offers.iter().rev().filter(|offer| offer.pane == pane).collect()
+    }
+
+    /// What tells each of `offers_at(pane)` from another of its title, in that order: drawn, never
+    /// in the state.
+    pub fn offer_details(&self, pane: PaneId) -> Vec<Option<String>> {
+        let offers: Vec<_> = (self.offers_at(pane).into_iter())
+            .map(|o| crate::same_title::Listed {
+                window: o.window,
+                title: &o.title,
+                frame: o.frame,
+                subrole: &o.subrole,
+            })
+            .collect();
+        let displays: Vec<_> = self.displays.iter().map(|d| d.frame).collect();
+        crate::same_title::details(&offers, &displays)
     }
 
     /// True if `pane`'s chip groups offers: several, and not a pane that waits (it has no chip).
@@ -143,9 +163,9 @@ impl Model {
                     Some((slot, false)) => Placed::SlotOffer { slot },
                     None => {
                         self.offers.retain(|offer| offer.window != window);
-                        let crate::slot::Seen { pid, title, .. } = seen;
+                        let crate::slot::Seen { pid, title, frame, subrole, .. } = seen;
                         let app = (bundle.clone(), name.clone());
-                        self.offers.push(Offer { pane, window, pid, title, why, app, split: None });
+                        self.offers.push(Offer { pane, window, pid, title, why, app, split: None, frame, subrole });
                         Placed::Offer
                     }
                 };
@@ -212,8 +232,13 @@ mod tests {
 
     /// Window `window` of process 7, a standard one titled `title`, opened beside pane `pane`.
     fn new_window(pane: PaneId, window: u32, title: &str) -> Action {
-        let subrole = "AXStandardWindow".into();
-        let seen = crate::slot::Seen { pid: 7, window, title: title.into(), subrole, ..Default::default() };
+        sized_window(pane, window, title, 800., 600.)
+    }
+
+    /// As `new_window`, `w`×`h` points.
+    fn sized_window(pane: PaneId, window: u32, title: &str, w: f64, h: f64) -> Action {
+        let (subrole, frame) = ("AXStandardWindow".into(), crate::ax::Frame::new(0., 0., w, h));
+        let seen = crate::slot::Seen { pid: 7, window, title: title.into(), subrole, frame, ..Default::default() };
         Action::WindowOffered { pane, seen, why: "no slot".into() }
     }
 
@@ -281,6 +306,21 @@ mod tests {
         let state = serde_json::to_string(&m).unwrap_or_default();
         assert!(state.contains(r#""offers":[{"pane":1,"window":9}]"#), "{state}");
         assert!(!state.contains("SECRET"), "{state}");
+    }
+
+    /// Zoom's meeting opens two windows of one title: the list tells them apart by size, newest
+    /// first as listed; a unique title gets nothing. Neither title nor detail is in the state.
+    #[test]
+    fn offers_of_one_title_are_told_apart_and_the_state_holds_neither() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(sized_window(1, 9, "Zoom SECRET Meeting", 1280., 800.).sent_by(Origin::System));
+        m.update(sized_window(1, 10, "Zoom SECRET Meeting", 320., 240.).sent_by(Origin::System));
+        m.update(sized_window(1, 11, "Chat", 320., 240.).sent_by(Origin::System));
+        let said = m.offer_details(1);
+        assert_eq!(said, [None, Some("small · 320×240".into()), Some("large · 1280×800".into())]);
+        let state = serde_json::to_string(&m).unwrap_or_default();
+        assert!(!state.contains("SECRET") && !state.contains("320") && !state.contains("AXStandard"), "{state}");
     }
 
     /// A mark of a pane whose window went while it offers another: it keeps the place while the
