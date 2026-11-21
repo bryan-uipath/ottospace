@@ -91,26 +91,49 @@ impl Feature {
         self.stage() == Stage::Preview
     }
 
+    /// Its name as the palette shows it, e.g. "Code city" for `code_city`.
+    pub fn title(self) -> &'static str {
+        match self {
+            Feature::Marks => "Marks",
+            Feature::AppsSection => "Apps section",
+            Feature::Transcripts => "Transcripts",
+            Feature::Slots => "Slots",
+            Feature::AgentMode => "Agent mode",
+            Feature::MultiMonitor => "Multi-monitor",
+            Feature::OverlayPanels => "Overlay panels",
+            Feature::Decisions => "Decisions",
+            Feature::CodeCity => "Code city",
+        }
+    }
+
+    /// Its own key, if it has one.
+    pub fn key(self) -> Option<&'static str> {
+        match self {
+            Feature::Transcripts => Some("⌘⌃T"),
+            Feature::AgentMode => Some("⌘⌃V"),
+            Feature::MultiMonitor => Some("⌘⇧O"),
+            Feature::Decisions => Some("⌘J"),
+            _ => None,
+        }
+    }
+
+    /// What it does, after its title: no name, no key.
     pub fn description(self) -> &'static str {
         match self {
-            Feature::Marks => "Marks: name a pane or a tab, and go back to it with a letter",
-            Feature::AppsSection => "The Apps section: the Dock's apps, pins, Not running and All apps",
+            Feature::Marks => "Name a pane or a tab, and go back to it with a letter",
+            Feature::AppsSection => "The Dock's apps, pins, Not running and All apps",
             Feature::Transcripts => {
-                "Transcripts (⌘⌃T): an app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file"
+                "An app pane's audio, transcribed on this Mac (macOS 26), as lines in the drawer and a Markdown file"
             }
-            Feature::Slots => {
-                "Slots: a pane that keeps its place and waits for a window you name (⋯ on an app pane's header)"
-            }
-            Feature::AgentMode => {
-                "Agent mode (⌘⌃V): let a workspace's task see an app pane, from the robot in its header"
-            }
-            Feature::MultiMonitor => "Multi-monitor (⌘⇧O): fold a tab out to its own window on another display",
+            Feature::Slots => "A pane that keeps its place and waits for a window you name (⋯ on an app pane's header)",
+            Feature::AgentMode => "Let a workspace's task see an app pane, from the robot in its header",
+            Feature::MultiMonitor => "Fold a tab out to its own window on another display",
             Feature::OverlayPanels => {
-                "Overlay panels (an experiment): the sidebar and the drawer float over the panes, moving nothing, and close after use"
+                "The sidebar and the drawer float over the panes, moving nothing, and close after use"
             }
-            Feature::Decisions => "Decisions (⌘J): a workspace that shows what waits on you, one question at a time",
+            Feature::Decisions => "A workspace that shows what waits on you, one question at a time",
             Feature::CodeCity => {
-                "Code city: an empty tab of a task draws the task's folder as a 3D city, its files where they were last time"
+                "An empty tab of a task draws the task's folder as a 3D city, its files where they were last time"
             }
         }
     }
@@ -198,8 +221,9 @@ pub fn table() -> String {
     let mut table = String::from("| Feature | Stage | Default | What it is |\n| --- | --- | --- | --- |\n");
     for feature in ALL {
         let default = if feature.default_on() { "on" } else { "off" };
-        let (name, stage, about) = (feature.name(), feature.stage().label(), feature.description());
-        table += &format!("| `{name}` | {stage} | {default} | {about} |\n");
+        let (name, stage, title) = (feature.name(), feature.stage().label(), feature.title());
+        let key = feature.key().map(|key| format!(" ({key})")).unwrap_or_default();
+        table += &format!("| `{name}` | {stage} | {default} | {title}{key}: {} |\n", feature.description());
     }
     table
 }
@@ -213,6 +237,16 @@ mod tests {
         let reference = include_str!("../../../docs/reference.md");
         let table = table();
         assert!(reference.contains(&table), "docs/reference.md must hold:\n{table}");
+    }
+
+    #[test]
+    fn a_description_does_not_repeat_its_title_or_key() {
+        for feature in ALL {
+            let (title, about) = (feature.title().to_lowercase(), feature.description().to_lowercase());
+            assert!(!about.starts_with(&title) && !about.contains(&format!("{title}:")), "{about}");
+            assert!(!about.contains(feature.key().unwrap_or("⌘")), "{about}");
+            assert!(feature.description().starts_with(char::is_uppercase), "{about}");
+        }
     }
 
     #[test]
@@ -373,6 +407,14 @@ mod tests {
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
+            // Its id or its title finds it, first.
+            for query in ["code_city", "city", "Code city"] {
+                m.update(Action::FieldEdit { edit: crate::edit::Edit::SelectAll });
+                m.update(Action::FieldEdit { edit: crate::edit::Edit::Insert(query.into()) });
+                let first = m.palette.as_ref().and_then(|p| p.feature_matches().first().map(|c| c.feature));
+                assert_eq!(first, Some(Feature::CodeCity), "{query}");
+            }
+            m.update(Action::FieldEdit { edit: crate::edit::Edit::SelectAll });
             m.update(crate::model::Action::FieldEdit { edit: crate::edit::Edit::Insert("apps".into()) });
             let effects = m.update(Action::PaletteChoose { index: None });
             assert_eq!(effects, [Effect::SaveFeature { feature: Feature::AppsSection, on: true }]);

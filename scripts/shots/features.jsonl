@@ -1,0 +1,6 @@
+# Palette ▸ Features…: every flag, off (a test run's default); then narrowed by typing.
+{"cmd":"split","kind":"empty"}
+{"cmd":"key","keys":"cmd-p f e a t u r e s enter","as":"user"}
+{"shot":"list"}
+{"cmd":"key","keys":"c i t y","as":"user"}
+{"shot":"typed"}

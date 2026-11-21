@@ -13,6 +13,7 @@ use gpui::{
     SharedString, Stateful, StyleRefinement, StyledText, Svg, black, canvas, div, point, prelude::*, px, rgb, svg,
     transparent_black,
 };
+use ottospace_core::features::Stage;
 use ottospace_core::{Axis, notice, theme};
 
 use crate::{RAIL_CELL, ROW, cut_text};
@@ -215,6 +216,35 @@ pub(crate) fn list_row(id: impl Into<ElementId>, row: Row, state: State) -> Stat
             })
         }
     }
+}
+
+/// A two-line row's title line, and the row's height: the title over a description of at most two
+/// lines (`two_lines`), padded as a filter row.
+pub(crate) const TITLE_LINE: f32 = 18.;
+const DESCRIPTION_LINE: f32 = 15.;
+pub(crate) const TWO_LINE_ROW: f32 = 2. * theme::SPACE_1_5 + TITLE_LINE + theme::SPACE_0_5 + 2. * DESCRIPTION_LINE;
+
+/// A row's title over its description, smaller and muted, wrapping to two lines at most (VS Code's
+/// settings list). e.g. "Marks" over "Name a pane or a tab, and go back to it with a letter".
+pub(crate) fn two_lines(title: impl IntoElement, description: impl Into<SharedString>) -> Div {
+    let title = div().h(px(TITLE_LINE)).min_w_0().overflow_hidden().flex().items_center().child(title);
+    let description = div()
+        .text_size(px(theme::TEXT_XS))
+        .line_height(px(DESCRIPTION_LINE))
+        .text_color(rgb(theme::MUTED))
+        .line_clamp(2)
+        .child(description.into());
+    div().min_w_0().flex().flex_col().gap(px(theme::SPACE_0_5)).child(title).child(description)
+}
+
+/// A stage's icon: a flask for Experimental, quiet (muted); none for Preview. The caller adds the
+/// stage's name as its tooltip.
+pub(crate) fn stage_icon(stage: Stage) -> Option<Svg> {
+    let path = match stage {
+        Stage::Experimental => "icons/flask.svg",
+        Stage::Preview => return None,
+    };
+    Some(svg().path(path).flex_none().size(px(theme::ICON_SM)).text_color(rgb(theme::MUTED)))
 }
 
 /// A heading's fold mark, ▾ open or ▸ folded: drawn, not a glyph, so it sits on the words' middle

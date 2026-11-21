@@ -5050,6 +5050,48 @@ fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
     assert!(otto.raw(r#"{"cmd":"key","keys":"cmd-p"}"#)["state"]["palette"].is_null());
 }
 
+/// The owner: Features… lists each flag on two lines (its name over its description), with no
+/// group column, a flask for its stage, and finds a flag by its id or its name.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn features_lists_each_flag_on_two_lines_and_finds_it_by_id_or_name() {
+    let home = user_folder("flag-rows", r#"{"repos": [], "restore_layout": false}"#);
+    let otto = Otto::launch_with("flag-rows", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    // A one-line list: the commands, each with its group column.
+    let commands = otto.user_key("cmd-p");
+    let one = rect(&commands["palette_rows"][0]["rect"])[3];
+    assert!(commands["palette_rows"][0]["group_rect"].is_array(), "{}", commands["palette_rows"][0]);
+    otto.user_key("f e a t u r e s enter");
+    let reply = otto.call(json!({"cmd": "state"}));
+    let rows = reply["palette_rows"].as_array().expect("rows").clone();
+    assert_eq!(rows.len(), 9, "{rows:?}");
+    // The first row whole (a rect is the part that shows), two lines tall, as is the next.
+    let whole = |reply: &Value| {
+        let rows = &reply["palette_rows"];
+        let (first, next) = (rect(&rows[0]["rect"])[3], rect(&rows[1]["rect"])[3]);
+        assert!(first > 1.8 * one && first == next && rows[0]["stage_rect"].is_array(), "{rows} against {one}");
+    };
+    whole(&reply);
+    for row in &rows {
+        // No group column, a flask for Experimental; the name has no id or stage in it.
+        assert_eq!((&row["group_rect"], &row["stage"]), (&Value::Null, &json!("Experimental")), "{row}");
+        assert!(!row["name"].as_str().unwrap_or("").contains('_'), "{row}");
+    }
+    assert_eq!((&rows[8]["name"], &rows[8]["on"]), (&json!("Code city"), &json!(false)));
+    // A filter typed and cleared: the first row whole again.
+    otto.user_key("z z");
+    whole(&otto.user_key("backspace backspace"));
+    // Its id's letters or its name finds it, first (the core test types `code_city` itself).
+    for query in ["c o d e c i t y", "c i t y"] {
+        let found = otto.user_key(&format!("cmd-a backspace {query}"));
+        assert_eq!(found["palette_rows"][0]["name"], "Code city", "{query}: {}", found["palette_rows"]);
+    }
+    // ↵ turns it on: the state's features change.
+    let on = otto.user_key("enter");
+    assert_eq!(on["state"]["features"], json!(["code_city"]));
+}
+
 /// The mark called `name`, as the state has it.
 fn mark_named(reply: &Value, name: &str) -> Value {
     let marks = reply["marks"].as_array().cloned().unwrap_or_default();
@@ -9536,7 +9578,9 @@ fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     let rows = reply["palette_rows"].as_array().expect("rows").clone();
     assert!(rows.len() > 30, "{rows:?}");
     let first = json!({"command": "split_right", "name": "Terminal Right", "group": "Panes", "key": "⌘D"});
-    assert_eq!(rows[0], first);
+    let fields =
+        |row: &Value| json!({"command": row["command"], "name": row["name"], "group": row["group"], "key": row["key"]});
+    assert_eq!(fields(&rows[0]), first);
     // The version left the status bar for About.
     assert!(rows.iter().any(|row| row["name"] == "About ottospace" && row["group"] == "App"), "{rows:?}");
     // Typing narrows the rows, best first. A client's key is refused, and its split waits.

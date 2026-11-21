@@ -2,6 +2,7 @@
 //! `scripts/shot ui-gallery` pictures it, so `shots.yml` shows any change to one.
 
 use gpui::{AnyElement, Div, ElementId, SharedString, div, prelude::*, px, rgb};
+use ottospace_core::features::Stage;
 use ottospace_core::{Mode, notice, theme};
 
 use super::{Button, Face, Pill, Row, Side, State, Tip};
@@ -65,6 +66,34 @@ fn rows() -> Div {
             case(format!("{} {state:?}", if open { "open" } else { "folded" }), width(h))
         });
     div().flex().flex_col().gap(px(theme::SPACE_2)).children(rows).child(group("section heading", headings))
+}
+
+/// A filter list's rows (the palette's): one line, and a flag's two (on, with a key; off), at rest
+/// and highlighted. Then the stage's icon with its tooltip.
+fn filter_rows() -> Div {
+    use ottospace_core::commands::FeatureChoice;
+    use ottospace_core::features::Feature;
+    let width = |d: gpui::Stateful<Div>| div().w(px(300.)).bg(rgb(theme::RAISED)).child(d);
+    let looks = [(false, "rest"), (true, "selected")];
+    let one = looks.map(|(selected, name)| {
+        let row = crate::dialog::filter_row(id(format!("filter-one-{name}")), selected);
+        case(format!("one line {name}"), width(row.child(crate::cut_text("Terminal Right").flex_1()).child("⌘D")))
+    });
+    let flags = [(Feature::Decisions, true), (Feature::Marks, false)];
+    let two = looks.into_iter().zip(flags).enumerate().map(|(at, ((selected, name), (feature, on)))| {
+        let row = crate::dialog::filter_row(id(format!("filter-two-{name}")), selected);
+        let row = crate::commands::flag_row(row, 1000 + at, &FeatureChoice { feature, on });
+        case(format!("flag {name}"), width(row))
+    });
+    let tip = div()
+        .flex()
+        .flex_col()
+        .items_start()
+        .gap(px(theme::SPACE_1))
+        .children(super::stage_icon(Stage::Experimental))
+        .child(super::tooltip(Stage::Experimental.label().into(), Tip::Hint));
+    let stage = case("stage icon, hover", tip);
+    group("filter row", one.into_iter().chain(two).chain([stage]))
 }
 
 fn header() -> Div {
@@ -151,7 +180,14 @@ fn shimmers() -> Div {
 
 /// The gallery, over the whole window.
 pub(crate) fn view() -> Div {
-    let left = div().flex().flex_col().gap(px(theme::SPACE_3)).child(buttons()).child(pills()).child(tips());
+    let left = div()
+        .flex()
+        .flex_col()
+        .gap(px(theme::SPACE_3))
+        .child(buttons())
+        .child(pills())
+        .child(tips())
+        .child(filter_rows());
     let right = div()
         .flex()
         .flex_col()
