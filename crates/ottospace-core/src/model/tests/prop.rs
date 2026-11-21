@@ -5148,11 +5148,13 @@ impl Run {
                         "{origin:?}'s {action:?} picks a folder"
                     )
                 }
-                Effect::Clone { remote, dest, .. } => {
+                Effect::Clone { remote, staging, dest, .. } => {
                     ensure!(user && matches!(action, Action::CloneChoose { .. }), "{origin:?}'s {action:?} cloned");
                     let dir = m.repo_dirs.clone.as_deref().unwrap_or("");
                     let inside = crate::clone::destination(dir, &remote.name).as_deref() == Some(dest.as_str());
                     ensure!(inside, "cloned {remote:?} into {dest}, not one name inside {dir}");
+                    let beside = crate::clone::staging(dir, &remote.name).as_deref() == Some(staging.as_str());
+                    ensure!(beside, "staged {remote:?} in {staging}, not beside {dest}");
                     ensure!(m.cloning.as_ref().is_some_and(|job| job.dest == *dest), "a clone with no job");
                 }
                 Effect::CloneCancel { id } => {

@@ -1,9 +1,12 @@
 //! A repository the user chose, cloned with their gh (`Effect::Clone`) on a thread of its own:
-//! a fixed argv, no shell, no prompt, no hook, into a folder this clone makes and only that one
-//! removes. What the clone means and what is said of it are the core's (`ottospace_core::clone`).
+//! a fixed argv, no shell, no prompt, no hook, into a hidden staging folder this clone makes and
+//! only that one removes, then renamed into place, never over anything there. What the clone
+//! means and what is said of it are the core's (`ottospace_core::clone`).
 
 use std::collections::HashMap;
+use std::ffi::CString;
 use std::io::Read;
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -14,7 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use gpui::{Context, KeyDownEvent, Window, div, prelude::*, px, rgb};
-use ottospace_core::clone::{Dialog, Failure, Provider, Remote};
+use ottospace_core::clone::{Dialog, Failure, Provider, Remote, STAGING, after_gh};
 use ottospace_core::keys::FilterKey;
 use ottospace_core::{Action, Origin, theme};
 
@@ -72,8 +75,8 @@ impl Cloner {
         Self { news_in, news, stops: Arc::default() }
     }
 
-    /// Starts clone `id` of `remote` into `dest`, on a thread of its own.
-    pub fn start(&self, id: u64, provider: Provider, remote: Remote, dest: String, make_dir: bool) {
+    /// Starts clone `id` of `remote` into `staging`, then `dest`, on a thread of its own.
+    pub fn start(&self, id: u64, provider: Provider, remote: Remote, staging: String, dest: String, make_dir: bool) {
         let stop = Arc::new(AtomicBool::new(false));
         if let Ok(mut stops) = self.stops.lock() {
             stops.insert(id, stop.clone());
@@ -81,7 +84,8 @@ impl Cloner {
         let (news, stops) = (self.news_in.clone(), self.stops.clone());
         std::thread::spawn(move || {
             let line = |line: String| drop(news.send(News::Line { id, line }));
-            let result = run(source(provider), &remote, Path::new(&dest), make_dir, &stop, line);
+            let paths = (Path::new(&staging), Path::new(&dest));
+            let result = run(source(provider), &remote, paths, make_dir, &stop, line);
             if let Ok(mut stops) = stops.lock() {
                 stops.remove(&id);
             }
@@ -90,7 +94,7 @@ impl Cloner {
         });
     }
 
-    /// The user's Esc: clone `id` stops, and its folder goes.
+    /// The user's Esc: clone `id` stops, and its staging folder goes.
     pub fn cancel(&self, id: u64) {
         if let Some(stop) = self.stops.lock().ok().and_then(|stops| stops.get(&id).cloned()) {
             stop.store(true, Ordering::Relaxed);
@@ -101,19 +105,21 @@ impl Cloner {
 /// Which folder this clone made: its device and inode, so only that one is ever removed.
 type Made = (u64, u64);
 
-/// One clone: the checks, the folder, gh. Nothing is made before the checks pass, and what
-/// this run made goes again if the clone does not end with a repository there.
+/// One clone: the checks, the staging folder, gh, the rename. Nothing is made before the checks
+/// pass; the staging folder goes again unless it was renamed to `dest`.
 fn run(
     source: &dyn Source,
     remote: &Remote,
-    dest: &Path,
+    (staging, dest): (&Path, &Path),
     make_dir: bool,
     stop: &AtomicBool,
     line: impl Fn(String),
 ) -> Result<(), Failure> {
     let dir = dest.parent().filter(|dir| dir.is_absolute()).ok_or(Failure::DirMissing)?;
-    // The core checked the name; checked again at the door: one plain name inside `dir`.
-    if dest.file_name().and_then(|name| name.to_str()) != Some(remote.name.as_str()) || !dest.is_absolute() {
+    // The core checked the name; checked again at the door: one plain name inside `dir`, staged beside it.
+    let beside = staging.parent() == Some(dir)
+        && staging.file_name().and_then(|name| name.to_str()) == Some(&format!("{STAGING}{}", remote.name));
+    if dest.file_name().and_then(|name| name.to_str()) != Some(remote.name.as_str()) || !dest.is_absolute() || !beside {
         return Err(Failure::Said("the destination is not one name inside clone_dir".into()));
     }
     match std::fs::metadata(dir) {
@@ -132,29 +138,60 @@ fn run(
         crate::prs::NO_GH => Failure::NoGh,
         why => Failure::Said(why.into()),
     })?;
-    // Made here, atomically: one made meanwhile by anything else is refused, never cloned into.
-    let made = make(dest)?;
-    let result = clone(source, &gh, remote, dest, stop, line);
-    let result = match result {
-        // Esc as gh ended: stopped all the same.
-        Ok(()) if stop.load(Ordering::Relaxed) => Err(Failure::Cancelled),
-        Ok(()) if dest.join(".git").is_dir() => return Ok(()),
-        Ok(()) => Err(Failure::Said("gh ended with no repository there".into())),
-        Err(failure) => Err(failure),
-    };
-    remove_made(dest, made);
+    staged(source, &gh, remote, (staging, dest), stop, line)
+}
+
+/// The clone proper: into a fresh staging folder, then renamed to `dest`.
+fn staged(
+    source: &dyn Source,
+    gh: &Path,
+    remote: &Remote,
+    (staging, dest): (&Path, &Path),
+    stop: &AtomicBool,
+    line: impl Fn(String),
+) -> Result<(), Failure> {
+    clear_stale(staging)?;
+    let made = make(staging)?;
+    let gh = clone(source, gh, remote, staging, stop, line);
+    let result = after_gh(gh, stop.load(Ordering::Relaxed), staging.join(".git").is_dir())
+        .and_then(|()| rename_new(staging, dest));
+    if result.is_err() {
+        remove_made(staging, made);
+    }
     result
 }
 
-/// Makes `dest`, empty; `Exists` if anything is there.
-fn make(dest: &Path) -> Result<Made, Failure> {
-    match std::fs::create_dir(dest) {
-        Ok(()) => {}
-        Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => return Err(Failure::Exists),
-        Err(err) => return Err(Failure::Said(format!("{}: {err}", dest.display()))),
+/// A crashed run's staging folder goes before this one is made; anything else of that name (a
+/// link, a file) is not ours: refused, left.
+fn clear_stale(staging: &Path) -> Result<(), Failure> {
+    let said = |err: std::io::Error| Failure::Said(format!("{}: {err}", staging.display()));
+    match std::fs::symlink_metadata(staging) {
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Ok(meta) if meta.is_dir() => std::fs::remove_dir_all(staging).map_err(said),
+        Ok(_) => Err(Failure::Said(format!("{} is in the way", staging.display()))),
+        Err(err) => Err(said(err)),
     }
-    let meta = std::fs::symlink_metadata(dest).map_err(|err| Failure::Said(err.to_string()))?;
+}
+
+/// Makes `path`, empty, atomically: one made meanwhile by anything else is refused, never cloned into.
+fn make(path: &Path) -> Result<Made, Failure> {
+    std::fs::create_dir(path).map_err(|err| Failure::Said(format!("{}: {err}", path.display())))?;
+    let meta = std::fs::symlink_metadata(path).map_err(|err| Failure::Said(err.to_string()))?;
     Ok((meta.dev(), meta.ino()))
+}
+
+/// Renames `from` to `to` in one step, never over anything at `to` (`RENAME_EXCL`): `Exists` if
+/// something came there meanwhile.
+fn rename_new(from: &Path, to: &Path) -> Result<(), Failure> {
+    let c = |path: &Path| CString::new(path.as_os_str().as_bytes()).map_err(|err| Failure::Said(err.to_string()));
+    let (from, to) = (c(from)?, c(to)?);
+    if unsafe { libc::renamex_np(from.as_ptr(), to.as_ptr(), libc::RENAME_EXCL) } == 0 {
+        return Ok(());
+    }
+    match std::io::Error::last_os_error() {
+        err if err.kind() == std::io::ErrorKind::AlreadyExists => Err(Failure::Exists),
+        err => Err(Failure::Said(format!("moving the clone into place: {err}"))),
+    }
 }
 
 /// Removes `dest` only if it is still the folder this clone made: not a link, the same inode.
@@ -416,15 +453,57 @@ mod tests {
         let dest = code.join("hello");
         let never = script(&root, &format!("touch '{}'", root.join("ran").display()));
         let stop = AtomicBool::new(false);
-        assert_eq!(run(&never, &hello(), &dest, false, &stop, |_| {}), Err(Failure::DirMissing));
+        let staging = code.join(".ottospace-clone-hello");
+        assert_eq!(run(&never, &hello(), (&staging, &dest), false, &stop, |_| {}), Err(Failure::DirMissing));
         std::fs::create_dir(&code).unwrap();
         std::os::unix::fs::symlink("/nowhere", &dest).unwrap();
-        assert_eq!(run(&never, &hello(), &dest, false, &stop, |_| {}), Err(Failure::Exists));
-        // A destination that is not the remote's name is refused at the door.
+        assert_eq!(run(&never, &hello(), (&staging, &dest), false, &stop, |_| {}), Err(Failure::Exists));
+        // A destination that is not the remote's name, or staged elsewhere, is refused at the door.
         let elsewhere = code.join("other");
-        assert!(matches!(run(&never, &hello(), &elsewhere, false, &stop, |_| {}), Err(Failure::Said(_))));
-        assert!(!root.join("ran").exists());
-        assert_eq!(make(&dest), Err(Failure::Exists));
+        assert!(matches!(run(&never, &hello(), (&staging, &elsewhere), false, &stop, |_| {}), Err(Failure::Said(_))));
+        let away = root.join(".ottospace-clone-hello");
+        std::fs::remove_file(&dest).unwrap();
+        assert!(matches!(run(&never, &hello(), (&away, &dest), false, &stop, |_| {}), Err(Failure::Said(_))));
+        assert!(!root.join("ran").exists() && !staging.exists() && !away.exists());
+        assert!(make(&code).is_err());
+    }
+
+    #[test]
+    fn a_clone_is_staged_then_renamed_into_place_never_over_what_came_there_meanwhile() {
+        let (_scratch, root) = temp("staged");
+        let code = root.join("code");
+        std::fs::create_dir(&code).unwrap();
+        let (staging, dest) = (code.join(".ottospace-clone-hello"), code.join("hello"));
+        let gh = Path::new("/usr/bin/true");
+        let stop = AtomicBool::new(false);
+        // A crashed run's staging folder goes; gh clones into a fresh one; nothing is at `dest`
+        // until the rename, and no staging folder after it.
+        std::fs::create_dir_all(staging.join("half")).unwrap();
+        let probe = root.join("dest-seen");
+        let body = format!(
+            "[ -e half ] && exit 1; mkdir .git; [ -e '{}' ] && touch '{}'; exit 0",
+            dest.display(),
+            probe.display()
+        );
+        let git = script(&root, &body);
+        assert_eq!(staged(&git, gh, &hello(), (&staging, &dest), &stop, |_| {}), Ok(()));
+        assert!(dest.join(".git").is_dir() && !staging.exists() && !probe.exists());
+        // Something at `dest` by the end: refused, never overwritten, and the staging folder goes.
+        std::fs::remove_dir_all(&dest).unwrap();
+        let racing = script(&root, &format!("mkdir .git '{}'; touch '{}/theirs'", dest.display(), dest.display()));
+        assert_eq!(staged(&racing, gh, &hello(), (&staging, &dest), &stop, |_| {}), Err(Failure::Exists));
+        assert!(dest.join("theirs").exists() && !dest.join(".git").exists() && !staging.exists());
+        // gh made no repository, or failed: nothing at `dest`, no staging folder.
+        std::fs::remove_dir_all(&dest).unwrap();
+        for body in ["exit 0", "mkdir .git; exit 1"] {
+            let failing = script(&root, body);
+            assert!(staged(&failing, gh, &hello(), (&staging, &dest), &stop, |_| {}).is_err(), "{body}");
+            assert!(!dest.exists() && !staging.exists(), "{body}");
+        }
+        // A link in the staging folder's place is not ours: refused and left, as what it points at.
+        std::os::unix::fs::symlink(&code, &staging).unwrap();
+        assert!(matches!(staged(&git, gh, &hello(), (&staging, &dest), &stop, |_| {}), Err(Failure::Said(_))));
+        assert!(std::fs::symlink_metadata(&staging).is_ok() && !dest.exists());
     }
 
     #[test]

@@ -2250,8 +2250,8 @@ impl Workspace {
                 // Later reads of the list look where the model now does (also after "Unlist?" is
                 // answered); a file not written leaves them as the settings are.
                 Effect::PickRepoFolder => self.pick_repo(window, cx),
-                Effect::Clone { id, provider, remote, dest, make_dir } => {
-                    self.cloner.start(*id, *provider, remote.clone(), dest.clone(), *make_dir)
+                Effect::Clone { id, provider, remote, staging, dest, make_dir } => {
+                    self.cloner.start(*id, *provider, remote.clone(), staging.clone(), dest.clone(), *make_dir)
                 }
                 Effect::CloneCancel { id } => self.cloner.cancel(*id),
                 Effect::SaveRepos { dirs } => {
@@ -3720,6 +3720,10 @@ impl Workspace {
             if let Some(why) = self.model.refusal(&paste, Origin::Socket) {
                 return Some(why);
             }
+        }
+        // The clone dialog types, moves and clones for the user alone.
+        if self.model.clone.is_some() {
+            return Some(ottospace_core::clone::USERS_ALONE);
         }
         // The palette types, moves and runs for the user alone.
         self.model.palette.is_some().then_some(ottospace_core::commands::USERS_ALONE)

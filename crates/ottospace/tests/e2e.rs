@@ -1874,7 +1874,8 @@ fn the_repos_plus_offers_a_local_folder_and_a_pasted_github_repository_is_cloned
     assert_eq!(
         argv(),
         format!(
-            "auth status --hostname github.com\nrepo clone octo/hello {dest} -- --progress --no-recurse-submodules\n"
+            "auth status --hostname github.com\nrepo clone octo/hello {} -- --progress --no-recurse-submodules\n",
+            code.join(".ottospace-clone-hello").display()
         )
     );
 
@@ -1887,7 +1888,7 @@ fn the_repos_plus_offers_a_local_folder_and_a_pasted_github_repository_is_cloned
     // Not found on GitHub: said in plain words, and its folder gone.
     otto.user_key("cmd-a backspace m i s s i n g / r e p o enter");
     assert_eq!(clone_said(&otto), "Not found on GitHub, or not yours to read: missing/repo");
-    assert!(!code.join("repo").exists());
+    assert!(!code.join("repo").exists() && !code.join(".ottospace-clone-repo").exists());
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
@@ -1910,13 +1911,15 @@ fn esc_while_cloning_stops_it_and_removes_only_the_folder_it_made() {
     private(&otto.user_key("enter"));
     let line = |o: &Otto| Some(o.drawn()).filter(|s| s["clone"]["job"]["line"] == "Receiving objects:  10%");
     private(&otto.wait_for("gh's line", line));
-    assert!(code.join("s3cr3t-app").is_dir());
+    // Staged hidden beside it: nothing at the destination until the clone is done.
+    let staging = code.join(".ottospace-clone-s3cr3t-app");
+    assert!(staging.is_dir() && !code.join("s3cr3t-app").exists());
     otto.user_key("escape");
     let said = |o: &Otto| Some(o.drawn()).filter(|s| s["clone"]["job"].is_null());
     let state = otto.wait_for("the clone to stop", said);
     private(&state);
     assert_eq!(state["notice"], "Cancelled the clone: its folder was removed");
-    assert!(!code.join("s3cr3t-app").exists() && code.join("kept").is_dir());
+    assert!(!code.join("s3cr3t-app").exists() && !staging.exists() && code.join("kept").is_dir());
     assert_eq!(state["state"]["repos"], json!([]));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);

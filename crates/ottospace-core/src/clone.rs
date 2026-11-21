@@ -94,6 +94,26 @@ pub fn destination(dir: &str, name: &str) -> Option<String> {
     (dir.starts_with('/') && parts_ok && valid_name(name)).then(|| format!("{}/{name}", dir.trim_end_matches('/')))
 }
 
+/// The prefix of a clone's staging folder: hidden, beside the destination.
+pub const STAGING: &str = ".ottospace-clone-";
+
+/// Where `<dir>/<name>` is cloned first: `<dir>/.ottospace-clone-<name>`, on the destination's
+/// volume, so the move into place is one rename. Named by the repository: a crashed run's is found again.
+pub fn staging(dir: &str, name: &str) -> Option<String> {
+    destination(dir, name).map(|_| format!("{}/{STAGING}{name}", dir.trim_end_matches('/')))
+}
+
+/// What a clone does once gh ended: `Ok` moves the staged repository into place; an error ends
+/// it, and its staging folder goes. A stop wins over gh's end; no `.git` there is no repository.
+pub fn after_gh(gh: Result<(), Failure>, stopped: bool, has_repo: bool) -> Result<(), Failure> {
+    match gh {
+        _ if stopped => Err(Failure::Cancelled),
+        Ok(()) if has_repo => Ok(()),
+        Ok(()) => Err(Failure::Said("gh ended with no repository there".into())),
+        Err(failure) => Err(failure),
+    }
+}
+
 /// Why a clone ended without a repository. Whatever gh says is `Said`: shown cleaned, one line.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Failure {
@@ -298,6 +318,19 @@ mod tests {
         ] {
             assert_eq!(destination(dir, name), None, "{dir:?} {name:?}");
         }
+    }
+
+    #[test]
+    fn a_clone_is_staged_hidden_beside_its_destination_and_moved_only_once_gh_made_a_repository() {
+        assert_eq!(staging("/Users/me/code/", "hello").as_deref(), Some("/Users/me/code/.ottospace-clone-hello"));
+        assert_eq!(staging("/code", "../x"), None);
+        assert_eq!(staging("code", "hello"), None);
+        let said = || Failure::Said("fatal: x".into());
+        assert_eq!(after_gh(Ok(()), false, true), Ok(()));
+        assert_eq!(after_gh(Ok(()), true, true), Err(Failure::Cancelled));
+        assert_eq!(after_gh(Err(said()), true, false), Err(Failure::Cancelled));
+        assert_eq!(after_gh(Err(said()), false, true), Err(said()));
+        assert_eq!(after_gh(Ok(()), false, false), Err(Failure::Said("gh ended with no repository there".into())));
     }
 
     #[test]

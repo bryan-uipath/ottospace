@@ -3326,16 +3326,18 @@ pub enum Effect {
     },
     /// The system's folder picker, for the Repos list: its choice comes back as `RepoAdd`.
     PickRepoFolder,
-    /// Clone `remote` of `provider` into `dest` (`<clone_dir>/<name>`, made by this clone, never
-    /// one there already), then send `CloneDone`. `make_dir`: `clone_dir` may be made first.
+    /// Clone `remote` of `provider` into `staging` (`clone::staging`: a crashed run's is removed
+    /// first), then rename it to `dest` (`<clone_dir>/<name>`), never over anything there; then
+    /// send `CloneDone`. `make_dir`: `clone_dir` may be made first.
     Clone {
         id: u64,
         provider: crate::clone::Provider,
         remote: crate::clone::Remote,
+        staging: String,
         dest: String,
         make_dir: bool,
     },
-    /// Stop clone `id` and remove the folder it made; then `CloneDone` with `Cancelled`.
+    /// Stop clone `id` and remove its staging folder; then `CloneDone` with `Cancelled`.
     CloneCancel {
         id: u64,
     },

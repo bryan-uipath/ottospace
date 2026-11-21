@@ -45,8 +45,9 @@ impl Model {
             return;
         }
         let dir = self.repo_dirs.clone.clone();
-        let Some((dir, dest)) = dir.and_then(|dir| clone::destination(&dir, &remote.name).map(|dest| (dir, dest)))
-        else {
+        let paths =
+            |dir: String| Some((clone::destination(&dir, &remote.name)?, clone::staging(&dir, &remote.name)?, dir));
+        let Some((dest, staging, dir)) = dir.and_then(paths) else {
             dialog.said = Some(clone::NO_DIR.into());
             return;
         };
@@ -58,7 +59,7 @@ impl Model {
         let provider = dialog.provider;
         self.cloning =
             Some(Job { id, remote: remote.clone(), dest: dest.clone(), line: String::new(), cancelled: false });
-        effects.push(Effect::Clone { id, provider, remote, dest, make_dir });
+        effects.push(Effect::Clone { id, provider, remote, staging, dest, make_dir });
     }
 
     /// Esc stops a running clone (its folder goes) and closes; a click outside closes, and the
@@ -195,6 +196,7 @@ mod tests {
             id: 1,
             provider: Provider::GitHub,
             remote: hello(),
+            staging: "/Users/me/code/.ottospace-clone-hello".into(),
             dest: "/Users/me/code/hello".into(),
             make_dir: false,
         };

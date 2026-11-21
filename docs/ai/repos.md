@@ -49,19 +49,24 @@ workspace of that checkout, else makes one with it as its default worktree: `doc
 - **What runs** (the shell, `clone.rs`, a thread per clone, one clone at a time): refused before
   any process if the destination is there (a link too); then `gh auth status --hostname
   github.com` (`prs::gh`, the same gh lookup and stand-in: `OTTOSPACE_GH` only, in a test run);
-  then the folder is made with `mkdir` (never one there already; its device and inode kept) and
-  `gh repo clone <owner>/<name> <dest> -- --progress --no-recurse-submodules`, no shell, no
+  then a hidden staging folder beside it, `<clone_dir>/.ottospace-clone-<name>` (`clone::staging`:
+  one volume, so the move is one rename), is made with `mkdir` (a crashed run's folder of that name
+  is removed first; a link or file there is refused; its device and inode kept) and
+  `gh repo clone <owner>/<name> <staging> -- --progress --no-recurse-submodules`, no shell, no
   standard input, `GIT_TERMINAL_PROMPT=0`, gh's prompts and colours off, no `GIT_DIR`-like
   variables, and `core.hooksPath=/dev/null` for that run only (`GIT_CONFIG_COUNT`, never written to
-  the clone's config), in a process group of its own, at most 30 minutes.
+  the clone's config), in a process group of its own, at most 30 minutes. A repository there
+  (`clone::after_gh`: gh ended well, no Esc, a `.git`) is renamed to `<dest>` with `RENAME_EXCL`:
+  anything that came there meanwhile is never overwritten (there already). Nothing is at `<dest>`,
+  and nothing listed, before that rename.
 - **Progress**: gh's last line in the dialog (cleaned, one line), five times a second at most.
-  Esc stops it: the group is killed and the folder goes, only if it is still the one this clone
-  made (not a link, the same inode). A click outside hides the dialog; the clone goes on and its
+  Esc stops it: the group is killed and the staging folder goes, only if it is still the one this
+  clone made (not a link, the same inode). A click outside hides the dialog; the clone goes on and its
   end is a toast.
 - **The end**: made, it is listed as Local's add lists one (`repo_add`: the end of `repos`, its row
   selected) and said. Not: the dialog says why in plain words (`Failure::explain`: not logged in →
   `gh auth login`, not found, there already, the network, else gh's last line), or a toast if it
-  is hidden; the folder this clone made goes.
+  is hidden; the staging folder this clone made goes.
 - **Names are the user's data**: the dialog and the clone are never in the ordinary state (its line
   is a hidden field, `field_hidden`: the cursor, never the words); a clone's toasts name no
   repository or path (`Failure::public`, `clone::CLONED`), the dialog says them in full when it
