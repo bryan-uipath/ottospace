@@ -887,6 +887,25 @@ fn a_terminal_draws_dim_struck_and_curly_underlined_text() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_draws_box_and_block_characters_as_shapes() {
+    let otto = Otto::launch("cell-art");
+    otto.call(json!({"cmd": "split"}));
+    let art = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["cell_art"].as_u64();
+    // Each character alone on a cleared screen: the count grows only if it is drawn as shapes.
+    // `\342\224\202` is │, `\342\226\210` █: printf writes them, the typed line holds digits.
+    for (bytes, shown) in [("\\342\\224\\202", "\u{2502}"), ("\\342\\226\\210", "\u{2588}")] {
+        otto.call(json!({"cmd": "type", "text": format!("clear; printf '{bytes}\\n'\r")}));
+        let lines = |o: &Otto| o.call(json!({"cmd": "state"}))["terminals"]["1"]["lines"].clone();
+        otto.wait_for(shown, |o| lines(o).as_array()?.iter().any(|l| l == shown).then_some(()));
+        let before = otto.wait_for("the count", art);
+        // The prompt redraws under it: a frame that paints it again.
+        otto.call(json!({"cmd": "type", "text": "\r"}));
+        otto.wait_for("the shape drawn", |o| art(o).filter(|n| *n > before));
+    }
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
     let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
     std::fs::create_dir_all(root.join("app-api")).unwrap();
