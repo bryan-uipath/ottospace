@@ -1,0 +1,19 @@
+# session_waits: a Claude Code asking permission and a Codex quiet past its turn, each a stand-in
+# (`sleep` under the CLI's name) in a terminal pane: Elsewhere's rows in the needs-you colour,
+# the status bar's `needs you`, and the hover card saying why. Before: the flag is unknown.
+{"cmd": "split", "axis": "right"}
+{"settle": 1000}
+{"cmd": "wait", "pane": 1, "pattern": "\\$"}
+{"cmd": "type", "pane": 1, "text": "RECORDS='{ROOT}/claude/sessions' /bin/bash '{ROOT}/stand-in.sh' claude '{ROOT}/repos/app' '{\"pid\":PID,\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"status\":\"waiting\",\"waitingFor\":\"permission prompt\",\"updatedAt\":NOW}'\r"}
+{"cmd": "wait", "pane": 2, "pattern": "\\$"}
+{"cmd": "type", "pane": 2, "text": "touch -A -002000 {ROOT}/codex/sessions/2026/11/12/rollout-2026-11-12T09-30-00-c0de0001-0000-4000-8000-000000000001.jsonl && /bin/bash '{ROOT}/stand-in.sh' codex '{ROOT}/repos/app/crates' ''\r"}
+{"cmd": "section", "section": "tasks"}
+{"until": "sessions_bar.total"}
+{"cmd": "task_group", "heading": "sessions"}
+{"until": "sessions_bar.rows.1"}
+{"settle": 7000}
+{"cmd": "mouse", "action": "move", "x": -50, "y": -50, "as": "user"}
+{"shot": "elsewhere"}
+{"hover": "session:claude:11111111-1111-4111-8111-111111111111"}
+{"settle": 1500}
+{"shot": "hover"}
