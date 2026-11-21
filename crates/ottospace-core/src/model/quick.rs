@@ -88,12 +88,11 @@ impl Model {
             .chain(heard.map(Pill::Transcript))
             .chain(front.clone().map(|of| Pill::Front { of }))
             .collect();
-        // The project of what is in front: a task's own, else that of the task in front of the workspace.
-        let task = match &front {
-            Some(Owner::Task { id }) => Some(*id),
-            Some(of) => self.front(of),
-            None => None,
-        };
+        // The project of the task in front there (in a shared space, the one in front, not its owner).
+        let task = front.as_ref().and_then(|of| match of {
+            Owner::Task { id } => self.front(of).or(Some(*id)),
+            of => self.front(of),
+        });
         let project = task.and_then(|id| self.tasks.get(id)).and_then(|task| task.project.clone());
         if self.compose.is_none() {
             self.open_box(String::new(), false, effects);
@@ -124,15 +123,14 @@ impl Model {
                 Enter::Add => {}
             }
         }
-        let Some(quick) = self.quick.clone() else { return };
-        // Its project, as a tag the line files with, unless the line names one.
         let line = self.compose_line().cloned().unwrap_or_default();
-        let named = self.draft(&line).project.is_some();
-        let line = match quick.project.as_ref().filter(|_| !named) {
-            Some(project) => format!("{} #{project}", line.trim_end()),
-            None => line,
-        };
+        let Some(quick) = self.quick.clone() else { return };
         let Some(id) = self.file_titled(&line, None, None) else { return };
+        // Its project, unless the line names one: the line is filed as typed.
+        let task = self.tasks.get(id).filter(|task| task.project.is_none()).map(|task| task.repo.clone());
+        if let (Some(repo), Some(project)) = (task, quick.project.clone()) {
+            self.tasks.tag(id, Some(project), repo);
+        }
         self.compose = None;
         self.compose_reset();
         self.keep_note(id, &quick, effects);
@@ -312,6 +310,12 @@ mod tests {
     fn its_project_is_that_of_the_task_in_front_and_its_pill_takes_it_off() {
         let mut m = model();
         m.update(Action::TaskFromLine { line: "ship it #canvas".into(), known: Default::default(), open: true });
+        // A line that ends in a backslash files as typed, under the project.
+        open(&mut m, 600_000);
+        type_line(&mut m, "check C:\\");
+        m.update(Action::ComposeEnter);
+        let task = m.tasks.list.last().expect("filed");
+        assert_eq!((task.title.as_str(), task.project.as_deref()), ("check C:\\", Some("canvas")));
         open(&mut m, 600_000);
         assert_eq!(
             (m.quick_project().as_deref(), m.compose_pickers(), m.compose_choices()),
@@ -343,6 +347,19 @@ mod tests {
         assert_eq!(m.picker_menu().map(|menu| menu.mark), Some('#'));
         m.update(Action::ComposeComplete);
         assert_eq!(m.picker_menu(), None);
+    }
+
+    /// Two tasks in one space: the project is that of the one in front, not of the space's owner.
+    #[test]
+    fn its_project_is_that_of_the_task_in_front_of_a_shared_space() {
+        let mut m = model();
+        for line in ["first #alpha", "second #beta"] {
+            m.update(Action::TaskFromLine { line: line.into(), known: Default::default(), open: true });
+        }
+        let second = m.tasks.list.last().map(|task| task.id);
+        assert_eq!(m.front(m.space()), second, "the second in front");
+        open(&mut m, 600_000);
+        assert_eq!(m.quick_project().as_deref(), Some("beta"));
     }
 
     /// With nothing open the drawer's own empty box shows: ⌘⇧N makes it the quick note.
