@@ -61,7 +61,7 @@ follow it.
 | Churn: commits touching a file, square-root heat ramp grey → amber → orange → red | Hotspots stand out | bring over |
 | Fix churn: commits whose subject says fix/bug | Where bugs cluster | bring over (cheap, same read) |
 | Recent: touched in the last 30 days | What moves now | bring over |
-| Strata: each file a stack of slabs, one per commit, coloured by commit type, with a timeline | History as height | bring over as its own view, after layers |
+| Strata: each file a stack of slabs, one per commit, sized by its lines then, coloured by commit type, with a timeline to rewind | History as height | bring over (owner asked, 2026-11-21): a layer on the layers' one reader, its own PR after them; the timeline its one extra control |
 | Structure: buildings coloured by kind (function, class, ...) | Needs the file-level parse | later, with the file level |
 | Provenance (a diff or PR), external metric file | Needs inputs ottospace does not have | leave |
 | Working tree: modified files by added/removed balance, new files as construction, deleted as vacant lots, the rest ghosted | What is uncommitted now | bring over as a layer |
