@@ -6285,16 +6285,23 @@ impl Model {
                 match first.map(|(runner, id)| (self.runs_in(&runner, &id), runner, id)) {
                     None => {}
                     Some((Some(pane), ..)) => {
-                        self.list = None;
+                        (self.list, self.rail_focus) = (None, None);
                         self.focus(pane, effects);
                     }
-                    // Its row: Tasks open, Elsewhere unfolded.
+                    // Its row selected, Tasks open and Elsewhere unfolded: no guess at a pane.
                     Some((None, runner, id)) => {
                         if self.sidebar != Some(Section::Tasks) {
                             self.act(Action::ToggleSection { section: Section::Tasks }, effects);
                         }
                         self.collapsed.retain(|heading| *heading != Heading::Sessions);
-                        self.act(Action::SessionClick { runner, id }, effects);
+                        let row = self
+                            .list_rows()
+                            .into_iter()
+                            .position(|row| row == ListRow::Session(runner.clone(), id.clone()));
+                        if let Some(row) = row {
+                            self.leave(effects);
+                            (self.list, self.rail_focus) = (Some(row), None);
+                        }
                     }
                 }
             }

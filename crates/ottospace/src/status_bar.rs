@@ -273,7 +273,6 @@ impl Workspace {
     }
 
     fn agents_segment(&self, agents: Agents, short: bool, cx: &mut Context<Self>) -> Stateful<Div> {
-        let names = self.model.in_terminal_names().join("\n");
         let parts = agents.parts(short).into_iter().map(|(text, part)| {
             let color = match part {
                 Part::NeedsYou => theme::task(Group::NeedsYou),
@@ -284,7 +283,7 @@ impl Workspace {
             match part {
                 // Its hover lists them; a click goes to the first, not to what needs you.
                 Part::Terminal => {
-                    let tip = format!("In a terminal:\n{names}");
+                    let tip = format!("In a terminal:\n{}", self.model.in_terminal_names().join("\n"));
                     div.id("status-terminal")
                         .relative()
                         .child(self.controls.mark("status:terminal"))
