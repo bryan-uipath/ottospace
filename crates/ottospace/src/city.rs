@@ -717,7 +717,8 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
         let (size, colour) = match (graded, name.tier) {
             (true, 1) => (theme::TEXT_ROW, Hsla::from(rgb(theme::TEXT)).opacity(0.85)),
             (true, 2) => (theme::TEXT_XS, Hsla::from(rgb(theme::MUTED))),
-            (true, _) => (theme::TEXT_2XS, Hsla::from(rgb(theme::MUTED)).opacity(0.7)),
+            (true, 3) => (theme::TEXT_2XS, Hsla::from(rgb(theme::MUTED)).opacity(0.7)),
+            (true, _) => (theme::TEXT_2XS, Hsla::from(rgb(theme::MUTED)).opacity(0.5)),
             (false, _) => (theme::TEXT_2XS, Hsla::from(rgb(theme::MUTED))),
         };
         let line = shape(&name.text, colour, size, window);

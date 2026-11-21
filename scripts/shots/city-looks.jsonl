@@ -1,10 +1,10 @@
 # The code city's looks (`developer.city_look`), an experiment for the owner to pick from: each look
-# over code-city's small repository (`app`, 31 files) and a made-up tree of 2,000 (`big`), as a
-# repository's tab after its terminal closed. `print` gives each picture's render time.
+# over code-city's small repository (`app`, 31 files; city-looks/ is a link to code-city/, listed by
+# its settings) and a made-up tree of 2,000 (`big`), as a repository's tab after its terminal closed.
+# `print` gives each picture's render time.
 {"env": {"OTTOSPACE_FEATURES": "code_city"}}
-{"fixtures": "code-city"}
 {"tree": "repos/big", "files": 2000}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"terraces\"}}\n"}
+{"cmd": "repo_add", "path": "{ROOT}/repos/big"}
 {"until": "repos_bar.1"}
 {"cmd": "open_repo", "path": "{ROOT}/repos/app"}
 {"cmd": "close"}
@@ -12,22 +12,22 @@
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "app-terraces"}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"plinths\"}}\n"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"plinths\"}}\n"}
 {"until": "city.look", "is": "plinths", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "app-plinths"}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"tint\"}}\n"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"tint\"}}\n"}
 {"until": "city.look", "is": "tint", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "app-tint"}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"labels\"}}\n"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"labels\"}}\n"}
 {"until": "city.look", "is": "labels", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "app-labels"}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"blend\"}}\n"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"blend\"}}\n"}
 {"until": "city.look", "is": "blend", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
@@ -35,27 +35,27 @@
 {"cmd": "open_repo", "path": "{ROOT}/repos/big"}
 {"cmd": "close"}
 {"until": "city.places", "is": 2096, "timeout_ms": 60000}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"terraces\"}}\n"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"terraces\"}}\n"}
 {"until": "city.look", "is": "terraces", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "big-terraces"}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"plinths\"}}\n"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"plinths\"}}\n"}
 {"until": "city.look", "is": "plinths", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "big-plinths"}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"tint\"}}\n"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"tint\"}}\n"}
 {"until": "city.look", "is": "tint", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "big-tint"}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"labels\"}}\n"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"labels\"}}\n"}
 {"until": "city.look", "is": "labels", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
 {"shot": "big-labels"}
-{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/big\"], \"restore_layout\": false, \"developer\": {\"city_look\": \"blend\"}}\n"}
+{"write": "home/settings.json", "text": "{\"restore_layout\": false, \"developer\": {\"city_look\": \"blend\"}}\n"}
 {"until": "city.look", "is": "blend", "timeout_ms": 30000}
 {"settle": 500}
 {"print": "city.render_us"}
