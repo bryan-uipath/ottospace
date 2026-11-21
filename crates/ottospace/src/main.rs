@@ -601,8 +601,8 @@ const TOP_BAR: f32 = 40.;
 const SPACE_TABS: f32 = 30.;
 /// Height of the status bar, at the window's foot.
 const STATUS_BAR: f32 = 24.;
-/// The widest words the status bar's mode says (`render_status`, at most 7 letters): its slot's width.
-const WIDEST_MODES: [&str; 4] = ["COMMAND", "INSPECT", "DELETE?", "UNLIST?"];
+/// Every word the status bar's mode says (`render_status`): its slot is as wide as the widest.
+const MODE_WORDS: [&str; 5] = ["APP", "LIST", "SELECT", "GO TO", "LETTER"];
 /// What the mode's slot says, dimmed, in normal mode.
 const RESTING_MODE: &str = "NORMAL";
 /// How narrow a space of the top row gets before the row clips, and how wide.
@@ -7869,36 +7869,29 @@ impl Workspace {
         };
         let (mode, hint) = match self.model.mode() {
             // A key, not the key list: ⌘/ shows the keys of every mode. A mode you can be in by
-            // accident names its way out. Normal: `RESTING_MODE`, dimmed, no chip.
-            Mode::Normal => ("", ""),
-            Mode::Pick => ("PICK", ""),
-            Mode::Palette => ("COMMAND", ""),
-            Mode::Inspect => ("INSPECT", ""),
+            // accident names its way out. A word only where nothing else on screen shows where keys
+            // go (a palette, a question, a field shows itself): else `RESTING_MODE`, dimmed, no chip.
+            Mode::Normal
+            | Mode::Pick
+            | Mode::Palette
+            | Mode::Inspect
+            | Mode::Compose
+            | Mode::Confirm
+            | Mode::Annotate
+            | Mode::Talk => ("", ""),
             Mode::App => ("APP", app_hint.as_str()),
-            Mode::Visual => ("VISUAL", "esc"),
+            Mode::Visual => ("SELECT", "esc"),
             Mode::List => ("LIST", "esc"),
-            Mode::Compose => ("TASK", ""),
             // Sneak turned the overlay off, and it stays off: say how to get it back.
             Mode::Sneak if self.model.sneak.as_ref().is_some_and(|sneak| sneak.hid_overlay) => {
-                ("SNEAK", "esc · ⌘⌃A overlay")
+                ("", "esc · ⌘⌃A overlay")
             }
-            Mode::Sneak => ("SNEAK", "esc"),
-            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.dismiss.is_some()) => ("STOP?", ""),
-            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.unlist.is_some()) => ("UNLIST?", ""),
-            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.paste.is_some()) => ("PASTE?", ""),
-            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.close.is_some()) => ("CLOSE?", ""),
-            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.later.is_some()) => ("LATER?", ""),
-            Mode::Confirm if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) => ("DELETE?", ""),
-            Mode::Confirm => ("QUIT?", ""),
-            // The capture bar lists the annotate keys.
-            Mode::Annotate => ("DRAW", ""),
-            Mode::Talk => ("TALK", ""),
+            Mode::Sneak => ("", "esc"),
             Mode::Mark => match self.model.mark_input {
-                Some(MarkInput::Rename { .. }) => ("MARK", ""),
-                Some(MarkInput::SetKey { .. }) => ("MARK", "a letter for the mark · ⌫ for none · esc cancels"),
-                Some(MarkInput::Workbook { .. }) => ("NAME", ""),
-                Some(MarkInput::Worktree { .. }) => ("BRANCH", "↵ add · esc cancels"),
-                _ => ("MARK?", "a mark's letter · esc cancels"),
+                Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. }) => ("", ""),
+                Some(MarkInput::SetKey { .. }) => ("LETTER", "a letter for the mark · ⌫ for none · esc cancels"),
+                Some(MarkInput::Worktree { .. }) => ("", "↵ add · esc cancels"),
+                _ => ("GO TO", "a mark's letter · esc cancels"),
             },
         };
         let hint = match self.sneak_app_hint() {
@@ -7916,7 +7909,7 @@ impl Workspace {
         // What the middle keeps whole (the hint is cut): the room left is the segments'.
         let kept = [back.as_deref(), clip.as_deref(), pending.as_deref()];
         // The mode's slot, at the far left: as wide as the longest word, so nothing moves when a mode comes or goes.
-        let widest = WIDEST_MODES.iter().chain([&mode, &RESTING_MODE]).map(|word| status_bar::width(window, word));
+        let widest = MODE_WORDS.iter().chain([&mode, &RESTING_MODE]).map(|word| status_bar::width(window, word));
         let slot = widest.fold(0., f32::max) + 2. * theme::SPACE_2;
         let middle = kept.iter().flatten().map(|text| status_bar::width(window, text) + 12.).sum::<f32>() + slot + 12.;
         let segments = self.status_segments(middle, window, cx);

@@ -10597,8 +10597,14 @@ fn the_status_bar_says_where_you_are_whats_next_and_whos_working_and_shortens_in
     // Normal mode: NORMAL, dimmed, in the slot.
     let resting = rect(&shown["resting"]);
     assert!(resting[0] >= status[0] && resting[0] + resting[2] <= place[0], "{shown}");
+    // The palette shows itself: no word, NORMAL stays.
+    otto.user_key("cmd-shift-p");
+    let open = otto.wait_for("the palette", |o| Some(o.drawn()).filter(|d| d["mode"] == "palette"));
+    let palette = &open["status_bar"];
+    assert_eq!((&palette["mode"], rect(&palette["resting"])[0]), (&Value::Null, resting[0]), "{palette}");
+    otto.user_key("escape");
     let with_mode = |o: &Otto| {
-        o.user_key("cmd-p");
+        o.user_key("cmd-ctrl-e");
         let b = o.wait_for("the mode's block", |o| Some(bar(o)).filter(|b| b["mode"].is_array()));
         o.user_key("escape");
         o.wait_for("no mode", |o| bar(o)["mode"].is_null().then_some(()));
