@@ -3608,6 +3608,10 @@ pub struct Tab {
     /// when plugged in again. Cleared by the user's fold in.
     #[serde(skip)]
     pub(crate) display: Option<String>,
+    /// The listed checkout it was opened in (`open_repo`), kept when its last pane closes: what
+    /// its empty state is the city of.
+    #[serde(skip)]
+    pub(crate) folder: Option<String>,
 }
 
 /// Where `TabPlace` puts a tab: at the end of a space's tabs, or just before another tab, in
@@ -4233,8 +4237,15 @@ impl Default for Model {
             waiting: Vec::new(),
         };
         // Home's own tab, on show.
-        let home =
-            Tab { id: HOME_TAB, title: HOME.into(), space: Owner::Home, layout: None, focused: None, display: None };
+        let home = Tab {
+            id: HOME_TAB,
+            title: HOME.into(),
+            space: Owner::Home,
+            layout: None,
+            focused: None,
+            display: None,
+            folder: None,
+        };
         model.tabs.push(home);
         model
     }
@@ -5641,11 +5652,19 @@ impl Model {
                         self.push_tab_of(Owner::Home);
                     }
                     let named = self.layout.is_none() || self.tabs[self.active].title.starts_with("Tab ");
+                    // A tab its terminal fills (no pane, or one empty one) is that checkout's,
+                    // after the terminal too.
+                    let fills = self.layout.as_ref().is_none_or(|layout| layout.leaves().len() == 1 && empty);
                     // The workspace made for it, if one is, is named for the folder; the user's has it as its default.
                     self.home_hint = Some((name.clone(), path.clone()));
-                    self.open_terminal_at(axis, Some(path), effects);
-                    if let Some(tab) = self.tabs.get_mut(self.active).filter(|_| named) {
-                        tab.title = name;
+                    self.open_terminal_at(axis, Some(path.clone()), effects);
+                    if let Some(tab) = self.tabs.get_mut(self.active) {
+                        if fills {
+                            tab.folder = Some(path);
+                        }
+                        if named {
+                            tab.title = name;
+                        }
                     }
                 }
             }
@@ -9227,7 +9246,8 @@ impl Model {
         let title = self.free_title();
         self.add_space(&of);
         let at = self.space_end(&of);
-        self.tabs.insert(at, Tab { id: self.next_tab, title, space: of, layout: None, focused: None, display: None });
+        let tab = Tab { id: self.next_tab, title, space: of, layout: None, focused: None, display: None, folder: None };
+        self.tabs.insert(at, tab);
         self.active = at;
     }
 

@@ -1,0 +1,22 @@
+# The code city on every empty place with a folder (`code_city`): a repository's tab after its
+# terminal closed; an empty pane there; two side by side (one picture for both); panes too small
+# for a city (their lattice); Home (no folder: its lattice). A made-up tree of 400 files.
+{"env":{"OTTOSPACE_FEATURES":"code_city"}}
+{"tree":"repos/app","files":400}
+{"cmd":"repo_add","path":"{ROOT}/repos/app"}
+{"until":"repos_bar.0"}
+{"shot":"home"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"close"}
+{"settle":1500}
+{"shot":"repo-tab"}
+{"cmd":"split","kind":"empty"}
+{"settle":1000}
+{"shot":"pane"}
+{"cmd":"split","kind":"empty"}
+{"settle":1000}
+{"shot":"two-panes"}
+{"cmd":"split","kind":"empty","axis":"down"}
+{"cmd":"split","kind":"empty","axis":"down"}
+{"settle":1000}
+{"shot":"small-panes"}
