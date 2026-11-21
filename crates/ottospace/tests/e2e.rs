@@ -844,6 +844,30 @@ fn terminal_runs_a_typed_command() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_answers_a_programs_question_about_its_colours_and_size() {
+    let otto = Otto::launch("replies");
+    otto.call(json!({"cmd": "split"}));
+    let lines = |o: &Otto| o.call(json!({"cmd": "state"}))["terminals"]["1"]["lines"].clone();
+    // Asks, reads the answer with echo off, and prints it without its escapes.
+    let ask = |query: &str| {
+        let script = format!(
+            "stty -echo -icanon min 0 time 10; printf '{query}'; r=$(dd bs=64 count=1 2>/dev/null); stty sane; \
+             echo \"reply:$(printf %s \"$r\" | tr -d '\\033\\\\')\"\r"
+        );
+        otto.call(json!({"cmd": "type", "text": script}));
+    };
+    let heard = |o: &Otto, check: &dyn Fn(&str) -> bool| {
+        lines(o).as_array()?.iter().filter_map(|l| l.as_str()).find(|l| check(l)).map(str::to_string)
+    };
+    ask("\\033]11;?\\033\\\\");
+    otto.wait_for("the background", |o| heard(o, &|l| l == "reply:]11;rgb:0909/0909/0b0b"));
+    ask("\\033[14t");
+    let size = otto.wait_for("the size", |o| heard(o, &|l| l.starts_with("reply:[4;")));
+    assert!(size.ends_with('t') && size.split(';').count() == 3, "{size}");
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn a_pane_header_names_the_directory_and_the_program_not_the_kind() {
     let root = support::temp(&format!("ottospace-e2e-header-{}", std::process::id()));
     std::fs::create_dir_all(root.join("app-api")).unwrap();

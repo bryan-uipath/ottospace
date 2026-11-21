@@ -25,9 +25,25 @@ pub fn xterm(index: u8) -> u32 {
     }
 }
 
+/// The colour a program's query names (OSC 4 an index 0-255, OSC 10, 11 and 12 the text, the
+/// background and the cursor: 256, 257, 258), as `0xRRGGBB`. Others (dim names) are the text's.
+pub fn queried(index: usize) -> u32 {
+    match u8::try_from(index) {
+        Ok(index) => xterm(index),
+        Err(_) if index == 257 => BACKGROUND,
+        Err(_) => FOREGROUND,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::xterm;
+    use super::{BACKGROUND, FOREGROUND, queried, xterm};
+
+    #[test]
+    fn a_query_is_answered_with_the_colours_drawn() {
+        assert_eq!((queried(1), queried(196)), (xterm(1), 0xff0000));
+        assert_eq!((queried(256), queried(257), queried(258)), (FOREGROUND, BACKGROUND, FOREGROUND));
+    }
 
     #[test]
     fn cube_and_grey_ramp_match_xterm() {

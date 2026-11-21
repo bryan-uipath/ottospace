@@ -20,7 +20,7 @@ use alacritty_terminal::term::cell::Flags;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::tty;
 use alacritty_terminal::vi_mode::ViMotion;
-use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor};
+use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use gpui::{
     App, Bounds, ContentMask, FontStyle, FontWeight, Hsla, Pixels, Size, TextRun, UnderlineStyle, Window, fill, font,
     point, px, rgb, size,
@@ -85,6 +85,8 @@ struct Shared {
     input: OnceLock<EventLoopSender>,
     /// How the program ended: its exit code, or `None` for a signal. Set before `exited`.
     status: OnceLock<Option<i32>>,
+    /// The text area's width and height in points as drawn, for a program that asks (CSI 14 t).
+    area: std::sync::Mutex<Option<[f32; 2]>>,
 }
 
 impl Shared {
@@ -114,6 +116,12 @@ impl EventListener for Listener {
                     let _ = input.send(Msg::Input(text.into_bytes().into()));
                 }
             }
+            Event::ColorRequest(..) | Event::TextAreaSizeRequest(_) => {
+                let area = *self.0.area.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(text) = answer(&event, area) {
+                    self.send_event(Event::PtyWrite(text))
+                }
+            }
             Event::ChildExit(status) => {
                 let _ = self.0.status.set(status.code());
                 self.0.set_exited()
@@ -121,6 +129,24 @@ impl EventListener for Listener {
             Event::Exit => self.0.set_exited(),
             _ => {}
         }
+    }
+}
+
+/// The answer to a program's question about the terminal: a colour (OSC 10/11/12/4, e.g. the
+/// background, to pick a light or dark theme) as drawn, or the text area in points (CSI 14 t).
+/// Never the clipboard: OSC 52 reads are refused (`Config::osc52`).
+fn answer(event: &Event, area: Option<[f32; 2]>) -> Option<String> {
+    match event {
+        Event::ColorRequest(index, reply) => {
+            let c = palette::queried(*index);
+            Some(reply(Rgb { r: (c >> 16) as u8, g: (c >> 8) as u8, b: c as u8 }))
+        }
+        // One cell the size of the whole area: the reply multiplies cells by their size, and a
+        // cell's points are fractional (7.83 in Menlo 13), the PTY's whole.
+        Event::TextAreaSizeRequest(reply) => area.map(|[w, h]| {
+            reply(WindowSize { num_lines: 1, num_cols: 1, cell_width: w.round() as u16, cell_height: h.round() as u16 })
+        }),
+        _ => None,
     }
 }
 
@@ -260,7 +286,10 @@ impl Terminal {
         let home = std::env::var_os("HOME").filter(|_| at_root || gone).map(PathBuf::from);
         let working_directory = cwd.map(PathBuf::from).filter(|dir| dir.is_dir()).or(home).filter(|dir| dir.is_dir());
         let options = tty::Options { shell, env, working_directory, ..Default::default() };
-        let pty = tty::new(&options, window_size(grid, size(px(8.), px(terminal_font().line_height()))), 0)?;
+        let first = window_size(grid, size(px(8.), px(terminal_font().line_height())));
+        let area = [grid.cols as f32 * 8., grid.rows as f32 * terminal_font().line_height()];
+        *shared.area.lock().unwrap_or_else(|e| e.into_inner()) = Some(area);
+        let pty = tty::new(&options, first, 0)?;
         let (child, master) = (pty.child().id(), pty.file().try_clone().ok());
         let term = Arc::new(FairMutex::new(Term::new(Config::default(), &grid, listener.clone())));
         // Before the shell can print: the history comes first, its prompt below it.
@@ -606,8 +635,12 @@ impl Terminal {
             return;
         }
         self.grid = grid;
+        // Under the grid's lock: a program's questions in one read see one size, cells and points.
+        let mut term = self.term.lock();
+        let drawn = [grid.cols as f32 * f32::from(cell.width), grid.rows as f32 * f32::from(cell.height)];
+        *self.shared.area.lock().unwrap_or_else(|e| e.into_inner()) = Some(drawn);
         let _ = self.input.send(Msg::Resize(window_size(grid, cell)));
-        self.term.lock().resize(grid);
+        term.resize(grid);
     }
 
     /// True once since new output arrived. Also types a workbook's command once the prompt is there.
@@ -1146,6 +1179,41 @@ mod tests {
         assert_eq!(env["COLORTERM"], "truecolor");
         assert_eq!((env["TERM"].as_str(), env["TERM_PROGRAM"].as_str()), ("xterm-256color", "ottospace"));
         assert_eq!(env["TERM_PROGRAM_VERSION"], env!("CARGO_PKG_VERSION"));
+    }
+
+    /// A program asking for the background, the text's colour, a palette entry or the text area's
+    /// size in points is answered as drawn.
+    #[test]
+    fn colour_and_size_questions_are_answered() {
+        #[derive(Clone, Default)]
+        struct Heard(Arc<std::sync::Mutex<Vec<Event>>>);
+        impl EventListener for Heard {
+            fn send_event(&self, event: Event) {
+                self.0.lock().unwrap().push(event);
+            }
+        }
+        let heard = Heard::default();
+        let mut term = Term::new(Config::default(), &Grid { cols: 80, rows: 24 }, heard.clone());
+        Processor::<StdSyncHandler>::new().advance(&mut term, b"\x1b]11;?\x1b\\\x1b]10;?\x07\x1b]4;1;?\x07\x1b[14t");
+        let area = Some([80. * 8., 24. * 18.]);
+        let answers: Vec<Option<String>> = heard.0.lock().unwrap().iter().map(|e| answer(e, area)).collect();
+        let ansi_red = format!("{:06x}", palette::xterm(1));
+        let red = format!("{0}{0}/{1}{1}/{2}{2}", &ansi_red[..2], &ansi_red[2..4], &ansi_red[4..]);
+        assert_eq!(
+            answers,
+            [
+                Some("\x1b]11;rgb:0909/0909/0b0b\x1b\\".to_string()),
+                Some("\x1b]10;rgb:fafa/fafa/fafa\x07".to_string()),
+                Some(format!("\x1b]4;1;rgb:{red}\x07")),
+                Some("\x1b[4;432;640t".to_string()),
+            ]
+        );
+        assert_eq!(answer(&Event::TextAreaSizeRequest(Arc::new(|_| String::new())), None), None, "no size yet");
+        // 100 columns of Menlo 13 (7.83 points a cell): the width as drawn, not 100 × 7.
+        let reply = Arc::new(|size: WindowSize| {
+            format!("{}x{}", size.num_cols * size.cell_width, size.num_lines * size.cell_height)
+        });
+        assert_eq!(answer(&Event::TextAreaSizeRequest(reply), Some([783.2, 432.])).as_deref(), Some("783x432"));
     }
 
     /// What clients read keeps a cell's zero-width characters: a combining accent, a joiner.
