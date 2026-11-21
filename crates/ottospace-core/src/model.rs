@@ -8320,7 +8320,7 @@ impl Model {
         // Only words that are such a tag go, each with the space after it; the rest is as typed.
         // A tag a clause's punctuation ends (`#canvas,`) is one too, as the line reads it.
         let tag = |word: &str| {
-            let word = word.trim_end_matches([',', '.', ';', ':', '!', '?']);
+            let word = word.trim_end_matches(compose::clause_end);
             word.strip_prefix(mark).is_some_and(|rest| compose::taggable(mark, rest))
         };
         let mut text: String = field.text().split_inclusive(' ').filter(|piece| !tag(piece.trim_end())).collect();
@@ -15333,7 +15333,7 @@ mod tests {
         assert!(m.picker_menu().is_none());
         // A tag a comma ends goes with "no project"; a model typed that no list has is kept.
         m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
-        keys(&mut m, "fix #canvas, @claude-opus-9 ");
+        keys(&mut m, "fix #canvas), @claude-opus-9 ");
         m.update(Action::ComposePicker { mark: Some('#') });
         m.update(Action::ComposeAccept { index: 0 });
         m.update(Action::ComposePicker { mark: Some('@') });
