@@ -1581,9 +1581,17 @@ export interface Home {
   counts: Record<Group, number>;
 }
 
-/** The code city in a task's empty tab (`code_city`): a picture rendered on the GPU. Counts and
- * rectangles, no name. */
+/** Where a city is: the main window's empty tab, an empty pane, or a folded-out tab. */
+export type CityOn = "tab" | { pane: number } | { out: number };
+
+/** The code city of the first empty place on show that draws one (`code_city`): a picture
+ * rendered on the GPU. Counts and rectangles, no name. */
 export interface CityDrawn {
+  on: CityOn;
+  /** Pictures kept: one per folder, lit files and size on show. */
+  pictures: number;
+  /** The places too small for a city, drawing their lattice. */
+  small: CityOn[];
   /** Folders and files placed, and how many of them are folders: null until a picture is made. */
   places: number | null;
   groups: number | null;

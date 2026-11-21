@@ -16198,6 +16198,88 @@ fn bug_send_files_a_task_in_a_new_worktree_with_a_brief_of_no_titles() {
     assert!(otto.call(json!({"cmd": "state"}))["bug"]["report"].is_null());
 }
 
+/// The code city on every empty place with a folder (`code_city`). The owner's case: a Repos row
+/// opens a terminal in its checkout, closed, the tab draws that checkout's city (and a worktree's
+/// row its worktree's). An empty pane there draws it too; two empty panes of one size share one
+/// picture, and the files are read once for both; a pane too small for a city keeps the lattice.
+/// Home has no folder: no city.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn every_empty_place_with_a_folder_draws_its_city() {
+    let root = support::temp(&format!("ottospace-e2e-city-places-{}", std::process::id()));
+    let repos = root.join("repos");
+    let app = repos.join("app");
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q"]);
+    for (file, bytes) in [("src/main.rs", 900), ("src/lib.rs", 4000), ("docs/a.md", 300), ("README.md", 2000)] {
+        std::fs::create_dir_all(app.join(file).parent().unwrap()).unwrap();
+        std::fs::write(app.join(file), "x".repeat(bytes)).unwrap();
+    }
+    git(&app, &["add", "-A"]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "files"]);
+    git(&app, &["worktree", "add", "-q", "-b", "fix", "../app-2"]);
+    let repos = repos.canonicalize().unwrap();
+    let path = |name: &str| repos.join(name).to_string_lossy().into_owned();
+    let home = user_folder("city-places", &json!({"repos": [path("app")], "restore_layout": false}).to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "code_city"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ];
+    let otto = Otto::launch_with("city-places", &env);
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    let drawn = |o: &Otto, on: Value| {
+        o.wait_for(&format!("a city on {on}"), |o| Some(city(o)).filter(|c| c["on"] == on && !c["picture"].is_null()))
+    };
+    assert_eq!(city(&otto), Value::Null, "Home: no folder, no city");
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    // The worktree's row, then the checkout's: a terminal there; closed, the tab is its city.
+    for name in ["app-2", "app"] {
+        otto.wait_for("the row", |o| o.control_opt(&format!("repo:{}", path(name))));
+        otto.user_click(at(otto.control(&format!("repo:{}", path(name))), 0.5, 0.5));
+        assert_eq!(city(&otto), Value::Null, "a terminal covers the tab");
+        otto.user_key("cmd-w");
+        let tab = drawn(&otto, json!("tab"));
+        // Four files, two folders.
+        assert_eq!((tab["places"].as_u64(), tab["groups"].as_u64()), (Some(6), Some(2)), "{name}: {tab}");
+    }
+    // An empty pane filling the tab, then two side by side: one picture for both, no read again.
+    let reads = city(&otto)["reads"].as_u64();
+    let one = pane_ids(&otto.call(json!({"cmd": "split", "kind": "empty"})))[0];
+    let renders = drawn(&otto, json!({"pane": one}))["renders"].as_u64().unwrap();
+    let reply = otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let two = *pane_ids(&reply).last().unwrap();
+    let both = otto.bounds(&[one, two]);
+    assert_eq!((both[0][2], both[0][3]), (both[1][2], both[1][3]), "two panes of one size");
+    // The picture of their size, shared: one kept, as large as the pane in pixels. As numbers:
+    // the picture's size is whole (`324`), a scaled bound a float (`324.0`), never equal as JSON.
+    let size = |c: &Value| {
+        let (b, scale) = (&c["bounds"], c["scale"].as_f64().unwrap_or(1.));
+        let px = |v: &Value| (v.as_f64().unwrap_or(0.) * scale).round();
+        let picture = c["picture"].as_array().map(|p| p.iter().map(|v| v.as_f64().unwrap_or(-1.)).collect::<Vec<_>>());
+        picture == Some(vec![px(&b[2]), px(&b[3])])
+    };
+    let shared = otto.wait_for("one picture for both", |o| {
+        // The shared picture reports either pane as its place.
+        let on_either = |c: &Value| c["on"] == json!({"pane": one}) || c["on"] == json!({"pane": two});
+        Some(city(o)).filter(|c| on_either(c) && c["pictures"] == json!(1) && size(c))
+    });
+    assert_eq!(shared["reads"].as_u64(), reads, "the files are read once per folder");
+    assert!(shared["renders"].as_u64() > Some(renders), "drawn again at their size");
+    // The first pane split down twice: too small for a city, its lattice.
+    otto.call(json!({"cmd": "focus", "pane": one}));
+    otto.call(json!({"cmd": "split", "kind": "empty", "axis": "down"}));
+    otto.call(json!({"cmd": "focus", "pane": one}));
+    otto.call(json!({"cmd": "split", "kind": "empty", "axis": "down"}));
+    let small = otto.wait_for("a small pane", |o| {
+        Some(city(o)).filter(|c| c["small"].as_array().is_some_and(|small| small.contains(&json!({"pane": one}))))
+    });
+    assert!(otto.bounds(&[one])[0][3] < 220., "{small}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a 3D
 /// picture rendered on the GPU, where the lattice was, as large as the tab in pixels. The file
 /// the agent reads is lit, and only it; an ignored file is no building; nothing is read or
@@ -16302,7 +16384,8 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     otto.call(json!({"cmd": "split"}));
     assert_eq!(city(&otto), Value::Null);
     otto.call(json!({"cmd": "close"}));
-    let again = otto.wait_for("the city back", |o| Some(city(o)).filter(|city| !city.is_null()));
+    // Its picture is made again for the tab (none is kept for a place gone): wait for it.
+    let again = otto.wait_for("the city back", |o| Some(city(o)).filter(|city| !city["picture"].is_null()));
     assert_eq!(again["lit"], lit["lit"]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
