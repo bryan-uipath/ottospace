@@ -17,6 +17,7 @@ below; a folder scripts/shots/<name>/ beside it is copied into the instance's ow
   {"click":"task:1"}          the user's click on a named control (ids: {"controls":true}); "at":[x,y]
                               "button":"right": a right click
   {"hover":"task:1"}          the pointer over a named control, or {"hover":{"rect":"calendar.band.blocks.0.rect"}}
+                              (a point the state gives, [x, y], is taken as it is: {"rect":"city.lit_tops.0"})
                               "modifiers":["cmd"]: with those keys held
   {"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[150,0]}   the user's drag from a control or rect, by points
   {"hold":"workbook:3","by":[0,-40]}   the same, the button still down (mid-drag); {"cmd":"key","keys":"escape","as":"user"} or a click ends it
@@ -284,8 +285,11 @@ class Instance:
 
     def control(self, ident, at):
         if isinstance(ident, dict):
-            # {"rect":"calendar.band.blocks.0.rect"}: a rect the state gives, [x, y, w, h].
+            # {"rect":"calendar.band.blocks.0.rect"}: a rect the state gives, [x, y, w, h]; or a
+            # point it gives, [x, y] ("city.lit_tops.0"), taken as it is.
             r = path_get(self.state(), ident["rect"])
+            if isinstance(r, list) and len(r) == 2:
+                return r[0], r[1]
             if not (isinstance(r, list) and len(r) == 4):
                 raise Failed(f"no rect at {ident['rect']}: {r}")
             return r[0] + r[2] * at[0], r[1] + r[3] * at[1]

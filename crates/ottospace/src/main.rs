@@ -4193,6 +4193,8 @@ impl Workspace {
                 "new_windows_menu_item": self.new_window_asks[2],
                 // File lists the code city read (`code_city`): none with the flag off, none at rest.
                 "city_reads": self.city_reads(),
+                // Frames the hovered beam's fade in the code city asked for: none under Reduce Motion.
+                "city_beam_frames": self.city_beam_frames(),
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
                 // Frames a working line's sweep asked for: none at rest, none under Reduce Motion.
