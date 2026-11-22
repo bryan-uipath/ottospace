@@ -94,6 +94,22 @@ pub(crate) fn program(name: &str) -> Result<String, String> {
     Ok(std::path::Path::new(&dir).join(name).to_string_lossy().into_owned())
 }
 
+/// What the login shell runs for an agent: its script, positional parameters and variables
+/// (`agents::shell_run`). `command`: `agent_commands`' text for the runner. In a test run the
+/// program is its stand-in, and a command's `PATH` is the stand-ins and the system's alone:
+/// a stand-in missing never finds an agent the user installed.
+pub(crate) fn shell_run(
+    name: &str,
+    args: &[String],
+    command: Option<&str>,
+) -> Result<(&'static str, Vec<String>, Option<(&'static str, String)>), String> {
+    let program = program(name)?;
+    let (script, argv) = agents::shell_run(&program, args, command);
+    let stand_ins = std::path::Path::new(&program).parent().filter(|_| std::env::var_os("OTTOSPACE_E2E").is_some());
+    let path = stand_ins.filter(|_| command.is_some()).map(|dir| ("PATH", format!("{}:/usr/bin:/bin", dir.display())));
+    Ok((script, argv, path))
+}
+
 /// How a conversation is named in the state reply: a task's id,
 /// or `<runner>:<session id>`.
 pub fn key(subject: &Subject) -> String {
@@ -121,6 +137,7 @@ impl Workspace {
         start: &Start,
         cwd: Option<&str>,
         brief: Option<&str>,
+        command_text: Option<&str>,
     ) -> Result<Option<String>, String> {
         folder_there(cwd)?;
         let task = subject.task();
@@ -129,7 +146,7 @@ impl Workspace {
         let brief = brief.as_ref().and_then(|path| path.to_str());
         // Drawn natively: the runner's structured mode, not its TUI.
         if self.model.talk_view(subject) == ottospace_core::transcript::View::Native {
-            return self.start_native(subject, start, cwd, brief);
+            return self.start_native(subject, start, cwd, brief, command_text);
         }
         let (command, session, model) = match start {
             Start::New(launch) => {
@@ -157,10 +174,12 @@ impl Workspace {
         let pass = task.map(|_| crate::pass::Live::mint()).transpose()?;
         let mut vars: Vec<(&str, String)> = task.map(|id| ("OTTOSPACE_TASK", id.to_string())).into_iter().collect();
         vars.extend(pass.as_ref().map(|pass| (crate::pass::VAR, pass.file().to_string_lossy().into_owned())));
+        let (script, argv, path) = shell_run(name, &args, command_text)?;
+        vars.extend(path);
         // No repository: the home folder, as the core says, not wherever ottospace was started.
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let cwd = cwd.or(home.as_deref());
-        let terminal = Terminal::run(&program(name)?, &args, &vars, cwd).map_err(|err| format!("{name}: {err}"))?;
+        let terminal = Terminal::run(script, argv, &vars, cwd).map_err(|err| format!("{name}: {err}"))?;
         let (given, cwd) = (session.clone(), cwd.map(str::to_string));
         let session = session.map(|(_, id)| id);
         let agent = Agent { terminal, since: Instant::now(), model, told: false, session: given, cwd, pass };
@@ -1006,6 +1025,26 @@ impl Workspace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The owner's `ja`, an alias for an assignment, before the program: zsh and sh run it with
+    /// each argument whole and never read, as the login shell does (`agents::shell_run`).
+    #[test]
+    fn a_runners_command_is_read_by_the_shell_and_its_arguments_are_not() {
+        let args = ["--resume".to_string(), "a b; echo no".to_string(), "$HOME".to_string()];
+        let show = "/bin/sh -c 'printf \"%s|\" \"$MARK\" \"$@\"' -";
+        let run = |shell: &str, before: &str, command: &str| {
+            let (script, argv) = agents::shell_run("claude", &args, Some(command));
+            let out = std::process::Command::new(shell)
+                .args(["-c", &format!("{before}{script}"), "ottospace-agent"])
+                .args(argv)
+                .output()
+                .unwrap();
+            String::from_utf8_lossy(&out.stdout).into_owned()
+        };
+        let want = "set|--resume|a b; echo no|$HOME|";
+        assert_eq!(run("/bin/zsh", "alias ja='MARK=set'\n", &format!("ja {show}")), want);
+        assert_eq!(run("/bin/sh", "", &format!("MARK=set {show}")), want);
+    }
 
     #[test]
     fn an_agent_starts_only_in_a_folder_that_is_there() {

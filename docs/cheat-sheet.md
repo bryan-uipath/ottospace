@@ -239,6 +239,7 @@ restart, and the rest applies at once:
   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
   "session_quiet_minutes": 3,
   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
+  "agent_commands": { "claude": "ja claude" },
   "capture_key": "ctrl-alt-cmd-space",
   "capture": { "keep_images": true, "ax": true },
   "apps": ["Microsoft Outlook", "Slack"],
@@ -253,7 +254,7 @@ A mistake in a key (one that does not exist, or a wrong value) shows in a toast:
 takes its default and the others still apply. If the file is not a JSON object at all, every
 setting takes its default.
 
-`sessions`: `false` reads no agent session files. `session_dirs` names where Claude Code and Codex keep them, if not `~/.claude` and `~/.codex`. `session_quiet_minutes`: a task adopted from a session moves to Needs you after the session has been quiet this long (default 3; 0 never). `agent_models`: the models `@` offers after each runner, as its CLI names them, in place of the built-in list.
+`sessions`: `false` reads no agent session files. `session_dirs` names where Claude Code and Codex keep them, if not `~/.claude` and `~/.codex`. `session_quiet_minutes`: a task adopted from a session moves to Needs you after the session has been quiet this long (default 3; 0 never). `agent_models`: the models `@` offers after each runner, as its CLI names them, in place of the built-in list. `agent_commands`: what your shell runs in place of a runner's program (`ja claude`: an alias works); only the file sets it.
 
 `apps`: the pinned apps, by name or bundle path. `apps_hidden`: Dock apps not to suggest. Pin, Unpin and Hide in Apps write these two and leave the rest of the file as it is. `suggest_dock_apps`: `false` lists no Dock apps.
 

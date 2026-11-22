@@ -3572,12 +3572,14 @@ pub enum Effect {
     /// Start `task`'s agent in a terminal for the right drawer, in `cwd` (none: the home
     /// folder), and answer `AgentStarted` or `AgentExited`. `brief`: the task's folder in the
     /// materials folder, if it has captures. The shell makes the session's id and asks
-    /// `agents` for the command: nothing else goes into it.
+    /// `agents` for the command: nothing else goes into it. `command`: what the user's shell
+    /// runs in place of the runner's program (`agent_commands`).
     StartAgent {
         task: Subject,
         start: agents::Start,
         cwd: Option<String>,
         brief: Option<String>,
+        command: Option<String>,
     },
     /// End `task`'s agent, and answer `AgentExited`.
     StopAgent {
@@ -4042,6 +4044,10 @@ pub struct Model {
     talk_titles: Vec<(String, String, String)>,
     #[serde(skip)]
     models: agents::Models,
+    /// What the user's shell runs in place of each runner's program (`agent_commands`): never in
+    /// the state, it may hold a secret.
+    #[serde(skip)]
+    agent_commands: std::collections::BTreeMap<RunnerId, String>,
     #[serde(skip)]
     default_agent: Option<String>,
     /// The conversations drawn natively, with their transcripts and drafts (`chat`).
@@ -4257,6 +4263,7 @@ impl Default for Model {
             left: (Vec::new(), None),
             talk_titles: Vec::new(),
             models: agents::Models::default(),
+            agent_commands: Default::default(),
             default_agent: None,
             chats: Vec::new(),
             btw_next: 0,
@@ -7249,7 +7256,7 @@ impl Model {
                     let start = Some(&subject).filter(|s| !self.agent_runs(s)).and_then(|s| self.agent_start(s));
                     if let Some((start @ agents::Start::Resume { .. }, cwd)) = start {
                         self.starting.push((subject.clone(), None));
-                        effects.push(Effect::StartAgent { task: subject, start, cwd, brief: None });
+                        effects.push(self.start_effect(subject, start, cwd, None));
                     }
                 }
             }
@@ -7819,7 +7826,19 @@ impl Model {
         };
         let brief = brief.filter(|_| runner.is_some());
         self.starting.push((subject.clone(), runner));
-        effects.push(Effect::StartAgent { task: subject, start, cwd, brief });
+        effects.push(self.start_effect(subject, start, cwd, brief));
+    }
+
+    /// `StartAgent`, with what the user's shell runs for its runner (`agent_commands`).
+    pub(crate) fn start_effect(
+        &self,
+        task: Subject,
+        start: agents::Start,
+        cwd: Option<String>,
+        brief: Option<String>,
+    ) -> Effect {
+        let command = self.agent_commands.get(&start.runner()).cloned();
+        Effect::StartAgent { task, start, cwd, brief, command }
     }
 
     /// A session became a task's: its conversation, open or with an agent running, is the
@@ -9603,7 +9622,13 @@ impl Model {
     /// `settings.json` read again: right, what applies as the app runs is told again; wrong,
     /// the last good settings stay. The toast says which (`settings_line`).
     fn settings_read(&mut self, text: &str, written: bool, effects: &mut Vec<Effect>) {
+        let first = self.settings_file.started().is_none();
         let settings = self.settings_file.read(text, written);
+        // At start what is right key by key applies, as the shell's own settings do: a wrong key
+        // elsewhere must not start the plain program (another account, for `ja claude`).
+        if let Some(started) = self.settings_file.started().filter(|_| first && settings.is_none()) {
+            self.agent_commands = agent_commands(started);
+        }
         // A dismissed line that is fixed, or says something else now, is dismissed no more.
         let line = self.settings_file.line();
         use crate::notice::Kind::{SettingsProblem, SettingsRestart, SettingsRetired};
@@ -9622,6 +9647,7 @@ impl Model {
         let shows = settings.conversation_view.unwrap_or(crate::settings::DEFAULT_VIEW);
         let default = settings.default_agent.clone();
         self.act(Action::SetAgents { claude, codex, default, shows }, effects);
+        self.agent_commands = agent_commands(&settings);
         let (notify, links_only) = (settings.calendar_notify.unwrap_or(true), settings.calendar_notify_for);
         let links_only = links_only == Some(crate::settings::NotifyFor::Links);
         let (hide_free, colors) = (settings.calendar_hide_free.unwrap_or(false), settings.color_rules());
@@ -10108,6 +10134,12 @@ impl Model {
             talk.keys = false;
         }
     }
+}
+
+/// `agent_commands` by runner: the settings checked each key.
+fn agent_commands(settings: &crate::settings::Settings) -> std::collections::BTreeMap<RunnerId, String> {
+    let commands = settings.agent_commands.iter().flatten();
+    commands.filter_map(|(name, text)| Some((RunnerId::named(name)?, text.clone()))).collect()
 }
 
 #[cfg(test)]
@@ -15629,7 +15661,7 @@ mod tests {
     /// `claude --resume <id>` (or Codex's) for `subject`, in `cwd`.
     fn resumed(subject: Subject, runner: &str, id: &str, cwd: &str) -> Effect {
         let start = agents::Start::Resume { runner: RunnerId::named(runner).unwrap(), session: id.into() };
-        Effect::StartAgent { task: subject, start, cwd: Some(cwd.into()), brief: None }
+        Effect::StartAgent { task: subject, start, cwd: Some(cwd.into()), brief: None, command: None }
     }
 
     /// A session's space: no task, so nothing in front; ⌘⌥] / ⌘⌥[ still reach the transcript.
@@ -15898,6 +15930,47 @@ mod tests {
         // Its agent gone: the user's to look at.
         m.update(Action::AgentExited { task: Subject::Task(1) }.sent_by(Origin::System));
         assert_eq!(m.tasks.get(1).map(|task| task.state), Some(State::NeedsYou));
+    }
+
+    /// The owner: "i'd like to run 'ja claude' instead of 'claude'". `agent_commands` goes with
+    /// each start of its runner's agent, new or gone on with, read again at once; never in the state.
+    #[test]
+    fn a_runners_command_goes_with_each_start_of_it_and_never_into_the_state() {
+        const MINE: &str = "TOKEN=made-up-secret claude";
+        let mut m = conversations();
+        let read = |m: &mut Model, text: String| {
+            m.update(Action::SettingsRead { text, written: false }.sent_by(Origin::System));
+        };
+        read(&mut m, serde_json::json!({"agent_commands": {"claude": MINE}}).to_string());
+        let command = |effects: Vec<Effect>| match &effects[..] {
+            [Effect::StartAgent { command, .. }] => command.clone(),
+            _ => panic!("{effects:?}"),
+        };
+        let names = compose::Names { agents: vec!["codex".into()], skills: Vec::new() };
+        let known = compose::Known { names, ..Default::default() };
+        let line = |line: &str| Action::TaskFromLine { line: line.into(), known: known.clone(), open: false };
+        m.update(line("mine"));
+        m.update(line("theirs @codex"));
+        assert_eq!(command(started(&mut m, Action::TaskTalk { id: 1 })), Some(MINE.into()));
+        // Another runner's start: its own program.
+        assert_eq!(command(started(&mut m, Action::TaskTalk { id: 2 })), None);
+        // A listed session gone on with: the same command.
+        let open = Action::SessionOpen { runner: "claude".into(), id: IDLE.into() };
+        assert_eq!(command(started(&mut m, open)), Some(MINE.into()));
+        let state = serde_json::to_string(&m).unwrap();
+        assert!(!state.contains("made-up-secret") && !state.contains("agent_commands"), "{state}");
+        // Taken out of the file: the program again, with no restart.
+        read(&mut m, "{}".into());
+        m.update(line("again"));
+        assert_eq!(command(started(&mut m, Action::TaskTalk { id: 3 })), None);
+        // At start, a wrong key elsewhere does not undo it; a wrong file later keeps the last good.
+        let mut m = Model::default();
+        read(&mut m, serde_json::json!({"agent_commands": {"claude": MINE}, "typo": true}).to_string());
+        m.update(line("first"));
+        assert_eq!(command(started(&mut m, Action::TaskTalk { id: 1 })), Some(MINE.into()));
+        read(&mut m, "{,}".into());
+        m.update(line("second"));
+        assert_eq!(command(started(&mut m, Action::TaskTalk { id: 2 })), Some(MINE.into()));
     }
 
     /// The Tasks section closed: a session's conversation keeps the name and badge it had.
@@ -16525,6 +16598,7 @@ mod tests {
             start,
             cwd: cwd.map(str::to_string),
             brief: None,
+            command: None,
         };
         let codex = launch(RunnerId::Codex, Some("gpt-6-astra"), "fix zoom");
         assert_eq!(started(&mut m, Action::TaskTalk { id: 1 }), [asked(1, codex, Some("/code/app"))]);
@@ -16860,7 +16934,13 @@ mod tests {
         // empty tab; nothing the user had changes.
         let launch = agents::Launch { runner: RunnerId::Claude, model: None, title: "fix zoom".into() };
         let start = agents::Start::New(launch);
-        let agent = Effect::StartAgent { task: Subject::Task(1), start, cwd: Some("/code/app".into()), brief: None };
+        let agent = Effect::StartAgent {
+            task: Subject::Task(1),
+            start,
+            cwd: Some("/code/app".into()),
+            brief: None,
+            command: None,
+        };
         assert_eq!(m.update(Action::ComposeSubmit { open: true }), [agent]);
         assert_eq!((m.compose.as_ref().map(Field::text), m.tab_task(), m.mode()), (None, Some(1), Mode::Talk));
         assert_eq!((m.tabs.len(), m.layout.is_none(), m.tabs[0].layout.is_none()), (2, true, true));

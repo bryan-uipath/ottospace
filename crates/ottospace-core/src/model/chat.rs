@@ -381,7 +381,7 @@ impl Model {
         }
         if let Some((start @ agents::Start::Resume { .. }, cwd)) = self.agent_start(&subject) {
             self.starting.push((subject.clone(), None));
-            effects.push(Effect::StartAgent { task: subject, start, cwd, brief: None });
+            effects.push(self.start_effect(subject, start, cwd, None));
         }
     }
 

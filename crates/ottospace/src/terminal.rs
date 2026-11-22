@@ -274,14 +274,12 @@ impl Terminal {
         Self::start(shell, vars, cwd, history)
     }
 
-    /// Runs `program` with `args` through the user's login shell, for its `PATH`:
-    /// `$SHELL -lic 'exec "$@"' ottospace-agent <program> <args…>`. The script is fixed text;
-    /// the program and each argument are positional parameters, never read by the shell.
+    /// Runs an agent through the user's login shell, for its `PATH` and aliases:
+    /// `$SHELL -lic <script> ottospace-agent <argv…>`, as `agents::shell_run` makes them. The
+    /// script is fixed text; each argument is a positional parameter, never read by the shell.
     /// With `$OTTOSPACE_SHELL` (tests), that shell runs it without reading a profile.
-    pub fn run(program: &str, args: &[String], vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
-        let mut argv = vec![program.to_string()];
-        argv.extend(args.iter().cloned());
-        Self::script("exec \"$@\"", "ottospace-agent", argv, vars, cwd)
+    pub fn run(script: &str, argv: Vec<String>, vars: &[(&str, String)], cwd: Option<&str>) -> io::Result<Self> {
+        Self::script(script, "ottospace-agent", argv, vars, cwd)
     }
 
     /// Runs the user's editor on `file`, as `run` runs a program: `$VISUAL`, else `$EDITOR`,
@@ -1020,6 +1018,13 @@ fn cut_history<T>(term: &Term<T>, from: Line, rows: Vec<(String, bool)>) -> Vec<
 impl Terminal {
     /// Sends `signal` to the program it runs (SIGHUP to hang up, SIGKILL to end it), keeping the
     /// terminal to see when the program is gone (`exited`).
+    /// The process group in front, if not the program's own: a job of its shell, as an agent
+    /// started by `agent_commands`' text, whose shell does not exec it.
+    pub fn job(&self) -> Option<i32> {
+        let group = self.pty.as_ref().and_then(|pty| process::foreground(pty.as_fd()))?;
+        (group != self.child as i32).then_some(group)
+    }
+
     pub fn signal(&self, signal: i32) {
         if !self.exited() {
             // SAFETY: plain integers; the child is ours and not reaped while `exited` is false.

@@ -9260,6 +9260,51 @@ fn a_saved_tab_is_a_workbook_kept_between_runs() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner: "i'd like to run 'ja claude' instead of 'claude'". `agent_commands`' text is run by
+/// the shell in place of the program, in the terminal view and the native one: an assignment in
+/// it reaches the stand-in `claude`, its arguments unchanged. Never in the state.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_runners_command_from_the_settings_starts_its_agent_in_either_view() {
+    use std::os::unix::fs::PermissionsExt;
+    let root = support::temp(&format!("ottospace-e2e-command-{}", std::process::id()));
+    let (bin, repos) = (root.join("bin"), root.join("repos"));
+    fake_repo(&repos.join("app"));
+    std::fs::create_dir_all(&bin).unwrap();
+    // It writes `$MARK` and its arguments, one a line, to `<view>.argv`, then echoes what it is sent.
+    let record = root.join("record");
+    let script = format!(
+        "#!/bin/sh\n{{ printf '%s\\n' \"$MARK\"; printf '%s\\n' \"$@\"; }} > '{0}'.$VIEW.part && mv '{0}'.$VIEW.part '{0}'.$VIEW\necho 'fake claude ready'\nexec cat\n",
+        record.display()
+    );
+    std::fs::write(bin.join("claude"), script).unwrap();
+    std::fs::set_permissions(bin.join("claude"), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let made = |view: &str| -> PathBuf {
+        let command = format!("VIEW={view} MARK=made-up-secret claude");
+        let settings =
+            json!({ "repos": repos_in(&repos), "conversation_view": view, "agent_commands": {"claude": command} });
+        user_folder(&format!("command-{view}"), &settings.to_string())
+    };
+    for view in ["terminal", "native"] {
+        let home = made(view);
+        let env = [("OTTOSPACE_AGENTS_DIR", bin.to_str().unwrap()), ("OTTOSPACE_HOME", home.to_str().unwrap())];
+        let otto = Otto::launch_with(&format!("command-{view}"), &env);
+        otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
+        otto.call(json!({"cmd": "section", "section": "tasks"}));
+        otto.start_task(1);
+        let path = record.with_extension(view);
+        let lines = otto.wait_for("the stand-in's record", |_| std::fs::read_to_string(&path).ok());
+        let lines: Vec<&str> = lines.lines().collect();
+        assert_eq!(lines[0], "made-up-secret", "{view}: the command's assignment reached it");
+        assert!(lines.contains(&"--session-id"), "{view}: its arguments as before: {lines:?}");
+        let state = otto.call(json!({"cmd": "state"})).to_string();
+        assert!(!state.contains("made-up-secret") && !state.contains("agent_commands"), "{view}");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_workspace_stays() {

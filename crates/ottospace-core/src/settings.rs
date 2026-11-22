@@ -53,6 +53,7 @@ impl RepoEntry {
 ///   "session_dirs": { "claude": ["~/.claude"], "codex": "~/.codex" },
 ///   "session_quiet_minutes": 3,
 ///   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
+///   "agent_commands": { "claude": "ja claude" },
 ///   "conversation_view": "native",
 ///   "capture_key": "ctrl-alt-cmd-space",
 ///   "capture": { "keep_images": true, "ax": true },
@@ -122,6 +123,10 @@ pub struct Settings {
     /// runner's CLI takes them. `@claude-opus-5-5`, `@codex-gpt-6-astra`.
     #[serde(default)]
     pub agent_models: Option<AgentModels>,
+    /// What the user's shell runs in place of a runner's program, its arguments after it:
+    /// `{"claude": "ja claude"}`. Shell text, so an alias works. Only this file sets it.
+    #[serde(default)]
+    pub agent_commands: Option<std::collections::BTreeMap<String, String>>,
     /// The agent a task with no `@agent` starts with: a name `@` takes. Default: `claude`.
     #[serde(default)]
     pub default_agent: Option<String>,
@@ -348,6 +353,15 @@ impl Settings {
         if let Some(id) = settings.agent_models.as_ref().and_then(AgentModels::wrong) {
             return Err(not_a_model(&format!("{id:?}")));
         }
+        for (runner, command) in settings.agent_commands.iter().flatten() {
+            if crate::runner::RunnerId::named(runner).is_none() {
+                return Err(format!("{runner:?} is not `claude` or `codex`"));
+            }
+            // On one line: the arguments follow it on the same line, or they are lost.
+            if command.trim().is_empty() || command.chars().any(char::is_control) {
+                return Err(format!("{runner}'s command must be one line, as \"ja {runner}\""));
+            }
+        }
         // Never names the link: it may hold a secret.
         if let Some(feed) = settings.calendar_ics.as_deref() {
             let path = feed.starts_with('/') || feed.starts_with("~/");
@@ -418,6 +432,12 @@ impl Settings {
                 wrong.extend((!named).then(|| format!("agent_models: {}", not_a_model(&said))));
                 named
             });
+        }
+        // Its text may be private: a wrong shape is said without it.
+        let commands = keys.get("agent_commands");
+        if commands.is_some_and(|c| !c.as_object().is_some_and(|map| map.values().all(serde_json::Value::is_string))) {
+            keys.remove("agent_commands");
+            wrong.push("agent_commands: each runner's command as text: { \"claude\": \"ja claude\" }".into());
         }
         // So does a flag that is wrong: the other flags stay. A retired one is dropped, and only
         // warned of (`retired_flags`): it is no mistake.
@@ -509,6 +529,11 @@ impl Watch {
         Some(settings)
     }
 
+    /// What was read at start, key by key (`Settings::read`). `None`: nothing was read yet.
+    pub fn started(&self) -> Option<&Settings> {
+        self.started.as_ref()
+    }
+
     pub fn errors(&self) -> usize {
         self.problems.len()
     }
@@ -598,6 +623,8 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         // Told to the core again on each good read.
         session_quiet_minutes: _,
         agent_models,
+        // Told to the core again on each good read.
+        agent_commands: _,
         default_agent: _,
         conversation_view: _,
         agent_mode: _,
@@ -971,6 +998,29 @@ mod tests {
         assert_eq!(wrong, ["agent_models: 7 is not a model name: letters, digits, `.`, `-` and `_`, at most 64"]);
         let (settings, wrong) = Settings::read(r#"{ "agent_models": { "gemini": [] } }"#);
         assert_eq!((settings.agent_models, wrong.len()), (None, 1));
+    }
+
+    #[test]
+    fn agent_commands_name_a_runner_and_one_line_each() {
+        let (settings, wrong) = Settings::read(r#"{ "agent_commands": { "claude": "ja claude" } }"#);
+        let commands = settings.agent_commands.unwrap();
+        assert_eq!(
+            (commands.get("claude").map(String::as_str), commands.len(), wrong.len()),
+            (Some("ja claude"), 1, 0)
+        );
+        // A runner nobody knows, an empty command or one on two lines: the key is left out, said once.
+        for (text, said) in [
+            (r#"{ "agent_commands": { "gemini": "ja gemini" }, "sessions": false }"#, r#""gemini" is not `claude`"#),
+            (r#"{ "agent_commands": { "codex": " " }, "sessions": false }"#, "codex's command must be one line"),
+            (r#"{ "agent_commands": { "claude": "ja\nclaude" }, "sessions": false }"#, "claude's command must be"),
+            (r#"{ "agent_commands": { "claude": ["ja", "claude"] }, "sessions": false }"#, "as text"),
+            (r#"{ "agent_commands": "TOKEN=private claude", "sessions": false }"#, "as text"),
+        ] {
+            let (settings, wrong) = Settings::read(text);
+            assert_eq!((settings.agent_commands, settings.sessions, wrong.len()), (None, Some(false), 1), "{text}");
+            assert!(wrong[0].starts_with("agent_commands: ") && wrong[0].contains(said), "{wrong:?}");
+            assert!(!wrong[0].contains("private"), "its text is never said: {wrong:?}");
+        }
     }
 
     #[test]
