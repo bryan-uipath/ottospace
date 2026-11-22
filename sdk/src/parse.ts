@@ -1260,6 +1260,10 @@ function sessionRow(value: unknown, at: string): SessionRow {
     pane: orNull(num)(o.pane, `${at}.pane`),
     quoted_title: orNull(str)(o.quoted_title, `${at}.quoted_title`),
     model: orNull(str)(o.model, `${at}.model`),
+    waits_for: orNull(oneOf(["permission", "question", "input", "turn"] as const, "what a session waits for"))(
+      o.waits_for,
+      `${at}.waits_for`,
+    ),
   };
 }
 
@@ -1454,6 +1458,7 @@ function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
   if (value === "overlay_panels" || value === "decisions" || value === "code_city") return value;
+  if (value === "session_waits") return value;
   throw wrong(at, "a feature", value);
 }
 

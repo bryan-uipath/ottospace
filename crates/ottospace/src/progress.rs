@@ -166,8 +166,16 @@ pub struct SessionCard(pub Row);
 impl Render for SessionCard {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let row = &self.0;
-        let state = if row.active { row.doing.clone().unwrap_or_else(|| "active".into()) } else { "idle".into() };
-        let color = if row.active { theme::task(Group::Running) } else { theme::BORDER_STRONG };
+        // A wait says why ("needs you · permission"), quiet or not.
+        let state = match (row.waits_for, row.active) {
+            (None, false) => "idle".into(),
+            _ => row.doing.clone().unwrap_or_else(|| "active".into()),
+        };
+        let color = match (row.waits_for, row.active) {
+            (Some(_), _) => theme::task(Group::NeedsYou),
+            (None, true) => theme::task(Group::Running),
+            (None, false) => theme::BORDER_STRONG,
+        };
         frame(row.title().to_string(), color, state)
             .child(fact("Repository", row.name.clone()))
             .child(fact("Runner", row.runner.clone()))

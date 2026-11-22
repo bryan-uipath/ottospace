@@ -129,6 +129,23 @@ fn claude_lists_sessions_started_in_a_directory_or_below() {
 }
 
 #[test]
+fn claude_says_what_a_process_waits_on_the_user_for_by_its_record() {
+    use ottospace_core::sessions::WaitsFor::{Input, Permission, Question};
+    let claude = claude();
+    let of = |pid| claude.process(pid).map(|p| (p.id, p.waits_for));
+    let id = |n: u32| format!("33333333-3333-4333-8333-33333333330{n}");
+    assert_eq!(of(4300), Some((id(1), Some(Permission))));
+    assert_eq!(of(4301), Some((id(2), Some(Question))));
+    // A dialog the user opened waits on nobody; a word not known yet is some input.
+    assert_eq!(of(4302), Some((id(3), None)));
+    assert_eq!(of(4303), Some((id(4), Some(Input))));
+    // Busy: no wait. An id that is not a name is no session. No record: nothing.
+    assert_eq!(of(4242), Some(("11111111-1111-4111-8111-111111111111".to_string(), None)));
+    assert_eq!((of(4304), of(1)), (None, None));
+    assert_eq!(codex().process(4300), None, "Codex records no process");
+}
+
+#[test]
 fn an_empty_or_relative_directory_is_an_error_not_every_session() {
     let (claude, codex) = (claude(), codex());
     let runners: [&dyn SessionReader; 2] = [&claude, &codex];

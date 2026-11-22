@@ -110,6 +110,77 @@ pub struct Link {
     pub state: Option<State>,
 }
 
+/// Why a session in a terminal waits on the user. Shown the same for every runner; a runner that
+/// cannot say more gives none of the first three, and its session shows `Turn` once quiet.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitsFor {
+    /// To run a tool, reach the network, or the like.
+    Permission,
+    /// An answer to its question.
+    Question,
+    /// Some other input its runner names.
+    Input,
+    /// Its turn ended and it has been quiet since: the next prompt is the user's.
+    Turn,
+}
+
+impl WaitsFor {
+    pub fn label(self) -> &'static str {
+        match self {
+            WaitsFor::Permission => "permission",
+            WaitsFor::Question => "question",
+            WaitsFor::Input => "input",
+            WaitsFor::Turn => "your turn",
+        }
+    }
+}
+
+/// A session whose runner runs in a terminal pane of ours, as the shell found it there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InPane {
+    pub pane: PaneId,
+    pub runner: String,
+    pub id: String,
+    /// When its file last changed (milliseconds since 1970).
+    #[serde(default)]
+    pub last_activity: Option<u64>,
+    /// What it waits for now, when its runner says so (`Disk::waits`). None: not said.
+    #[serde(default)]
+    pub waits_for: Option<WaitsFor>,
+}
+
+impl InPane {
+    /// Why it needs the user at `now`: its runner's reason, else its turn, once its file has been
+    /// quiet `quiet_ms` (the rule adopted tasks follow). `quiet_ms` 0: only a runner's reason.
+    pub fn needs(&self, now: u64, quiet_ms: u64) -> Option<WaitsFor> {
+        let quiet = quiet_ms > 0 && self.last_activity.is_some_and(|at| now.saturating_sub(at) >= quiet_ms);
+        self.waits_for.filter(|w| *w != WaitsFor::Turn).or(quiet.then_some(WaitsFor::Turn))
+    }
+}
+
+/// What is kept of the sessions the shell found in panes: of a known runner, with a plain id,
+/// each session and each pane once, by pane (⌘J takes the first).
+pub fn in_panes_kept(found: Vec<InPane>) -> Vec<InPane> {
+    let mut kept: Vec<InPane> = Vec::new();
+    for at in found {
+        let plain = !at.id.is_empty() && at.id.len() <= 128 && !at.id.chars().any(char::is_control);
+        let again = kept.iter().any(|k| (&k.runner, &k.id) == (&at.runner, &at.id) || k.pane == at.pane);
+        if RunnerId::named(&at.runner).is_some() && plain && !again {
+            kept.push(at);
+        }
+    }
+    kept.sort_by_key(|at| at.pane);
+    kept.truncate(MAX_FOUND);
+    kept
+}
+
+/// What a task adopted from a session that waits on the user should be: needs you, at once.
+/// `link` as in `follow`: a state someone else set since is theirs to keep.
+pub fn waiting(link: Option<State>, state: State) -> Option<State> {
+    (link == Some(state) && state != State::NeedsYou).then_some(State::NeedsYou)
+}
+
 /// A session as the shell read it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Found {
@@ -168,6 +239,8 @@ pub struct Row {
     pub quoted_title: Option<String>,
     /// The model in short: `opus-4.7`, `gpt-6`.
     pub model: Option<String>,
+    /// Why it needs the user, while it runs in one of our terminal panes (`session_waits`).
+    pub waits_for: Option<WaitsFor>,
 }
 
 impl Row {
@@ -459,6 +532,57 @@ mod tests {
     }
 
     #[test]
+    fn a_waiting_session_needs_you_at_once_unless_someone_else_set_its_task() {
+        assert_eq!(waiting(Some(State::Running), State::Running), Some(State::NeedsYou));
+        assert_eq!(waiting(Some(State::Captured), State::Captured), Some(State::NeedsYou));
+        assert_eq!(waiting(Some(State::NeedsYou), State::NeedsYou), None, "once");
+        assert_eq!(waiting(Some(State::Running), State::Parked), None, "the user's hold stays");
+        assert_eq!(waiting(None, State::Running), None);
+    }
+
+    #[test]
+    fn a_session_in_a_pane_needs_you_for_its_runners_reason_else_once_quiet() {
+        let at = |waits_for, last| InPane {
+            pane: 1,
+            runner: "codex".into(),
+            id: "a".into(),
+            last_activity: last,
+            waits_for,
+        };
+        let now = 10 * QUIET_MS;
+        // No reason from its runner: its turn, once quiet, for any runner alike.
+        assert_eq!(at(None, Some(now - QUIET_MS)).needs(now, QUIET_MS), Some(WaitsFor::Turn));
+        assert_eq!(at(None, Some(now - QUIET_MS + 1)).needs(now, QUIET_MS), None);
+        assert_eq!(at(None, None).needs(now, QUIET_MS), None, "never known to write: not quiet");
+        assert_eq!(at(None, Some(0)).needs(now, 0), None, "the setting's 0: never");
+        // Its runner's reason: at once, quiet or not.
+        assert_eq!(at(Some(WaitsFor::Permission), Some(now)).needs(now, QUIET_MS), Some(WaitsFor::Permission));
+        assert_eq!(at(Some(WaitsFor::Question), Some(now)).needs(now, 0), Some(WaitsFor::Question));
+        assert_eq!(at(Some(WaitsFor::Turn), Some(now)).needs(now, QUIET_MS), None, "a turn is the quiet rule's");
+    }
+
+    #[test]
+    fn sessions_in_panes_kept_are_of_a_known_runner_with_a_plain_id_each_once() {
+        let at = |pane, runner: &str, id: &str| InPane {
+            pane,
+            runner: runner.into(),
+            id: id.into(),
+            last_activity: None,
+            waits_for: None,
+        };
+        let kept = in_panes_kept(vec![
+            at(1, "claude", "a"),
+            at(2, "claude", "a"),
+            at(1, "codex", "z"),
+            at(3, "gemini", "b"),
+            at(4, "claude", "c\u{1b}[31m"),
+            at(5, "claude", ""),
+            at(6, "codex", "d"),
+        ]);
+        assert_eq!(kept.iter().map(|k| k.id.as_str()).collect::<Vec<_>>(), ["a", "d"]);
+    }
+
+    #[test]
     fn a_row_is_named_by_its_title_else_its_repository() {
         let (runner, id, name) = ("claude".to_string(), "a".to_string(), "app".to_string());
         let row = Row {
@@ -471,6 +595,7 @@ mod tests {
             pane: None,
             quoted_title: None,
             model: None,
+            waits_for: None,
         };
         assert_eq!(row.title(), "app");
         assert_eq!(Row { quoted_title: Some("Fix the form".into()), ..row }.title(), "Fix the form");

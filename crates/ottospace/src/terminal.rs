@@ -433,6 +433,12 @@ impl Terminal {
         foreground.and_then(process::cwd).or_else(|| process::cwd(self.child as i32))
     }
 
+    /// The process in front of the shell, `None` at a prompt: a suspended job behind it is not.
+    pub fn front_pid(&self) -> Option<i32> {
+        let foreground = self.pty.as_ref().and_then(|pty| process::foreground(pty.as_fd()))?;
+        (foreground != self.child as i32).then_some(foreground)
+    }
+
     /// The shell's own directory, whatever program is in front of it.
     pub fn shell_cwd(&self) -> Option<String> {
         process::cwd(self.child as i32)

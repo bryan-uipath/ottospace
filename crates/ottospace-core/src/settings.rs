@@ -1337,7 +1337,7 @@ mod tests {
             wrong,
             [
                 "features: \"apps_section\" must be true or false",
-                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city"
+                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits"
             ]
         );
         assert!(Settings::parse(r#"{"features": {"tabs": true}}"#).unwrap_err().contains("marks, apps_section"));
@@ -1354,7 +1354,8 @@ mod tests {
             .with(crate::features::Feature::MultiMonitor, false)
             .with(crate::features::Feature::OverlayPanels, false)
             .with(crate::features::Feature::Decisions, false)
-            .with(crate::features::Feature::CodeCity, false);
+            .with(crate::features::Feature::CodeCity, false)
+            .with(crate::features::Feature::SessionWaits, false);
         assert_eq!(Settings::read(&set).0.features(), both);
         assert_eq!(with_feature("", "marks", false).unwrap(), "{\n  \"features\": {\n    \"marks\": false\n  }\n}\n");
         assert!(with_feature(r#"{"features": true}"#, "marks", true).unwrap_err().contains("not an object"));

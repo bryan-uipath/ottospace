@@ -170,7 +170,8 @@ export type Feature =
   | "multi_monitor"
   | "overlay_panels"
   | "decisions"
-  | "code_city";
+  | "code_city"
+  | "session_waits";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** The clone dialog and the clone on its way, in a test run. */
@@ -666,6 +667,8 @@ export interface SessionRow {
   quoted_title: string | null;
   /** The model in short: `opus-4.7`, `gpt-6`. */
   model: string | null;
+  /** Why it needs you, while it runs in a terminal pane (flag `session_waits`): its runner's reason, or `turn` once quiet. */
+  waits_for: "permission" | "question" | "input" | "turn" | null;
 }
 
 /** An app that is not running, in the Apps section. */

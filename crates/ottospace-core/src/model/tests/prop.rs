@@ -24,7 +24,7 @@ use crate::model::reorder::{Reorder, ReorderItem};
 use crate::progress;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::row_menu::MenuOf;
-use crate::sessions::{Link, Seen};
+use crate::sessions::{InPane, Link, Seen, WaitsFor};
 use crate::sneak_apps;
 use crate::transcript::{Event as Said, Outcome, Text, View};
 use crate::workbook::{self, History, Workbook, WorkbookId};
@@ -1320,6 +1320,21 @@ const MAKERS: &[Make] = &[
         Action::SessionsSeen { seen: (0..g.rng.below(4)).map(|_| seen(g)).collect() }
     },
     |g| {
+        let at = |g: &mut Gen| {
+            let (runner, id) = g.session();
+            let kinds = [
+                None,
+                Some(WaitsFor::Permission),
+                Some(WaitsFor::Question),
+                Some(WaitsFor::Input),
+                Some(WaitsFor::Turn),
+            ];
+            let (pane, last_activity, waits_for) = (g.pane(), g.rng.coin().then(|| g.time()), g.rng.pick(&kinds));
+            InPane { pane, runner, id, last_activity, waits_for }
+        };
+        Action::SessionsInPanes { found: (0..g.rng.below(3)).map(|_| at(g)).collect() }
+    },
+    |g| {
         let found = (0..g.rng.below(3)).map(|_| g.found()).collect();
         Action::SessionsAtWork { found }
     },
@@ -2158,6 +2173,16 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
     marks.shapes.iter().cloned().chain(typed).collect()
 }
 
+/// A waiting session counts once, as a task's or by itself; with its flag off, not at all.
+fn check_waits(m: &Model) -> Result<(), String> {
+    let (all, free) = (m.agents().needs_you, m.waits_unadopted().count());
+    ensure!(all >= free, "needs you {all}, fewer than the {free} waits");
+    ensure!(m.features.on(Feature::SessionWaits) || free == 0, "{free} waits counted with the flag off");
+    let adopted = m.waits_unadopted().filter(|(at, _)| m.tasks.adopted(&at.runner, &at.id)).count();
+    ensure!(adopted == 0, "{adopted} waits of a task's session counted besides its task");
+    Ok(())
+}
+
 /// Decisions: none with the flag off; while open, its card is the queue's first, the queue not
 /// empty, its one card pane in its one tab, "at of of" its title; closed, nothing of it is left.
 fn check_decisions(m: &Model) -> Result<(), String> {
@@ -2246,6 +2271,7 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(m.pane(*pane).is_some(), "a copy ask or always for pane {pane}, gone");
     }
     ensure!(m.copy_asks.values().all(|ask| !ask.too_large || ask.text.is_empty()), "a refused ask holds its text");
+    check_waits(m)?;
     check_slots(m)?;
     // With the overlays on, the panes' room never depends on the sidebar or the drawer being open.
     ensure!(!m.overlays() || !(m.sidebar_takes_room() || m.drawer_takes_room()), "an overlay takes the panes' room");
@@ -5865,6 +5891,7 @@ fn code(sent: &Envelope) -> String {
         "Known",
         "Found",
         "Seen",
+        "InPane",
         "Link",
         "Target",
         "Frame",
@@ -5911,6 +5938,7 @@ fn code(sent: &Envelope) -> String {
         ("content", "Content"),
         ("view", "TasksView"),
         ("range", "sessions::Range"),
+        ("waits_for", "WaitsFor"),
         ("runner", "RunnerId"),
         // A conversation's: `TaskStop { id: Task(1) }`.
         ("task", "Subject"),
@@ -6495,6 +6523,69 @@ fn seed_123_start_agent_from_a_tab_out_keeps_the_main_windows_tab() {
         Action::TabOut { tab: None }.into(),
         Action::Focus { pane: 1 }.sent_by(Origin::System),
         Action::TalkStart.into(),
+    ])
+    .unwrap();
+}
+
+/// Repos' overlay closed by a step kept its heads until the next step cleared them: a client's
+/// refused action then changed the model. They go in the step that closes it.
+#[test]
+fn seed_527_heads_read_with_repos_closed_are_not_kept() {
+    replay(&[
+        Action::SetRepos {
+            repos: vec![Repo {
+                name: "app".into(),
+                path: "/code/app".into(),
+                branch: Some("main".into()),
+                worktrees: vec![Worktree { name: "app-2".into(), path: "/code/app-2".into(), branch: None }],
+            }],
+        }
+        .sent_by(Origin::User),
+        set_features(&["agent_mode", "overlay_panels", "code_city"]).sent_by(Origin::User),
+        Action::FocusList.sent_by(Origin::User),
+        Action::SetHeads { heads: vec![("/code/app".into(), 80), ("/code/app-2".into(), 240)], at: 988, calm: true }
+            .sent_by(Origin::System),
+        Action::Open { kind: Kind::Empty, axis: Axis::Down, beside: None }.sent_by(Origin::User),
+        Action::CalendarRetry.sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
+/// A waiting session's pane in another tab: a click on its row (from a timer here) showed that
+/// tab. A row's click stays in the tab on show; only ⌘J goes to another.
+#[test]
+fn seed_513_a_waiting_sessions_row_does_not_change_the_tab() {
+    let at = |id: &str, waits_for, pane| InPane {
+        pane,
+        runner: "claude".into(),
+        id: id.into(),
+        last_activity: None,
+        waits_for,
+    };
+    let found = |id: &str, last_activity, active| Found {
+        runner: "claude".into(),
+        id: id.into(),
+        cwd: "/code/app".into(),
+        repo: "/code/app".into(),
+        started: Some(1),
+        last_activity,
+        active,
+        station: None,
+        label: None,
+        title: None,
+        model: None,
+        held: false,
+    };
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::SetSessions { found: vec![found("s1", Some(999000), true), found("s2", Some(5), false)], day: 0 }
+            .sent_by(Origin::User),
+        Action::SelectTab { index: 1 }.sent_by(Origin::User),
+        Action::SessionsInPanes {
+            found: vec![at("s9", Some(WaitsFor::Input), 7), at("s2", Some(WaitsFor::Permission), 1)],
+        }
+        .sent_by(Origin::User),
+        Action::SessionClick { runner: "claude".into(), id: "s2".into() }.sent_by(Origin::System),
     ])
     .unwrap();
 }
