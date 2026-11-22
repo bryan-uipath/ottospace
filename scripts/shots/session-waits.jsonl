@@ -1,6 +1,7 @@
 # session_waits: a Claude Code asking permission and a Codex quiet past its turn, each a stand-in
 # (`sleep` under the CLI's name) in a terminal pane: Elsewhere's rows in the needs-you colour,
 # the status bar's `needs you`, and the hover card saying why. Before: the flag is unknown.
+{"cmd": "split"}
 {"cmd": "split", "axis": "right"}
 {"settle": 1000}
 {"cmd": "wait", "pane": 1, "pattern": "\\$"}
