@@ -613,6 +613,16 @@ mod tests {
         assert_eq!(m.compose_status().as_deref(), Some("↵ discards the capture · Esc keeps it"));
         assert_eq!(m.update(Action::ComposeSubmit { open: false }), [dropped(None)]);
         assert!(m.capture.is_none() && m.compose.is_none() && m.tasks.list.is_empty());
+        // Unless a list's row is up: ↵ takes that, and the line says so.
+        let mut listed = terminal_and_app();
+        let repo = crate::repos::Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![] };
+        listed.update(Action::SetRepos { repos: vec![repo] }.sent_by(Origin::System));
+        start(&mut listed, None);
+        listed.update(Action::AnnotateLeave { title: true });
+        typed(&mut listed, "fix >ap");
+        listed.update(Action::CaptureCancel);
+        assert!(bar(&listed).asked);
+        assert_eq!(listed.compose_status().as_deref(), Some("↵ takes >app · Esc closes the list"));
         // Esc says no, and so does ×. Typing is no answer: the question goes.
         start(&mut m, None);
         m.update(Action::AnnotateLeave { title: true });

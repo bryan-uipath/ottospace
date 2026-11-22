@@ -6,11 +6,11 @@
 use std::path::PathBuf;
 
 use gpui::{
-    Bounds, Context, Div, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions,
+    App, Bounds, Context, Div, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions,
     Pixels, Point, Window, div, prelude::*, px, rgb,
 };
 use ottospace_core::complete::{self, Dropdown, Row};
-use ottospace_core::model::{Pointed, TAG_KEYS, TerminalInfo};
+use ottospace_core::model::{Pointed, TAG_KEYS, TerminalInfo, fit_status};
 use ottospace_core::{Action, Origin, theme};
 
 use crate::{Workspace, dialog, ui};
@@ -18,8 +18,6 @@ use crate::{Workspace, dialog, ui};
 /// The dropdown's width, and a row's height: the shell knows its room from them.
 const MENU_WIDTH: f32 = 340.;
 const ROW: f32 = 26.;
-/// A character of the status line's size, a little wider than most: what it is measured by.
-const STATUS_CHAR: f32 = 6.4;
 
 /// A tag's colour, by its mark: in the line, and on the dropdown's kind marks.
 pub fn tag_color(mark: char) -> u32 {
@@ -430,11 +428,20 @@ impl Workspace {
                 cx.stop_propagation();
             }),
         );
-        // The room it had when last drawn, by a generous width a character of its size takes.
-        let width = f32::from(self.field.borrow().status);
-        let fits = |text: &str| width <= 0. || text.chars().count() as f32 * STATUS_CHAR <= width;
-        let status_text = self.model.compose_status_fitting(fits).unwrap_or_default();
+        // As it fit its room when last drawn; measured again as drawn, and drawn again if it changed.
+        let full = self.model.compose_status().unwrap_or_default();
+        let status_text =
+            Some(self.field.borrow().status.clone()).filter(|(of, _)| *of == full).map_or(full.clone(), |(_, fit)| fit);
         let room = self.field.clone();
+        let measure = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut App| {
+            let width = f32::from(bounds.size.width);
+            let fit = fit_status(&full, |text| crate::status_bar::width(window, text) <= width);
+            let mut room = room.borrow_mut();
+            if room.status != (full.clone(), fit.clone()) {
+                room.status = (full, fit);
+                window.refresh();
+            }
+        };
         // One line: what ↵ does with the line as it is, then the other keys.
         let status = div()
             .flex()
@@ -450,11 +457,7 @@ impl Workspace {
                     .flex_1()
                     .min_w_0()
                     .truncate()
-                    .child(
-                        gpui::canvas(move |bounds, _, _| room.borrow_mut().status = bounds.size.width, |_, _, _, _| {})
-                            .absolute()
-                            .size_full(),
-                    )
+                    .child(gpui::canvas(measure, |_, _, _, _| {}).absolute().size_full())
                     .child(status_text),
             )
             .child(tags);

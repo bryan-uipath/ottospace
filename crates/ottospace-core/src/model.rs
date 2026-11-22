@@ -288,7 +288,8 @@ struct Taken {
 }
 
 /// `status` with its trailing ` · ` parts left off, last first, until `fits` says it fits; the
-/// first part stays whatever its length (the shell cuts that one, if it must).
+/// first part, what ↵ does, stays whatever its length (the shell cuts that one, if it must).
+/// `↵ starts @claude in app · ⇧↵ later · Esc` → `↵ starts @claude in app · ⇧↵ later`.
 pub fn fit_status(status: &str, fits: impl Fn(&str) -> bool) -> String {
     let parts: Vec<&str> = status.split(" · ").collect();
     (1..=parts.len()).rev().map(|n| parts[..n].join(" · ")).find(|text| fits(text)).unwrap_or_else(|| parts[0].into())
@@ -8288,8 +8289,8 @@ impl Model {
     /// closes the list`, `↵ files it for later · ⌘↵ starts it now · Esc`.
     pub fn compose_status(&self) -> Option<String> {
         let plan = self.compose_plan()?;
-        // A draft's "Discard?": ↵ discards it (`capture_model`), Esc keeps it.
-        if self.capture.as_ref().is_some_and(|draft| draft.asked) {
+        // A draft's "Discard?": ↵ discards it (`capture_model`), Esc keeps it; a list's row first.
+        if self.capture.as_ref().is_some_and(|draft| draft.asked) && self.enter() == Enter::Add {
             return Some("↵ discards the capture · Esc keeps it".into());
         }
         if let Some(menu) = self.dropdown() {
@@ -8327,13 +8328,6 @@ impl Model {
         // Not "this workspace" while the box goes to another: its pinned line names that one.
         let takes = if self.compose_binds() && !self.compose_elsewhere() { BINDS_TOO } else { "" };
         Some(format!("{first}↵ starts @{} {place}{takes} · ⇧↵ later · Esc", plan.agent))
-    }
-
-    /// The status line as it fits its room (`fits`): never cut inside a word. Its trailing parts go
-    /// first, one at a time, "Esc" and then the other keys; what ↵ does always stays.
-    /// `↵ starts @claude in app · ⇧↵ later · Esc` → `↵ starts @claude in app · ⇧↵ later`.
-    pub fn compose_status_fitting(&self, fits: impl Fn(&str) -> bool) -> Option<String> {
-        Some(fit_status(&self.compose_status()?, fits))
     }
 
     /// The tags a line may hold, while the box is open and its sheet shows ("? tags", ⌘/). The
@@ -15196,7 +15190,10 @@ mod tests {
         assert_eq!(fit_status(said, room(5)), "↵ starts @claude in your home folder");
         let mut m = Model::default();
         m.update(Action::OpenCompose { text: "fix".into() });
-        assert_eq!(m.compose_status_fitting(room(40)).as_deref(), Some("↵ starts @claude in your home folder"));
+        assert_eq!(
+            fit_status(&m.compose_status().unwrap_or_default(), room(40)),
+            "↵ starts @claude in your home folder"
+        );
     }
 
     #[test]

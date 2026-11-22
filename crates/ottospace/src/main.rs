@@ -4279,15 +4279,15 @@ impl Workspace {
             // what was heard never reaches a client.
             "listen_lines": self.listen_lines(),
             "listen_rects": self.listen_rects(),
-            // Test runs only: where an offer chip's words (`words:<pane>`), their tooltip (`tip`,
-            // while it shows) and a listed offer's picture (`thumb:<window>`) were drawn. Never the
-            // words. Null outside a test run.
             // Where the open box's controls were drawn, by id (`compose-attach`, `compose-sheet`): sneak
             // mode does not label them while the line has the keyboard. Null outside a test run.
             "compose_rects": std::env::var_os("OTTOSPACE_E2E").filter(|_| self.model.compose.is_some()).map(|_| {
                 let ids = ["compose-attach", "compose-sheet"];
                 ids.iter().filter_map(|id| Some((id.to_string(), rect(self.controls.bounds(id)?)))).collect::<BTreeMap<_, _>>()
             }),
+            // Test runs only: where an offer chip's words (`words:<pane>`), their tooltip (`tip`,
+            // while it shows) and a listed offer's picture (`thumb:<window>`) were drawn. Never the
+            // words. Null outside a test run.
             "offer_rects": std::env::var_os("OTTOSPACE_E2E").map(|_| {
                 let named = |(mark, bounds): (&Mark, &Bounds<Pixels>)| match mark {
                     Mark::OfferWords(pane) => Some((format!("words:{pane}"), rect(*bounds))),
