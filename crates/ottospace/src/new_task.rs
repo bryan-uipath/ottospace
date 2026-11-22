@@ -450,7 +450,7 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(theme::MUTED))
             // One line, whatever it says: what is under it never moves. Too long, its trailing
-            // keys go (the core says which), never part of a word.
+            // keys go, then words of what ↵ does (the core says which), never part of a word.
             .child(
                 div()
                     .relative()

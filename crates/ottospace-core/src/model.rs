@@ -287,12 +287,15 @@ struct Taken {
     repo: Option<String>,
 }
 
-/// `status` with its trailing ` · ` parts left off, last first, until `fits` says it fits; the
-/// first part, what ↵ does, stays whatever its length (the shell cuts that one, if it must).
-/// `↵ starts @claude in app · ⇧↵ later · Esc` → `↵ starts @claude in app · ⇧↵ later`.
+/// `status` with its trailing ` · ` parts left off, last first, until `fits` says it fits; then
+/// the first, what ↵ does, cut after a word with `…`. Never inside a word.
+/// `↵ starts @claude in app · ⇧↵ later · Esc` → `↵ starts @claude in app · ⇧↵ later` → `↵ starts @claude…`.
 pub fn fit_status(status: &str, fits: impl Fn(&str) -> bool) -> String {
     let parts: Vec<&str> = status.split(" · ").collect();
-    (1..=parts.len()).rev().map(|n| parts[..n].join(" · ")).find(|text| fits(text)).unwrap_or_else(|| parts[0].into())
+    let words: Vec<&str> = parts[0].split(' ').collect();
+    let kept = (1..=parts.len()).rev().map(|n| parts[..n].join(" · "));
+    let cut = (1..words.len()).rev().map(|n| format!("{}…", words[..n].join(" ")));
+    kept.chain(cut).find(|text| fits(text)).unwrap_or_else(|| parts[0].into())
 }
 
 /// How many repositories the drawer offers as picks.
@@ -8310,7 +8313,7 @@ impl Model {
         }
         // With no title ↵ files nothing (`file_titled`): a draft's captures name one.
         let untitled = self.compose_line().is_some_and(|line| self.draft(line).title.is_empty());
-        // Short: it is the part of the line that always stays (`fit_status`).
+        // Short: it is the part of the line cut last (`fit_status`).
         let first = if untitled && self.capture_title().is_none() { "Type, then " } else { "" };
         if self.quick.is_some() {
             return Some(format!("{first}↵ files it for later · ⌘↵ starts it now · Esc"));
@@ -15186,8 +15189,9 @@ mod tests {
         assert_eq!(fit_status(said, room(80)), said);
         assert_eq!(fit_status(said, room(50)), "↵ starts @claude in your home folder · ⇧↵ later");
         assert_eq!(fit_status(said, room(40)), "↵ starts @claude in your home folder");
-        // What ↵ does stays, however little room: the shell cuts that one.
-        assert_eq!(fit_status(said, room(5)), "↵ starts @claude in your home folder");
+        // Then what ↵ does, after a word; with room for no word, the shell cuts it.
+        assert_eq!(fit_status(said, room(30)), "↵ starts @claude in your home…");
+        assert_eq!(fit_status(said, room(1)), "↵ starts @claude in your home folder");
         let mut m = Model::default();
         m.update(Action::OpenCompose { text: "fix".into() });
         assert_eq!(
