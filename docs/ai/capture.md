@@ -45,7 +45,7 @@ the keyboard). It is the capture key's capture, started for the box (`Action::Co
 `Effect::PenStart`, then the shell's `CaptureStart`): the user's alone, as the capture key is;
 the core refuses a `ComposePen` of any other origin, and still refuses their `CaptureStart`.
 
-- The box tucks away to a line at the top that says the keys; the pane in use freezes in
+- The box tucks away to a line at the bottom that says the keys; the pane in use freezes in
   annotate mode as above. No bar opens: the draft is the box's (`Collection::boxed`). A click on
   another pane captures that one too, in the same round.
 - ↵ goes back to the box, centred, its line as typed. Each capture is a pill in its field: the
