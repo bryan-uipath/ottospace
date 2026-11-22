@@ -2222,7 +2222,7 @@ dependencies = [
 [[package]]
 name = "gpui"
 version = "0.2.2"
-source = "git+https://github.com/bryan-uipath/gpui?rev=0a74b7a1f8e377e7270d3a958a40ab9c9048bab3#0a74b7a1f8e377e7270d3a958a40ab9c9048bab3"
+source = "git+https://github.com/bryan-uipath/gpui?rev=e9412b9c9413474a467e3646fbc0174e7eccad7e#e9412b9c9413474a467e3646fbc0174e7eccad7e"
 dependencies = [
  "anyhow",
  "as-raw-xcb-connection",
