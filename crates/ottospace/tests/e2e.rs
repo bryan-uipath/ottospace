@@ -4393,10 +4393,7 @@ fn the_boxs_pickers_show_the_choice_and_its_bottom_row_is_one_line() {
         assert_eq!((&quick["compose_choices"], quick["quick_pills"].is_array()), (&Value::Null, true));
         let drawn = quick["compose_rects"].as_object().cloned().unwrap_or_default();
         assert!(drawn.contains_key("compose-start") && !drawn.keys().any(|id| id.starts_with("picker:")), "{drawn:?}");
-        assert_eq!(
-            quick["compose_status"],
-            "Type what needs doing, then ↵ files it for later · ⌘↵ starts it now · Esc"
-        );
+        assert_eq!(quick["compose_status"], "Type, then ↵ files it for later · ⌘↵ starts it now · Esc");
     }
     let _ = std::fs::remove_dir_all(&root);
 }
