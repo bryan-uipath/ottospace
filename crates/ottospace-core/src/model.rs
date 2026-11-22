@@ -7370,15 +7370,13 @@ impl Model {
     /// with. `None`: a saved agent, a session at work elsewhere, or one no built-in runner can
     /// go on with: nothing is started.
     fn agent_start(&self, subject: &Subject) -> Option<(agents::Start, Option<String>)> {
-        let resume = |runner: &str, id: &str| {
-            let runner = RunnerId::named(runner).filter(|_| agents::is_uuid(id))?;
-            let takes = runner.spec().attach.take_over_when_idle == Support::Yes;
-            takes.then(|| agents::Start::Resume { runner, session: id.into() })
-        };
+        let resume = Self::resume_start;
         match subject {
-            // Idle, and no process holds it: else a second program on it would clash.
+            // Idle, and no process holds it: else a second program on it would clash. As listed,
+            // else as read for a resume (the Tasks section closed).
             Subject::Session { runner, id } => {
-                let session = self.session(runner, id).filter(|s| !self.in_use(s))?;
+                let session = self.facts(runner, id).flatten().filter(|s| !self.in_use(s));
+                let session = session.filter(|_| !self.tasks.adopted(runner, id))?;
                 Some((resume(runner, id)?, Some(self.resume_dir(session)?)))
             }
             // Its worktree is being made: it starts there once it is (`worktree_made`).
@@ -7410,6 +7408,21 @@ impl Model {
         }
     }
 
+    /// `<runner> --resume <id>` (or its runner's), if a built-in runner can take the session over.
+    fn resume_start(runner: &str, id: &str) -> Option<agents::Start> {
+        let runner = RunnerId::named(runner).filter(|_| agents::is_uuid(id))?;
+        let takes = runner.spec().attach.take_over_when_idle == Support::Yes;
+        takes.then(|| agents::Start::Resume { runner, session: id.into() })
+    }
+
+    /// A session's conversation not listed (the Tasks section is closed) nor read yet: a resume
+    /// reads it first (`ReadSession`), then goes on with it if it can.
+    fn session_unread(&self, subject: &Subject) -> bool {
+        let Subject::Session { runner, id } = subject else { return false };
+        let can = Self::resume_start(runner, id).is_some() && !self.tasks.adopted(runner, id);
+        can && self.facts(runner, id).is_none()
+    }
+
     /// The folder a conversation's agent would start in now (`agent_start`): a session gone on
     /// with, where it started. `None`: nothing would start, or in no folder of its own (home).
     pub fn agent_dir(&self, subject: &Subject) -> Option<String> {
@@ -7430,13 +7443,14 @@ impl Model {
         if self.talk_live(subject) {
             return None;
         }
-        self.agent_start(subject).map(|(start, _)| matches!(start, agents::Start::Resume { .. }))
+        let start = self.agent_start(subject).map(|(start, _)| matches!(start, agents::Start::Resume { .. }));
+        start.or_else(|| self.session_unread(subject).then_some(true))
     }
 
     /// Why the drawer has no agent for the conversation it is on, if that is so: for the shell to say.
     pub fn talk_note(&self) -> Option<String> {
         let subject = &self.talk.as_ref()?.task;
-        if self.agent_runs(subject) || self.agent_start(subject).is_some() {
+        if self.agent_runs(subject) || self.agent_start(subject).is_some() || self.session_unread(subject) {
             return None;
         }
         if let Some(making) = self.making.iter().find(|making| Subject::Task(making.task) == *subject) {
@@ -7460,11 +7474,36 @@ impl Model {
                 })
             }
         };
-        Some(match (live, subject) {
-            (true, _) => "its session is live in another terminal: go on with it there".into(),
-            (false, Subject::Task(_)) => "this task's session cannot be gone on with from here".into(),
-            (false, Subject::Session { .. }) => "this session cannot be gone on with from here".into(),
-        })
+        if live {
+            return Some("its session is live in another terminal: go on with it there".into());
+        }
+        let why = self.session_of(subject).and_then(|(runner, id)| self.resume_refusal(&runner, &id));
+        Some(why.unwrap_or_else(|| match subject {
+            Subject::Task(_) => "this task's session cannot be gone on with from here".into(),
+            Subject::Session { .. } => "this session cannot be gone on with from here".into(),
+        }))
+    }
+
+    /// Why a session that is not live cannot be gone on with here, in plain words: one reason
+    /// each. `None`: none of these. A name, never a path.
+    fn resume_refusal(&self, runner: &str, id: &str) -> Option<String> {
+        let Some(named) = RunnerId::named(runner) else {
+            return Some(format!("{runner} is not a runner ottospace knows"));
+        };
+        let spec = named.spec();
+        if spec.attach.take_over_when_idle != Support::Yes {
+            return Some(format!("{} cannot go on with a session from here yet", spec.display));
+        }
+        if !agents::is_uuid(id) {
+            return Some(format!("its session id is not one {} can resume", spec.display));
+        }
+        match self.facts(runner, id)? {
+            None => Some("its session file is in no listed repository now: gone, or moved".into()),
+            Some(s) if self.resume_dir(s).is_none() => {
+                Some(format!("it started in {}, outside the listed repositories", repos::name_of(&s.cwd)))
+            }
+            Some(_) => None,
+        }
     }
 
     /// True if the session is listed under Sessions: one Adopt can make a task of.
@@ -7579,7 +7618,7 @@ impl Model {
 
     /// Opens a conversation's space and the drawer on it, with the keyboard if its agent runs.
     /// `start`: and starts its agent (or goes on with its session) if it does not run; selecting
-    /// a conversation never does. A session's opens while it is listed or its agent runs.
+    /// a conversation never does. A session's opens while it is listed, its agent runs or its space is open.
     fn talk_to(&mut self, subject: Subject, start: bool, effects: &mut Vec<Effect>) {
         // The user's own opening (a click, ↵, ⌘J) of a task put away or done: a task like any
         // other again; a done one's session gone on with.
@@ -7595,14 +7634,22 @@ impl Model {
                 Some(task) => task.materials_dir().map(str::to_string),
                 None => return,
             },
-            Subject::Session { runner, id } if self.session(runner, id).is_some() || self.agent_runs(&subject) => None,
+            // Or its space is still open (the section closed, or it was hidden since): a resume reads it first.
+            Subject::Session { runner, id }
+                if self.session(runner, id).is_some()
+                    || self.agent_runs(&subject)
+                    || (!self.tasks.adopted(runner, id) && self.spaces.iter().any(|s| s.of == Owner::of(&subject))) =>
+            {
+                None
+            }
             Subject::Session { .. } => return,
         };
         // A task's session not listed now (the Tasks section is closed): where it started, and
         // whether something has it, are read first (`ReadSession`), and the resume waits on that.
         let unlisted = |(runner, id): &(String, String)| !self.found.iter().any(|s| (&s.runner, &s.id) == (runner, id));
         let task = subject.task().and_then(|id| self.tasks.get(id));
-        let resumes = task.and_then(|task| task.session.as_ref()).is_some_and(|l| l.state != Some(State::Running));
+        // A session's own, or a task's that is not at work elsewhere.
+        let resumes = task.is_none_or(|t| t.session.as_ref().is_some_and(|l| l.state != Some(State::Running)));
         let read = self.session_of(&subject).filter(|_| start && resumes && !self.talk_live(&subject));
         if let Some((runner, id)) = read.filter(unlisted) {
             self.read_sessions.retain(|(r, i, _)| (r, i) != (&runner, &id));
@@ -15532,16 +15579,80 @@ mod tests {
             let note = m.talk_note().unwrap_or_default();
             assert_eq!(note, "its session is live in another terminal: go on with it there");
         }
-        // Out of the listed checkout, or an id no command is built from: nothing started.
-        for id in [ASTRAY, "plain"] {
+        // Out of the listed checkout, or an id no command is built from: nothing started, and the
+        // drawer says why.
+        for (id, why) in [
+            (ASTRAY, "it started in other, outside the listed repositories"),
+            ("plain", "its session id is not one Claude Code can resume"),
+        ] {
             assert_eq!(open(&mut m, "claude", id), [], "{id}");
-            assert_eq!(m.talk_note().as_deref(), Some("this session cannot be gone on with from here"));
+            assert_eq!(m.talk_note().as_deref(), Some(why));
         }
-        // Not listed (hidden, never read): nothing opens.
-        m.update(Action::SessionHide { runner: "codex".into(), id: BUSY.into() });
+        // Never read: nothing opens.
         let before = m.talk.clone();
-        assert_eq!((open(&mut m, "codex", BUSY), open(&mut m, "claude", "nope")), (vec![], vec![]));
+        assert_eq!(open(&mut m, "claude", "nope"), []);
         assert_eq!(m.talk, before);
+    }
+
+    /// The Tasks section closed after a session's conversation opened: nothing is listed, so the
+    /// session is read for the resume, as a task's is, and gone on with where it started.
+    #[test]
+    fn a_session_opened_before_the_section_closed_is_read_and_gone_on_with() {
+        let closed = || {
+            let mut m = conversations();
+            m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+            m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
+            let idle = of_session("claude", IDLE);
+            // No dead end: Resume session shows, and nothing says it cannot.
+            assert_eq!((m.talk_note(), m.talk_resumes(), m.take_over_ready(&idle)), (None, Some(true), true));
+            let read = Effect::ReadSession { runner: "claude".into(), id: IDLE.into() };
+            assert_eq!(m.update(Action::TalkStart), [read]);
+            assert!(m.talk_live(&idle) && m.talk_note().is_none());
+            m
+        };
+        let read = |found: Option<Found>| Action::SessionRead { runner: "claude".into(), id: IDLE.into(), found };
+        let below = Found { repo: "/code/app".into(), ..session("claude", IDLE, "/code/app/crates/core", false, 1) };
+        let mut m = closed();
+        let resumes = [resumed(of_session("claude", IDLE), "claude", IDLE, "/code/app/crates/core")];
+        assert_eq!(m.update(read(Some(below.clone())).sent_by(Origin::System)), resumes);
+        // No listed checkout has it now: nothing started, and the drawer says why.
+        let mut m = closed();
+        assert_eq!(m.update(read(None).sent_by(Origin::System)), []);
+        let note = m.talk_note();
+        assert_eq!(note.as_deref(), Some("its session file is in no listed repository now: gone, or moved"));
+        // Held by a live process as it is read: live there.
+        let mut m = closed();
+        assert_eq!(m.update(read(Some(Found { held: true, ..below })).sent_by(Origin::System)), []);
+        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        // Never opened: a session not listed still opens nothing.
+        let mut m = conversations();
+        m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
+        assert_eq!(m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() }), []);
+        assert_eq!(m.talk, None);
+    }
+
+    /// Hiding a session only takes it out of Elsewhere: its tab, already open, still goes on with
+    /// it (Resume and Take over). Nothing unhides it: it stays out of the list after.
+    #[test]
+    fn a_hidden_sessions_open_tab_still_goes_on_with_it() {
+        let mut m = conversations();
+        let idle = of_session("claude", IDLE);
+        m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+        m.update(Action::SessionHide { runner: "claude".into(), id: IDLE.into() });
+        assert!(!m.sessions_bar().rows.iter().any(|row| row.id == IDLE));
+        assert_eq!((m.talk_note(), m.talk_resumes(), m.take_over_ready(&idle)), (None, Some(true), true));
+        let resumes = [resumed(idle.clone(), "claude", IDLE, "/code/app/crates/core")];
+        assert_eq!(m.update(Action::TalkStart), resumes);
+        m.update(Action::AgentStarted { task: idle.clone(), session: None, at: 1 }.sent_by(Origin::System));
+        let found = m.found.iter().map(|s| Found { active: s.id == IDLE, ..s.clone() }).collect();
+        m.update(Action::SetSessions { found, day: 0 }.sent_by(Origin::System));
+        assert!(!m.sessions_bar().rows.iter().any(|row| row.id == IDLE), "still hidden");
+        // Closed and reopened from its tab, unlisted too: read first, then gone on with.
+        m.update(Action::TaskStop { id: idle.clone() });
+        m.update(Action::AgentExited { task: idle.clone() }.sent_by(Origin::System));
+        m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
+        let read = Effect::ReadSession { runner: "claude".into(), id: IDLE.into() };
+        assert_eq!(m.update(Action::TalkStart), [read]);
     }
 
     /// Our own agent just stopped: what its session's file shows (written lately, a process

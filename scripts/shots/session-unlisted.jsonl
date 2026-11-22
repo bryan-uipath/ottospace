@@ -1,0 +1,19 @@
+# A session opened from Elsewhere, then the Tasks section closed: nothing is listed, and the
+# drawer still offers Resume session (read first), no "cannot". Then a session no runner can
+# resume (its id is no UUID): the drawer says why.
+{"cmd":"split","kind":"empty"}
+{"cmd":"section","section":"tasks"}
+{"until":"sessions_bar.total","is":2}
+{"cmd":"task_group","heading":"sessions"}
+{"until":"sessions_bar.rows.1"}
+{"click":"session:claude:8f14e45f-ceea-467f-a8d3-0242ac130009","at":[0.3,0.3]}
+{"cmd":"section","section":"tasks"}
+{"until":"sessions_bar.count","is":0}
+{"settle":1500}
+{"shot":"unlisted"}
+{"cmd":"section","section":"tasks"}
+{"until":"sessions_bar.rows.1"}
+{"click":"session:claude:plain","at":[0.3,0.3]}
+{"until":"drawer.note","is":"its session id is not one Claude Code can resume","timeout_ms":60000}
+{"settle":800}
+{"shot":"why"}

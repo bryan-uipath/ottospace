@@ -5019,7 +5019,8 @@ impl Run {
                     // A session no task owns is gone on with only where it started, in a listed
                     // checkout, and only if nothing has it: not at work, held by no process.
                     if let Subject::Session { runner, id } = subject {
-                        let found = m.found.iter().find(|s| (&s.runner, &s.id) == (runner, id));
+                        // As listed, else as read for the resume (the Tasks section closed).
+                        let found = m.facts(runner, id).flatten();
                         let free = found.is_some_and(|s| !m.in_use(s) && Some(&s.cwd) == cwd.as_ref());
                         let listed =
                             cwd.as_ref().is_some_and(|cwd| m.repo_names().any(|(_, path)| sessions::below(cwd, path)));
