@@ -1193,6 +1193,9 @@ pub enum Action {
         runner: String,
         id: String,
     },
+    /// A click on the status bar's agents in a terminal: the first one's pane when known
+    /// (`session_waits`), else its Elsewhere row, in the Tasks section.
+    TerminalAgentGo,
     /// The user's click or ↵ on a session's row: its conversation in the right drawer, gone on
     /// with there unless it is at work elsewhere. No task is made. Only the user's.
     SessionOpen {
@@ -2349,6 +2352,7 @@ impl Action {
                 | Action::ListSection { .. }
                 | Action::ListChoose { .. }
                 | Action::SessionClick { .. }
+                | Action::TerminalAgentGo
                 | Action::Close { .. }
                 | Action::Focus { .. }
                 | Action::FocusDir { .. }
@@ -2583,6 +2587,7 @@ impl Action {
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionClick { .. }
+            | Action::TerminalAgentGo
             | Action::SessionsRange { .. }
             | Action::RowSnooze { .. }
             | Action::RowHold { .. }
@@ -3032,6 +3037,7 @@ impl Action {
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionClick { .. }
+            | Action::TerminalAgentGo
             | Action::SessionOpen { .. }
             | Action::SessionsRange { .. }
             | Action::FocusList
@@ -4911,7 +4917,7 @@ impl Model {
             }
             Action::ToggleKeys if boxed && !self.keys => Some("the picker or the new-task box is open"),
             // For the user it waits, as every pane action does. A client is told why.
-            Action::SessionClick { .. } if boxed || self.keys || self.visual.is_some() => {
+            Action::SessionClick { .. } | Action::TerminalAgentGo if boxed || self.keys || self.visual.is_some() => {
                 Some("the picker, the new-task box, the key reference or visual mode has the keyboard")
             }
             _ => None,
@@ -5450,6 +5456,7 @@ impl Model {
                 | Action::RepoAdd { .. }
                 | Action::CloneDone { .. }
                 | Action::SessionClick { .. }
+                | Action::TerminalAgentGo
                 | Action::CalendarDay { .. }
         );
         let selected = self.list.and_then(|at| self.list_rows().into_iter().nth(at)).filter(|_| !own_move);
@@ -6271,6 +6278,31 @@ impl Model {
             Action::SessionHide { runner, id } => {
                 if self.session(&runner, &id).is_some() {
                     self.hidden.push((runner, id));
+                }
+            }
+            Action::TerminalAgentGo => {
+                let first = self.in_terminal().first().map(|s| (s.runner.clone(), s.id.clone()));
+                match first.map(|(runner, id)| (self.runs_in(&runner, &id), runner, id)) {
+                    None => {}
+                    Some((Some(pane), ..)) => {
+                        (self.list, self.rail_focus) = (None, None);
+                        self.focus(pane, effects);
+                    }
+                    // Its row selected, Tasks open and Elsewhere unfolded: no guess at a pane.
+                    Some((None, runner, id)) => {
+                        if self.sidebar != Some(Section::Tasks) {
+                            self.act(Action::ToggleSection { section: Section::Tasks }, effects);
+                        }
+                        self.collapsed.retain(|heading| *heading != Heading::Sessions);
+                        let row = self
+                            .list_rows()
+                            .into_iter()
+                            .position(|row| row == ListRow::Session(runner.clone(), id.clone()));
+                        if let Some(row) = row {
+                            self.leave(effects);
+                            (self.list, self.rail_focus) = (Some(row), None);
+                        }
+                    }
                 }
             }
             Action::SessionClick { runner, id } => {
@@ -9208,6 +9240,20 @@ impl Model {
         self.in_panes.iter().filter(move |at| free(at)).filter_map(|at| self.waiting(&at.runner, &at.id))
     }
 
+    /// Sessions at work in a terminal that are no task's, not hidden and not waiting on you (those
+    /// count as needing you): the status bar's agents in a terminal. As the Repos dots read them.
+    pub fn in_terminal(&self) -> Vec<&Found> {
+        let hidden = |s: &Found| self.hidden.iter().any(|(runner, id)| (runner, id) == (&s.runner, &s.id));
+        let free = |s: &&Found| !hidden(s) && !self.tasks.adopted(&s.runner, &s.id);
+        self.at_work.iter().filter(free).filter(|s| self.waiting(&s.runner, &s.id).is_none()).collect()
+    }
+
+    /// The pane a session runs in, as found there (`session_waits`), in any tab.
+    fn runs_in(&self, runner: &str, id: &str) -> Option<PaneId> {
+        let at = self.in_panes.iter().find(|at| (at.runner.as_str(), at.id.as_str()) == (runner, id))?;
+        Some(at.pane).filter(|_| self.in_pane_live(at) && self.features.on(Feature::SessionWaits))
+    }
+
     /// Its pane is still one of our terminals.
     fn in_pane_live(&self, at: &sessions::InPane) -> bool {
         self.pane(at.pane).is_some_and(|pane| pane.kind == Kind::Terminal)
@@ -9227,7 +9273,7 @@ impl Model {
 
     /// The name of the listed repository or worktree a session runs in: as the Repos section
     /// names it, else the last part of its path.
-    fn session_name(&self, session: &Found) -> String {
+    pub(crate) fn session_name(&self, session: &Found) -> String {
         self.repo_name(&session.repo).unwrap_or_else(|| repos::name_of(&session.repo))
     }
 
@@ -9251,9 +9297,7 @@ impl Model {
     /// `session_pane`'s guess. A row's click never changes the tab; ⌘J may.
     fn found_pane(&self, session: &Found) -> Option<PaneId> {
         let shown = self.layout.as_ref().map(Node::leaves).unwrap_or_default();
-        let wait = self.in_panes.iter().find(|at| (&at.runner, &at.id) == (&session.runner, &session.id));
-        let wait = wait.filter(|at| self.in_pane_live(at) && self.features.on(Feature::SessionWaits)).map(|at| at.pane);
-        match wait {
+        match self.runs_in(&session.runner, &session.id) {
             // Known, in another tab: no guess at a terminal on show.
             Some(pane) => shown.contains(&pane).then_some(pane),
             None => self.session_pane(session),
@@ -10617,6 +10661,7 @@ mod tests {
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
         Action::SessionClick { .. },
+        Action::TerminalAgentGo,
         Action::SessionOpen { .. },
         Action::SessionsRange { .. },
         Action::SetApps { .. },
@@ -10987,6 +11032,7 @@ mod tests {
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
             Action::SessionClick { runner: text(), id: text() },
+            Action::TerminalAgentGo,
             Action::SessionOpen { runner: text(), id: text() },
             Action::SessionsRange { range: sessions::Range::All },
             Action::RowSnooze { id: 1, until: 0 },
@@ -16487,6 +16533,60 @@ mod tests {
         m.update(Action::SessionsInPanes { found: vec![at(None)] }.sent_by(Origin::System));
         m.update(Action::SetSessions { found: found(true), day: 0 }.sent_by(Origin::System));
         assert_eq!(state(&m), State::Running);
+    }
+
+    #[test]
+    fn agents_at_work_in_a_terminal_count_as_working_once_and_a_click_goes_to_them() {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        term(&mut m); // pane 1
+        m.update(Action::NewTab); // pane 2's tab on show
+        let now = 1_000_000;
+        m.update(Action::Tick { now }.sent_by(Origin::System));
+        let found =
+            vec![session("claude", "a", "/code/app", true, now), session("codex", "b", "/code/app", false, now)];
+        m.update(Action::SetSessions { found, day: 0 }.sent_by(Origin::System));
+        let agents = |m: &Model| (m.agents().working, m.agents().in_terminal, m.agents().needs_you);
+        assert_eq!(agents(&m), (1, 1, 0), "at work: counted; idle: not");
+        assert_eq!(m.in_terminal_names(), ["app · claude"], "its hover");
+        // A task that runs besides: the split.
+        let add = Action::TaskAdd {
+            title: "t".into(),
+            priority: 1,
+            state: State::Running,
+            tab: None,
+            assign: Assign::default(),
+        };
+        m.update(add.sent_by(Origin::Socket));
+        assert_eq!(agents(&m), (2, 1, 0));
+        // Its pane not known: its Elsewhere row, Tasks open and the group unfolded.
+        m.update(Action::TerminalAgentGo);
+        assert_eq!(m.sidebar, Some(Section::Tasks));
+        let row = m.list.and_then(|at| m.list_rows().into_iter().nth(at));
+        assert_eq!(row, Some(ListRow::Session("claude".into(), "a".into())));
+        // Found in a pane of another tab: that pane.
+        let at = |waits_for| sessions::InPane {
+            pane: 1,
+            runner: "claude".into(),
+            id: "a".into(),
+            last_activity: Some(now),
+            waits_for,
+        };
+        m.update(Action::SessionsInPanes { found: vec![at(None)] }.sent_by(Origin::System));
+        m.update(Action::TerminalAgentGo);
+        assert_eq!(m.focused, Some(1));
+        // Waiting on you: it needs you, and works no more. Adopted: the task's, counted once.
+        m.update(
+            Action::SessionsInPanes { found: vec![at(Some(sessions::WaitsFor::Permission))] }.sent_by(Origin::System),
+        );
+        assert_eq!(agents(&m), (1, 0, 1));
+        m.update(Action::SessionsInPanes { found: Vec::new() }.sent_by(Origin::System));
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "a".into() });
+        assert_eq!(agents(&m), (2, 0, 0), "two tasks run");
+        // None left: the click does nothing.
+        let before = format!("{m:?}");
+        m.update(Action::TerminalAgentGo);
+        assert_eq!(format!("{m:?}"), before);
     }
 
     #[test]

@@ -1996,7 +1996,18 @@ export interface Snapshot {
     resting: Rect | null;
     place: { text: string; rect: Rect | null } | null;
     meeting: { rect: Rect | null; join: Rect | null } | null;
-    agents: { text: string; rect: Rect | null };
+    /**
+     * `working` counts agents at work in a terminal (`in_terminal`, no task's) too; `terminal`:
+     * where its own part (`1 in a terminal`) is drawn, null when it is not.
+     */
+    agents: {
+      text: string;
+      rect: Rect | null;
+      working: number;
+      in_terminal: number;
+      needs_you: number;
+      terminal: Rect | null;
+    };
     shrink: number;
   };
   /**
