@@ -1136,7 +1136,7 @@ pub enum Action {
         target: Pointed,
     },
     /// A click on one of the drawer's picks: the line's `>repo` (`mark` `>`) or `@agent` (`@`)
-    /// becomes `name`, or goes with `None`. Only a name `compose_picks` offers.
+    /// becomes `name`, or goes with `None`. Only a name its picker lists.
     ComposePick {
         mark: char,
         name: Option<String>,
@@ -8310,31 +8310,43 @@ impl Model {
             return;
         }
         // Only a name its picker lists.
-        if name
-            .as_ref()
-            .is_some_and(|name| !self.picker_rows(mark).iter().any(|row| row.name == *name && row.kind != "none"))
-        {
+        let listed =
+            |name: &String| self.picker_rows(mark).iter().any(|row| row.name == *name && row.kind != pickers::NONE);
+        if name.as_ref().is_some_and(|name| !listed(name)) {
             return;
         }
+        let picked = self.compose_picked(mark, name.as_deref());
         let Some(field) = self.compose.as_mut() else { return };
-        // Only words that are such a tag go, each with the space after it; the rest is as typed.
-        // A tag a clause's punctuation ends (`#canvas,`) is one too, as the line reads it.
+        let all = 0..field.text().len();
+        match picked {
+            Some(text) => field.splice(all, &text),
+            None => self.compose_note = Some("no room in the line for that name".into()),
+        }
+    }
+
+    /// The line with its tag of `mark` as `name`, or none: `None` if that does not fit. Every word
+    /// shaped as such a tag goes (`>old`, `#canvas,`; not `a\ #b`), each with the space after it;
+    /// the rest is as typed, and the new tag goes at the end.
+    fn compose_picked(&self, mark: char, name: Option<&str>) -> Option<String> {
+        let field = self.compose.as_ref()?;
+        let (line, mut text, mut at) = (field.text(), String::new(), 0);
         let tag = |word: &str| {
             let word = word.trim_end_matches(compose::clause_end);
             word.strip_prefix(mark).is_some_and(|rest| compose::taggable(mark, rest))
         };
-        let mut text: String = field.text().split_inclusive(' ').filter(|piece| !tag(piece.trim_end())).collect();
+        for word in compose::spaced(line).into_iter().filter(|word| tag(&line[word.clone()])) {
+            text.push_str(&line[at..word.start]);
+            let space = line[word.end..].chars().next().filter(|c| c.is_whitespace());
+            at = word.end + space.map_or(0, char::len_utf8);
+        }
+        text.push_str(&line[at..]);
         if let Some(name) = name {
             if !text.is_empty() && !text.ends_with(' ') {
                 text.push(' ');
             }
             text.push_str(&format!("{mark}{name} "));
         }
-        let all = 0..field.text().len();
-        match field.fits(all.clone(), &text) {
-            true => field.splice(all, &text),
-            false => self.compose_note = Some("no room in the line for that name".into()),
-        }
+        field.fits(0..line.len(), &text).then_some(text)
     }
 
     /// What ↵ in the new-task box would do with the line as it is: start this agent, in this
@@ -8377,11 +8389,15 @@ impl Model {
         }
         // A picker's list: ↵ takes its row; in the agent's, ⌥↵ makes it the default.
         if let Some(menu) = self.picker_menu() {
-            let row = menu.selected.and_then(|at| menu.rows.get(at)).filter(|row| row.kind != "none");
-            let name = row.map_or_else(
-                || format!("no {}", if menu.mark == '#' { "project" } else { "repository" }),
-                |row| format!("{}{}", menu.mark, row.name),
-            );
+            let row = menu.selected.and_then(|at| menu.rows.get(at));
+            let name = row.map_or_else(String::new, |row| match row.kind {
+                pickers::NONE => row.name.clone(),
+                _ => format!("{}{}", menu.mark, row.name),
+            });
+            let named = row.filter(|row| row.kind != pickers::NONE).map(|row| row.name.as_str());
+            if self.compose_picked(menu.mark, named).is_none() {
+                return Some(format!("↵: no room in the line for {name} · Esc closes the list"));
+            }
             let default = if self.picker_default().is_some() { " · ⌥↵ makes it the default" } else { "" };
             return Some(format!("↵ takes {name}{default} · Esc closes the list"));
         }
@@ -15339,7 +15355,27 @@ mod tests {
         m.update(Action::ComposePicker { mark: Some('@') });
         m.update(Action::ComposeEnter);
         assert_eq!((line(&m), choices(&m).project), ("fix @claude-opus-9 ", None));
-        // The quick note has none.
+        // A word is as the line reads it: a backslash keeps a space in it; any space ends one.
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        keys(&mut m, "see /tmp/a\\ #b fix\u{a0}#canvas ");
+        m.update(Action::ComposePick { mark: '#', name: None });
+        assert_eq!(line(&m), "see /tmp/a\\ #b fix\u{a0}");
+        // A name the line has no room for: its list says so.
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        keys(&mut m, &"x".repeat(MAX_TITLE - 4));
+        m.update(Action::ComposePicker { mark: Some('@') });
+        m.update(Action::ComposeMove { delta: 1 });
+        let said = m.compose_status().unwrap_or_default();
+        assert!(said.starts_with("↵: no room in the line for @"), "{said}");
+        // The quick note has none, and no list stays open from the box it was.
+        m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
+        m.update(
+            Action::SetFeatures { features: Features::all().with(Feature::OverlayPanels, true) }
+                .sent_by(Origin::System),
+        );
+        m.update(Action::ComposePicker { mark: Some('@') });
+        m.update(Action::QuickOpen { now: 0, word: "note".into(), transcript: None }.sent_by(Origin::User));
+        assert_eq!((m.quick.is_some(), m.picker_menu()), (true, None));
         m.update(Action::CloseCompose);
         assert_eq!(m.compose_choices(), None);
     }

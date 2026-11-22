@@ -25,7 +25,7 @@ pub struct Choices {
 }
 
 /// The kind of a list's first row, the one that takes the tag out of the line.
-const NONE: &str = "none";
+pub(super) const NONE: &str = "none";
 
 impl Model {
     /// The pickers the open box shows, in Tab's order. The quick note has none.
@@ -102,7 +102,11 @@ impl Model {
     /// The open picker's list: its rows, the one highlighted (that ↑ ↓ went to, else the line's
     /// own). `None`: no picker is open, or the line does not have the keyboard.
     pub fn picker_menu(&self) -> Option<Dropdown> {
-        let (mark, moved) = self.compose_picker.as_ref().filter(|_| self.composing())?;
+        // Only a picker the box shows: the quick note has none.
+        let (mark, moved) = self
+            .compose_picker
+            .as_ref()
+            .filter(|(mark, _)| self.composing() && self.compose_pickers().contains(mark))?;
         let rows = self.picker_rows(*mark);
         let current = self.picker_current(*mark);
         // The row moved to by its exact name (`Foo` and `foo` are two projects); the line's own by
@@ -179,7 +183,7 @@ impl Model {
         let Some(agent) = self.picker_default().filter(|_| self.by_user) else { return };
         self.compose_picker = None;
         self.compose_pick('@', None);
-        if self.default_agent() != agent {
+        if !self.default_agent().eq_ignore_ascii_case(&agent) {
             self.default_agent = Some(agent.clone());
             effects.push(Effect::SaveDefaultAgent { agent });
         }

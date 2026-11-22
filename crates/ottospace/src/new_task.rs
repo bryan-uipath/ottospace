@@ -449,6 +449,10 @@ impl Workspace {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
+                    // Start starts: an open picker's list closes first, its row not taken.
+                    if this.model.picker_menu().is_some() {
+                        this.dispatch(Action::ComposePicker { mark: None }, this.input, window, cx);
+                    }
                     this.dispatch(Action::ComposeEnter, this.input, window, cx);
                     cx.stop_propagation();
                 }),
