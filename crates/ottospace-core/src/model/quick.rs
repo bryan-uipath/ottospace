@@ -321,7 +321,7 @@ mod tests {
             (m.quick_project().as_deref(), m.compose_pickers(), m.compose_choices()),
             (Some("canvas"), &['#'][..], None)
         );
-        let said = "Type what needs doing, then ↵ files it for later under #canvas · ⌘↵ starts it now · Esc";
+        let said = "Type, then ↵ files it for later under #canvas · ⌘↵ starts it now · Esc";
         assert_eq!(m.compose_status().as_deref(), Some(said));
         type_line(&mut m, "ask about it");
         m.update(Action::ComposeEnter);
