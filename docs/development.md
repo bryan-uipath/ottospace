@@ -209,7 +209,7 @@ whether the regression is real and accepted.
 | `crates/ottospace-mac` | macOS calls: AX window control, SCK lookup, display geometry, HID clicks, crash recovery |
 | `crates/ottospace-sessions` | Reads Claude Code and Codex session files, read-only: sessions of a directory, events, snapshot. See `docs/ai/sessions.md` |
 | `crates/ottospace-agents` | Speaks to Claude Code (`claude -p`, stream-json) and Codex (`codex app-server`) in their structured modes: starts, sends, reads events. Not wired into the app yet. See `docs/ai/agent-runners.md` |
-| `crates/ottospace` | The app: GPUI views, terminal, control socket, `ctl` client. Turns input into `Action`s, carries out `Effect`s |
+| `crates/ottospace` | The app: GPUI views, terminal, control socket, `ctl` client. Turns input into `Action`s, carries out `Effect`s. The network only to read the calendar feed (`calendar_ics`), through `/usr/bin/curl`, `https:` only, and the open pull requests of listed GitHub repositories, through the user's `gh` (`repos_prs`; `prs.rs`), read-only, a fixed argv; and, started only by the user, listing the user's repositories and cloning one the user chose, through the user's `gh` (`clone.rs`), each a fixed argv |
 | `sdk/` | TypeScript client for the control socket: [`sdk/README.md`](../sdk/README.md). Tests: `npm test` in `sdk/`, after `cargo build -p ottospace` |
 | `harness/` | Local input test page (`python3 -m http.server 8765 -d harness`) |
 | `docs/` | Design notes |

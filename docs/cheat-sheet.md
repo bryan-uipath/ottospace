@@ -60,8 +60,9 @@ ottospace            # opens on the Repos list
 | Collapse the bar, or open it again | ⌘⇧L (the section open last), ← in its header, or a click on the open section's icon; collapsed, a click on an icon opens that section |
 | Use it from the keyboard | ⌘⌃E (the open section, else Apps, or with it off the first), then `j` `k` move · ↵ open · ⇧↵ open below · Tab next section · Esc leave |
 | Read the lists again | Close and open the section, or ⌘⌃E: Apps and Repos are read when they open |
-| Add something | + in the bar's header: a new task in Tasks, a new empty workspace in Workspaces, a repository in Repos (pick its folder, or one inside it; it goes at the end of `repos` in the settings) |
-| Add a repository | Repos lists only what you add: its +, "+ Add a repository" while it is empty, a folder dropped on it, or ⌘⇧P ▸ Add Folder to Repos (the focused terminal's folder, else the tab's task's) |
+| Add something | + in the bar's header: a new task in Tasks, a new empty workspace in Workspaces, a repository in Repos (Local folder…: pick its folder, or one inside it; From GitHub…: clone one; it goes at the end of `repos` in the settings) |
+| Add a repository | Repos lists only what you add: its + (↵: Local folder…), "Add a local folder…" while it is empty, a folder dropped on it, or ⌘⇧P ▸ Add Folder to Repos (the focused terminal's folder, else the tab's task's) |
+| Clone from GitHub | Repos' + ▸ From GitHub… (or "Clone from GitHub…" while it is empty): paste `owner/name` or a link, ↵. It goes in `~/code/<name>` (`clone_dir`) with your `gh`, and is listed. Esc stops it; a click outside hides it |
 | Stop listing a repository | Point at its name in Repos: the trash. Nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it). A folder of repositories from older settings is one folded group: its trash takes it off whole |
 | New worktree | Point at a repository's name in Repos: +, type a branch, ↵. It goes in `~/.ottospace/worktrees/<repo>/<branch>` (`worktrees_dir`) and opens as a terminal tab |
 | Delete a worktree | Right-click its row in Repos: Delete worktree…, then ↵ (Esc keeps it). Its folder goes, its branch stays; git keeps one with changes, and the notice says why. Close its terminals, and mark its task done or dismiss it, first |

@@ -77,6 +77,10 @@ pub struct Settings {
     /// beside the settings file (`~/.ottospace/worktrees`).
     #[serde(default)]
     pub worktrees_dir: Option<String>,
+    /// Where the Repos section's From GitHub… clones, as `<dir>/<name>`. A relative path is inside
+    /// the ottospace folder. Default: `~/code` (a test run: none unless named).
+    #[serde(default)]
+    pub clone_dir: Option<String>,
     /// Where transcripts are kept, one Markdown file each (`listen::file`). Default: `transcripts`
     /// beside the settings file (`~/.ottospace/transcripts`).
     #[serde(default)]
@@ -582,6 +586,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         // Read each time they are used.
         windows: _,
         worktrees_dir: _,
+        clone_dir: _,
         transcripts_dir: _,
         repos_prs: _,
         apps,
