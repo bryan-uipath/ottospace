@@ -171,13 +171,15 @@ impl Model {
         self.back_to = self.live.or(self.back_to);
         let target = pane.or(self.live).or(self.focused).filter(|id| self.shown().contains(id));
         let source = target.and_then(|id| self.source_of(self.pane(id)?, &facts));
-        // The box's line becomes the draft's title, unless someone else wrote in it.
-        if self.compose.is_none() || (self.capture.is_none() && self.compose_theirs) {
+        // The box's ✎: the draft is the box's, which stays as it was (where it goes, a quick note).
+        let pen = std::mem::take(&mut self.compose_pen);
+        // The box's line becomes the draft's title, unless someone else wrote in it (the user's ✎
+        // in it keeps it).
+        if self.compose.is_none() || (self.capture.is_none() && self.compose_theirs && !pen) {
             self.compose = Some(Field::new("", MAX_TITLE));
             self.compose_reset();
         }
-        // The box's ✎: the draft is the box's, which stays as it was (where it goes, a quick note).
-        let boxed = std::mem::take(&mut self.compose_pen) && self.capture.as_ref().is_none_or(|bar| bar.boxed);
+        let boxed = pen && self.capture.as_ref().is_none_or(|bar| bar.boxed);
         // A draft in the bar is no box of the drawer: its task goes where the user is, also once
         // filed. Nor a quick note: its pills are not the draft's.
         if !boxed && self.capture.as_ref().is_none_or(|bar| !bar.boxed) {
@@ -214,8 +216,9 @@ impl Model {
                 effects.push(Effect::Snapshot { draft: bar.draft.clone(), material: n, pane });
                 self.focused = Some(pane);
             }
-            // Nothing to take a picture of: the bar is open for the title.
-            _ => bar.typing = true,
+            // Nothing to take a picture of: the bar is open for the title; the box's ✎ round
+            // ends with what it marked.
+            _ => (bar.typing, bar.round) = (true, None),
         }
         self.leave(effects);
         self.leave_visual(effects);
@@ -293,6 +296,10 @@ impl Model {
         let Some(bar) = &mut self.capture else { return action };
         let asked = bar.asked;
         let action = match action {
+            // ⌘N while the box's ✎ marks up: back to the box, with what was marked, as ↵.
+            Action::OpenCompose { .. } if bar.boxed && bar.annotating.is_some() => {
+                Action::AnnotateLeave { title: true }
+            }
             Action::OpenCompose { .. } => Action::CaptureTitle,
             Action::ComposeSubmit { .. } if asked => Action::CaptureDiscard { yes: true },
             Action::CloseCompose | Action::CaptureCancel if asked => Action::CaptureDiscard { yes: false },
@@ -1087,6 +1094,37 @@ mod tests {
         pen(&mut m);
         m.update(Action::Close { pane: Some(1) });
         assert_eq!((m.pen_marking(), m.mode(), m.compose_keys()), (false, Mode::Compose, true));
+    }
+
+    /// The box keeps its captures: a tab chosen puts nothing aside; a pane with nothing to picture
+    /// ends the round with what it marked, as ⌘N does; the user's ✎ keeps a line a client wrote.
+    #[test]
+    fn the_boxs_captures_stay_with_it() {
+        let mut m = boxed();
+        pen(&mut m);
+        drag(&mut m, [0.2, 0.2], [0.4, 0.5]);
+        m.update(Action::AnnotateLeave { title: true });
+        m.update(Action::SelectTab { index: 0 });
+        assert_eq!((title(&m), bar(&m).materials.len()), (Some("fix the cart"), 1));
+        // Round two: its pane, then one with nothing to picture. Round three's Esc drops its own alone.
+        let empty = Some(99).filter(|id| m.pane(*id).is_none());
+        pen(&mut m);
+        drag(&mut m, [0.2, 0.2], [0.4, 0.5]);
+        start(&mut m, empty);
+        assert_eq!((m.pen_marking(), bar(&m).round), (false, None));
+        pen(&mut m);
+        m.update(Action::AnnotateLeave { title: false });
+        assert_eq!(bar(&m).materials.iter().map(|m| m.n).collect::<Vec<_>>(), [1, 2]);
+        // ⌘N while marking: the box again, with what was marked, as ↵.
+        pen(&mut m);
+        drag(&mut m, [0.2, 0.2], [0.4, 0.5]);
+        m.update(Action::OpenCompose { text: String::new() });
+        assert_eq!((m.pen_marking(), m.compose_keys(), bar(&m).materials.len()), (false, true, 3));
+        // A line a client wrote, then the user's ✎: the line stays, the draft the box's.
+        let mut m = terminal_and_app();
+        m.update(Action::OpenCompose { text: "theirs".into() }.sent_by(Origin::Socket));
+        pen(&mut m);
+        assert_eq!((title(&m), m.pen_marking()), (Some("theirs"), true));
     }
 
     /// Only the user's ✎ starts one; a client's capture stays refused. Over a draft in the bar

@@ -5108,7 +5108,8 @@ impl Model {
     /// opening, as a conversation opened puts it (`follow_space`). `None`: the rest waits, as
     /// keys for panes do; and all of it under the key reference.
     fn beside_box(&self, action: &Action) -> Option<bool> {
-        if !(self.compose_modal() && self.mode() == Mode::Compose && !self.keys) {
+        // The box with its ✎ captures is not put aside: they would be lost with it.
+        if !(self.compose_modal() && self.mode() == Mode::Compose && !self.keys) || self.capture.is_some() {
             return None;
         }
         match action {
@@ -8025,6 +8026,10 @@ impl Model {
 
     /// Closes the new-task box, its line kept for the box's next opening (`OpenCompose` empty).
     fn put_compose_aside(&mut self) {
+        // Nor the box with its ✎ captures: they would be lost with it (`fold_drawer` neither).
+        if self.capture.is_some() {
+            return;
+        }
         let line = self.compose.take().filter(|line| !line.text().is_empty());
         let (refs, folder, quick) =
             (std::mem::take(&mut self.compose_refs), self.compose_folder.take(), self.quick.take());

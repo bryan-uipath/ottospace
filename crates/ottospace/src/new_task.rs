@@ -382,20 +382,12 @@ impl Workspace {
             let marks = material.marks.shapes.len();
             let label =
                 format!("Snapshot · {} · {marks} mark{}", material.source.label(), if marks == 1 { "" } else { "s" });
-            let off = div()
-                .id(gpui::SharedString::from(format!("snapshot-off:{n}")))
-                .relative()
-                .px_1()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_color(rgb(theme::MUTED))
-                .hover(|s| s.bg(rgb(theme::BORDER_STRONG)).text_color(rgb(theme::TEXT)))
-                .child("×")
-                .child(self.controls.mark(format!("snapshot:{n}")))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    drop(this.dispatch(Action::CaptureRemove { material: n }, this.input, window, cx))
-                }));
+            let off = self.pill_off(
+                format!("snapshot-off:{n}"),
+                Some(format!("snapshot:{n}")),
+                Action::CaptureRemove { material: n },
+                cx,
+            );
             let crop = ottospace_core::capture::crop(&material.marks.shapes).unwrap_or([0., 0., 1., 1.]);
             div()
                 .flex()
@@ -564,16 +556,19 @@ impl Workspace {
                     cx.stop_propagation();
                 }),
             );
-        let pen = ui::button("compose-pen", ui::Button::Ghost(ui::Face::Icon("icons/pen.svg")), ui::State::Rest)
-            .child(self.controls.mark("compose-pen"))
-            .tooltip(tip("Mark up a pane for it · ⌘⇧M"))
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    this.dispatch(Action::ComposePen, this.input, window, cx);
-                    cx.stop_propagation();
-                }),
-            );
+        // Not over a draft in the bar: that one is the capture key's.
+        let pen = self.model.bar_draft().is_none().then(|| {
+            ui::button("compose-pen", ui::Button::Ghost(ui::Face::Icon("icons/pen.svg")), ui::State::Rest)
+                .child(self.controls.mark("compose-pen"))
+                .tooltip(tip("Mark up a pane for it · ⌘⇧M"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.dispatch(Action::ComposePen, this.input, window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+        });
         let quick = self.model.quick_pills().is_some();
         let line = div()
             .relative()
@@ -600,7 +595,7 @@ impl Workspace {
             .border_t_1()
             .border_color(rgb(theme::BORDER))
             .child(attach)
-            .child(pen)
+            .children(pen)
             .children(self.pickers(cx))
             .child(div().flex_1())
             .children(self.agent_picker(cx))

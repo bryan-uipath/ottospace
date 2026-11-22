@@ -551,7 +551,7 @@ export interface BriefMaterial {
   /** The user's own: what they drew and typed. */
   annotations: Shape[];
   /** The part the marks cover, a little wider: what the new-task box's pill shows. Absent before it was kept. */
-  crop?: [number, number, number, number];
+  crop?: Rect;
   captured: Captured<{
     source: CaptureSource;
     /** What lies under each annotation, by its place in `annotations`. */

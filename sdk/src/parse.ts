@@ -222,16 +222,6 @@ function range(value: unknown, at: string): [[number, number], [number, number]]
   return [pair(value[0], at), pair(value[1], at)];
 }
 
-/** Four numbers, as a crop's `[x, y, w, h]`. */
-function quad(value: unknown, at: string): [number, number, number, number] {
-  const all = list(num)(value, at);
-  const [x, y, w, h] = all;
-  if (all.length !== 4 || x === undefined || y === undefined || w === undefined || h === undefined) {
-    throw wrong(at, "four numbers", value);
-  }
-  return [x, y, w, h];
-}
-
 function rect(value: unknown, at: string): Rect {
   if (!Array.isArray(value) || value.length !== 4) throw wrong(at, "[x, y, w, h]", value);
   return [num(value[0], at), num(value[1], at), num(value[2], at), num(value[3], at)];
@@ -805,7 +795,7 @@ function briefMaterial(value: unknown, at: string): BriefMaterial {
     n: num(o.n, `${at}.n`),
     stale: bool(o.stale ?? false, `${at}.stale`),
     annotations: list(shape)(o.annotations, `${at}.annotations`),
-    ...(o.crop === undefined ? {} : { crop: quad(o.crop, `${at}.crop`) }),
+    ...(o.crop === undefined ? {} : { crop: rect(o.crop, `${at}.crop`) }),
     captured: {
       ...labelled(c, `${at}.captured`),
       source: captureSource(c.source, `${at}.captured.source`),
