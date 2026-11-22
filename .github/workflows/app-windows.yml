@@ -73,6 +73,8 @@ jobs:
       # The canary's transcript, shown: what the recogniser heard, or why it skipped.
       - name: Transcript tests
         if: ${{ inputs.repeat == '0' }}
+        env:
+          OTTOSPACE_E2E_OUT: ${{ runner.temp }}/e2e
         run: cargo --locked e2e-apps canarys --nocapture
       # To measure a flaky step: every attempt runs, and the step fails if any did.
       - name: One test, repeated

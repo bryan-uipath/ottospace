@@ -157,6 +157,8 @@ jobs:
         id: transcript
         if: ${{ inputs.apps && !cancelled() }}
         continue-on-error: true
+        env:
+          OTTOSPACE_E2E_OUT: ${{ runner.temp }}/apps
         run: |
           set -o pipefail
           cargo --locked e2e-apps canarys --nocapture 2>&1 | tee "$RUNNER_TEMP/logs/transcript.log"
