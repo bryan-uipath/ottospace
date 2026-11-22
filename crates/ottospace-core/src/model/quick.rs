@@ -327,9 +327,11 @@ mod tests {
         m.update(Action::ComposeEnter);
         let task = m.tasks.list.last().expect("filed");
         assert_eq!((task.title.as_str(), task.project.as_deref()), ("ask about it", Some("canvas")));
-        // × on its pill: untagged, and the line says so.
+        // × on its pill: untagged, and the line says so. Its list, if open, closes: ↵ takes no row.
         open(&mut m, 600_000);
+        m.update(Action::ComposePicker { mark: Some('#') });
         m.update(Action::ComposePick { mark: '#', name: None });
+        assert_eq!((m.quick_project(), m.picker_menu()), (None, None));
         type_line(&mut m, "untagged");
         assert_eq!(m.compose_status().as_deref(), Some("↵ files it for later · ⌘↵ starts it now · Esc"));
         m.update(Action::ComposeEnter);

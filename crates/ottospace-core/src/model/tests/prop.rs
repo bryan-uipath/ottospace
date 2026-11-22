@@ -3676,6 +3676,8 @@ impl Run {
         // A draft with captures is filed under a name of its own when none was typed.
         let named = m.capture_title();
         let filing = filing.map(|line| (line.clone(), m.draft(line)));
+        // A quick note files under its project, that of what was in front, unless its line names one.
+        let quick_project = m.quick_project();
         // The default worktree of the workspace a task started now would join, and the box's folder.
         let joins_default = m.joins().and_then(|of| m.space_worktree(&of).map(String::from));
         let box_folder = m.compose_folder().map(String::from);
@@ -4823,7 +4825,8 @@ impl Run {
                 // the workspace's.
                 let shares = repo.is_none() && joined;
                 let repo = if shares { task.repo.clone() } else { repo };
-                let read = (&draft.title, draft.priority.unwrap_or(3), &draft.project, &repo, &draft.agent);
+                let project = quick_project.clone().or(draft.project.clone());
+                let read = (&draft.title, draft.priority.unwrap_or(3), &project, &repo, &draft.agent);
                 ensure!(
                     (&task.title, task.priority, &task.project, &task.repo, &task.agent) == read,
                     "{line:?} reads as {draft:?} and filed {task:?}"

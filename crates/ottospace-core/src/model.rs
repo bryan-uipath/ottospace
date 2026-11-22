@@ -6248,13 +6248,6 @@ impl Model {
             Action::ComposePicker { mark } => self.picker_toggle(mark),
             Action::ComposePickerStep { delta } => self.picker_step(delta),
             Action::ComposeDefault => self.picker_make_default(effects),
-            // The quick note's project pill's ×: untagged, typed tag and all.
-            Action::ComposePick { mark: '#', name: None } if self.quick.is_some() => {
-                if let Some(quick) = &mut self.quick {
-                    quick.project = None;
-                }
-                self.compose_pick('#', None);
-            }
             Action::ComposePick { mark, name } => self.compose_pick(mark, name),
             Action::ComposeAttach { paths, home, unreadable } => {
                 // A name the line cannot hold (a line break in it) or one too long to keep
@@ -8312,7 +8305,7 @@ impl Model {
 
     /// The line's tag of `mark` becomes `name` (one the picks offer), or goes: every word that
     /// is such a tag is taken out, and the new one added at the end.
-    fn compose_pick(&mut self, mark: char, name: Option<String>) {
+    fn compose_pick(&mut self, mark: char, mut name: Option<String>) {
         if !matches!(mark, '#' | '>' | '@') {
             return;
         }
@@ -8321,6 +8314,11 @@ impl Model {
             |name: &String| self.picker_rows(mark).iter().any(|row| row.name == *name && row.kind != pickers::NONE);
         if name.as_ref().is_some_and(|name| !listed(name)) {
             return;
+        }
+        self.compose_picker = None;
+        // The quick note keeps its project off the line (its pill's × too): a typed one goes.
+        if let Some(quick) = self.quick.as_mut().filter(|_| mark == '#') {
+            quick.project = name.take();
         }
         let picked = self.compose_picked(mark, name.as_deref());
         let Some(field) = self.compose.as_mut() else { return };

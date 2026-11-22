@@ -169,12 +169,6 @@ impl Model {
         let Some(menu) = self.picker_menu() else { return };
         let Some(row) = menu.rows.get(index) else { return };
         let name = (row.kind != NONE).then(|| row.name.clone());
-        self.compose_picker = None;
-        // The quick note keeps its project off the line: a typed one goes, the row's is its own.
-        if let Some(quick) = self.quick.as_mut().filter(|_| menu.mark == '#') {
-            quick.project = name;
-            return self.compose_pick('#', None);
-        }
         self.compose_pick(menu.mark, name);
     }
 
