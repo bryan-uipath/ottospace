@@ -368,7 +368,7 @@ export type Owner =
   | { kind: "decisions" };
 
 /** What the user's reorder drag carries: a row of the Workspaces section, or a space of the top row (never Home's). */
-export type ReorderItem = { kind: "workbook"; id: number } | { kind: "space"; of: Owner };
+export type ReorderItem = { kind: "workbook"; id: number } | { kind: "space"; of: Owner } | { kind: "repo"; path: string };
 
 /** A space of the top row: its tabs as places in `state.tabs`. Exactly one is `selected`: the tab on show is its. */
 export interface SpaceRow {

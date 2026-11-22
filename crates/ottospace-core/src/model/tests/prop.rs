@@ -236,11 +236,12 @@ impl Gen<'_> {
         self.rng.coin().then(|| self.rng.pick(&[0, 1, 2, 5, usize::MAX]))
     }
 
-    /// What a reorder drag carries: a workbook's row or a space, there or not.
+    /// What a reorder drag carries: a workbook's row, a space or a repository, there or not.
     fn reorder_item(&mut self) -> ReorderItem {
-        match self.rng.coin() {
-            true => ReorderItem::Workbook { id: self.workbook() },
-            false => {
+        match self.rng.below(3) {
+            0 => ReorderItem::Workbook { id: self.workbook() },
+            1 => ReorderItem::Repo { path: self.repo_path() },
+            _ => {
                 let shown: Vec<Owner> = self.m.shown_spaces().iter().map(|space| space.of.clone()).collect();
                 let of = if self.rng.one_in(4) { self.owner() } else { self.rng.pick(&shown) };
                 ReorderItem::Space { of }
@@ -2211,6 +2212,13 @@ fn check_reorder(m: &Model) -> Result<(), String> {
             ensure!(shown && *of != Owner::Home && *to >= 1, "a drag carries space {of:?} to {to}");
             m.shown_spaces().len()
         }
+        ReorderItem::Repo { path } => {
+            let entries = m.repo_entries();
+            let own = entries.iter().any(|at| m.repo_dirs.dirs[*at].path == *path);
+            let repo = m.repos.iter().any(|repo| repo.path == *path);
+            ensure!(own && repo && !m.repo_dirs.fixed, "a drag carries repository {path:?}, not an entry");
+            entries.len()
+        }
     };
     ensure!(*to < len, "a drag's place {to} of {len}");
     Ok(())
@@ -3767,8 +3775,17 @@ impl Run {
         let (sidebar_was, collapsed_was) = (m.sidebar.is_some(), m.drawer_collapsed());
         let decisions_before = m.decisions.is_some();
         let talk_before = m.talk.clone();
+        // A reorder moves the Repos entries and repositories, never adds or drops one.
+        let repo_set = |m: &Model| {
+            let mut dirs: Vec<String> = m.repo_dirs.dirs.iter().map(|dir| dir.path.clone()).collect();
+            let mut found: Vec<String> = m.repos.iter().map(|repo| repo.path.clone()).collect();
+            (dirs.sort(), found.sort());
+            (dirs, found)
+        };
+        let repos_before = matches!(action, Action::ReorderDrop).then(|| repo_set(m));
         let effects = m.update(sent);
         check(m)?;
+        ensure!(repos_before.is_none_or(|was| was == repo_set(m)), "a reorder changed the Repos list's entries");
         // With the overlays on, no client or timer opens one over the user's work.
         if m.overlays() && origin != Origin::User {
             ensure!(sidebar_was || m.sidebar.is_none(), "{action:?} from {origin:?} opened the sidebar overlay");
@@ -5109,8 +5126,10 @@ impl Run {
                 Effect::SaveRepos { dirs } => {
                     // Only the user adds, removes, moves or pins: what is written is what the list holds.
                     ensure!(user && !m.repo_dirs.fixed, "{origin:?} wrote the settings: {dirs:?}");
-                    let acts =
-                        matches!(action, Action::RepoAdd { .. } | Action::RepoRemove { .. } | Action::QuitConfirm);
+                    let acts = matches!(
+                        action,
+                        Action::RepoAdd { .. } | Action::RepoRemove { .. } | Action::QuitConfirm | Action::ReorderDrop
+                    );
                     ensure!(acts, "{action:?} wrote the Repos list");
                     ensure!(*dirs == m.repo_dirs.dirs, "written {dirs:?}, held {:?}", m.repo_dirs.dirs);
                     ensure!(dirs.len() <= MAX_DIRS, "more repositories than the settings may name");

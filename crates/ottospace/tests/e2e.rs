@@ -7492,6 +7492,68 @@ fn a_workspaces_row_dragged_above_another_moves_there_and_stays_after_a_restart(
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner: "being able to re-order repos in the left pane". A repository's name drags to
+/// another place, folded or not; a click still folds it; the order is kept in the settings.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_repositorys_name_dragged_above_another_moves_it_there_and_in_the_settings() {
+    let root = support::temp(&format!("ottospace-e2e-repo-reorder-{}", std::process::id()));
+    for repo in ["alpha", "beta", "gamma"] {
+        fake_repo(&root.join(repo));
+    }
+    let root = root.canonicalize().unwrap();
+    let dir = |name: &str| root.join(name).to_string_lossy().into_owned();
+    let settings = json!({"repos": [dir("alpha"), dir("beta"), dir("gamma")], "restore_layout": false});
+    let home = user_folder("repo-reorder", &settings.to_string());
+    let otto = Otto::launch_with("repo-reorder", &[("OTTOSPACE_HOME", home.to_str().unwrap())]);
+    let file = || serde_json::from_str::<Value>(&std::fs::read_to_string(home.join("settings.json")).unwrap()).unwrap();
+    let names = |reply: &Value| -> Vec<String> {
+        let bar = reply["repos_bar"].as_array().cloned().unwrap_or_default();
+        bar.iter().map(|r| r["name"].as_str().unwrap_or_default().to_string()).collect()
+    };
+    let header = |reply: &Value, n: usize| rect(&reply["repos_bar"][n]["header"]);
+    otto.call(json!({"cmd": "section", "section": "repos"}));
+    let before = otto.drawn();
+    assert_eq!(names(&before), ["alpha", "beta", "gamma"]);
+
+    // A click on a name still folds it.
+    otto.user_click(at(header(&before, 2), 0.25, 0.5));
+    let folded = otto.drawn();
+    assert_eq!(folded["repos_bar"][2]["folded"], true, "{}", folded["repos_bar"]);
+    let (gamma, alpha) = (header(&folded, 2), header(&folded, 0));
+
+    // A client's drag moves nothing: the order is the user's.
+    let refused = otto.drag(at(gamma, 0.5, 0.5), at(alpha, 0.5, 0.1));
+    assert_eq!((names(&refused), &refused["state"]["reorder"]), (names(&before), &Value::Null));
+
+    // Mid-drag: the name carried is not drawn; a bar above alpha's says where it lands. Esc puts it back.
+    let mouse = |action: &str, p: [f64; 2]| {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "as": "user"}))
+    };
+    mouse("down", at(gamma, 0.5, 0.5));
+    mouse("move", at(gamma, 0.5, 0.0));
+    let carried = mouse("move", at(alpha, 0.5, 0.1));
+    assert_eq!(carried["state"]["reorder"]["item"], json!({"kind": "repo", "path": dir("gamma")}));
+    assert_eq!(carried["state"]["reorder"]["to"], 0, "{}", carried["state"]["reorder"]);
+    assert_eq!(carried["repos_bar"][2]["header"], Value::Null, "the carried name is drawn");
+    let bar = rect(&carried["reorder_bar"]);
+    assert!(bar[1] < alpha[1] && bar[1] + bar[3] > alpha[1] - 6.0, "bar {bar:?}, alpha {alpha:?}");
+    otto.user_key("escape");
+    mouse("up", at(alpha, 0.5, 0.1));
+    assert_eq!((names(&otto.drawn()), &file()["repos"]), (names(&before), &settings["repos"]));
+
+    // Dropped: first, still folded, and so in the settings.
+    otto.user_drag(at(gamma, 0.5, 0.5), at(alpha, 0.5, 0.1));
+    let dropped = otto.drawn();
+    assert_eq!(names(&dropped), ["gamma", "alpha", "beta"]);
+    assert_eq!((&dropped["state"]["reorder"], &dropped["repos_bar"][0]["folded"]), (&Value::Null, &json!(true)));
+    assert_eq!(file()["repos"], json!([dir("gamma"), dir("alpha"), dir("beta")]));
+    // An open one, to the end: below the last name.
+    otto.user_drag(at(header(&dropped, 1), 0.5, 0.5), at(header(&dropped, 2), 0.5, 0.9));
+    assert_eq!(names(&otto.drawn()), ["gamma", "beta", "alpha"]);
+    assert_eq!(file()["repos"], json!([dir("gamma"), dir("beta"), dir("alpha")]));
+}
+
 /// The owner: "if i have a workspace w/o an active task, and i'm focused in it, and I press
 /// command+n for a new task and specify the task - the active workspace should now be attached
 /// to the task". In place, with its tabs; ⇧↵ and a client's task take nothing; the binding is

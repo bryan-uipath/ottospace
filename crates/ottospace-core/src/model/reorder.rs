@@ -1,16 +1,17 @@
-//! The user's drag that reorders: a row of the Workspaces section, or any space on the top row but
-//! Home. The workspaces have one order, the workbooks' (kept in their files): their spaces take
-//! their places on the row in it. A space of no workspace (a task's, a session's) keeps its own
+//! The user's drag that reorders: a row of the Workspaces section, any space on the top row but
+//! Home, or a repository's name in the Repos section (kept in the settings). The workspaces have
+//! one order, the workbooks' (kept in their files): their spaces take their places on the row in it. A space of no workspace (a task's, a session's) keeps its own
 //! place on the row, and the workspaces' go around it (`settle_space_order`). The shell says where
 //! the pointer is (`ReorderOver`); the core says what moves.
 
 use serde::{Deserialize, Serialize};
 
-use super::{Model, Owner, Space};
+use super::{Effect, Model, Owner, Space};
+use crate::repos;
 use crate::workbook::WorkbookId;
 
 /// Why a client's reorder is refused: the order follows the user's pointer.
-pub const REORDER_USERS: &str = "only the user drags a workspace to another place";
+pub const REORDER_USERS: &str = "only the user drags a row or a tab to another place";
 
 /// What a reorder drag carries.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -20,10 +21,12 @@ pub enum ReorderItem {
     Workbook { id: WorkbookId },
     /// A space on the top row: a workspace's (its task's, while bound to one) or another. Never Home's.
     Space { of: Owner },
+    /// A repository's name in the Repos section, by its path: one the settings name as itself.
+    Repo { path: String },
 }
 
 /// A drag in flight: `item`, and the place it takes if dropped now, among the rows listed (the
-/// section's) or the spaces shown (the top row's, Home at 0).
+/// section's), the spaces shown (the top row's, Home at 0) or the Repos entries drawn.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Reorder {
     pub item: ReorderItem,
@@ -56,30 +59,47 @@ impl Model {
         self.reorder.as_ref()
     }
 
-    /// How many places `item` moves among, and the least it may take (Home stays first). None:
-    /// it is not there to move.
+    /// The least and most place `item` may take (Home stays first; a pinned repository among
+    /// the pinned). None: it is not there to move.
     fn reorder_places(&self, item: &ReorderItem) -> Option<(usize, usize)> {
         match item {
             ReorderItem::Workbook { id } => {
                 let listed: Vec<WorkbookId> = self.workbooks.listed().map(|book| book.id).collect();
-                listed.contains(id).then_some((listed.len(), 0))
+                listed.contains(id).then(|| (0, listed.len() - 1))
             }
             // Anywhere after Home.
             ReorderItem::Space { of } => {
                 let shown = self.shown_spaces();
-                (*of != Owner::Home && shown.iter().any(|space| space.of == *of)).then_some((shown.len(), 1))
+                (*of != Owner::Home && shown.iter().any(|space| space.of == *of)).then(|| (1, shown.len() - 1))
+            }
+            ReorderItem::Repo { path } => {
+                let entries = self.repo_entries();
+                let dirs = &self.repo_dirs.dirs;
+                // A repository's own entry, not a group's folder.
+                let listed = self.repos.iter().any(|repo| repo.path == *path) && !self.repo_dirs.fixed;
+                let own = entries.iter().position(|at| dirs[*at].path == *path).filter(|_| listed)?;
+                let pinned = entries.iter().filter(|at| dirs[**at].pinned).count();
+                Some(if own < pinned { (0, pinned - 1) } else { (pinned, entries.len() - 1) })
             }
         }
     }
 
+    /// The Repos entries drawn, by index in `repo_dirs`, in the section's order: each repository's
+    /// own, and each group's folder. One with nothing found in it is not drawn.
+    pub fn repo_entries(&self) -> Vec<usize> {
+        let mut entries: Vec<usize> = self.repos.iter().filter_map(|repo| self.repo_dirs.place(&repo.path)).collect();
+        entries.dedup();
+        entries
+    }
+
     /// The user carries `item` over place `to`: a drag starts, or goes on. Kept within the list.
     pub(crate) fn reorder_over(&mut self, item: ReorderItem, to: usize) {
-        self.reorder = self.reorder_places(&item).map(|(len, least)| Reorder { item, to: to.clamp(least, len - 1) });
+        self.reorder = self.reorder_places(&item).map(|(least, most)| Reorder { item, to: to.clamp(least, most) });
     }
 
     /// The drop: the item carried takes its place. A workbook's makes the section's order the
-    /// user's from then on, kept in each file (`Workbook::order`).
-    pub(crate) fn reorder_drop(&mut self) {
+    /// user's from then on, kept in each file (`Workbook::order`); a repository's, in the settings.
+    pub(crate) fn reorder_drop(&mut self, effects: &mut Vec<Effect>) {
         let Some(Reorder { item, to }) = self.reorder.take() else { return };
         match item {
             ReorderItem::Workbook { id } => {
@@ -101,6 +121,22 @@ impl Model {
                 let Some(place) = books.iter().position(|book| *book == id) else { return };
                 let on_row: Vec<bool> = self.workbooks.list.iter().map(|book| books.contains(&book.id)).collect();
                 self.workbooks_move(id, place, &on_row);
+            }
+            ReorderItem::Repo { path } => {
+                // The row selected stays selected where it now is.
+                let selected = self.list.and_then(|at| self.list_rows().get(at).cloned());
+                let entries = self.repo_entries();
+                let dirs = &mut self.repo_dirs.dirs;
+                let drawn: Vec<bool> = (0..dirs.len()).map(|at| entries.contains(&at)).collect();
+                let Some(from) = dirs.iter().position(|dir| dir.path == path) else { return };
+                if !move_among(dirs, from, to, &drawn) {
+                    return;
+                }
+                // Past an entry not drawn: pinned ones first again, e.g. [P, x, C] with P after x.
+                self.repo_dirs.settle();
+                self.repos = repos::arrange(std::mem::take(&mut self.repos), &self.repo_dirs);
+                self.list = selected.and_then(|row| self.list_rows().iter().position(|r| *r == row)).or(self.list);
+                effects.push(Effect::SaveRepos { dirs: self.repo_dirs.dirs.clone() });
             }
         }
     }
@@ -539,5 +575,112 @@ mod tests {
             Action::RestoreLayout { layout, gone: Vec::new(), home: None, launch: true }.sent_by(Origin::System),
         );
         assert_eq!(names(&again), before);
+    }
+
+    /// Repos listing `entries` (`!` before a path: pinned; `/old` a group holding `/old/x`, `/old/y`).
+    fn repos_model(entries: &[&str]) -> Model {
+        let mut m = Model::default();
+        let dir = |e: &&str| {
+            let path = e.trim_start_matches('!');
+            repos::RepoDir { pinned: e.starts_with('!'), ..repos::RepoDir::new(path, path) }
+        };
+        let dirs = repos::RepoDirs { dirs: entries.iter().map(dir).collect(), ..Default::default() };
+        let paths = entries.iter().map(|e| e.trim_start_matches('!')).flat_map(|path| match path {
+            "/old" => vec!["/old/x".to_string(), "/old/y".to_string()],
+            _ => vec![path.to_string()],
+        });
+        let repo = |path: String| repos::Repo { name: repos::name_of(&path), path, branch: None, worktrees: vec![] };
+        let found = paths.map(repo).collect();
+        m.update(Action::SetRepoDirs { dirs }.sent_by(Origin::System));
+        m.update(Action::SetRepos { repos: found }.sent_by(Origin::System));
+        m
+    }
+
+    fn repo_paths(m: &Model) -> Vec<&str> {
+        m.repos.iter().map(|repo| repo.path.as_str()).collect()
+    }
+
+    fn move_repo(m: &mut Model, path: &str, to: usize) -> Vec<Effect> {
+        m.update(Action::ReorderOver { item: ReorderItem::Repo { path: path.into() }, to });
+        m.update(Action::ReorderDrop)
+    }
+
+    #[test]
+    fn a_repository_dragged_takes_its_place_and_the_settings_keep_it() {
+        let mut m = repos_model(&["/a", "/b", "/c"]);
+        let effects = move_repo(&mut m, "/a", 2);
+        assert_eq!(repo_paths(&m), ["/b", "/c", "/a"]);
+        let written = effects.iter().find_map(|e| match e {
+            Effect::SaveRepos { dirs } => Some(dirs.iter().map(|d| d.path.as_str()).collect::<Vec<_>>()),
+            _ => None,
+        });
+        assert_eq!(written, Some(vec!["/b", "/c", "/a"]));
+        assert_eq!(m.reorder(), None);
+        // Onto itself: nothing moves, nothing is written.
+        assert!(!move_repo(&mut m, "/c", 1).iter().any(|e| matches!(e, Effect::SaveRepos { .. })));
+        // A cancelled one moves nothing either.
+        m.update(Action::ReorderOver { item: ReorderItem::Repo { path: "/a".into() }, to: 0 });
+        m.update(Action::ReorderCancel);
+        assert_eq!((repo_paths(&m), m.reorder()), (vec!["/b", "/c", "/a"], None));
+    }
+
+    #[test]
+    fn a_folded_repository_moves_the_same_and_the_selected_row_stays_selected() {
+        let mut m = repos_model(&["/a", "/b", "/c"]);
+        m.update(Action::RepoFold { path: "/b".into(), fold: Some(true) });
+        m.sidebar = Some(super::super::Section::Repos);
+        let row = crate::list::ListRow::Repo("/c".into());
+        m.list = m.list_rows().iter().position(|r| *r == row);
+        move_repo(&mut m, "/b", 0);
+        assert_eq!(repo_paths(&m), ["/b", "/a", "/c"]);
+        assert_eq!(m.list.and_then(|at| m.list_rows().get(at).cloned()), Some(row));
+    }
+
+    #[test]
+    fn a_pinned_repository_moves_among_the_pinned_and_another_after_them() {
+        let mut m = repos_model(&["!/p", "!/q", "/a", "/b"]);
+        m.update(Action::ReorderOver { item: ReorderItem::Repo { path: "/b".into() }, to: 0 });
+        assert_eq!(m.reorder().map(|r| r.to), Some(2));
+        m.update(Action::ReorderDrop);
+        m.update(Action::ReorderOver { item: ReorderItem::Repo { path: "/p".into() }, to: 9 });
+        assert_eq!(m.reorder().map(|r| r.to), Some(1));
+        m.update(Action::ReorderDrop);
+        assert_eq!(repo_paths(&m), ["/q", "/p", "/b", "/a"]);
+        // An unpinned entry with nothing found, between: a pinned one still goes before it.
+        let mut m = repos_model(&["!/p", "!/q", "/gone", "/a"]);
+        m.update(Action::SetRepos { repos: m.repos.iter().filter(|r| r.path != "/gone").cloned().collect() });
+        move_repo(&mut m, "/p", 1);
+        let dirs: Vec<&str> = m.repo_dirs.dirs.iter().map(|d| d.path.as_str()).collect();
+        assert_eq!(dirs, ["/q", "/p", "/gone", "/a"]);
+    }
+
+    #[test]
+    fn a_group_is_a_place_but_neither_it_nor_its_repositories_are_carried() {
+        let mut m = repos_model(&["/a", "/old", "/b"]);
+        assert_eq!(repo_paths(&m), ["/a", "/old/x", "/old/y", "/b"]);
+        for path in ["/old", "/old/x", "/elsewhere"] {
+            m.update(Action::ReorderOver { item: ReorderItem::Repo { path: path.into() }, to: 0 });
+            assert_eq!(m.reorder(), None, "{path}");
+        }
+        // Above the group: its repositories stay under it, after the one moved.
+        move_repo(&mut m, "/b", 1);
+        assert_eq!(repo_paths(&m), ["/a", "/b", "/old/x", "/old/y"]);
+        // An entry with nothing found in it is no place, and stays where it was.
+        let mut m = repos_model(&["/a", "/gone", "/b"]);
+        m.update(Action::SetRepos { repos: m.repos.iter().filter(|r| r.path != "/gone").cloned().collect() });
+        move_repo(&mut m, "/b", 0);
+        let dirs: Vec<&str> = m.repo_dirs.dirs.iter().map(|d| d.path.as_str()).collect();
+        assert_eq!(dirs, ["/b", "/a", "/gone"]);
+    }
+
+    #[test]
+    fn none_is_carried_while_the_environment_names_the_repositories_or_once_it_is_unlisted() {
+        let mut m = repos_model(&["/a", "/b"]);
+        m.update(Action::ReorderOver { item: ReorderItem::Repo { path: "/b".into() }, to: 0 });
+        let dirs = repos::RepoDirs { fixed: true, ..m.repo_dirs.clone() };
+        m.update(Action::SetRepoDirs { dirs }.sent_by(Origin::System));
+        assert_eq!(m.reorder(), None);
+        m.update(Action::ReorderOver { item: ReorderItem::Repo { path: "/b".into() }, to: 0 });
+        assert_eq!(m.reorder(), None);
     }
 }
