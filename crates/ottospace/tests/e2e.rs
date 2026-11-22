@@ -5308,8 +5308,8 @@ fn a_feature_that_is_off_is_absent_and_features_turns_it_on_live() {
     assert!(otto.raw(r#"{"cmd":"key","keys":"cmd-shift-p"}"#)["state"]["palette"].is_null());
 }
 
-/// The owner: Features… lists each flag on two lines (its name over its description), with no
-/// group column, a flask for its stage, and finds a flag by its id or its name.
+/// The owner: Features… lists each flag on two lines (its name over its description), each row as
+/// tall as its description, with no group column, a flask for its stage, and finds a flag by its id or its name.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn features_lists_each_flag_on_two_lines_and_finds_it_by_id_or_name() {
@@ -5324,11 +5324,22 @@ fn features_lists_each_flag_on_two_lines_and_finds_it_by_id_or_name() {
     let reply = otto.call(json!({"cmd": "state"}));
     let rows = reply["palette_rows"].as_array().expect("rows").clone();
     assert_eq!(rows.len(), 9, "{rows:?}");
-    // The first row whole (a rect is the part that shows), two lines tall, as is the next.
+    // The first row whole (a rect is the part that shows), taller than a command's. Each row
+    // followed by another is whole: as much room above its name as below its description, whether
+    // that is one line or two (the owner: rows were two lines tall, a one-line one bottom-heavy).
     let whole = |reply: &Value| {
-        let rows = &reply["palette_rows"];
-        let (first, next) = (rect(&rows[0]["rect"])[3], rect(&rows[1]["rect"])[3]);
-        assert!(first > 1.8 * one && first == next && rows[0]["stage_rect"].is_array(), "{rows} against {one}");
+        let rows = reply["palette_rows"].as_array().expect("rows");
+        assert!(rect(&rows[0]["rect"])[3] > 1.5 * one && rows[0]["stage_rect"].is_array(), "{rows:?} against {one}");
+        let mut heights = vec![];
+        for pair in rows.windows(2).take_while(|pair| pair[1]["rect"].is_array()) {
+            let (row, text) = (rect(&pair[0]["rect"]), rect(&pair[0]["text_rect"]));
+            let (above, below) = (text[1] - row[1], row[1] + row[3] - text[1] - text[3]);
+            assert!(above > 1. && (above - below).abs() < 0.5, "{above} above, {below} below: {}", pair[0]);
+            heights.push(text[3]);
+        }
+        // A one-line description and a two-line one: a line apart.
+        let (low, high) = heights.iter().fold((f64::MAX, 0f64), |(l, h), &x| (l.min(x), h.max(x)));
+        assert!(high - low > 10., "{heights:?}");
     };
     whole(&reply);
     for row in &rows {
