@@ -18,6 +18,8 @@ use crate::{Workspace, dialog, ui};
 /// The dropdown's width, and a row's height: the shell knows its room from them.
 const MENU_WIDTH: f32 = 340.;
 const ROW: f32 = 26.;
+/// A picker's list: wide enough for a model's id and its word of detail.
+const PICKER_WIDTH: f32 = 280.;
 
 /// A tag's colour, by its mark: in the line, and on the dropdown's kind marks.
 pub fn tag_color(mark: char) -> u32 {
@@ -225,12 +227,10 @@ impl Workspace {
             .cursor_pointer()
             .when(menu.selected == Some(index), |d| d.bg(rgb(theme::SELECTED)))
             .hover(|s| s.bg(rgb(theme::SELECTED)))
-            // A picker's "no project" row needs no kind.
-            .child(div().w(px(46.)).flex_none().text_color(rgb(tag_color(menu.mark))).child(if row.kind == "none" {
-                ""
-            } else {
-                row.kind
-            }))
+            // A tag's row says what it is; a picker's needs not (its picker says it).
+            .when(self.model.picker_menu().is_none(), |d| {
+                d.child(div().w(px(46.)).flex_none().text_color(rgb(tag_color(menu.mark))).child(row.kind))
+            })
             .child(
                 div().flex().flex_none().max_w(px(180.)).overflow_hidden().text_color(rgb(theme::MUTED)).children(name),
             )
@@ -392,7 +392,11 @@ impl Workspace {
         let menu = self.model.picker_menu().filter(|menu| menu.mark == mark);
         let open = menu.is_some();
         let id = format!("picker:{mark}");
-        let list = menu.map(|menu| gpui::deferred(self.menu_list(&menu, cx).top_full().mt_1().left_0()));
+        // Its own width, not the picker's; the agent's, at the edge's right, opens leftward.
+        let list = menu.map(|menu| {
+            let list = self.menu_list(&menu, cx).w(px(PICKER_WIDTH)).max_w(px(PICKER_WIDTH)).top_full().mt_1();
+            gpui::deferred(if mark == '@' { list.right_0() } else { list.left_0() })
+        });
         ui::picker(gpui::SharedString::from(id.clone()), label, tag_color(mark), open)
             .child(self.controls.mark(id))
             // On the press, and no further: the line keeps the keyboard.
