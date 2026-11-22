@@ -4119,7 +4119,20 @@ impl Run {
             && done_before.iter().any(|id| m.tasks.get(*id).is_some_and(|t| t.state != State::Done));
         let acts = |e: &Effect| acts(e) && !(reopens && resumes(e));
         ensure!(!selects || !effects.iter().any(acts), "{origin:?}'s {action:?} started an agent: {effects:?}");
-        ensure!(!selects || m.chats == chats_before, "{origin:?}'s {action:?} changed a transcript");
+        // A card's row brings its card to the front (`card_first`, and Deny's message goes): an
+        // order, not what the transcript holds.
+        let ordered = |chats: &[crate::model::chat::Chat]| {
+            let mut chats = chats.to_vec();
+            for chat in chats.iter_mut().filter(|_| matches!(action, Action::TaskCard { .. })) {
+                chat.transcript.cards.make_contiguous().sort_by_key(|card| card.ticket);
+                chat.deny = false;
+            }
+            chats
+        };
+        ensure!(
+            !selects || ordered(&m.chats) == ordered(&chats_before),
+            "{origin:?}'s {action:?} changed a transcript"
+        );
         // A dial moves only on what its agent did (an app it read too), a message sent, or its process starting or ending.
         let moves = matches!(
             action,
@@ -6500,6 +6513,54 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// A card's row (`TaskCard`) brings its card to the front, by design: the check took that new
+/// order for a changed transcript.
+#[test]
+fn a_cards_row_brings_its_card_to_the_front_and_changes_nothing_else() {
+    replay(&[
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::Triaged, tab: None, assign: Assign::default() }
+            .into(),
+        Action::TaskTalk { id: 1 }.into(),
+        Action::TalkStart.into(),
+        Action::AgentStarted { task: Subject::Task(1), session: None, at: 1 }.sent_by(Origin::System),
+        Action::AgentEvents {
+            task: Subject::Task(1),
+            events: vec![
+                Said::TurnStarted,
+                Said::Permission {
+                    ticket: 1,
+                    tool: "AskUserQuestion".into(),
+                    label: "AskUserQuestion".into(),
+                    detail: Text::new(""),
+                    len: 0,
+                    cut: false,
+                    claim: Text::new(""),
+                    questions: vec![crate::ask::tests::question(2, false)],
+                },
+            ],
+            at: 5,
+        }
+        .sent_by(Origin::System),
+        Action::AgentEvents {
+            task: Subject::Task(1),
+            events: vec![Said::Permission {
+                ticket: 0,
+                tool: "Bash".into(),
+                label: "fix".into(),
+                detail: Text::new(&"x".repeat(28)),
+                len: 9,
+                cut: false,
+                claim: Text::new(""),
+                questions: vec![],
+            }],
+            at: 0,
+        }
+        .sent_by(Origin::System),
+        Action::TaskCard { id: 1, ticket: Some(0) }.into(),
+    ])
+    .unwrap();
+}
 
 /// ⇧↵ with a picker's list open took its row, as ↵ does, and the check took it for a lost task.
 #[test]
