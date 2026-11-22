@@ -4318,10 +4318,7 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     let plan = json!({"agent": "codex", "starts": true, "dir": null, "branch": null});
     assert_eq!(reply["compose_plan"], plan);
     // One line says what ↵ does; the tags only on demand.
-    assert_eq!(
-        reply["compose_status"],
-        json!("Type what needs doing, then ↵ starts @codex in your home folder · ⇧↵ later · Esc")
-    );
+    assert_eq!(reply["compose_status"], json!("Type, then ↵ starts @codex in your home folder · ⇧↵ later · Esc"));
     assert_eq!(reply["compose_hint"], Value::Null);
     // Typing goes into it; ⇧↵ files the task for later and the box closes. A task is open now:
     // the drawer goes.
@@ -4335,10 +4332,7 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     // ⌘N opens it again, empty: what ↵ will do once it has words; ⌘/ shows the tags, again every key.
     let reply = key("cmd-n");
     assert_eq!(reply["compose_host"], "drawer");
-    assert_eq!(
-        reply["compose_status"],
-        "Type what needs doing, then ↵ starts @claude in your home folder · ⇧↵ later · Esc"
-    );
+    assert_eq!(reply["compose_status"], "Type, then ↵ starts @claude in your home folder · ⇧↵ later · Esc");
     let reply = otto.user_key("cmd-/");
     assert!(
         reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")),

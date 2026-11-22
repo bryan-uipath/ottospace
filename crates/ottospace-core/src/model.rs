@@ -8309,7 +8309,8 @@ impl Model {
         }
         // With no title ↵ files nothing (`file_titled`): a draft's captures name one.
         let untitled = self.compose_line().is_some_and(|line| self.draft(line).title.is_empty());
-        let first = if untitled && self.capture_title().is_none() { "Type what needs doing, then " } else { "" };
+        // Short: it is the part of the line that always stays (`fit_status`).
+        let first = if untitled && self.capture_title().is_none() { "Type, then " } else { "" };
         if self.quick.is_some() {
             return Some(format!("{first}↵ files it for later · ⌘↵ starts it now · Esc"));
         }
@@ -15205,7 +15206,7 @@ mod tests {
         assert_eq!((m.compose_status(), m.compose_hint()), (None, None), "closed");
         m.update(Action::OpenCompose { text: String::new() });
         // Empty: what ↵ will do once there is a title. No tags until asked for.
-        let said = "Type what needs doing, then ↵ starts @claude in your home folder · ⇧↵ later · Esc";
+        let said = "Type, then ↵ starts @claude in your home folder · ⇧↵ later · Esc";
         assert_eq!((m.compose_status().as_deref(), m.compose_hint()), (Some(said), None));
         // The sheet: "? tags" or ⌘/ (the key reference's key) while the line has the keyboard.
         m.update(Action::ComposeSheet);
