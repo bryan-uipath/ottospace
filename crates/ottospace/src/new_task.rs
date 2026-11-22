@@ -18,6 +18,8 @@ use crate::{Workspace, dialog, ui};
 /// The dropdown's width, and a row's height: the shell knows its room from them.
 const MENU_WIDTH: f32 = 340.;
 const ROW: f32 = 26.;
+/// A character of the status line's size, a little wider than most: what it is measured by.
+const STATUS_CHAR: f32 = 6.4;
 
 /// A tag's colour, by its mark: in the line, and on the dropdown's kind marks.
 pub fn tag_color(mark: char) -> u32 {
@@ -428,6 +430,11 @@ impl Workspace {
                 cx.stop_propagation();
             }),
         );
+        // The room it had when last drawn, by a generous width a character of its size takes.
+        let width = f32::from(self.field.borrow().status);
+        let fits = |text: &str| width <= 0. || text.chars().count() as f32 * STATUS_CHAR <= width;
+        let status_text = self.model.compose_status_fitting(fits).unwrap_or_default();
+        let room = self.field.clone();
         // One line: what ↵ does with the line as it is, then the other keys.
         let status = div()
             .flex()
@@ -435,8 +442,21 @@ impl Workspace {
             .gap_2()
             .text_xs()
             .text_color(rgb(theme::MUTED))
-            // One line, whatever it says: what is under it never moves.
-            .child(div().flex_1().min_w_0().truncate().child(self.model.compose_status().unwrap_or_default()))
+            // One line, whatever it says: what is under it never moves. Too long, its trailing
+            // keys go (the core says which), never part of a word.
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(
+                        gpui::canvas(move |bounds, _, _| room.borrow_mut().status = bounds.size.width, |_, _, _, _| {})
+                            .absolute()
+                            .size_full(),
+                    )
+                    .child(status_text),
+            )
             .child(tags);
         let sheet = sheet_open.then(|| self.tag_caps(cx));
         div()

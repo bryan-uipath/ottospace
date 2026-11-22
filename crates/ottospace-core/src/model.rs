@@ -287,6 +287,13 @@ struct Taken {
     repo: Option<String>,
 }
 
+/// `status` with its trailing ` · ` parts left off, last first, until `fits` says it fits; the
+/// first part stays whatever its length (the shell cuts that one, if it must).
+pub fn fit_status(status: &str, fits: impl Fn(&str) -> bool) -> String {
+    let parts: Vec<&str> = status.split(" · ").collect();
+    (1..=parts.len()).rev().map(|n| parts[..n].join(" · ")).find(|text| fits(text)).unwrap_or_else(|| parts[0].into())
+}
+
 /// How many repositories the drawer offers as picks.
 pub const PICKS: usize = 4;
 
@@ -8321,6 +8328,13 @@ impl Model {
         Some(format!("{first}↵ starts @{} {place}{takes} · ⇧↵ later · Esc", plan.agent))
     }
 
+    /// The status line as it fits its room (`fits`): never cut inside a word. Its trailing parts go
+    /// first, one at a time, "Esc" and then the other keys; what ↵ does always stays.
+    /// `↵ starts @claude in app · ⇧↵ later · Esc` → `↵ starts @claude in app · ⇧↵ later`.
+    pub fn compose_status_fitting(&self, fits: impl Fn(&str) -> bool) -> Option<String> {
+        Some(fit_status(&self.compose_status()?, fits))
+    }
+
     /// The tags a line may hold, while the box is open and its sheet shows ("? tags", ⌘/). The
     /// dropdown teaches the rest.
     pub fn compose_hint(&self) -> Option<&'static str> {
@@ -15168,6 +15182,20 @@ mod tests {
             (m.compose_plan(), m.update(Action::ComposePick { mark: '>', name: Some("app".into()) })),
             (None, vec![])
         );
+    }
+
+    #[test]
+    fn a_status_line_too_long_leaves_off_its_trailing_keys_never_part_of_a_word() {
+        let said = "↵ starts @claude in your home folder · ⇧↵ later · Esc";
+        let room = |n: usize| move |text: &str| text.chars().count() <= n;
+        assert_eq!(fit_status(said, room(80)), said);
+        assert_eq!(fit_status(said, room(50)), "↵ starts @claude in your home folder · ⇧↵ later");
+        assert_eq!(fit_status(said, room(40)), "↵ starts @claude in your home folder");
+        // What ↵ does stays, however little room: the shell cuts that one.
+        assert_eq!(fit_status(said, room(5)), "↵ starts @claude in your home folder");
+        let mut m = Model::default();
+        m.update(Action::OpenCompose { text: "fix".into() });
+        assert_eq!(m.compose_status_fitting(room(40)).as_deref(), Some("↵ starts @claude in your home folder"));
     }
 
     #[test]
