@@ -173,11 +173,15 @@ impl Model {
         let source = target.and_then(|id| self.source_of(self.pane(id)?, &facts));
         // The box's ✎: the draft is the box's, which stays as it was (where it goes, a quick note).
         let pen = std::mem::take(&mut self.compose_pen);
-        // The box's line becomes the draft's title, unless someone else wrote in it (the user's ✎
-        // in it keeps it).
-        if self.compose.is_none() || (self.capture.is_none() && self.compose_theirs && !pen) {
+        // The box's line becomes the draft's title, unless someone else wrote in it: then it
+        // starts empty, the ✎'s box still the box it was.
+        if self.compose.is_none() || (self.capture.is_none() && self.compose_theirs) {
+            let was = (self.compose_centred, self.quick.take());
             self.compose = Some(Field::new("", MAX_TITLE));
             self.compose_reset();
+            if pen {
+                (self.compose_centred, self.quick) = was;
+            }
         }
         let boxed = pen && self.capture.as_ref().is_none_or(|bar| bar.boxed);
         // A draft in the bar is no box of the drawer: its task goes where the user is, also once
@@ -1097,7 +1101,7 @@ mod tests {
     }
 
     /// The box keeps its captures: a tab chosen puts nothing aside; a pane with nothing to picture
-    /// ends the round with what it marked, as ⌘N does; the user's ✎ keeps a line a client wrote.
+    /// ends the round with what it marked, as ⌘N does; a client's line is no ✎ draft's title.
     #[test]
     fn the_boxs_captures_stay_with_it() {
         let mut m = boxed();
@@ -1120,11 +1124,14 @@ mod tests {
         drag(&mut m, [0.2, 0.2], [0.4, 0.5]);
         m.update(Action::OpenCompose { text: String::new() });
         assert_eq!((m.pen_marking(), m.compose_keys(), bar(&m).materials.len()), (false, true, 3));
-        // A line a client wrote, then the user's ✎: the line stays, the draft the box's.
-        let mut m = terminal_and_app();
-        m.update(Action::OpenCompose { text: "theirs".into() }.sent_by(Origin::Socket));
+        // A line a client wrote, then the user's ✎: no title of theirs; the draft is still the box's.
+        let mut m = boxed();
+        m.update(Action::FieldEdit { edit: Edit::Insert(" theirs".into()) }.sent_by(Origin::Socket));
         pen(&mut m);
-        assert_eq!((title(&m), m.pen_marking()), (Some("theirs"), true));
+        assert_eq!((title(&m), m.compose_theirs, m.pen_marking()), (Some(""), false, true));
+        drag(&mut m, [0.2, 0.2], [0.4, 0.5]);
+        m.update(Action::AnnotateLeave { title: true });
+        assert_eq!((m.compose_centred(), m.bar_draft().is_none()), (true, true));
     }
 
     /// Only the user's ✎ starts one; a client's capture stays refused. Over a draft in the bar

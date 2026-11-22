@@ -3949,7 +3949,7 @@ pub struct Model {
     pub(crate) compose_talked: bool,
     /// The user's ⌘N opened the box over the panes, centred (`overlay_panels`): see `compose_centred`.
     #[serde(skip)]
-    compose_centred: bool,
+    pub(crate) compose_centred: bool,
     /// The quick note box (⌘⇧N): the box is it while this is set. Never in the state.
     #[serde(skip)]
     pub(crate) quick: Option<quick::Quick>,
