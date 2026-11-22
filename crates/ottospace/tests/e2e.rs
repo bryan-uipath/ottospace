@@ -2491,10 +2491,12 @@ fn the_new_task_box_files_a_line() {
         // Esc closes the dropdown first, if a folder's entries have opened it again.
         while key("escape")["mode"] == "compose" {}
     }
-    // An amount of money is no skill being typed: Tab leaves the line alone.
+    // An amount of money is no skill being typed: Tab leaves the line alone (it opens the first
+    // picker's list instead), and Esc closes that list, then the box.
     compose("costs $5");
-    assert_eq!(key("tab")["state"]["compose"], "costs $5");
-    key("escape");
+    let reply = key("tab");
+    assert_eq!((&reply["state"]["compose"], &reply["compose_picker"]["mark"]), (&json!("costs $5"), &json!("#")));
+    while key("escape")["mode"] == "compose" {}
     // Every tag through the box. The skill is spelled as its folder is, once; the path is kept
     // as typed, with where it was found: inside the repository; and it stays in the title.
     let line = r"review the export PR #canvas >flow-app p2, @codex $Code-Review $code-review ./src/export, ./My\ Notes";
