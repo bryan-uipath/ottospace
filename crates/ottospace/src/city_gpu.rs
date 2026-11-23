@@ -4,7 +4,7 @@
 //! paint. Run
 //! on a thread of its own; a still picture, made again only when the scene or its size changes.
 
-use ottospace_core::scene::{Block, Kind, Look, Scene};
+use ottospace_core::scene::{Block, Kind, Scene};
 use ottospace_core::theme;
 
 /// The picture, `width` × `height` pixels, BGRA, rows packed.
@@ -108,40 +108,15 @@ fn rgb(hex: u32) -> [f32; 3] {
     [c.r, c.g, c.b]
 }
 
-/// Hues of top-level districts in a tinted look, in degrees: one each, round again past eight.
-const HUES: [f32; 8] = [195., 265., 30., 140., 330., 55., 225., 95.];
-
-fn hsl(hue: f32, s: f32, l: f32) -> [f32; 3] {
-    let c = gpui::Rgba::from(gpui::hsla(hue / 360., s, l, 1.));
-    [c.r, c.g, c.b]
-}
-
-/// A box's top colour and its edges', in `look`. Four tones, quiet behind the hints: the
-/// background, the ground (streets), districts (a step lighter per tier, edged in a dim primary
-/// that fades with the tier) and buildings (edged lighter). A tinted look gives each top-level
-/// district's plates and buildings its hue, edged stronger; plinths edge every tier bright.
-fn colour(block: &Block, look: Look) -> ([f32; 3], [f32; 3]) {
-    let hue = block.district.filter(|_| look.tinted()).map(|d| HUES[d % HUES.len()]);
-    match (block.kind, hue) {
-        (Kind::Plate(tier), Some(h)) => {
-            let tier = tier.clamp(1, 5) as f32 - 1.;
-            (hsl(h, 0.28, 0.15 + 0.025 * tier), hsl(h, 0.6, 0.58 - 0.06 * tier))
-        }
-        (Kind::Building, Some(h)) => (hsl(h, 0.14, 0.34), hsl(h, 0.25, 0.64)),
-        (Kind::Plate(tier), None) if look.rims() => {
-            let tier = tier.clamp(1, 5) as u32 - 1;
-            (rgb(0x1f2632 + 0x06080a * tier), rgb(0x56cde8))
-        }
-        _ => plain(block.kind),
-    }
-}
-
-fn plain(kind: Kind) -> ([f32; 3], [f32; 3]) {
+/// A box's top colour and its edges'. Four tones, quiet behind the hints: the background, the
+/// ground (streets), districts (plinths a step lighter per tier, their top edge lit: dimmed on
+/// their sides, `instance`) and buildings (edged lighter).
+fn colour(kind: Kind) -> ([f32; 3], [f32; 3]) {
     match kind {
         Kind::Ground => (rgb(0x111115), rgb(0x111115)),
         Kind::Plate(tier) => {
             let tier = tier.clamp(1, 5) as u32 - 1;
-            (rgb(0x1f2632 + 0x06080a * tier), rgb(0x3ab8d4 - 0x0a1a1e * tier))
+            (rgb(0x1f2632 + 0x06080a * tier), rgb(0x56cde8))
         }
         Kind::Building => (rgb(0x50505e), rgb(0x9a9aac)),
         Kind::Lit(hex) => (rgb(hex), rgb(0xffffff)),
@@ -289,10 +264,8 @@ impl Gpu {
         clear.sort_by(|a, b| far(a).total_cmp(&far(b)));
         let solid = scene.blocks.iter().filter(|b| !see_through(b));
         let solid_count = solid.clone().count() as u32;
-        let boxes: Vec<f32> = (solid.map(|b| instance(b, scene.look, 1.)))
-            .chain(clear.iter().map(|b| instance(b, scene.look, GLASS)))
-            .flatten()
-            .collect();
+        let boxes: Vec<f32> =
+            (solid.map(|b| instance(b, 1.))).chain(clear.iter().map(|b| instance(b, GLASS))).flatten().collect();
         let instances = buffer(device, &boxes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST);
         self.queue.write_buffer(&instances, 0, &bytes(&boxes));
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -361,11 +334,11 @@ impl Gpu {
     }
 }
 
-fn instance(block: &Block, look: Look, alpha: f32) -> [f32; 15] {
-    let ([r, g, b], edge) = colour(block, look);
+fn instance(block: &Block, alpha: f32) -> [f32; 15] {
+    let ([r, g, b], edge) = colour(block.kind);
     let (lo, hi) = (block.min, block.max);
     let glows = if matches!(block.kind, Kind::Lit(_)) { 1. } else { 0. };
-    let sides = if look.rims() && matches!(block.kind, Kind::Plate(_)) { 0.25 } else { 1. };
+    let sides = if matches!(block.kind, Kind::Plate(_)) { 0.25 } else { 1. };
     [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2], sides, alpha]
 }
 
@@ -404,21 +377,20 @@ mod tests {
             let plan = atlas::atlas(&atlas::repo(&files));
             let laid = started.elapsed();
             let lit = [(plan.places.iter().rev().find(|p| !p.group).unwrap().id.as_str(), 0xff6467)];
-            let looks = [Look::Terraces, Look::Plinths, Look::Tint, Look::Labels, Look::Blend];
-            for (look, glass) in looks.into_iter().flat_map(|look| [(look, true), (look, false)]) {
+            for glass in [true, false] {
                 let started = std::time::Instant::now();
-                let scene = ottospace_core::scene::scene_as(&plan, &lit, 1.6, look);
+                let scene = ottospace_core::scene::scene(&plan, &lit, 1.6);
                 let built = started.elapsed();
                 let (w, h) = (1600, 1000);
                 let started = std::time::Instant::now();
                 let picture = gpu.render(&scene, w, h, glass).unwrap();
                 let rendered = started.elapsed();
                 println!(
-                    "{count} files, {look:?}, glass {glass}: layout {laid:.1?}, scene {built:.1?} ({} boxes), render and read back {w}×{h} {rendered:.1?}",
+                    "{count} files, glass {glass}: layout {laid:.1?}, scene {built:.1?} ({} boxes), render and read back {w}×{h} {rendered:.1?}",
                     scene.blocks.len()
                 );
                 if let Some(dir) = std::env::var_os("CITY_PICTURE") {
-                    let name = format!("city-{count}-{look:?}{}.bmp", if glass { "" } else { "-opaque" });
+                    let name = format!("city-{count}{}.bmp", if glass { "" } else { "-opaque" });
                     std::fs::write(std::path::Path::new(&dir).join(name), bmp(&picture)).unwrap();
                 }
             }

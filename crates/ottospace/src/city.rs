@@ -20,7 +20,7 @@ use ottospace_core::atlas::{self, Atlas};
 use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::model::Origin;
 use ottospace_core::model::city::At;
-use ottospace_core::scene::{self, Kind, Look, Scene};
+use ottospace_core::scene::{self, Kind, Scene};
 use ottospace_core::{status_bar, theme};
 
 use crate::city_gpu::{Gpu, Picture};
@@ -34,8 +34,10 @@ const MOST_BYTES: u64 = 4 << 20;
 const MOST_FILES: usize = 20_000;
 /// Cities kept, by folder: a task's tab shown again draws at once.
 const KEPT: usize = 8;
-/// Names of districts on their plates, at most (a look that names more tiers: twice as many).
+/// Names of districts on their plates, at most, and their tier at most (2: a folder of the root
+/// and the districts on it).
 const MOST_NAMES: usize = 24;
+const NAMED_TIERS: usize = 2;
 /// A beam's label sits this many points beside its dot; the hovered beam fades in over this long.
 const BESIDE: f32 = 8.;
 const FADE: Duration = Duration::from_millis(120);
@@ -196,24 +198,22 @@ pub(crate) fn checkout_files(
 }
 
 /// A picture asked for: the folder, its plan, the lit files (place ids, colours), the size in
-/// pixels and the look (`developer.city_look`). Empty places with one key share one picture.
+/// pixels and whether its buildings are glass. Empty places with one key share one picture.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Key {
     dir: String,
     plan: usize,
     lit: Vec<(String, u32)>,
     size: (u32, u32),
-    look: Look,
     glass: bool,
 }
 
 /// A district's name on its plate: where it starts and how wide the plate's edge is there, in
-/// shares of the picture, and its tier.
+/// shares of the picture.
 struct Name {
     text: String,
     at: (f32, f32),
     room: f32,
-    tier: usize,
 }
 
 /// A picture made: where, in shares of it, the lit buildings and the districts' names are; the
@@ -328,7 +328,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
     let started = Instant::now();
     let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
     let (w, h) = key.size;
-    let scene = scene::scene_as(plan, &lit, w as f32 / h as f32, key.look);
+    let scene = scene::scene(plan, &lit, w as f32 / h as f32);
     let Picture { width, height, bgra } = gpu.render(&scene, w, h, key.glass)?;
     let camera = scene.camera.ok_or("no camera")?;
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
@@ -343,28 +343,26 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
         .collect();
     // A district is named along the back edge of its plate, from its left end on screen, outer
     // tiers first; a district on another is named from it (`ui` on `src`, not `src/ui`).
-    let named = key.look.named_tiers();
     let mut plates: Vec<(usize, usize, &scene::Block)> = (scene.blocks.iter())
         .filter_map(|b| match (b.kind, b.place) {
-            (Kind::Plate(tier), Some(place)) if tier <= named => Some((tier, place, b)),
+            (Kind::Plate(tier), Some(place)) if tier <= NAMED_TIERS => Some((tier, place, b)),
             _ => None,
         })
         .collect();
     plates.sort_by_key(|(tier, ..)| *tier);
     let ids: Vec<&str> =
-        plates.iter().filter(|(tier, ..)| *tier < named).map(|(_, p, _)| plan.places[*p].id.as_str()).collect();
-    let most = if named > 2 { MOST_NAMES * 2 } else { MOST_NAMES };
+        plates.iter().filter(|(tier, ..)| *tier < NAMED_TIERS).map(|(_, p, _)| plan.places[*p].id.as_str()).collect();
     let names = (plates.iter())
-        .filter_map(|(tier, place, b)| {
+        .filter_map(|(_, place, b)| {
             let id = plan.places[*place].id.as_str();
             let outer =
                 ids.iter().filter_map(|outer| id.strip_prefix(outer)?.strip_prefix('/')).min_by_key(|rest| rest.len());
             let one = camera.project([b.min[0], b.max[1], b.max[2]])?;
             let other = camera.project([b.max[0], b.max[1], b.max[2]])?;
             let at = if one.0 <= other.0 { one } else { other };
-            Some(Name { text: outer.unwrap_or(id).to_string(), at, room: (other.0 - one.0).abs(), tier: *tier })
+            Some(Name { text: outer.unwrap_or(id).to_string(), at, room: (other.0 - one.0).abs() })
         })
-        .take(most)
+        .take(MOST_NAMES)
         .collect();
     let groups = plan.places.iter().filter(|p| p.group).count();
     let render_us = started.elapsed().as_micros() as u64;
@@ -421,7 +419,7 @@ impl Drawn {
             "lit": lit, "labels": place.map_or(0, |place| place.labels), "failed": failed, "reads": reads,
             "renders": self.renders, "paints": self.paints, "render_us": made.map(|made| made.render_us),
             "hovered": hovered, "lit_tops": tops, "lit_beams": lit_beams, "pictures": self.pictures.len(),
-            "look": made.map(|made| made.key.look), "glass": made.map(|made| made.key.glass),
+            "glass": made.map(|made| made.key.glass),
         })
     }
 }
@@ -568,7 +566,6 @@ impl Workspace {
                     plan: Arc::as_ptr(plan) as usize,
                     lit,
                     size: (size(w), size(h)),
-                    look: crate::config::live().developer.city_look,
                     glass: !crate::config::live().developer.city_opaque,
                 });
                 let key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
@@ -713,24 +710,15 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
     let mut drawn_names: Vec<Bounds<Pixels>> = Vec::new();
     // A name with a line break in it is not drawn: `shape_line` takes one line. Nor one wider
     // than its plate's edge, or over the hints or another name.
-    let graded = made.key.look.graded_names();
     for name in made.names.iter().filter(|name| !name.text.contains(char::is_control)) {
-        // Graded: the outer the district, the larger and brighter its name.
-        let (size, colour) = match (graded, name.tier) {
-            (true, 1) => (theme::TEXT_ROW, Hsla::from(rgb(theme::TEXT)).opacity(0.85)),
-            (true, 2) => (theme::TEXT_XS, Hsla::from(rgb(theme::MUTED))),
-            (true, 3) => (theme::TEXT_2XS, Hsla::from(rgb(theme::MUTED)).opacity(0.7)),
-            (true, _) => (theme::TEXT_2XS, Hsla::from(rgb(theme::MUTED)).opacity(0.5)),
-            (false, _) => (theme::TEXT_2XS, Hsla::from(rgb(theme::MUTED))),
-        };
-        let line = shape(&name.text, colour, size, window);
+        let line = shape(&name.text, Hsla::from(rgb(theme::MUTED)), theme::TEXT_2XS, window);
         let at = bounds.origin + point(px(name.at.0 * w + 4.), px(name.at.1 * h + 2.));
-        let room = Bounds { origin: at, size: gpui::size(line.width, px(size + 4.)) };
+        let room = Bounds { origin: at, size: gpui::size(line.width, px(14.)) };
         if f32::from(line.width) + 8. <= name.room * w
             && !room.intersects(&clear)
             && bounds.contains(&room.bottom_right())
             && !drawn_names.iter().any(|other| other.intersects(&room))
-            && line.paint(at, px(size + 4.), window, cx).is_ok()
+            && line.paint(at, px(14.), window, cx).is_ok()
         {
             drawn_names.push(room);
         }

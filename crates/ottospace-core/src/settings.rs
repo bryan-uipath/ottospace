@@ -214,10 +214,6 @@ pub struct Developer {
     /// shows; a report is filed as a task in a new worktree of it (`bug`).
     #[serde(default)]
     pub ottospace_repo: Option<String>,
-    /// How the code city draws folders, an experiment to pick from: `terraces` (default),
-    /// `plinths`, `tint`, `labels`, `blend` (`scene::Look`). Not documented for users.
-    #[serde(default)]
-    pub city_look: crate::scene::Look,
     /// The code city's buildings solid, not glass: for comparing. Not documented for users.
     #[serde(default)]
     pub city_opaque: bool,
@@ -1380,8 +1376,6 @@ mod tests {
             Settings::read(r#"{"developer": {"ottospace_rep": "~/code/ottospace"}, "tasks": "~/t"}"#);
         assert_eq!((settings.developer, settings.tasks.as_deref()), (Developer::default(), Some("~/t")));
         assert!(wrong.len() == 1 && wrong[0].starts_with("developer: unknown field"), "{wrong:?}");
-        let (settings, wrong) = Settings::read(r#"{"developer": {"city_look": "blend"}}"#);
-        assert_eq!((settings.developer.city_look, wrong.len()), (crate::scene::Look::Blend, 0));
         let (_, wrong) = Settings::read(r#"{"developer": {"ottospace_repo": 3}}"#);
         assert_eq!(wrong.len(), 1);
     }
