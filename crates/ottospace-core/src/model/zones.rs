@@ -11,8 +11,15 @@ use crate::model::PaneId;
 
 /// The left rail's sections, top to bottom, as the shell draws them. Calendar only while a feed is
 /// set: `Model::sections`.
-pub const SECTIONS: [Section; 6] =
-    [Section::Repos, Section::Tasks, Section::Calendar, Section::Apps, Section::Workbook, Section::Marks];
+pub const SECTIONS: [Section; 7] = [
+    Section::Repos,
+    Section::Projects,
+    Section::Tasks,
+    Section::Calendar,
+    Section::Apps,
+    Section::Workbook,
+    Section::Marks,
+];
 
 /// A rail when it has the keyboard, in list mode as the section list does: a section's cell, or
 /// an item of the drawer's rail.

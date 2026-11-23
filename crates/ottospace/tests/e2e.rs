@@ -19,6 +19,7 @@ const TIMEOUT: Duration = Duration::from_secs(40);
 const MARKS: (&str, &str) = ("OTTOSPACE_FEATURES", "marks");
 const APPS_SECTION: (&str, &str) = ("OTTOSPACE_FEATURES", "apps_section");
 const BOTH: (&str, &str) = ("OTTOSPACE_FEATURES", "marks,apps_section");
+const PROJECTS: (&str, &str) = ("OTTOSPACE_FEATURES", "projects");
 
 /// A running ottospace on a private socket. Killed on drop, so a failed assert leaves no window.
 struct Otto {
@@ -5730,7 +5731,7 @@ fn features_lists_each_flag_on_two_lines_and_finds_it_by_id_or_name() {
     otto.user_key("f e a t u r e s enter");
     let reply = otto.call(json!({"cmd": "state"}));
     let rows = reply["palette_rows"].as_array().expect("rows").clone();
-    assert_eq!(rows.len(), 10, "{rows:?}");
+    assert_eq!(rows.len(), 11, "{rows:?}");
     // The first row whole (a rect is the part that shows), taller than a command's. Each row
     // followed by another is whole: as much room above its name as below its description, whether
     // that is one line or two (the owner: rows were two lines tall, a one-line one bottom-heavy).
@@ -17557,4 +17558,56 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     assert!(otto.call(json!({"cmd": "state"}))["home_drawn"]["lattice_builds"].as_u64() > Some(0));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_projects_section_lists_a_made_up_folder_only_once_opened_and_newest_first() {
+    use std::time::SystemTime;
+    // Made-up projects: a folder with a note, two lone notes of set ages, and what is no project.
+    let dir = support::temp(&format!("ottospace-e2e-projects-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("beta-hiring")).unwrap();
+    std::fs::write(dir.join("beta-hiring/README.md"), "# Beta hiring\n").unwrap();
+    let days_ago = |days: u64| SystemTime::now() - Duration::from_secs(days * 86_400);
+    for (name, days) in [("alpha-launch.md", 3), ("gamma.md", 10)] {
+        std::fs::write(dir.join(name), format!("# {name}\n")).unwrap();
+        let file = std::fs::File::options().write(true).open(dir.join(name)).unwrap();
+        file.set_modified(days_ago(days)).unwrap();
+    }
+    std::fs::write(dir.join(".hidden.md"), "# Hidden").unwrap();
+    std::fs::write(dir.join("notes.txt"), "not a project").unwrap();
+    let settings = json!({"projects_dir": dir, "repos": [], "restore_layout": false, "sessions": false});
+    let home = user_folder("projects", &settings.to_string());
+    let otto = Otto::launch_with("projects-1", &[("OTTOSPACE_HOME", home.to_str().unwrap()), PROJECTS]);
+
+    // Set, but nothing read before the section opens.
+    let bar = otto.call(json!({"cmd": "state"}))["projects_bar"].clone();
+    assert_eq!(bar, json!({"on": true, "rows": []}));
+    otto.call(json!({"cmd": "section", "section": "projects"}));
+    let rows = otto.wait_for("three projects drawn", |o| {
+        let rows = o.call(json!({"cmd": "state"}))["projects_bar"]["rows"].as_array()?.clone();
+        (rows.len() == 3 && rows.iter().all(|row| !row["row"].is_null())).then_some(rows)
+    });
+    // Newest first: the folder (changed now), then the notes by age. No title or path is given.
+    let kinds: Vec<(bool, bool, bool)> = rows
+        .iter()
+        .map(|r| (r["file"].as_bool().unwrap(), r["note"].as_bool().unwrap(), r["placed"].as_bool().unwrap()))
+        .collect();
+    assert_eq!(kinds, [(false, true, false), (true, true, false), (true, true, false)]);
+    let modified: Vec<u64> = rows.iter().map(|r| r["modified"].as_u64().unwrap()).collect();
+    assert!(modified.windows(2).all(|w| w[0] > w[1]), "{modified:?}");
+    let tops: Vec<f64> = rows.iter().map(|r| rect(&r["row"])[1]).collect();
+    assert!(tops.windows(2).all(|w| w[0] < w[1]), "rows drawn in order: {tops:?}");
+    let state = otto.call(json!({"cmd": "state"}));
+    assert!(!state.to_string().contains("Beta hiring") && !state.to_string().contains("alpha-launch"));
+    drop(otto);
+
+    // No folder of its own: no settings, no section, nothing read.
+    let otto = Otto::launch_with("projects-2", &[PROJECTS]);
+    let reply = otto.call(json!({"cmd": "section", "section": "projects"}));
+    let shown = (&reply["projects_bar"], &reply["state"]["sidebar"]);
+    assert_eq!(shown, (&json!({"on": false, "rows": []}), &json!(null)));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&dir);
 }

@@ -1,0 +1,8 @@
+# Projects (`projects` flag): a made-up projects_dir of three folders and two notes. Titles come
+# from each note's first heading, else the name; the rail's Projects cell opens the list.
+{"env":{"OTTOSPACE_FEATURES":"projects"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"section","section":"projects"}
+{"until":"projects_bar.rows","len":5}
+{"settle":300}
+{"shot":"list"}

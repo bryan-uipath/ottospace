@@ -34,6 +34,8 @@ pub enum ListRow {
     AllApps,
     /// A meeting of the Calendar section, by its id. Opening it joins it.
     Meeting(u64),
+    /// A project of the Projects section, by its path.
+    ProjectEntry(String),
 }
 
 /// What a key does in list mode.

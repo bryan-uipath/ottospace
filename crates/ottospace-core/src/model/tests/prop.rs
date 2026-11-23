@@ -22,6 +22,7 @@ use crate::model::displays::Display;
 use crate::model::rail::RailItem;
 use crate::model::reorder::{Reorder, ReorderItem};
 use crate::progress;
+use crate::projects::Project;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::row_menu::MenuOf;
 use crate::sessions::{InPane, Link, Seen, WaitsFor};
@@ -1812,6 +1813,16 @@ const MAKERS: &[Make] = &[
     OUT_MAKERS[2],
     OUT_MAKERS[3],
     |g| {
+        // A few made-up projects, a path sometimes twice.
+        let project = |g: &mut Gen| Project {
+            path: format!("/projects/{}", g.rng.below(4)),
+            title: g.text(),
+            note: g.rng.coin().then(|| "/projects/note.md".to_string()),
+            modified: g.time(),
+        };
+        Action::SetProjects { on: g.rng.coin(), listed: (0..g.rng.below(5)).map(|_| project(g)).collect() }
+    },
+    |g| {
         let colors = g.rng.coin().then(|| ColorRule { text: g.text().to_lowercase(), color: 1 });
         let (on, notify, links_only, hide_free) = (g.rng.coin(), g.rng.coin(), g.rng.coin(), g.rng.coin());
         Action::SetCalendar { on, notify, links_only, hide_free, colors: colors.into_iter().collect() }
@@ -2446,6 +2457,15 @@ fn check(m: &Model) -> Result<(), String> {
         keys.count() + reference.known.len() == crate::key_use::ALL.iter().filter(|b| m.binding_on(**b)).count(),
         "the key reference: {reference:?}"
     );
+    // Projects is open, or has the rail's keyboard, only while a folder is set; each listed once,
+    // those the user placed first.
+    let projects_shown =
+        m.sidebar == Some(Section::Projects) || m.rail_focus == Some(zones::RailFocus::Left(Section::Projects));
+    ensure!(!projects_shown || m.projects.on, "the Projects section with no folder");
+    let order: Vec<&String> = m.projects.ordered().into_iter().map(|p| &p.path).collect();
+    ensure!(unique(&order) && order.len() == m.projects.listed.len(), "projects listed as {order:?}");
+    let rows = m.projects.rows();
+    ensure!(rows.windows(2).all(|w| w[0].placed || !w[1].placed), "a placed project after one not placed");
     // The Calendar is open, or has the rail's keyboard, only while a feed is set.
     let calendar_shown =
         m.sidebar == Some(Section::Calendar) || m.rail_focus == Some(zones::RailFocus::Left(Section::Calendar));
@@ -6081,6 +6101,7 @@ fn code(sent: &Envelope) -> String {
         "Event",
         "ColorRule",
         "PickWindow",
+        "Project",
     ];
     const ENUM_OF: &[(&str, &str)] = &[
         ("verb", "Verb"),

@@ -548,6 +548,8 @@ pub enum Section {
     Marks,
     /// Today's meetings. Only while a calendar feed is set (`Model::sections`).
     Calendar,
+    /// The projects folder's projects. Only while `projects_dir` is set.
+    Projects,
 }
 
 impl Section {
@@ -556,6 +558,7 @@ impl Section {
         match self {
             Section::Marks => Some(Feature::Marks),
             Section::Apps => Some(Feature::AppsSection),
+            Section::Projects => Some(Feature::Projects),
             Section::Workbook | Section::Tasks | Section::Repos | Section::Calendar => None,
         }
     }
@@ -2014,6 +2017,12 @@ pub enum Action {
     /// session (Start agent), Take over, ↵ in an ended composer. Selecting a conversation (its
     /// row, its rail cell, its tab) never starts one. Only the user's.
     TalkStart,
+    /// The settings name a projects folder (`on`), and its projects as last read (none until a
+    /// read). The shell's alone.
+    SetProjects {
+        on: bool,
+        listed: Vec<crate::projects::Project>,
+    },
     /// The settings name a calendar feed (`on`), and whether a meeting that starts alerts.
     SetCalendar {
         on: bool,
@@ -2745,6 +2754,7 @@ impl Action {
             | Action::TabOut { .. }
             | Action::TabIn { .. }
             | Action::KeyWindow { .. }
+            | Action::SetProjects { .. }
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
@@ -2854,6 +2864,7 @@ impl Action {
             | Action::MarkBind { .. }
             | Action::MarkPrefix
             | Action::MarkEdit { .. } => Some(Feature::Marks),
+            Action::ToggleSection { section: Section::Projects } => Some(Feature::Projects),
             Action::ToggleSection { section: Section::Apps }
             | Action::AppPin { .. }
             | Action::AppHide { .. }
@@ -3185,6 +3196,7 @@ impl Action {
             | Action::FillEnded
             | Action::SetDisplays { .. }
             | Action::TalkStart
+            | Action::SetProjects { .. }
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
@@ -4169,6 +4181,9 @@ pub struct Model {
     /// The meeting timeline. Not in the state: its text is other people's (`calendar_snapshot`).
     #[serde(skip)]
     pub calendar: Calendar,
+    /// The Projects section's list. Not in the state: titles and paths are the user's (`projects_bar`).
+    #[serde(skip)]
+    pub projects: crate::projects::Projects,
     /// The features that are on (`SetFeatures`). In the state, their names.
     pub features: Features,
     /// The pane Open Settings opened (or a restore opened again), while it may still be there.
@@ -4376,6 +4391,7 @@ impl Default for Model {
             layout_seen: None,
             layout_kept: true,
             calendar: Calendar::default(),
+            projects: crate::projects::Projects::default(),
             // In this crate's tests every feature is on (a test of one that is off turns it off), but
             // `overlay_panels`: an experiment that changes how the sidebar and the drawer close.
             features: if cfg!(test) {
@@ -6121,6 +6137,8 @@ impl Model {
             Action::Leave => self.leave(effects),
             // No rail cell, no section: the Calendar is there only while a feed is set.
             Action::ToggleSection { section: Section::Calendar } if !self.calendar.on => {}
+            // Nor Projects without a projects folder.
+            Action::ToggleSection { section: Section::Projects } if !self.projects.on => {}
             // The bar is ottospace's own UI, so using it takes the keyboard back.
             Action::ToggleSection { section } => {
                 self.leave(effects);
@@ -6555,7 +6573,8 @@ impl Model {
                 Some(ListRow::AllApps) => self.apps_toggle(apps::Group::All),
                 // ↵ on a meeting is its Join: the user's alone (`refusal`).
                 Some(ListRow::Meeting(id)) => self.act(Action::CalendarJoin { id }, effects),
-                None => {}
+                // Opening a project comes in a later slice: the list is read-only for now.
+                Some(ListRow::ProjectEntry(_)) | None => {}
             },
             Action::ListSnooze { until } => {
                 if let Some(id) = self.selected_task() {
@@ -7064,6 +7083,8 @@ impl Model {
             Action::ListUndo if self.sidebar == Some(Section::Marks) => self.mark_undo(),
             Action::ListUndo if self.sidebar == Some(Section::Apps) => self.apps_undo(effects),
             Action::ListUndo if self.sidebar == Some(Section::Workbook) => self.workbook_undo(effects),
+            // Nothing in Projects to take back: not the tasks' last move either.
+            Action::ListUndo if self.sidebar == Some(Section::Projects) => {}
             Action::ListUndo => self.tasks.undo(),
             Action::MarkRemove { mark } => {
                 if let Some(id) = self.marks.find(&mark) {
@@ -7507,14 +7528,18 @@ impl Model {
             Action::TabOut { tab } => self.tab_out(tab, effects),
             Action::TabIn { tab } => self.tab_in(tab, effects),
             Action::KeyWindow { tab } => self.key_window(tab, effects),
+            Action::SetProjects { on, listed } => {
+                self.projects.on = on;
+                self.projects.set(listed);
+                if !on {
+                    self.section_gone(Section::Projects);
+                }
+            }
             Action::SetCalendar { on, notify, links_only, hide_free, colors } => {
                 (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only);
                 self.calendar.options(hide_free, colors);
                 if !on {
-                    self.sidebar = self.sidebar.filter(|s| *s != Section::Calendar);
-                    if self.rail_focus == Some(zones::RailFocus::Left(Section::Calendar)) {
-                        self.rail_focus = Some(zones::RailFocus::Left(Section::Tasks));
-                    }
+                    self.section_gone(Section::Calendar);
                 }
             }
             Action::CalendarRead { events, days, at, held_from } => {
@@ -8799,7 +8824,23 @@ impl Model {
     /// behind a flag only while it is on.
     pub fn sections(&self) -> Vec<Section> {
         let flagged = |s: &Section| s.feature().is_none_or(|feature| self.features.on(feature));
-        zones::SECTIONS.into_iter().filter(|s| (*s != Section::Calendar || self.calendar.on) && flagged(s)).collect()
+        let set = |s: &Section| match s {
+            Section::Calendar => self.calendar.on,
+            Section::Projects => self.projects.on,
+            _ => true,
+        };
+        zones::SECTIONS.into_iter().filter(|s| set(s) && flagged(s)).collect()
+    }
+
+    /// A section no longer shown (its setting went): its list closes, and a rail focus on it
+    /// moves to Tasks.
+    fn section_gone(&mut self, section: Section) {
+        if self.sidebar == Some(section) {
+            (self.sidebar, self.list) = (None, None);
+        }
+        if self.rail_focus == Some(zones::RailFocus::Left(section)) {
+            self.rail_focus = Some(zones::RailFocus::Left(Section::Tasks));
+        }
     }
 
     /// A left rail cell's needs-you dot: Tasks while a task needs the user, whichever section is
@@ -9621,6 +9662,9 @@ impl Model {
             Some(Section::Tasks) => self.task_list_rows(self.tasks_view, false),
             Some(Section::Marks) => self.marks.list.iter().map(|mark| ListRow::Mark(mark.id)).collect(),
             Some(Section::Calendar) => self.calendar.agenda(),
+            Some(Section::Projects) => {
+                self.projects.ordered().into_iter().map(|p| ListRow::ProjectEntry(p.path.clone())).collect()
+            }
             // Each workbook, and the tabs of an unfolded one under it.
             Some(Section::Workbook) => {
                 let mut rows = Vec::new();
@@ -11012,6 +11056,7 @@ mod tests {
         Action::TabIn { .. },
         Action::KeyWindow { .. },
         Action::TalkStart,
+        Action::SetProjects { .. },
         Action::SetCalendar { .. },
         Action::CalendarRead { .. },
         Action::CallSeen { .. },
@@ -11414,6 +11459,7 @@ mod tests {
             Action::TabIn { tab: None },
             Action::KeyWindow { tab: 1 },
             Action::TalkStart,
+            Action::SetProjects { on: true, listed: Vec::new() },
             Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
             Action::CalendarRead { events: None, days: [0; calendar::DAYS], at: 0, held_from: 0 },
             Action::CallSeen { in_call: Some(false), at: 0 },
