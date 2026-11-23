@@ -36,6 +36,8 @@ pub enum Binding {
     NextTab,
     CloseTab,
     FoldTab,
+    /// ⌘⇧\, every tab at once (`zoom_out`).
+    ZoomOut,
     SaveWorkbook,
     NewTask,
     /// ⌘⇧N, the quick note box (`overlay_panels`).
@@ -91,6 +93,7 @@ pub const ALL: &[Binding] = &[
     Binding::NextTab,
     Binding::CloseTab,
     Binding::FoldTab,
+    Binding::ZoomOut,
     Binding::SaveWorkbook,
     Binding::NewTask,
     Binding::QuickNote,
@@ -142,6 +145,7 @@ impl Binding {
             Binding::NextTab => &[C::NextTab, C::PrevTab],
             Binding::CloseTab => &[C::CloseTab],
             Binding::FoldTab => &[C::FoldTab],
+            Binding::ZoomOut => &[C::ZoomOut],
             Binding::SaveWorkbook => &[C::SaveWorkbook],
             Binding::NewTask => &[C::NewTask],
             Binding::QuickNote => &[C::QuickNote],
@@ -208,6 +212,7 @@ impl Binding {
             | B::NextTab
             | B::CloseTab
             | B::FoldTab
+            | B::ZoomOut
             | B::SaveWorkbook
             | B::MarkPane
             | B::MarkJump
@@ -249,6 +254,7 @@ impl Binding {
             B::NextTab => "Next / previous tab",
             B::CloseTab => "Close tab",
             B::FoldTab => "Tab out to another display / back in",
+            B::ZoomOut => "Every tab at once / back in",
             B::SaveWorkbook => "Save tab as workspace",
             B::MarkPane => "Mark pane / tab",
             B::MarkJump => "Go to mark by letter",

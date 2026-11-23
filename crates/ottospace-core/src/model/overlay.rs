@@ -22,16 +22,16 @@ pub const OVERLAY_USERS: &str = "only the user opens or dismisses a side overlay
 /// the model has already closed it.
 pub const SLIDE_MS: f32 = 140.;
 
-/// How far in an overlay is `at` milliseconds into its slide: 0 out of sight, 1 at rest.
-/// Eased out, so it is nearly there at once and never holds up a click.
-pub fn slide(at: f32) -> f32 {
-    crate::seal::ease_out((at / SLIDE_MS).clamp(0., 1.))
+/// How far in a slide of `ms` (an overlay's, `SLIDE_MS`; zoom-out's) is `at` milliseconds in: 0 out
+/// of sight, 1 at rest. Eased out, so it is nearly there at once and never holds up a click.
+pub fn slide(at: f32, ms: f32) -> f32 {
+    crate::seal::ease_out((at / ms).clamp(0., 1.))
 }
 
-/// Where a slide is `elapsed` milliseconds after it was `from` milliseconds in, moving in
+/// Where a slide of `ms` is `elapsed` milliseconds after it was `from` milliseconds in, moving in
 /// (`opening`) or back out. A toggle mid-way turns it from where it is: 60 in, closed, 20 later is 40.
-pub fn travel(from: f32, elapsed: f32, opening: bool) -> f32 {
-    (if opening { from + elapsed } else { from - elapsed }).clamp(0., SLIDE_MS)
+pub fn travel(from: f32, elapsed: f32, opening: bool, ms: f32) -> f32 {
+    (if opening { from + elapsed } else { from - elapsed }).clamp(0., ms)
 }
 
 /// What an overlay rule compares a step with: the step's sender and action, and the view before it.
@@ -250,6 +250,7 @@ mod tests {
 
     #[test]
     fn the_slide_eases_out_to_rest() {
+        let slide = |at| slide(at, SLIDE_MS);
         assert_eq!((slide(0.), slide(SLIDE_MS), slide(1e9), slide(-5.)), (0., 1., 1., 0.));
         assert!(slide(SLIDE_MS / 4.) > 0.5, "most of the way in the first quarter");
     }
@@ -257,6 +258,8 @@ mod tests {
     /// The close is the opening backwards, from where it is: a toggle mid-way turns it there.
     #[test]
     fn a_slide_travels_back_from_where_it_is() {
+        let (slide, travel) =
+            (|at| slide(at, SLIDE_MS), |from, elapsed, opening| travel(from, elapsed, opening, SLIDE_MS));
         assert_eq!((travel(0., 30., true), travel(SLIDE_MS, 30., false)), (30., SLIDE_MS - 30.));
         assert_eq!((travel(60., 20., false), travel(40., 1e9, true), travel(40., 1e9, false)), (40., SLIDE_MS, 0.));
         // As far out 30 ms into the close as 30 ms before the opening's end.

@@ -166,9 +166,10 @@ Design note: `docs/ai/attention/plan.md`.
     code city's pan).
   - `"as":"user"` on `key`, `mouse` and `drag`: the event is `Origin::User`, for what a socket
     client is refused (sneak mode, a mark's wait, the quit question, a pin in the Apps section).
-    Every key and pointer event a client sends is otherwise the client's. Outside a test run a
-    client that passed for the user could quit over running programs, end the mode the user is
-    typing in, or write their settings. A test run hosts no window and is the test's own
+    Every key and pointer event a client sends is otherwise the client's. Zoom-out (`zoom_out`)
+    is the user's alone: a test zooms with `cmd-|` and clicks a tile (`zoom_tiles`) this way.
+    Outside a test run a client that passed for the user could quit over running programs, end the
+    mode the user is typing in, or write their settings. A test run hosts no window and is the test's own
     instance, on its own socket.
   - `repo_add` (`"path"`): the folder the user's picker would give the Repos section's +, as the
     user's own act. Outside a test run only the user adds a directory to their settings, and a
@@ -303,6 +304,7 @@ Design note: `docs/ai/attention/plan.md`.
   same for Done's seal, fold and land (`seal.rs`), and `counts.repo_pulse_frames` for a Repos
   dot's commit pulse; `counts.repo_pulses` counts the pulses (none under Reduce Motion);
   `counts.overlay_frames` for a side overlay's slide out of its rail and back (`overlays.rs`);
+  `counts.zoom_frames` for zoom-out's zoom both ways (`zoom.rs`);
   `counts.shimmer_frames` for a working line's sweep (`ui::shimmer`): none at rest;
   `counts.space_pulse_frames` for a working space's mark breathing on the top row (none while none
   works).

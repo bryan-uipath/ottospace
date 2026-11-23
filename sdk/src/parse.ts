@@ -165,6 +165,7 @@ import type {
   WaitReply,
   Worktree,
   Zone,
+  Zoom,
 } from "./types.ts";
 
 type Fields = Record<string, unknown>;
@@ -1514,7 +1515,7 @@ function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
   if (value === "overlay_panels" || value === "decisions" || value === "code_city") return value;
-  if (value === "session_waits" || value === "projects" || value === "terminal_tasks") return value;
+  if (value === "session_waits" || value === "projects" || value === "terminal_tasks" || value === "zoom_out") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -1908,7 +1909,14 @@ function model(value: unknown, at: string): Model {
     viewers: map(viewer)(o.viewers, `${at}.viewers`),
     // Absent from an older build's reply: none open.
     decisions: o.decisions === undefined ? null : orNull(decisions)(o.decisions, `${at}.decisions`),
+    // Absent from an older build's reply: not zoomed out.
+    zoom: o.zoom === undefined ? null : orNull(zoom)(o.zoom, `${at}.zoom`),
   };
+}
+
+function zoom(value: unknown, at: string): Zoom {
+  const o = fields(value, at);
+  return { from: num(o.from, `${at}.from`), selected: num(o.selected, `${at}.selected`) };
 }
 
 function decisions(value: unknown, at: string): Decisions {
@@ -2335,6 +2343,7 @@ export function snapshot(value: unknown): Snapshot {
     bar_header: orNull(rect)(o.bar_header, "bar_header"),
     overlays: overlays(o.overlays, "overlays"),
     tasks_dot: orNull(rect)(o.tasks_dot, "tasks_dot"),
+    zoom_tiles: o.zoom_tiles === undefined ? null : orNull(map(rect))(o.zoom_tiles, "zoom_tiles"),
     drag: orNull(drag)(o.drag, "drag"),
     shown: map(rect)(o.shown, "shown"),
     tab_panes: list(list(num))(o.tab_panes, "tab_panes"),

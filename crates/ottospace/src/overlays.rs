@@ -18,8 +18,9 @@ use ottospace_core::model::overlay::{SLIDE_MS, slide, travel};
 use crate::{Mark, Workspace, mark};
 
 /// One side's slide: where it was (milliseconds in), since when, and whether it moves in.
+/// Zoom-out's zoom is one too (`zoom`).
 #[derive(Default)]
-struct Slide {
+pub(crate) struct Slide {
     from: f32,
     since: Option<Instant>,
     opening: bool,
@@ -28,18 +29,20 @@ struct Slide {
 impl Slide {
     /// This frame's share in (0 out of sight, 1 at rest), and whether it still moves. A close plays
     /// the opening backwards from where it is; `at_once` (Reduce Motion, nothing to draw): no slide.
-    fn step(&mut self, shown: bool, at_once: bool) -> (f32, bool) {
+    /// `ms`: how long the whole slide lasts.
+    pub(crate) fn step(&mut self, shown: bool, at_once: bool, ms: f32) -> (f32, bool) {
         let now = Instant::now();
-        let at =
-            |s: &Self| s.since.map_or(s.from, |since| travel(s.from, (now - since).as_secs_f32() * 1000., s.opening));
+        let at = |s: &Self| {
+            s.since.map_or(s.from, |since| travel(s.from, (now - since).as_secs_f32() * 1000., s.opening, ms))
+        };
         if shown != self.opening {
             (self.from, self.since, self.opening) = (at(self), Some(now), shown);
         }
         if at_once {
-            (self.from, self.since) = (if shown { SLIDE_MS } else { 0. }, None);
+            (self.from, self.since) = (if shown { ms } else { 0. }, None);
         }
         let at = at(self);
-        (slide(at), if shown { at < SLIDE_MS } else { at > 0. })
+        (slide(at, ms), if shown { at < ms } else { at > 0. })
     }
 }
 
@@ -90,8 +93,8 @@ impl Workspace {
         let section = self.model.sidebar.filter(|_| self.model.overlays());
         let (left, right) = (section.is_some(), drawer.is_some());
         let ((l, left_moves), (r, right_moves)) = (
-            self.slides.left.step(left, calm || (!left && self.slides.section.is_none())),
-            self.slides.right.step(right, calm || (!right && last.is_none())),
+            self.slides.left.step(left, calm || (!left && self.slides.section.is_none()), SLIDE_MS),
+            self.slides.right.step(right, calm || (!right && last.is_none()), SLIDE_MS),
         );
         if left_moves || right_moves {
             self.slides.frames += 1;
@@ -181,7 +184,7 @@ impl Workspace {
 
 /// Its child painted, but its hitboxes put under an empty mask: none is ever under the pointer, so
 /// the click, the wheel and the hover go to what lies beneath it (a closing overlay's pane).
-struct Inert(AnyElement);
+pub(crate) struct Inert(pub(crate) AnyElement);
 
 impl IntoElement for Inert {
     type Element = Self;

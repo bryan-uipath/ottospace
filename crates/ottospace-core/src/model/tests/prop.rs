@@ -1746,6 +1746,10 @@ const MAKERS: &[Make] = &[
         Action::DecisionsLater { task, ticket, until: g.time() }
     },
     |_| Action::DecisionsClose,
+    // Zoom-out: open or back, the selection, into a tile (else a stray tab).
+    |_| Action::ZoomOut,
+    |g| Action::ZoomMove { dir: g.dir() },
+    |g| Action::ZoomEnter { tab: g.rng.coin().then(|| g.tab_id()) },
     |_| Action::TalkDenyNote,
     |_| Action::TalkEscape,
     |_| Action::TalkInterrupt,
@@ -2176,6 +2180,9 @@ fn selects_tab(action: &Action) -> bool {
             | Action::SetFeatures { .. }
             // Decisions opened: its tab is on show.
             | Action::DecisionsOpen
+            // Into a tile, or back to the tab the overview opened on.
+            | Action::ZoomOut
+            | Action::ZoomEnter { .. }
     )
 }
 
@@ -2213,6 +2220,17 @@ fn check_out(m: &Model) -> Result<(), String> {
     for space in m.spaces.iter().filter(|space| space.of == *m.shown_space()) {
         ensure!(space.last == Some(main), "the selected space's last tab is {:?}, not {main}", space.last);
     }
+    Ok(())
+}
+
+/// Zoomed out: with its flag, on tabs of the main window's space (never Home's), no app live over
+/// it, the keyboard in the main window.
+fn check_zoom(m: &Model) -> Result<(), String> {
+    let Some(zoom) = &m.zoom else { return Ok(()) };
+    ensure!(m.features.on(Feature::ZoomOut), "zoomed out with the flag off");
+    let tabs = m.zoom_tabs();
+    ensure!(tabs.contains(&zoom.from) && tabs.contains(&zoom.selected), "zoomed out on {zoom:?}, tiles {tabs:?}");
+    ensure!(m.live.is_none() && m.away.is_none(), "zoomed out, live {:?}, away {:?}", m.live, m.away);
     Ok(())
 }
 
@@ -2407,6 +2425,7 @@ fn check_reorder(m: &Model) -> Result<(), String> {
 
 fn check(m: &Model) -> Result<(), String> {
     check_decisions(m)?;
+    check_zoom(m)?;
     // A program's ask, and the "always" the user gave, last only while their pane does; an ask
     // past the cap holds no text.
     for pane in m.copy_asks.keys().chain(&m.copy_always) {
@@ -4037,6 +4056,11 @@ impl Run {
         );
         let idle_before: Vec<u32> =
             m.tabs.iter().map(|tab| tab.id).filter(|id| m.idle_stand_in(*id).is_some()).collect();
+        let zoom_before = m.zoom.clone();
+        let made = |m: &Model| {
+            (m.tabs.iter().map(|t| t.id).collect::<Vec<_>>(), m.panes.iter().map(|p| p.id).collect::<Vec<_>>())
+        };
+        let made_before = made(m);
         let talk_before = m.talk.clone();
         // A reorder moves the Repos entries and repositories, never adds or drops one.
         let repo_set = |m: &Model| {
@@ -4053,6 +4077,19 @@ impl Run {
         if m.overlays() && origin != Origin::User {
             ensure!(sidebar_was || m.sidebar.is_none(), "{action:?} from {origin:?} opened the sidebar overlay");
             ensure!(!collapsed_was || m.drawer_collapsed(), "{action:?} from {origin:?} opened the drawer overlay");
+        }
+        // The overview is a view: its steps add, close and move no tab or pane. Only the user opens
+        // it, and leaving it lands on a tab that exists: the one it opened on, or the one chosen.
+        let zooms = action.feature() == Some(Feature::ZoomOut);
+        ensure!(!zooms || made(m) == made_before, "{action:?} changed the tabs or panes");
+        ensure!(zoom_before.is_some() || m.zoom.is_none() || origin == Origin::User, "{origin:?} zoomed out");
+        if let (Some(was), None, true, Origin::User) = (&zoom_before, &m.zoom, zooms, origin) {
+            let main = m.tabs[m.main_at()].id;
+            let into = match action {
+                Action::ZoomEnter { tab } => tab.unwrap_or(was.selected),
+                _ => was.from,
+            };
+            ensure!(main == into || m.is_out(into), "left the overview of {was:?} for tab {main}, not {into}");
         }
         // Only the user's own act opens Decisions.
         let opened = !decisions_before && m.decisions.is_some();

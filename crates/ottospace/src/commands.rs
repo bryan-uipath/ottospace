@@ -76,6 +76,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::PrevTab => Box::new(PrevTab),
         Command::CloseTab => Box::new(CloseTab),
         Command::FoldTab => Box::new(FoldTab),
+        Command::ZoomOut => Box::new(crate::zoom::ZoomToggle),
         Command::NewTask => Box::new(NewTask),
         Command::QuickNote => Box::new(QuickNote),
         Command::NextNeedsYou => Box::new(NextTask),

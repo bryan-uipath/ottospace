@@ -154,6 +154,7 @@ mod viewer;
 mod words;
 mod workbook;
 mod worktree;
+mod zoom;
 use control::{Call, MouseAction, PaneKind, Request};
 use terminal::Terminal;
 
@@ -939,6 +940,8 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-ctrl-f", FillDisplay, None),
         // A tab out to another display, and back in (`multi_monitor`).
         KeyBinding::new("cmd-shift-o", FoldTab, None),
+        // Every tab at once, and back in (`zoom_out`): ⌘⇧\, which GPUI reads as the shifted `|`.
+        KeyBinding::new("cmd-|", zoom::ZoomToggle, None),
         // Debug: outline the focused app pane's accessibility tree.
         KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
         // The bug button's, while it shows; shown in its tooltip only.
@@ -1165,8 +1168,12 @@ struct Workspace {
     fly: fly::Fly,
     /// The side overlays' slides in (`overlay_panels`).
     slides: overlays::Slides,
+    /// Zoomed out: the tiles' zoom and where it drew them (`zoom_out`).
+    zooming: zoom::Zooming,
     /// The key that ended sneak mode is still down: its repeats are typed nowhere.
     sneak_spent: bool,
+    /// The key that left the overview is still down: its repeats are typed nowhere.
+    zoom_spent: bool,
     /// Reads of the focused app pane's tree while sneak mode is on.
     sneak_reads: sneak_apps::Reads,
     /// Scrolls held for an app pane the wheel entered, and counts.
@@ -1886,7 +1893,9 @@ impl Workspace {
             seals: seal::Seals::default(),
             fly: fly::Fly::default(),
             slides: overlays::Slides::default(),
+            zooming: zoom::Zooming::default(),
             sneak_spent: false,
+            zoom_spent: false,
             sneak_reads: sneak_apps::Reads::default(),
             wheel: app_wheel::Wheel::default(),
             input: Origin::User,
@@ -4103,8 +4112,13 @@ impl Workspace {
         let frame = window.bounds();
         let frame: [f32; 4] =
             [frame.origin.x.into(), frame.origin.y.into(), frame.size.width.into(), frame.size.height.into()];
-        // Only panes of the tabs on show are drawn; a background pane's last bounds are stale.
-        let drawn = self.model.shown_panes();
+        // Only panes of the tabs on show are drawn; a background pane's last bounds are stale, and
+        // so are the main window's while zoomed out (`zoom_out`).
+        let mut drawn = self.model.shown_panes();
+        if self.model.zoom.is_some() {
+            let main = self.model.main_panes();
+            drawn.retain(|id| !main.contains(id));
+        }
         let drawn_rects = |cells: &HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>| -> BTreeMap<PaneId, [f32; 4]> {
             cells
                 .iter()
@@ -4208,6 +4222,10 @@ impl Workspace {
                 // The new-task box centred over them (`compose_centred`).
                 "box": marks.get(&Mark::CentredBox).copied().map(rect),
             },
+            // Zoomed out, or zooming back in: each tile as drawn, by tab id. Else null.
+            "zoom_tiles": (!self.zooming.tiles.borrow().is_empty()).then(|| {
+                self.zooming.tiles.borrow().iter().map(|(id, b)| (id.to_string(), rect(*b))).collect::<BTreeMap<_, _>>()
+            }),
             // The Tasks rail cell's needs-you dot (null: not drawn).
             "tasks_dot": marks.get(&Mark::TasksDot).copied().map(rect),
             // While a pane is dragged: the pane a drop would land on and the zone of it, both
@@ -4430,6 +4448,8 @@ impl Workspace {
                 "fly_frames": self.fly.frames,
                 // Frames a side overlay's slide in or back asked for (`overlay_panels`): none under Reduce Motion.
                 "overlay_frames": self.slides.frames,
+                // Frames the zoom out or back in asked for (`zoom_out`): none at rest, none under Reduce Motion.
+                "zoom_frames": self.zooming.frames,
                 "seal_spark_frames": self.seals.spark_frames,
                 // Commits that pulsed a checkout's dot, and the frames the pulses asked for: none
                 // at rest, none under Reduce Motion.
@@ -5127,6 +5147,12 @@ impl Workspace {
             return;
         }
         self.sneak_spent = false;
+        // So for the ↵ or Esc that left the overview (`zoom_out`).
+        if self.zoom_spent && event.is_held {
+            cx.stop_propagation();
+            return;
+        }
+        self.zoom_spent = false;
         // So for the key that closed a row's menu.
         if self.row_menu_spent && event.is_held {
             cx.stop_propagation();
@@ -5224,6 +5250,12 @@ impl Workspace {
         }
         if self.model.mark_input.is_some() {
             self.mark_key(event, window, cx);
+            return;
+        }
+        // Zoomed out: its keys, and nothing typed into the tab under it.
+        if self.model.zoom.is_some() {
+            self.zoom_key(event, window, cx);
+            cx.stop_propagation();
             return;
         }
         if self.model.picker.is_some() {
@@ -9210,6 +9242,10 @@ impl Workspace {
                 true => drop(this.dispatch(Action::TabOut { tab: None }, this.input, window, cx)),
                 false => cx.propagate(),
             }))
+            .on_action(cx.listener(|this, _: &zoom::ZoomToggle, window, cx| match this.on(Feature::ZoomOut) {
+                true => drop(this.dispatch(Action::ZoomOut, this.input, window, cx)),
+                false => cx.propagate(),
+            }))
             // ⌘W: the focused pane closes; with the keyboard in the drawer, Later on its task.
             .on_action(cx.listener(|this, _: &ClosePane, window, cx| {
                 this.dispatch(this.model.close_key(), this.input, window, cx);
@@ -9330,13 +9366,15 @@ impl Render for Workspace {
             home::Floor::Pane(id) => self.model.pane(id).is_some(),
             home::Floor::Out(tab) => self.model.is_out(tab),
         });
+        // Zoomed out at rest the tiles cover the panes area: the tab under them is not drawn.
+        let (zoom, covered) = self.render_zoom(window, cx);
         // The main window's tab: the live tree, unless the keyboard is in a tab out's window.
-        let tree = self.model.tree_at(self.model.main_at()).map(|root| self.render_node(root, cx));
+        let tree = self.model.tree_at(self.model.main_at()).filter(|_| !covered).map(|root| self.render_node(root, cx));
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
         let keep_out = self.home.borrow().keep_out();
         // Home's screen, or an empty tab of a task, a session or a workbook: the floor and what goes in it.
-        let home = tree.is_none().then(|| self.render_home(self.model.home(&keep_out), held, cx));
+        let home = (tree.is_none() && !covered).then(|| self.render_home(self.model.home(&keep_out), held, cx));
         // The left column's width, and the drawer's: as dragged, or half the window when widened.
         // An overlay takes none: the panes lie as with both collapsed (`overlay_panels`).
         let left = RAIL + if self.model.sidebar_takes_room() { SECTION } else { 0. };
@@ -9430,9 +9468,12 @@ impl Render for Workspace {
                                                     .min_h_0()
                                                     .w_full()
                                                     .flex()
+                                                    .relative()
                                                     .overflow_hidden()
                                                     .children(home)
-                                                    .children(tree),
+                                                    .children(tree)
+                                                    .child(self.zoom_area())
+                                                    .children(zoom),
                                             ),
                                     )
                                     // The drawer (the draft being collected, a conversation, or a brief).

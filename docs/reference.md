@@ -50,6 +50,7 @@ running, and the rest of the design is not built: see the
 | [Command palette](#command-palette) (⌘⇧P): every command of the menu bar by name, with its key; a Developer group | Works today |
 | [Go to](#go-to) (⌘P): a workspace, a listed checkout or a task by name, then a file in its folder | Works today |
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
+| [Zoom out](#zoom-out) (⌘⇧\\): every tab of the workspace on show as a tile on a grid, each a live miniature; arrows select, ↵ goes in, Esc goes back | Works today, behind the `zoom_out` [flag](#features), off by default |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
 | Capture (⌃⌥⌘Space, from any app): a frozen picture of the pane in use to circle and write on, collected in a draft in the drawer; the task it becomes has a brief with the pictures, the notes and the text under each annotation (`task_brief`), and its agent is told the brief's path. Kept in `~/.ottospace/materials` | Works today |
 | Workspaces: + on the top row or in the Workspaces section makes a new, empty one, listed there; temporary (its name muted and italic) until it gets a task, a repository, a name or Keep, and then kept between runs. ⌘⇧S saves a tab into one (its splits, each terminal's directory, each app), to open again from the section. Several tabs each: add a tab to one, or save all the tabs on the bar as one. Kept in `~/.ottospace/workbooks`. An app comes back as its window, not on the page or document it showed | Works today |
@@ -121,6 +122,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌃W | Hide the selected task or workspace (Hide): it leaves the top row and nothing in it stops; its row in Tasks or Workspaces opens it again. Not Home |
 | ⌘⇧W | Close the tab and its panes |
 | ⌘⇧O | With the `multi_monitor` [flag](#features) on: fold the tab on show out to its own window on another display, the keyboard with it; again there (or its Fold back in) folds it back in. See [Displays](#displays) |
+| ⌘⇧\\ | With the `zoom_out` [flag](#features) on: zoom out to every tab of the workspace or task on show, as tiles on a grid; again, or Esc, back to the tab you came from. Arrows or H J K L select a tile, ↵ or a click goes into it. See [Zoom out](#zoom-out) |
 | ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in a task's space, as a new one. On a tab that came from one, or was saved into one: update its tab there |
 | ⌘Q | Quit. Asks first while a terminal runs something (a program in front of its shell, or a background or stopped job) or an agent runs ("Quitting ends these:"), or a draft has words ("Not sent yet": an unsent message, the new-task line, a capture, a card's typed answer, a btw question, a message in your editor; never one of only spaces). Click a draft's row to go to it. ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
 | Wheel / trackpad | Scroll a terminal back through its history |
@@ -1532,6 +1534,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `session_waits` | Experimental | off | Waiting sessions: An agent CLI you started in a terminal pane needs you when its turn ends, at once when it asks |
 | `projects` | Experimental | off | Projects: The projects in your projects_dir, on the left rail: read, never written |
 | `terminal_tasks` | Experimental | off | Terminal sessions as tasks: A live Claude Code or Codex you started in a terminal is listed with the tasks, read-only, until it ends |
+| `zoom_out` | Experimental | off | Zoom out (⌘⇧\\): Every tab of the workspace on show at once, as tiles on a grid |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1712,6 +1715,8 @@ empty and not renamed, and the main window shows the tab again.
   start.
 - Only you fold a tab out or in: a client's ⌘⇧O is refused. The state's `displays`, `windows` and
   `out` say what is where.
+- `zoom_out` off: ⌘⇧\\ does nothing, no Zoom Out or In item, and an open overview closes. On, see
+  [Zoom out](#zoom-out) (design: [zoom-out.md](ai/zoom-out.md)).
 - `agent_mode` off: no robot in an app pane's header, ⌘⌃V does nothing, no Agent Mode commands,
   the grants are kept as they are (turning it on again raises none), and every read of an app pane by a client (`app_read`,
   `app_look`, `ax_tree`) answers `feature off: agent_mode` (design: [agent-mode.md](ai/agent-mode.md)).
@@ -1723,6 +1728,34 @@ empty and not renamed, and the main window shows the tab again.
   `app_read`'s older name. Every use and refusal is a row in that task's conversation and a spoke
   of the dial's Apps station. A pane that moves to another task's workspace, or whose task ends,
   is Off; grants are not kept over a restart. See and act presses nothing yet (stage (c)).
+
+### Zoom out
+
+With `zoom_out` on, ⌘⇧\\ (View ▸ Zoom Out or In, the palette) shows every tab of the workspace or
+task on show as a tile on a grid over the panes area, in tab order (⌘1…⌘9's), with room between: one
+tile, 2 × 2 for four, three columns for seven. Each tile is the tab as it lies: its panes in their
+places, a terminal's screen live and small, an app pane its window's last picture (the one its
+parked pane already shows: nothing new is captured), any other pane its name. Above each, its
+number and name; the tab you came from says "you were here", the selected tile has a ring.
+
+- Arrows or H J K L move the selection; ↵ or a click goes into that tab; Esc or ⌘⇧\\ again goes
+  back to the tab you came from. ⌘; labels the tiles: a label's letters go in. No other key reaches a
+  terminal under it (⌃C does nothing); ⌘ shortcuts run as ever. In an app pane the keys are the
+  app's: take the keyboard back first (F18), then ⌘⇧\\.
+- The zoom plays both ways: the tab shrinks into its tile as the others fade in, and the chosen tile
+  grows back to fill the area. It never holds a key up: the view has changed before it plays, and on
+  the way back in it takes no click. Under Reduce Motion it is a cut.
+- An app you are in is parked as it opens (its picture is in its tile, no window floats over the
+  tiles), and is live again when you go back to the tab you came from. ↵ into another tab, as ⌘1:
+  no app is live there until you click one.
+- A tab out on another display (`multi_monitor`) is a tile marked out; ↵ goes to its window.
+- Any other key or click of yours (⌘T, ⌘1, a rail) ends it and does what it does. On Home there is
+  nothing to zoom out to: a notice says so.
+- Only you zoom: a client's ⌘⇧\\, arrows, ↵ or click is refused ("only the user zooms out or in"), and
+  while you are zoomed out a client's request that would take the keyboard is refused too. A
+  client's other requests run underneath (a split redraws its tile).
+- The state's `state.zoom` (`from`, `selected`, tab ids) and `zoom_tiles` (each tile as drawn, also
+  while zooming back in); `counts.zoom_frames`: the frames the zoom asked for, none at rest.
 
 ## Driving it from outside
 
