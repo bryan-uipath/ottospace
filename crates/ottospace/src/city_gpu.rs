@@ -18,8 +18,9 @@ const SAMPLES: u32 = 4;
 const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Per box: its corners (min, max), its top's colour, 1 if it glows (lit), its edges' colour,
-/// how bright its sides' edges are, a share of its top's, and how opaque its faces are.
-const STRIDE: u64 = 15 * 4;
+/// when it starts to rise (`Scene::rise_delays`; below 0: it stands from the start), how bright
+/// its sides' edges are, a share of its top's, and how opaque its faces are.
+const STRIDE: u64 = 16 * 4;
 /// How opaque a glass building's faces are (the original city's are 0.92; the owner asked for a
 /// little more see-through): its edges are whole.
 const GLASS: f32 = 0.8;
@@ -27,6 +28,8 @@ const GLASS: f32 = 0.8;
 const SHADER: &str = r#"
 struct Frame { matrix: mat4x4<f32>, eye: vec4<f32>, fog: vec4<f32>, background: vec4<f32>, light: vec4<f32> };
 @group(0) @binding(0) var<uniform> frame: Frame;
+// `scene::STAGGER`, written in at start.
+const STAGGER: f32 = {STAGGER};
 
 struct Out {
     @builtin(position) at: vec4<f32>,
@@ -57,8 +60,13 @@ const NORMALS = array<vec3<f32>, 6>(
 );
 
 @vertex
-fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>, @location(3) edge: vec3<f32>, @location(4) sides: f32, @location(5) alpha: f32) -> Out {
-    let world = lo + (hi - lo) * CORNERS[FACES[i]];
+fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>, @location(3) edge: vec3<f32>, @location(4) delay: f32, @location(5) sides: f32, @location(6) alpha: f32) -> Out {
+    // Rising (`frame.light.w`: the share of the rise, 1 at rest): as tall as `scene::risen` says.
+    let at = clamp((frame.light.w - delay) / (1. - STAGGER), 0., 1.);
+    let grown = select(1. - (1. - at) * (1. - at) * (1. - at), 1., delay < 0.);
+    let top_y = lo.y + (hi.y - lo.y) * grown;
+    let corner = CORNERS[FACES[i]];
+    let world = vec3(lo.x + (hi.x - lo.x) * corner.x, lo.y + (top_y - lo.y) * corner.y, lo.z + (hi.z - lo.z) * corner.z);
     let normal = NORMALS[i / 6u];
     // Sides darker than the top: ambient, and a light from above to one side.
     let light = 0.3 + 0.7 * max(dot(normal, normalize(frame.light.xyz)), 0.);
@@ -69,7 +77,7 @@ fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi
     out.lit = top.a;
     out.world = world;
     out.lo = lo;
-    out.hi = hi;
+    out.hi = vec3(hi.x, top_y, hi.z);
     out.edge = edge;
     out.axis = i / 12u;
     out.sides = sides;
@@ -143,7 +151,9 @@ impl Gpu {
             .map_err(|e| format!("no device: {e}"))?;
         let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("city"),
-            source: wgpu::ShaderSource::Wgsl(SHADER.into()),
+            source: wgpu::ShaderSource::Wgsl(
+                SHADER.replace("{STAGGER}", &format!("{:?}", ottospace_core::scene::STAGGER)).into(),
+            ),
         });
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: None,
@@ -163,7 +173,9 @@ impl Gpu {
             bind_group_layouts: &[Some(&layout)],
             immediate_size: 0,
         });
-        let attributes = wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3, 4 => Float32, 5 => Float32];
+        let attributes = wgpu::vertex_attr_array![
+            0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3, 4 => Float32, 5 => Float32, 6 => Float32
+        ];
         let pipeline = |glass: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
                 label: Some("city"),
@@ -205,14 +217,14 @@ impl Gpu {
         Ok(Self { device, queue, pipeline, glass, layout })
     }
 
-    /// `scene` as a picture `width` × `height` pixels, its buildings of glass or not, or why there
-    /// is none.
-    pub fn render(&self, scene: &Scene, width: u32, height: u32, glass: bool) -> Result<Picture, String> {
+    /// `scene` as a picture `width` × `height` pixels, `rise` (0 to 1) of the way through its
+    /// buildings' rise (1: standing), its buildings of glass or not, or why there is none.
+    pub fn render(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {
         // An error of the GPU's (out of memory, a lost device) fails the picture; uncaught, wgpu
         // panics.
         let memory = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let valid = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let picture = self.draw(scene, width, height, glass);
+        let picture = self.draw(scene, width, height, rise, glass);
         let errors = [pollster::block_on(valid.pop()), pollster::block_on(memory.pop())];
         match errors.into_iter().flatten().next() {
             Some(error) => Err(format!("render: {error}")),
@@ -220,7 +232,7 @@ impl Gpu {
         }
     }
 
-    fn draw(&self, scene: &Scene, width: u32, height: u32, glass: bool) -> Result<Picture, String> {
+    fn draw(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {
         let camera = scene.camera.ok_or("no camera")?;
         let limit = self.device.limits().max_texture_dimension_2d;
         if width == 0 || height == 0 || width > limit || height > limit {
@@ -254,18 +266,22 @@ impl Gpu {
         frame.extend([camera.eye[0], camera.eye[1], camera.eye[2], 0.]);
         frame.extend(reach);
         frame.extend([bg[0], bg[1], bg[2], 1.]);
-        frame.extend([-0.45, 1., -0.3, 0.]);
+        frame.extend([-0.45, 1., -0.3, rise.clamp(0., 1.)]);
         let uniform = buffer(device, &frame, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
         self.queue.write_buffer(&uniform, 0, &bytes(&frame));
         // The solid boxes first; then the glass ones, the farthest first, each over what is behind it.
-        let see_through = |b: &&Block| glass && b.kind == Kind::Building;
-        let mut clear: Vec<&Block> = scene.blocks.iter().filter(see_through).collect();
+        let delays = scene.rise_delays();
+        let see_through = |b: &Block| glass && b.kind == Kind::Building;
+        let mut clear: Vec<(&Block, f32)> =
+            scene.blocks.iter().zip(delays.iter().copied()).filter(|(b, _)| see_through(b)).collect();
         let far = |b: &Block| -(0..3).map(|i| (b.top()[i] - camera.eye[i]).powi(2)).sum::<f32>();
-        clear.sort_by(|a, b| far(a).total_cmp(&far(b)));
-        let solid = scene.blocks.iter().filter(|b| !see_through(b));
+        clear.sort_by(|a, b| far(a.0).total_cmp(&far(b.0)));
+        let solid = scene.blocks.iter().zip(delays.iter().copied()).filter(|(b, _)| !see_through(b));
         let solid_count = solid.clone().count() as u32;
-        let boxes: Vec<f32> =
-            (solid.map(|b| instance(b, 1.))).chain(clear.iter().map(|b| instance(b, GLASS))).flatten().collect();
+        let boxes: Vec<f32> = (solid.map(|(b, d)| instance(b, d, 1.)))
+            .chain(clear.iter().map(|(b, d)| instance(b, *d, GLASS)))
+            .flatten()
+            .collect();
         let instances = buffer(device, &boxes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST);
         self.queue.write_buffer(&instances, 0, &bytes(&boxes));
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -329,17 +345,21 @@ impl Gpu {
         device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("poll: {e}"))?;
         mapped.recv().map_err(|e| e.to_string())?.map_err(|e| format!("map: {e}"))?;
         let padded = read.slice(..).get_mapped_range().map_err(|e| format!("map: {e}"))?;
-        let bgra = padded.chunks(row as usize).flat_map(|line| &line[..width as usize * 4]).copied().collect();
+        // Row by row, as slices: a byte at a time took 15 ms for a 3200×2000 picture.
+        let mut bgra = Vec::with_capacity(width as usize * 4 * height as usize);
+        for line in padded.chunks(row as usize) {
+            bgra.extend_from_slice(&line[..width as usize * 4]);
+        }
         Ok(Picture { width, height, bgra })
     }
 }
 
-fn instance(block: &Block, alpha: f32) -> [f32; 15] {
+fn instance(block: &Block, delay: f32, alpha: f32) -> [f32; 16] {
     let ([r, g, b], edge) = colour(block.kind);
     let (lo, hi) = (block.min, block.max);
     let glows = if matches!(block.kind, Kind::Lit(_)) { 1. } else { 0. };
     let sides = if matches!(block.kind, Kind::Plate(_)) { 0.25 } else { 1. };
-    [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2], sides, alpha]
+    [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2], delay, sides, alpha]
 }
 
 fn bytes(values: &[f32]) -> Vec<u8> {
@@ -377,23 +397,33 @@ mod tests {
             let plan = atlas::atlas(&atlas::repo(&files));
             let laid = started.elapsed();
             let lit = [(plan.places.iter().rev().find(|p| !p.group).unwrap().id.as_str(), 0xff6467)];
-            for glass in [true, false] {
-                let started = std::time::Instant::now();
-                let scene = ottospace_core::scene::scene(&plan, &lit, 1.6);
-                let built = started.elapsed();
-                let (w, h) = (1600, 1000);
-                let started = std::time::Instant::now();
-                let picture = gpu.render(&scene, w, h, glass).unwrap();
-                let rendered = started.elapsed();
-                println!(
-                    "{count} files, glass {glass}: layout {laid:.1?}, scene {built:.1?} ({} boxes), render and read back {w}×{h} {rendered:.1?}",
-                    scene.blocks.len()
-                );
-                if let Some(dir) = std::env::var_os("CITY_PICTURE") {
-                    let name = format!("city-{count}{}.bmp", if glass { "" } else { "-opaque" });
-                    std::fs::write(std::path::Path::new(&dir).join(name), bmp(&picture)).unwrap();
+            let started = std::time::Instant::now();
+            let scene = ottospace_core::scene::scene(&plan, &lit, 1.6);
+            let built = started.elapsed();
+            let (w, h) = (1600, 1000);
+            let started = std::time::Instant::now();
+            let picture = gpu.render(&scene, w, h, 1., true).unwrap();
+            let rendered = started.elapsed();
+            println!(
+                "{count} files: layout {laid:.1?}, scene {built:.1?} ({} boxes), render and read back {w}×{h} {rendered:.1?}",
+                scene.blocks.len()
+            );
+            if let Some(dir) = std::env::var_os("CITY_PICTURE") {
+                std::fs::write(std::path::Path::new(&dir).join(format!("city-{count}.bmp")), bmp(&picture)).unwrap();
+            }
+            // Frames of the rise: each a render of its own, the slowest of them.
+            let started = std::time::Instant::now();
+            let mut slowest = std::time::Duration::ZERO;
+            for step in 0..=12 {
+                let frame = std::time::Instant::now();
+                let picture = gpu.render(&scene, w, h, step as f32 / 12., true).unwrap();
+                slowest = slowest.max(frame.elapsed());
+                if let (6, Some(dir)) = (step, std::env::var_os("CITY_PICTURE")) {
+                    std::fs::write(std::path::Path::new(&dir).join(format!("city-{count}-rising.bmp")), bmp(&picture))
+                        .unwrap();
                 }
             }
+            println!("  its rise: 13 frames in {:.1?}, the slowest {slowest:.1?}", started.elapsed());
         }
     }
 
@@ -413,7 +443,7 @@ mod tests {
         let face = at((building.min[2] + building.max[2]) / 2.);
         for scale in [1, 2] {
             let (w, h) = (320 * scale, 200 * scale);
-            let p = gpu.render(&scene, w, h, false).unwrap();
+            let p = gpu.render(&scene, w, h, 1., false).unwrap();
             let px = |v: f32, n: u32| (v * n as f32) as u32;
             let light = |(x, y): (f32, f32)| {
                 let at = ((px(y, h) * w + px(x, w)) * 4) as usize;

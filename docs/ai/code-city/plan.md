@@ -175,6 +175,27 @@ files, 4 MB of names or 10 s to read is not drawn (the lattice stays).
 **Frames**: none at rest. A picture is made when the file list, the lit set or the tab's size
 changes, and a paint happens then. A camera move (slice 7) would be the only animation.
 
+**Load** (the owner's word, 2026-11-21: "a progressive load experience"; "improve the
+performance"). Measured offscreen, release, on an Apple GPU, made-up trees (`a_city_is_rendered`,
+`a_read_is_timed`): the GPU opens once (about 65 ms, on the picture's thread); a render and its read
+back take 11 to 15 ms at 1600×1000 and 24 to 31 ms at 3200×2000, up to 20,000 files (half of that
+the copy out, row by row now: it was byte by byte, 15 ms at 3200×2000); a file list's read about
+57 ms at 30 or 2,000 files, of which most was waiting: the child was looked at every 50 ms, now
+from 1 ms doubling. The biggest wait was the loop: reads and pictures were taken every 15th step
+(about 250 ms) and a picture needs two hops, so up to half a second of nothing. Now each step
+takes them, and the threads that make them wake the loop. The lattice shows at once; then the
+first city of a place that waited rises (the owner's word: "why is it not feasible to
+animate?"): its districts stand from the start, its buildings grow from the ground over 400 ms,
+eased out, the district with most buildings first and the one with fewest a third of the way
+in (`Scene::rise_delays`, `scene::risen`, tested). A frame of the rise is a render with the
+rise's share as a uniform and each box's start as an instance value: nothing is rebuilt, and the
+scene is made once (the picture's thread keeps the last). Frames measured offscreen: release at
+most 6 ms at 2,000 files and 8 ms at 20,000; a dev build 6 and 23 ms (load average 18 to 40).
+A frame of the rise rendered slower than 12 ms ends it for that city: its standing picture fades
+in over 250 ms instead. Reduce Motion: at once. No frames at rest (`counts.city_rise_frames`,
+`counts.city_fade_frames`). The newest two pictures no place shows are kept, so a tab shown
+again paints its city at once, with no rise. `scripts/bench`: `city_2000_ms`, `city_20000_ms`.
+
 ## The camera (proposed; the first slice has none: the whole repository, fixed)
 
 The map has a view, a centre and a zoom, apart from the layout, which never changes. A stable

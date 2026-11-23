@@ -1689,6 +1689,10 @@ export interface CityDrawn {
   glass: boolean | null;
   /** The beam of the box under the user's pointer: a file's or a district's, lit, its label. */
   hovered: CityHovered | null;
+  /** From the place laid out to its first picture painted (ms): null before. */
+  first_ms: number | null;
+  /** How long the last file list took to read (µs): null before one. */
+  read_us: number | null;
 }
 
 export interface CityHovered {
