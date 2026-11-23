@@ -1,0 +1,8 @@
+# A window the user put in a pane (no Keep) closes: the pane stays, a slot waiting for that kind of
+# window (its id, never its title), saying so, with Close this pane. Before, the pane closed.
+{"env":{"OTTOSPACE_FEATURES":"slots"}}
+{"cmd":"app_fixture","name":"Meetings","user":true}
+{"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":0,"window":900000,"title":"Weekly sync","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
+{"shot":"open"}
+{"cmd":"window_fixture_close","window":900000}
+{"shot":"closed"}

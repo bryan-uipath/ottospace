@@ -1297,7 +1297,8 @@ shown when it has one, ticked then), `Title is “Weekly sync”`, which window 
 (the largest, the smallest, on display N, any), and Matching: Manual (the default: it offers) or
 Automatic (it takes a window that opens while it waits, on the tab on show, never the one you are
 in). Its foot says what the slot will wait for, `Waits for: Zoom · window id zm.meeting.window.main`,
-and Keep (↵) makes it. A title pattern (`*Incident*`) is written by hand in `layout.json`, under the
+and Keep (↵) makes it. A slot made from a dialog or panel (Zoom's popped-out meeting chat) waits for
+that kind (`subrole AXSystemDialog`); any other slot takes standard windows only. A title pattern (`*Incident*`) is written by hand in `layout.json`, under the
 pane's `slot.select.title`. ⋯ on a slot edits it, with Look Again (forget the windows passed over),
 Give Back the Window and Clear Slot at its foot.
 
@@ -1307,6 +1308,12 @@ away`. A window it selects is offered there, `“Weekly sync” is open · Match
 Bring it here (↵ while the slot is focused), Not this one and `N more match`. Several slots that select the same windows take them
 one by one, in reading order: one window a slot. ⌘E there and a pick end the slot. A filled slot's
 header says `slot`. Only you make, fill or clear a slot; a client's click on one is refused.
+
+A pane you put a window in (the picker, ⌘E, Bring it here) stays when that window closes or its app
+quits: it becomes a slot that waits for the same kind of window, by the window's id (`Waits for:
+Zoom · window id zm.meeting.window.main · the largest`, which the next meeting's window has too), or
+`no window id` for one without, never by its title. Close this pane in it, or ×, closes it. A pane a client opened,
+a window the app opened by itself, and a dialog close with their window, as before.
 
 ## The return key
 

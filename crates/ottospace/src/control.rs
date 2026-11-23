@@ -520,7 +520,8 @@ pub enum Request {
         pane: PaneId,
         slot: ottospace_core::slot::Slot,
     },
-    /// For tests (`test_refusal`): fixture window `window` closed, as the shell sees a window go.
+    /// For tests (`test_refusal`): fixture window `window` closed, as the shell sees a window go:
+    /// an offered one (`window_fixture`), or an app pane's own (`app_fixture`).
     WindowFixtureClose {
         window: u32,
     },

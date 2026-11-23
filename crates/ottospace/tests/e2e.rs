@@ -17088,6 +17088,40 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
     assert_eq!(state["state"]["panes"][0]["kind"]["window"], 700_001);
 }
 
+/// A window the user put in a pane (no Keep) closing leaves the pane, a slot waiting for that
+/// kind of window and saying so, with a Close of its own; a client's pane closes with its window.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_users_app_pane_whose_window_closes_stays_a_waiting_slot() {
+    let otto = Otto::launch_with("slot-kept", &[("OTTOSPACE_FEATURES", "slots")]);
+    let theirs = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": false}));
+    let theirs = theirs["state"]["panes"][0]["kind"]["window"].as_u64().unwrap();
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let pane = reply["state"]["focused"].as_u64().unwrap();
+    let mine = reply["state"]["panes"][1]["kind"]["window"].as_u64().unwrap();
+    let seen = json!({"pid": 0, "window": mine, "title": "SECRET standup", "identifier": "zm.meeting.window.main",
+        "subrole": "AXStandardWindow", "frame": {"x": 0, "y": 0, "w": 900, "h": 700}});
+    let displays = [json!({"x": 0, "y": 0, "w": 1920, "h": 1080})];
+    otto.call(json!({"cmd": "slot_windows", "look": {"name": "Meetings", "running": true, "windows": [seen], "displays": displays}}));
+    let reply = otto.call(json!({"cmd": "window_fixture_close", "window": theirs}));
+    assert_eq!(reply["state"]["panes"].as_array().map(Vec::len), Some(1), "a client's closes: {reply}");
+    let reply = otto.call(json!({"cmd": "window_fixture_close", "window": mine}));
+    let state = &reply["state"];
+    assert_eq!(
+        (&state["panes"][0]["id"], &state["panes"][0]["kind"]["type"]),
+        (&json!(pane), &json!("slot")),
+        "{reply}"
+    );
+    assert_eq!(state["slots"][pane.to_string()]["status"], "away");
+    assert!(!reply.to_string().contains("SECRET") && !reply.to_string().contains("zm.meeting"), "{reply}");
+    // Its own Close: a client's click is refused, the user's closes it.
+    let close = otto.control(&format!("slot-close:{pane}"));
+    assert_eq!(otto.click(at(close, 0.5, 0.5), 1)["state"]["panes"].as_array().map(Vec::len), Some(1));
+    let reply = otto.user_click(at(close, 0.5, 0.5));
+    let left = reply["state"]["panes"].as_array().unwrap().iter().any(|p| p["id"] == json!(pane));
+    assert!(!left && reply["state"]["slots"][pane.to_string()].is_null(), "{reply}");
+}
+
 /// The owner's call: three slots that each select any Meetings window take three new windows one
 /// by one, in reading order: one window a slot, never two slots one window. Manual offers; the
 /// user's Bring it here fills each.

@@ -42,7 +42,10 @@ impl Slot {
     pub fn words(&self, app: &str) -> String {
         let select = &self.select;
         let mut words = vec![app.to_string()];
-        words.extend(select.identifier.as_ref().map(|id| format!("window id {id}")));
+        words.extend(select.identifier.as_ref().map(|id| match id.is_empty() {
+            true => "no window id".to_string(),
+            false => format!("window id {id}"),
+        }));
         // A pattern written by hand in layout.json says so.
         words.extend(select.title.as_ref().map(|t| match t.contains('*') {
             true => format!("title matching “{t}”"),
@@ -161,7 +164,8 @@ impl Look {
     pub fn candidates<'a>(&'a self, slot: &Slot, rules: &[Rule], passed: impl Fn(u32) -> bool) -> Vec<&'a Seen> {
         let fits = |seen: &&Seen| {
             let facts = self.facts(seen);
-            rules::manages(rules, &facts) && !passed(seen.window) && slot.select.selects(&facts)
+            let names_kind = slot.select.subrole.is_some();
+            rules::slot_holds(rules, &facts, names_kind) && !passed(seen.window) && slot.select.selects(&facts)
         };
         let mut found: Vec<&Seen> = self.windows.iter().filter(fits).collect();
         let area = |seen: &&Seen| (seen.frame.w * seen.frame.h) as i64;
@@ -265,6 +269,8 @@ mod tests {
         let pattern = slot(r#"{"select": {"title": "*Incident*"}, "pick": {"display": 2}}"#);
         assert_eq!(pattern.words("Meetings"), "Meetings · title matching “*Incident*” · on display 2");
         assert_eq!(Slot::default().words("Zoom"), "Zoom · any window");
+        let no_id = slot(r#"{"select": {"identifier": ""}}"#);
+        assert_eq!(no_id.words("Zoom"), "Zoom · no window id");
     }
 
     #[test]

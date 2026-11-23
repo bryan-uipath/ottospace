@@ -1974,7 +1974,10 @@ const SLOT_MAKERS: [Make; 17] = [
     |g| Action::SlotWindows { look: g.look() },
     |g| g.slot_hosted(),
     |g| Action::SlotTick { at: g.time() },
-    |g| Action::WindowGone { pane: g.slot_pane(), app_running: g.rng.coin(), at: g.time() },
+    |g| {
+        let was = g.rng.coin().then(|| g.seen());
+        Action::WindowGone { pane: g.slot_pane(), app_running: g.rng.coin(), at: g.time(), was }
+    },
     // Not in `MAKERS`, which has its own `Adopt`.
     |g| g.adopt(),
     // The dialog: on any pane, with a look of its app's windows half the time. Its titles are
@@ -2091,6 +2094,8 @@ fn selects_tab(action: &Action) -> bool {
             | Action::DropPane { .. }
             | Action::MovePane { .. }
             | Action::Focus { .. }
+            // The status bar's "in a terminal": focuses that agent's pane, as `Focus` does.
+            | Action::TerminalAgentGo
             | Action::Enter { .. }
             | Action::Open { .. }
             | Action::PickerChoose { .. }
@@ -3850,6 +3855,45 @@ impl Run {
         let (default, last_before) = (m.agent.default, m.agent.last.clone());
         let slots_before = m.slots.clone();
         let ids_before: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
+        // App panes the user put a window in, not slots yet: theirs to keep when it closes.
+        let placed_before: Vec<PaneId> = m
+            .panes
+            .iter()
+            .filter(|p| {
+                matches!(p.kind, Kind::App { .. }) && !m.not_placed.contains(&p.id) && !m.slots.contains_key(&p.id)
+            })
+            .map(|p| p.id)
+            .collect();
+        // Whether the window rules manage a window of pane `id` (a dialog, one ignored: no slot's
+        // candidate, so its pane closes). Unknown facts: managed.
+        let managed = |m: &Model, id: PaneId, seen: Option<&crate::slot::Seen>| {
+            let Some(Kind::App { bundle, name, .. }) = m.pane(id).map(|p| &p.kind) else { return true };
+            let seen = seen.filter(|seen| !seen.subrole.is_empty());
+            seen.is_none_or(|seen| {
+                let facts = crate::rules::Facts {
+                    app: name,
+                    bundle: bundle.as_deref(),
+                    title: &seen.title,
+                    subrole: &seen.subrole,
+                    identifier: seen.identifier.as_deref(),
+                };
+                let names_kind = crate::rules::slot_kind(&seen.subrole).is_some();
+                crate::rules::slot_holds(&m.window_rules, &facts, names_kind)
+            })
+        };
+        let look_seen =
+            |window: u32| m.slot_looks.iter().flat_map(|look| &look.windows).find(|seen| seen.window == window);
+        let placed_unmanaged: Vec<PaneId> = m
+            .panes
+            .iter()
+            .filter(|p| matches!(p.kind, Kind::App { window, .. } if !managed(m, p.id, look_seen(window))))
+            .map(|p| p.id)
+            .collect();
+        let was_managed = match &action {
+            Action::WindowGone { pane, was: Some(seen), .. } => managed(m, *pane, Some(seen)),
+            Action::WindowGone { pane, was: None, .. } => !placed_unmanaged.contains(pane),
+            _ => true,
+        };
         let held_before: Vec<(PaneId, u32)> = m
             .panes
             .iter()
@@ -3977,10 +4021,22 @@ impl Run {
                 ensure!(!twice, "{action:?} filled slot {id} with window {window}, which another pane holds");
             }
         }
+        // A pane the user put a standard window in never goes because the window did (slots on).
+        if let Action::WindowGone { pane, .. } = &action
+            && origin == Origin::System
+            && m.features.on(Feature::Slots)
+            && placed_before.contains(pane)
+        {
+            ensure!(!was_managed || m.pane(*pane).is_some(), "{action:?} closed the user's pane {pane}");
+        }
+        // The user's place, its window gone: it waits as a slot (`kept_place`).
+        let kept = matches!(&action, Action::WindowGone { pane, .. } if origin == Origin::System
+            && made == [*pane] && placed_before.contains(pane));
         ensure!(
             made.is_empty()
                 || (users && matches!(action, Action::SlotMake { .. } | Action::SlotDialogKeep))
-                || restored,
+                || restored
+                || kept,
             "{origin:?}'s {action:?} made slot {made:?}"
         );
         for (id, run) in &slots_before {
@@ -6561,6 +6617,41 @@ fn random_actions_keep_the_model_sound_for_long() {
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
 
+/// The status bar's "in a terminal" (`TerminalAgentGo`) goes to that agent's pane, in another
+/// tab: the check had no place for it among the actions that select a tab.
+#[test]
+fn going_to_an_agent_in_a_terminal_selects_its_tab() {
+    let session = |id: &str, last: u64, active: bool| Found {
+        runner: "claude".into(),
+        id: id.into(),
+        cwd: "/code/app".into(),
+        repo: "/code/app".into(),
+        started: Some(1),
+        last_activity: Some(last),
+        active,
+        station: None,
+        label: None,
+        title: None,
+        model: None,
+        held: false,
+    };
+    let in_pane = |id: &str| InPane {
+        pane: 1,
+        runner: "claude".into(),
+        id: id.into(),
+        last_activity: None,
+        waits_for: Some(WaitsFor::Turn),
+    };
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.into(),
+        Action::SetSessions { found: vec![session("s1", 999000, true), session("s2", 5, false)], day: 0 }.into(),
+        Action::WorkbookNew { uid: "00000000000000a1".into() }.into(),
+        Action::SessionsInPanes { found: vec![in_pane("\u{202e}abc\u{7f}/p"), in_pane("s1")] }.sent_by(Origin::Socket),
+        Action::TerminalAgentGo.sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
 /// A card's row (`TaskCard`) brings its card to the front, by design: the check took that new
 /// order for a changed transcript.
 #[test]
@@ -8333,7 +8424,7 @@ fn a_live_slots_window_going_parks_it() {
         Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
         slot_make(2, 1, any).into(),
         Action::Enter { pane: 2 }.into(),
-        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 1 }),
+        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 1, was: None }),
     ])
     .unwrap();
 }
@@ -8510,11 +8601,11 @@ fn the_users_pick_of_its_apps_window_fills_a_slot() {
     replay(&[
         Action::Open { kind: app(1), axis: Axis::Right, beside: None }.sent_by(Origin::User),
         slot_make(1, 1, "{\"select\":{}}").sent_by(Origin::User),
-        Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System),
+        Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System),
         Action::OpenPicker { axis: Axis::Right, new_tab: false, items: vec![pick] }.sent_by(Origin::User),
         Action::PickerChoose { index: Some(0) }.sent_by(Origin::User),
         Action::Open { kind: app(2), axis: Axis::Right, beside: None }.sent_by(Origin::User),
-        Action::WindowGone { pane: 1, app_running: false, at: 0 }.sent_by(Origin::System),
+        Action::WindowGone { pane: 1, app_running: false, at: 0, was: None }.sent_by(Origin::System),
     ])
     .unwrap();
 }
@@ -8787,7 +8878,7 @@ fn seed_373_a_pane_emptied_for_an_offer_keeps_its_mark_while_it_waits() {
         .into(),
         Action::MarkToggle { of: MarkOf::Pane(None), uid: "u1".into(), cwds: vec![] }.into(),
         by(Origin::System, window_offered(2, seen, "no slot for this window")),
-        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 201000000 }),
+        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 201000000, was: None }),
     ])
     .unwrap();
 }
