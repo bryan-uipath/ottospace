@@ -89,6 +89,8 @@ import type {
   CityDrawn,
   CityAgent,
   CityHovered,
+  CityName,
+  CitySpots,
   CityOn,
   CityView,
   HomeNode,
@@ -2201,6 +2203,8 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     lit_tops: list(point)(o.lit_tops, `${at}.lit_tops`),
     lit_beams: list(segment)(o.lit_beams, `${at}.lit_beams`),
     labels: num(o.labels, `${at}.labels`),
+    names: list(cityName)(o.names, `${at}.names`),
+    spots: orNull(citySpots)(o.spots, `${at}.spots`),
     failed: orNull(str)(o.failed, `${at}.failed`),
     reads: num(o.reads, `${at}.reads`),
     renders: num(o.renders, `${at}.renders`),
@@ -2243,8 +2247,22 @@ function cityHovered(value: unknown, at: string): CityHovered {
   return {
     file: bool(o.file, `${at}.file`),
     lit: bool(o.lit, `${at}.lit`),
-    beam: segment(o.beam, `${at}.beam`),
+    beam: orNull(segment)(o.beam, `${at}.beam`),
+    outline: orNull(list(point))(o.outline, `${at}.outline`),
     beacon: rect(o.beacon, `${at}.beacon`),
+  };
+}
+
+function citySpots(value: unknown, at: string): CitySpots {
+  const o = fields(value, at);
+  return { folder: orNull(point)(o.folder, `${at}.folder`), file: orNull(point)(o.file, `${at}.file`) };
+}
+
+function cityName(value: unknown, at: string): CityName {
+  const o = fields(value, at);
+  return {
+    tier: oneOf(["wall", "folder", "file"] as const, "a city name's tier")(o.tier, `${at}.tier`),
+    rect: rect(o.rect, `${at}.rect`),
   };
 }
 

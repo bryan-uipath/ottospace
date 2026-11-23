@@ -17687,6 +17687,116 @@ fn the_users_pointer_moves_the_citys_camera() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,
+/// inside the picture, again after a zoom. The user's pointer on a folder's ground outlines its
+/// top face and hangs its label by its near edge or the pointer; on a building, a beam a share of
+/// the picture tall, its label right beside its dot.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_citys_names_stay_apart_and_a_hovered_folder_is_outlined() {
+    let root = support::temp(&format!("ottospace-e2e-city-names-{}", std::process::id()));
+    let app = root.join("repos/app");
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q"]);
+    for dir in ["src/model", "src/view", "src/net", "docs", "tests"] {
+        for i in 0..6 {
+            let file = app.join(format!("{dir}/f{i}.rs"));
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, "x".repeat(400 + 900 * i)).unwrap();
+        }
+    }
+    let app = app.canonicalize().unwrap();
+    let home = user_folder("city-names", &json!({"repos": [app], "restore_layout": false}).to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "code_city"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ];
+    let otto = Otto::launch_with("city-names", &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
+    // The drawer folded: at CI's window the city gets the whole tab, room for the walls' names.
+    otto.call(json!({"cmd": "key", "keys": "cmd-shift-r", "as": "user"}));
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    // Standing (a rise's frames name nothing) and named.
+    let named = |c: &Value| c["names"].as_array().is_some_and(|n| !n.is_empty()) && !c["spots"]["folder"].is_null();
+    let first = otto.wait_for("a named city", |o| Some(city(o)).filter(named));
+    let numbers = |v: &Value| v.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect::<Vec<_>>();
+    let b = numbers(&first["bounds"]);
+    let hints: Vec<[f64; 4]> =
+        otto.controls().into_iter().filter(|(id, _)| id.starts_with("home:")).map(|(_, r)| r).collect();
+    let apart =
+        |a: &[f64], b: &[f64]| a[0] + a[2] <= b[0] || b[0] + b[2] <= a[0] || a[1] + a[3] <= b[1] || b[1] + b[3] <= a[1];
+    let within = |r: &[f64]| {
+        r[0] >= b[0] - 0.5 && r[1] >= b[1] - 0.5 && r[0] + r[2] <= b[0] + b[2] + 0.5 && r[1] + r[3] <= b[1] + b[3] + 0.5
+    };
+    let check = |c: &Value| {
+        let names = c["names"].as_array().unwrap();
+        assert!(!names.is_empty() && names.len() <= 50 && c["labels"].as_u64() == Some(names.len() as u64), "{c}");
+        let rects: Vec<Vec<f64>> = names.iter().map(|n| numbers(&n["rect"])).collect();
+        for (i, r) in rects.iter().enumerate() {
+            assert!(within(r), "{r:?} in {b:?}");
+            assert!(hints.iter().all(|h| apart(r, h)), "{r:?} over the hints {hints:?}");
+            assert!(rects[i + 1..].iter().all(|o| apart(r, o)), "{r:?} over another: {rects:?}");
+        }
+        assert!(!c.to_string().contains("MODEL") && !c.to_string().contains("f1.rs"), "no name in the state: {c}");
+        rects
+    };
+    let fitted = check(&first);
+    assert!(first["names"].as_array().unwrap().iter().any(|n| n["tier"] == "wall"), "{first}");
+    // The user's pointer on a folder's own ground (`spots`), then over a grid of the city: the
+    // building whose beam is longest (one under the hints is lowered).
+    let hover = |x: f64, y: f64| {
+        otto.call(json!({"cmd": "mouse", "action": "move", "x": x, "y": y, "as": "user"}));
+        city(&otto)["hovered"].clone()
+    };
+    let at = numbers(&first["spots"]["folder"]);
+    let folder = hover(at[0], at[1]);
+    assert_eq!(folder["file"], json!(false), "{first}");
+    let length = |h: &Value| h["beam"].as_array().map_or(0., |b| b[1].as_f64().unwrap() - b[3].as_f64().unwrap());
+    let mut file: Option<Value> = None;
+    for row in 1..8 {
+        for col in 1..10 {
+            let h = hover(b[0] + b[2] * col as f64 / 10., b[1] + b[3] * row as f64 / 8.);
+            if h["file"] == json!(true) && file.as_ref().is_none_or(|f| length(&h) > length(f)) {
+                file = Some(h);
+            }
+        }
+    }
+    let outline: Vec<Vec<f64>> = folder["outline"].as_array().unwrap().iter().map(numbers).collect();
+    assert_eq!((outline.len(), &folder["beam"]), (4, &Value::Null), "{folder}");
+    let label = numbers(&folder["beacon"]);
+    assert!(within(&label) && hints.iter().all(|h| apart(&label, h)), "{label:?}");
+    // By its near edge (the lowest corner), else by the pointer: never in the middle of the city.
+    let near = outline.iter().max_by(|a, b| a[1].total_cmp(&b[1])).unwrap();
+    let by = |p: &[f64]| {
+        (label[0] - 40. ..=label[0] + label[2] + 40.).contains(&p[0])
+            && (label[1] - 40. ..=label[1] + label[3] + 40.).contains(&p[1])
+    };
+    assert!(by(near) || by(&at), "{label:?} by {near:?} or {at:?}");
+    let file = file.expect("a building under the pointer");
+    let (beam, label) = (numbers(&file["beam"]), numbers(&file["beacon"]));
+    // Long, or lowered to just under the hints (the city sits below them: #403).
+    let under = hints.iter().map(|h| h[1] + h[3]).fold(f64::MIN, f64::max);
+    let lowered = beam[1] - beam[3] >= 12. && beam[3] >= under;
+    let long = beam[1] - beam[3] >= 0.2 * b[3] || beam[3] <= b[1] + 0.06 * b[3] || lowered;
+    assert!(long, "a beam to see: {beam:?} in {b:?}, the hints' foot {under}");
+    let gap = if label[0] >= beam[2] { label[0] - beam[2] } else { beam[2] - label[0] - label[2] };
+    assert!((0. ..=8.).contains(&gap) && (label[1] + label[3] / 2. - beam[3]).abs() < 1., "{label:?} by {beam:?}");
+    // Zoomed in: names placed again, still apart.
+    let renders = city(&otto)["renders"].as_u64();
+    let p = [b[0] + b[2] / 2., b[1] + b[3] * 0.8];
+    otto.call(json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dy": 4, "as": "user"}));
+    // Drawn again and named again (a paint may land before the render's state is read).
+    let zoomed = otto.wait_for("names placed again", |o| {
+        Some(city(o)).filter(|c| c["renders"].as_u64() > renders && c["names"] != first["names"])
+    });
+    assert_ne!(check(&zoomed), fitted, "names follow the camera");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a 3D
 /// picture rendered on the GPU, where the lattice was, as large as the tab in pixels. The file
 /// the agent reads is lit, and only it, its agent's icon over it; an ignored file is no building;

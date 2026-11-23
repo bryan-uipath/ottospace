@@ -1,0 +1,32 @@
+# The code city's names (`code_city`), placed by `city_labels`: walls of the outer two tiers,
+# then folders and files by size on screen, apart, clear of the hints; at the fitted view and
+# turned lower. code-city's small repository (`app`; city-labels/ is a link to code-city/) and a
+# made-up tree of 2,000 (`big`). The hover is `city-hover`, which the base cannot run.
+{"env":{"OTTOSPACE_FEATURES":"code_city"}}
+{"tree":"repos/big","files":2000}
+{"cmd":"repo_add","path":"{ROOT}/repos/big"}
+{"until":"repos_bar.1"}
+{"cmd":"section","section":"repos"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"close"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"until":"city.picture","timeout_ms":30000}
+{"settle":800}
+{"shot":"app-names"}
+{"drag":{"rect":"city.bounds"},"at":[0.5,0.8],"by":[120,-30]}
+{"settle":800}
+{"shot":"app-turned"}
+{"click":"city:reset:tab"}
+{"settle":500}
+{"cmd":"open_repo","path":"{ROOT}/repos/big"}
+{"cmd":"close"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"until":"city.places","is":2096,"timeout_ms":60000}
+{"settle":800}
+{"shot":"big-names"}
+{"drag":{"rect":"city.bounds"},"at":[0.5,0.8],"by":[120,-30]}
+{"settle":800}
+{"shot":"big-turned"}
+{"click":"city:reset:tab"}
+{"settle":500}

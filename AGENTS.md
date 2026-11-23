@@ -222,8 +222,10 @@ Design note: `docs/ai/attention/plan.md`.
     `picture` (its size in pixels), `bounds` and `scale` (where it was painted), `lit` (each lit
     building's rect), `lit_tops` (the middle of each one's top), `labels`, `failed` (why there is
     no picture), `reads`, `renders`, `paints`, `render_us`, `hovered` (the beam of the box under
-    the user's pointer: `file`, `lit`, `beam` its foot and dot `[x0, y0, x1, y1]`, `beacon` its label's rect; null with
-    none), `lit_beams` (each lit building's beam drawn, as `beam`), `glass` (its buildings see-through:
+    the user's pointer: `file`, `lit`, a file's `beam` its foot and dot `[x0, y0, x1, y1]`, a folder's `outline`
+    (its top face's four corners), `beacon` its label's rect; null with none), `names` (each name drawn by
+    `city_labels`: its `tier`, `wall`, `folder` or `file`, and its `rect`; never the name), `spots` (a point
+    over an outer district's own ground, `folder`, and over a building, `file`, for a test's pointer), `lit_beams` (each lit building's beam drawn, as `beam`), `glass` (its buildings see-through:
     `developer.city_opaque` off), `lower` (how far below the picture's middle the fitted city's is,
     a share of its height: `developer.city_frame`), `first_ms` (the place laid out to its first picture painted),
     `read_us` (the last file list's read), `agents` (each agent's icon drawn: `task` (null: a session no
