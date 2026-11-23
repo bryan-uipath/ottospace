@@ -331,12 +331,14 @@ impl Model {
         }
         // A new session is asked its task first: shown as the user's message, the brief's path aside.
         let title = subject.task().and_then(|id| self.tasks.get(id)).map(|task| task.title.clone());
+        let runner = self.runner_of(subject);
+        let see = self.features.on(crate::features::Feature::AgentMode);
         let now = self.now;
         if let Some(chat) = self.chat_mut(subject) {
             chat.transcript.started(resumed);
             (chat.deny, chat.armed, chat.btw) = (false, false, None);
-            if let Some(title) = title.filter(|_| !resumed) {
-                chat.transcript.send(&agents::prompt(&title, None), now);
+            if let (Some(title), Some(runner)) = (title.filter(|_| !resumed), runner) {
+                chat.transcript.send(&agents::prompt(runner, &title, None, see), now);
             }
             if let Some(text) = chat.queued.take() {
                 chat.transcript.send(&text, now);
@@ -1561,7 +1563,8 @@ mod tests {
             crate::transcript::Entry::User { text } => Some(text.text().to_string()),
             _ => None,
         });
-        assert_eq!(asked.as_deref(), Some("Task: plan my week ~/notes folder"));
+        let prompt = crate::agents::prompt(launch.runner, "plan my week ~/notes folder", None, true);
+        assert_eq!(asked, Some(prompt));
     }
 
     /// The bug of 0.1.0: each click on an ended task started it again, its prompt and "ended"

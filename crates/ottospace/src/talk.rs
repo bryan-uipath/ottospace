@@ -151,7 +151,7 @@ impl Workspace {
         let (command, session, model) = match start {
             Start::New(launch) => {
                 let session = new_uuid().ok_or("no random bytes for a session id")?;
-                let command = launch.command(&session, brief).ok_or("no command for this agent")?;
+                let command = launch.command(&session, brief, self.see_apps()).ok_or("no command for this agent")?;
                 let model = launch.model.clone().unwrap_or_else(|| launch.runner.name().to_string());
                 (command, launch.runner.spec().chooses_session().then_some((launch.runner, session)), model)
             }
@@ -185,6 +185,11 @@ impl Workspace {
         let agent = Agent { terminal, since: Instant::now(), model, told: false, session: given, cwd, pass };
         self.drawer.agents.insert(subject.clone(), agent);
         Ok(session)
+    }
+
+    /// Agent mode is on: a task's agent is told it may be granted app panes (`agents::prompt`).
+    pub(crate) fn see_apps(&self) -> bool {
+        self.model.features.on(ottospace_core::features::Feature::AgentMode)
     }
 
     /// Whose a request's pass is: a task's agent that runs, or nobody's. The pass of a stopped

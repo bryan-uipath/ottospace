@@ -64,6 +64,14 @@ pub struct RunnerSpec {
     pub structured: Structured,
     pub disk: Disk,
     pub attach: Attach,
+    pub introduced: Introduced,
+}
+
+/// Where a task's agent is told of ottospace (`agents::preamble`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Introduced {
+    /// After the task, in its first message: the user sees it in the transcript.
+    FirstMessage,
 }
 
 /// Its TUI in a terminal pane (stage 1). Read from the CLI's `--help`.
@@ -210,6 +218,7 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         // branches the same file. Only a `--bg` session is joined, by `claude attach <id>` (a TUI).
         attach_live: AttachLive::ViaOwnTerminal,
     },
+    introduced: Introduced::FirstMessage,
 };
 
 const CODEX: RunnerSpec = RunnerSpec {
@@ -248,6 +257,7 @@ const CODEX: RunnerSpec = RunnerSpec {
         // running thread and got its live events. A private `codex app-server` refuses it.
         attach_live: AttachLive::ViaDaemon,
     },
+    introduced: Introduced::FirstMessage,
 };
 
 #[cfg(test)]
@@ -306,6 +316,7 @@ mod tests {
         table += &row("watch", &|spec| format!("{:?}", spec.attach.watch));
         table += &row("take over when idle", &|spec| format!("{:?}", spec.attach.take_over_when_idle));
         table += &row("attach live", &|spec| format!("{:?}", spec.attach.attach_live));
+        table += &row("told of ottospace", &|spec| format!("{:?}", spec.introduced));
         let note = include_str!("../../../docs/ai/agent-runners.md");
         assert!(note.contains(&table), "docs/ai/agent-runners.md must hold:\n{table}");
     }

@@ -9719,7 +9719,8 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let argv = otto.wait_for("the argv", |_| agent_argv(&bin, "claude"));
     let state = otto.call(json!({"cmd": "state"}));
     let session = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
-    assert_eq!(argv, [app.as_str(), "--session-id", &session, "--", "Task: fix login"]);
+    let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Claude, "fix login", None, false);
+    assert_eq!(argv, [app.as_str(), "--session-id", &session, "--", &prompt]);
     assert_eq!(state["state"]["tasks"]["list"][0]["state"], "running");
     // Its space is selected; the workspace's tab and panes are as they were.
     let space = (&state["state"]["active"], &state["state"]["tabs"][1]["space"]);
@@ -9765,7 +9766,8 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     // A task tagged with a Codex model starts Codex with that model, in the home folder.
     otto.start_task(2);
     let argv = otto.wait_for("codex's argv", |_| agent_argv(&bin, "codex"));
-    assert_eq!(argv[1..], ["--model", "gpt-6-astra", "--", "Task: try codex"]);
+    let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Codex, "try codex", None, false);
+    assert_eq!(argv[1..], ["--model", "gpt-6-astra", "--", &prompt]);
     assert_eq!(Some(&argv[0]), std::env::var("HOME").ok().as_ref(), "no repository: the home folder");
     // Codex names its own session: it is found where Codex wrote it, and the task follows it.
     let id = otto.wait_for("codex's session", |_| std::fs::read_to_string(codex_home.join("last-id")).ok());
@@ -12275,6 +12277,7 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     });
     assert!(argv().lines().any(|a| a == "-p") && argv().contains("--session-id"), "{}", argv());
     assert!(stdin().contains("Task: fix login"), "the prompt goes on stdin, never in argv");
+    assert!(stdin().contains("ottospace skill"), "the preamble follows the task: {}", stdin());
     let entries = first["transcript"]["entries"].as_array().unwrap();
     let kinds: Vec<&str> = entries.iter().filter_map(|e| e["kind"].as_str()).collect();
     assert_eq!(kinds, ["user", "assistant", "tool"], "{first}");
@@ -13229,9 +13232,19 @@ fn the_user_selects_and_copies_transcript_text_and_a_client_cannot() {
     assert!(input[3] > 22. * closed[3] * 0.8, "wrapped: {input:?}, a line {closed:?}");
     let open = otto.control(&row_id);
     assert!(input[0] + input[2] <= open[0] + open[2] + 1., "inside the drawer: {input:?} in {open:?}");
-    // Copy sits at the input's top, out of view in a short window (CI's): scrolled back to it.
-    otto.wheel([input[0] + 10., input[1] + input[3] - 10.], 40., false);
-    let input = texts(&otto).into_iter().find(|(key, _)| key.starts_with("in:")).map(|(_, r)| r).expect("its input");
+    // Copy sits at the input's top, out of view in a short window (CI's): scrolled back, over the
+    // drawer's body, until that top shows (how far depends on what is above, the first message).
+    let body = rect(&otto.drawn()["drawer"]["body"]);
+    let input_now = |o: &Otto| texts(o).into_iter().find(|(key, _)| key.starts_with("in:")).map(|(_, r)| r);
+    let mut input = input;
+    for _ in 0..40 {
+        if input[1] >= body[1] + 4. {
+            break;
+        }
+        otto.wheel([input[0] + 10., body[1] + body[3] / 2.], 5., false);
+        input = input_now(&otto).expect("its input");
+    }
+    assert!(input[1] >= body[1] + 4., "the input's top in view: {input:?} in {body:?}");
     // Copy over it: a client's puts nothing there, the user's the whole input.
     let id = row_id.rsplit(':').next().unwrap().to_string();
     let copy_id = format!("chat-io-copy:1:{id}:in");
