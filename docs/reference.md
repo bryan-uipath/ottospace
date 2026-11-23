@@ -1661,7 +1661,8 @@ moves only its own folder
 
 With `multi_monitor` on, ⌘⇧O (View ▸ Fold Tab Out or In, the palette) folds the tab on show out
 to its own window on another display: the next one after the main window's, left to right (the
-one it was on before, if free); with two displays a second fold swaps. The keyboard goes with
+one it was on before, if free); with two displays a second fold swaps (the tab coming back in shows in
+the main window if it is of the same workspace; else the main window stays on its workspace). The keyboard goes with
 it. The main window (the one ottospace started with: Home, the top row, the left sidebar) shows
 the tab's neighbour; the tab keeps its place in its workspace's row, marked out, with Fold back in
 where its × is. A click on it goes to its window. The only tab of its workspace leaves an empty tab
