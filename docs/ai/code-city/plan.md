@@ -160,6 +160,15 @@ Windows). It replaces the 2D plan this note first recommended.
   district is a plinth three times its terrace's lift (up to 4.5 beside a few tall towers), its
   top edge lit, its sides' edges dim (a per-instance factor in the shader: still one draw). A
   plinth's edge is where a folder's name goes, as in the original city.
+- **Stable folder colours** (the owner, 2026-11-23: "a mapping, customisable"). A building's
+  colour is its nearest folder's with a named colour (built in by what the folder is for: `docs`
+  green, `tests` violet, `e2e` pink, `src` blue, `crates`/`packages` teal; `city_folder_colors`
+  over them), else its top-level folder's own: a hue from an FNV-1a hash of its name, never its
+  index or order, round the wheel less amber's band ("needs you"). Nearest, not top-level only:
+  `crates/x/tests` reads as tests, and a monorepo's `packages/*/src` as source. A root file is
+  grey; a lit building keeps its task's colour. Muted (lightness 0.34 top, 0.64 edges) so a lit
+  building and amber stand out; districts keep their plinth tones. `city_colours`, tested: same
+  name same colour in any tree, adding a file or folder changes no other colour.
 - **Glass** (the owner's word, 2026-11-21: "a little more transparent"): buildings' faces are 80%
   opaque, their edges whole; a second pipeline blends them after the solid
   boxes, farthest first, writing no depth, so the order is fixed and nothing flickers as a camera
@@ -326,6 +335,8 @@ task's folder beside the label (shell-side only, never in the state). Open quest
    to bottom, footprint by lines (the owner's city found a treemap wrong here: "a function is
    not a district"). Needs an outline per language; the viewer's markdown headings are the
    cheap first case. The viewer's cursor line is the lit lot; `gg`/`G` and a lot's click move it.
+   Inside a file, a symbol is coloured by its kind (function, class, interface, type, enum,
+   const, a markdown heading), as the original city's `KIND_COLORS` did (the owner, 2026-11-23).
 
 ## Other sources (design only; none is built, and none adds a network path by this note)
 

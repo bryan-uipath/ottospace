@@ -227,7 +227,8 @@ Design note: `docs/ai/attention/plan.md`.
     `city_labels`: its `tier`, `wall`, `folder` or `file`, and its `rect`; never the name), `spots` (a point
     over an outer district's own ground, `folder`, and over a building, `file`, for a test's pointer), `lit_beams` (each lit building's beam drawn, as `beam`), `glass` (its buildings see-through:
     `developer.city_opaque` off), `lower` (how far below the picture's middle the fitted city's is,
-    a share of its height: `developer.city_frame`), `first_ms` (the place laid out to its first picture painted),
+    a share of its height: `developer.city_frame`), `folder_colors` (how many `city_folder_colors` the
+    picture's colours had), `first_ms` (the place laid out to its first picture painted),
     `read_us` (the last file list's read), `agents` (each agent's icon drawn: `task` (null: a session no
     task has), `rect`, `cone` (it shines on a building), `fan` `[k, n]`, `hovered`). `counts.city_reads`: the reads, a city on show or not;
     `counts.city_beam_frames`: the frames the hovered beam's fade asked for (none under Reduce Motion);

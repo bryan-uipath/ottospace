@@ -1703,6 +1703,8 @@ export interface CityDrawn {
   glass: boolean | null;
   /** How far below the picture's middle the fitted city's is, a share of its height: null with none. */
   lower: number | null;
+  /** How many `city_folder_colors` the picture's colours had: null with none. */
+  folder_colors: number | null;
   /** The beam of the box under the user's pointer: a file's or a district's, lit, its label. */
   hovered: CityHovered | null;
   /** From the place laid out to its first picture painted (ms): null before. */

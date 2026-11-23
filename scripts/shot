@@ -24,7 +24,7 @@ below; a folder scripts/shots/<name>/ beside it is copied into the instance's ow
   {"hold":"workbook:3","by":[0,-40]}   the same, the button still down (mid-drag); {"cmd":"key","keys":"escape","as":"user"} or a click ends it
   {"until":"drawer.native.chats.1.transcript.cards","len":1}   wait on the state ("is", "exists")
   {"sleep_ms":700}            wait (motion while recording)
-  {"write":"home/settings.json","text":"{}"}   a file in the instance's own folder, as an editor saves it
+  {"write":"home/settings.json","text":"{}"}   a file in the instance's own folder (its folders made), as an editor saves it
   {"tree":"repos/big","files":2000}   a made-up git repository there: nested folders, most files small
   {"record":"start"}          with --record: what the recording covers (default: all of it)
   {"controls":true}           print the named controls on screen (for writing scenarios)
@@ -492,6 +492,11 @@ def run_scenario(binary, scenario, out, record=False):
             elif "write" in step:
                 # Renamed into place, as an editor saves: the app never reads half a file.
                 path = os.path.join(inst.root, step["write"])
+                # Only inside the instance's own folder: its folders made there, never elsewhere.
+                root = os.path.realpath(inst.root)
+                if os.path.commonpath([root, os.path.realpath(path)]) != root:
+                    raise Failed(f"write outside the instance: {step['write']}")
+                os.makedirs(os.path.dirname(path), exist_ok=True)
                 with open(path + ".new", "w") as f:
                     f.write(step["text"])
                 os.replace(path + ".new", path)
