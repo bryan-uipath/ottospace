@@ -10641,7 +10641,8 @@ fn go_to_finds_a_worktree_then_a_file_in_it_and_a_gt_runs_a_command() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     let otto = Otto::launch("palette");
-    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    // A terminal: Terminal Below beside a lone empty pane would fill it, not split (#413).
+    otto.call(json!({"cmd": "split"}));
     let state = || otto.call(json!({"cmd": "state"}));
     // A client's ⌘⇧P or ⌘P opens nothing: the palette runs any command as the user's.
     for keys in ["cmd-shift-p", "cmd-p"] {
