@@ -9381,6 +9381,37 @@ fn seed_10915_the_users_click_on_the_shown_transcript_collapses_the_drawer() {
     .unwrap();
 }
 
+/// A pen round over a line a client wrote, then the user's picker: it waits while the box's pen
+/// marks up, so Esc's way back to the box finds no picker over it.
+#[test]
+fn seed_42928_the_picker_waits_for_the_boxs_pen() {
+    let facts = vec![
+        Facts {
+            pane: 2,
+            cwd: Some("@\"".into()),
+            program: Some("flicker".into()),
+            title: Some(" ".into()),
+            ignored: false,
+        },
+        Facts { pane: 5, cwd: Some("/tmp".into()), program: Some("flicker".into()), title: None, ignored: false },
+    ];
+    replay(&[
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::OpenCompose { text: " q".into() }.sent_by(Origin::Socket),
+        Action::ComposePen.sent_by(Origin::User),
+        Action::CaptureStart { pane: None, draft: "u2".into(), word: "w0rdw0rdw0rd".into(), facts, images: true }
+            .sent_by(Origin::User),
+        Action::OpenPicker {
+            axis: Axis::Right,
+            new_tab: false,
+            items: vec![PickItem::Closed { name: "Safari".into(), path: "/code/app-2".into() }],
+        }
+        .sent_by(Origin::User),
+        Action::AnnotateLeave { title: false }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
 /// The box opened in one workspace, its line taken by a capture's draft, then ↵ in a workspace
 /// of a default: the draft is filed, the bar goes, and the task joined the box's first workspace.
 #[test]

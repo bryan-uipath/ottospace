@@ -5207,8 +5207,10 @@ impl Model {
         let quick = matches!(action, Action::QuickOpen { .. });
         let opens = opens || (quick && self.compose.is_none());
         let under = quick && (self.picker.is_some() || self.palette.is_some());
-        let over_other =
-            ((modal || self.palette.is_some() || self.clone.is_some()) && picker) || (boxed && opens) || under;
+        // The box's ✎ marking up is the box, tucked away: the picker waits, or ↵ and Esc would
+        // bring the box back over it.
+        let holds = modal || self.pen_marking() || self.palette.is_some() || self.clone.is_some();
+        let over_other = (holds && picker) || (boxed && opens) || under;
         // A conversation the user opens takes the drawer from the new task being written.
         let talks = matches!(action, Action::TaskTalk { .. } | Action::TaskCard { .. } | Action::SessionOpen { .. })
             && self.picker.is_none();
