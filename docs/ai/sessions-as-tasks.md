@@ -316,6 +316,12 @@ today. Off: Elsewhere, unchanged.
    waits and offers "Go to the pane"; no answering from the card.
 6. **The city** (after #395): a card's glyph over its file, from `session_cards`.
 
+Slice 1 as built (#425): as above, but for these, left for a later step: the Project view shows no
+cards (live sessions stay Elsewhere's rows there); opening an ended or idle card shows today's
+session drawer, not a read-only past; no `MAX_CARDS` and "N more"; ⌘↵ from the drawer header;
+"N hidden · Show" brings all back at once. `terminal_tasks` reads the panes itself (no need for
+`session_waits`), and a session a pane runs is never resumed, flag on or off.
+
 Slice 1 is the owner's suggested first slice, with the three new points in it. One change of
 cut: "read-only cards for sessions in listed repos" is fresh outside our panes only while Tasks
 is open; making it fresh everywhere is a reader change worth its own measurement (slice 2).
