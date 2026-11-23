@@ -27,7 +27,8 @@ note") and its "Decided" note.
   most editors save by renaming), its note's, and the last time ottospace opened it.
 - **Opening** (slice 2): the note in a file viewer pane, read-only, beside the focused pane (⇧:
   below), as ⌘-click on a path opens one. A project with no note opens nothing; its row says "no
-  note". Its viewer pane has the note's path in the state, as any viewer's does.
+  note". Its viewer pane has the note's path in the state, as any viewer's does, so only the user
+  opens one (`projects::USERS_ALONE`); a drag's state never names its path.
 - **Placing** (slice 2): a drag lands among the placed rows or just after them (the line); a
   placed row dragged below stays placed, last ("Back to recent" is open). Kept with the open
   times in `~/.ottospace/projects.json` (`{version, placed, used}`, at most 1000 times), never

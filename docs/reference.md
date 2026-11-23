@@ -1594,7 +1594,7 @@ is the folder's projects: each folder in it (its note is `README.md`, else `inde
 only or newest `.md`) and each lone `.md` file. A row shows the title (the note's first heading,
 else the name) and how long ago it was last used (changed, or opened here). A click (or ↵) opens
 its note read-only in a file viewer beside the focused pane, ⇧ below; a project with no note says
-"no note" and opens nothing. Drag a row up to place it: placed projects come first, in your order,
+"no note" and opens nothing. Only you open one: a client's click, ↵ or label opens nothing. Drag a row up to place it: placed projects come first, in your order,
 above a thin line; the rest follow, most recently used first. Esc puts a drag back. The order and
 the open times are kept in `~/.ottospace/projects.json`, never in your notes. ottospace only reads
 the folder, and only while the
