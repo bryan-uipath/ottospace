@@ -121,8 +121,8 @@ impl Workspace {
                     self.listen_flush(window, cx);
                 }
                 self.row_menu_act(Action::RowMenuChoose { index }, window, cx);
-                // A pane's Keep or Edit: the dialog, with a look at the app's windows now.
-                if let Some(Action::SlotDialogOpen { pane, .. }) = stood {
+                // A pane's Create or Edit: the dialog, with a look at the app's windows now (the user's alone).
+                if let Some(Action::SlotDialogOpen { pane, .. }) = stood.filter(|_| self.input == Origin::User) {
                     self.slot_dialog_open(pane, window, cx);
                 }
             }

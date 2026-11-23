@@ -3125,6 +3125,8 @@ fn a_window_picked_into_its_apps_slot_fills_it_and_the_apps_quit_leaves_it_waiti
     assert_eq!(slot(), "filled");
     // Give Back: it waits.
     user_click_control(&otto, "slot-dots:1");
+    // ⋯'s Edit slot…: the dialog, whose foot gives the window back.
+    user_click_control(&otto, "row-menu:0");
     user_click_control(&otto, "slot-dialog:give-back");
     assert_eq!(state()["state"]["panes"][0]["kind"]["type"], "slot");
     // ⌘E, the canary, its window: the user's pick fills the slot, which stays one.

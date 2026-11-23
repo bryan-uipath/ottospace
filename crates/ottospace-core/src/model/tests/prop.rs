@@ -3805,6 +3805,11 @@ impl Run {
             m.tabs.iter().enumerate().filter_map(held).collect()
         };
         let closing_was = closing_held(m);
+        // What a choice in a menu stands for: a pane's Clear slot is a `SlotClear`.
+        let menu_chose = match &action {
+            Action::RowMenuChoose { index } => m.row_menu_action(*index),
+            _ => None,
+        };
         let bindings = |m: &Model| -> Vec<(String, Option<TaskId>)> {
             m.workbooks.list.iter().map(|book| (book.uid.clone(), book.task)).collect()
         };
@@ -4057,7 +4062,10 @@ impl Run {
             let own = matches!(m.pane(*id).map(|p| &p.kind), Some(Kind::App { bundle, name, .. })
                 if crate::marks::same_app((bundle.as_deref(), name), (run.bundle.as_deref(), &run.name)));
             ensure!(
-                !gone || !own || matches!(action, Action::SlotClear { .. }),
+                !gone
+                    || !own
+                    || matches!(action, Action::SlotClear { .. })
+                    || matches!(menu_chose, Some(Action::SlotClear { .. })),
                 "{action:?} ended slot {id} with its app in it"
             );
             let Some(now) = now else { continue };
@@ -6655,6 +6663,20 @@ fn going_to_an_agent_in_a_terminal_selects_its_tab() {
         Action::WorkbookNew { uid: "00000000000000a1".into() }.into(),
         Action::SessionsInPanes { found: vec![in_pane("\u{202e}abc\u{7f}/p"), in_pane("s1")] }.sent_by(Origin::Socket),
         Action::TerminalAgentGo.sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
+
+/// ⋯'s Clear slot on a filled slot is the user's Clear: the check took the menu's choice for a
+/// slot ended some other way with its app in it (xreview, #416).
+#[test]
+fn a_menus_clear_slot_on_a_filled_slot_is_the_users_clear() {
+    let app = Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() };
+    replay(&[
+        Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
+        Action::SlotMake { pane: 1, pid: 0, slot: crate::slot::Slot::default() }.into(),
+        Action::RowMenu { row: MenuOf::Pane(1), dots: None, keys: true }.into(),
+        Action::RowMenuChoose { index: Some(1) }.into(),
     ])
     .unwrap();
 }

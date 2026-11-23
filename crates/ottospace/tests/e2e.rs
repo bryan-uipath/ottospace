@@ -17038,7 +17038,7 @@ fn offered_windows_of_one_title_are_told_apart_in_the_offer_list() {
 /// The user's ⋯ on pane `pane`, then its menu's `item` (`slot_keep`, `slot_edit`, `slot_clear`).
 fn slot_menu(otto: &Otto, pane: u64, item: &str) -> Value {
     let reply = otto.user_click(at(otto.control(&format!("slot-dots:{pane}")), 0.5, 0.5));
-    let items = reply["state"]["row_menu"]["items"].as_array().cloned().unwrap_or_default();
+    let items = reply["row_menu"]["items"].as_array().cloned().unwrap_or_default();
     let index = items.iter().position(|i| i["item"] == item).unwrap_or_else(|| panic!("no {item}: {reply}"));
     otto.user_click(at(otto.control(&format!("row-menu:{index}")), 0.5, 0.5))
 }
@@ -17067,11 +17067,11 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
     // A client's ⋯ is refused; the user's opens its menu, whose Keep opens the dialog, by the window's id.
     let dots = otto.control(&format!("slot-dots:{pane}"));
     let reply = otto.click(at(dots, 0.5, 0.5), 1);
-    assert_eq!((&reply["state"]["row_menu"], &reply["state"]["slot_dialog"]), (&Value::Null, &Value::Null), "{reply}");
+    assert_eq!((&reply["row_menu"], &reply["state"]["slot_dialog"]), (&Value::Null, &Value::Null), "{reply}");
     let reply = otto.user_click(at(dots, 0.5, 0.5));
-    let items = &reply["state"]["row_menu"]["items"];
-    assert_eq!((&items[0]["item"], &items[0]["label"]), (&json!("slot_keep"), &json!("Create slot…")));
-    let reply = slot_menu(&otto, pane, "slot_keep");
+    let items = &reply["row_menu"]["items"];
+    assert_eq!((&items[0]["item"], &items[0]["label"]), (&json!("slot_keep"), &json!("Create slot…")), "{reply}");
+    let reply = otto.user_click(at(otto.control("row-menu:0"), 0.5, 0.5));
     let dialog = &reply["state"]["slot_dialog"];
     assert_eq!(
         (&dialog["by_id"], &dialog["by_title"], &dialog["editing"]),
