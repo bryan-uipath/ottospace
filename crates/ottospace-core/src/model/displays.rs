@@ -33,11 +33,14 @@ pub struct Display {
     pub scale: f32,
 }
 
-/// A tab folded out, and the display it is on.
+/// A tab folded out, and the display it is on. `stand_in`: the empty tab made for its space in
+/// the main window when it was that space's only one (its id and title), removed when the tab
+/// folds back in if still empty and not renamed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Out {
     pub tab: u32,
     pub display: String,
+    pub stand_in: Option<(u32, String)>,
 }
 
 /// Which window holds the keyboard: the main one, or a tab out's.
@@ -195,14 +198,53 @@ impl Model {
             self.tab_in(Some(was), effects);
         }
         let main = self.tabs[self.main_at()].id;
-        let main = if main == id { was.unwrap_or_else(|| self.main_after(at)) } else { main };
-        self.out.push(Out { tab: id, display: display.clone() });
+        // Its space's only tab in the main window: an empty one stands in for it there, so the
+        // space keeps a tab on show (its empty state).
+        let alone = main == id
+            && was.is_none()
+            && !self.space_tabs(&self.tabs[at].space).iter().any(|i| *i != at && !self.is_out(self.tabs[*i].id));
+        let stand_in = alone.then(|| self.stand_in(at));
+        let main = match stand_in {
+            Some((tab, _)) => tab,
+            None if main == id => was.unwrap_or_else(|| self.main_after(at)),
+            None => main,
+        };
+        self.out.push(Out { tab: id, display: display.clone(), stand_in });
         self.claim(at, &display);
         // Its space on the row: the main window's row lists it, marked out.
         let of = self.tabs[at].space.clone();
         self.add_space(&of);
         self.key_to(at, effects);
         self.away = Some(main);
+    }
+
+    /// A new empty tab right after tab `at`, in its space and folder, not put on show: its id and title.
+    fn stand_in(&mut self, at: usize) -> (u32, String) {
+        self.next_tab += 1;
+        let (id, title) = (self.next_tab, self.free_title());
+        let (space, folder) = (self.tabs[at].space.clone(), self.tabs[at].folder.clone());
+        let tab = super::Tab { id, title: title.clone(), space, layout: None, focused: None, display: None, folder };
+        self.tabs.insert(at + 1, tab);
+        self.active += usize::from(self.active > at);
+        (id, title)
+    }
+
+    /// Tab `out` folded back in: its stand-in goes if it is still empty and not renamed, and the
+    /// main window shows the tab back instead. Filled or renamed, both stay.
+    fn drop_stand_in(&mut self, out: &Out, effects: &mut Vec<Effect>) {
+        let Some((id, title)) = &out.stand_in else { return };
+        let Some(at) = self.tabs.iter().position(|tab| tab.id == *id) else { return };
+        let untouched = self.tree_at(at).is_none() && self.tabs[at].title == *title;
+        let Some(back) = self.tabs.iter().position(|tab| tab.id == out.tab).filter(|_| untouched) else { return };
+        if self.main_at() == at {
+            match self.away {
+                Some(_) => self.away = Some(out.tab),
+                None => self.select_tab(back, effects),
+            }
+        }
+        if let Some(at) = self.tabs.iter().position(|tab| tab.id == *id) {
+            self.close_background_tab(at, effects);
+        }
     }
 
     /// Tab `at` is display `uid`'s: no other tab is taken back there on a replug.
@@ -221,7 +263,8 @@ impl Model {
         if self.tabs[self.active].id == id {
             self.key_main(effects);
         }
-        self.out.remove(place);
+        let out = self.out.remove(place);
+        self.drop_stand_in(&out, effects);
         // The user's fold in: no display takes it back by itself.
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
             tab.display = None;
@@ -264,7 +307,7 @@ impl Model {
                 tab.display.as_ref() == Some(&uid) && !self.is_out(tab.id) && tab.id != main && !self.holds_app(*at)
             });
             if let Some(at) = at.filter(|_| !taken(self)) {
-                self.out.push(Out { tab: self.tabs[at].id, display: uid.clone() });
+                self.out.push(Out { tab: self.tabs[at].id, display: uid.clone(), stand_in: None });
                 self.claim(at, &uid);
             }
         }
@@ -290,12 +333,15 @@ impl Model {
                 seen.push(out.display.clone());
                 self.out.push(out);
             } else {
-                gone.push(out.tab);
+                gone.push(out);
             }
         }
         // The keyboard on a tab folded in goes to the main window.
-        if gone.contains(&self.tabs[self.active].id) {
+        if gone.iter().any(|out| out.tab == self.tabs[self.active].id) {
             self.key_main(effects);
+        }
+        for out in &gone {
+            self.drop_stand_in(out, effects);
         }
         let main = |model: &Self, id: u32| model.tabs.iter().any(|tab| tab.id == id && !model.is_out(id));
         match (self.is_out(self.tabs[self.active].id), self.away) {
@@ -433,6 +479,62 @@ mod tests {
         m.update(Action::TabOut { tab: None });
         assert_eq!((m.tabs_out(), id(&m), m.away), (vec![], 1, None));
         assert_eq!(m.tabs[1].display, None);
+    }
+
+    /// A workspace of one tab, a terminal in it.
+    fn one() -> Model {
+        let mut m = Model::default();
+        set(&mut m, &[display("left", 0.), display("right", 1728.)], "left");
+        m.update(Action::NewEmptyTab);
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m
+    }
+
+    fn space_tabs(m: &Model) -> Vec<u32> {
+        m.space_tabs(&m.tabs[m.active].space).into_iter().map(|at| m.tabs[at].id).collect()
+    }
+
+    /// Its only tab folded out: before, the main window went to Home and the workspace had no tab
+    /// there. Now an empty tab of the workspace stands in; folded back in, the tab takes its place.
+    #[test]
+    fn the_only_tab_out_leaves_an_empty_one_in_its_place_until_it_folds_back_in() {
+        let mut m = one();
+        let space = m.tabs[m.active].space.clone();
+        m.update(Action::TabOut { tab: None });
+        assert_eq!((id(&m), m.tabs_out().len()), (1, 1), "out, with the keyboard");
+        let stand_in = main_id(&m);
+        assert_ne!(stand_in, 1);
+        assert_eq!((m.shown_space(), space_tabs(&m)), (&space, vec![1, stand_in]));
+        assert!(m.tree_at(m.main_at()).is_none() && m.home(&[]).is_none(), "its empty state, not Home");
+        // In the main window, the keyboard is on the stand-in; ⌘⇧O from the window out folds in.
+        m.update(Action::KeyWindow { tab: stand_in });
+        assert_eq!((id(&m), m.focused), (stand_in, None));
+        m.update(Action::KeyWindow { tab: 1 });
+        m.update(Action::TabOut { tab: None });
+        assert_eq!((m.tabs_out(), id(&m), space_tabs(&m)), (vec![], 1, vec![1]));
+        assert_eq!(m.tree_at(m.active).map(crate::layout::Node::leaves), Some(vec![1, 2]));
+        // From the main window's row, too.
+        m.update(Action::TabOut { tab: None });
+        let stand_in = main_id(&m);
+        m.update(Action::KeyWindow { tab: stand_in });
+        m.update(Action::TabIn { tab: Some(1) });
+        assert_eq!((id(&m), space_tabs(&m)), (1, vec![1]));
+    }
+
+    /// Filled, or folded in by an unplug: a used stand-in stays; an empty one goes.
+    #[test]
+    fn a_filled_stand_in_stays_and_an_unplug_folds_in_as_the_user_does() {
+        let mut m = one();
+        m.update(Action::TabOut { tab: None });
+        let stand_in = main_id(&m);
+        m.update(Action::KeyWindow { tab: stand_in });
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::TabIn { tab: Some(1) });
+        assert_eq!((id(&m), space_tabs(&m)), (stand_in, vec![1, stand_in]));
+        let mut m = one();
+        m.update(Action::TabOut { tab: None });
+        set(&mut m, &[display("left", 0.)], "left");
+        assert_eq!((m.tabs_out(), id(&m), space_tabs(&m)), (vec![], 1, vec![1]));
     }
 
     #[test]
@@ -667,6 +769,15 @@ mod tests {
         assert_eq!((id(&m), m.away), (1, None));
     }
 
+    /// The user's main window goes to the first workspace (the tab out's stand-in left behind),
+    /// and back to the window out.
+    fn main_elsewhere(m: &mut Model) {
+        let out = id(m);
+        m.update(Action::KeyWindow { tab: main_id(m) });
+        m.update(Action::SpaceSelect { index: 1 });
+        m.update(Action::KeyWindow { tab: out });
+    }
+
     #[test]
     fn a_new_task_from_the_window_out_joins_its_workspace() {
         let mut m = two();
@@ -678,6 +789,7 @@ mod tests {
             m.update(Action::WorkbookKeep { workbook: id });
         }
         m.update(Action::TabOut { tab: None });
+        main_elsewhere(&mut m);
         assert_ne!(m.shown_space(), &of);
         m.update(Action::OpenCompose { text: "fix it".into() });
         // The box is the main window's, and so is the keyboard; its task goes where it was asked.
@@ -697,6 +809,7 @@ mod tests {
             m.update(Action::WorkbookKeep { workbook: id });
         }
         m.update(Action::TabOut { tab: None });
+        main_elsewhere(&mut m);
         m.update(Action::OpenCompose { text: "fix it".into() });
         // A capture takes the box's line: its task goes where the user is, not to the window out's.
         let word = "k3f9a2c41b7d".into();

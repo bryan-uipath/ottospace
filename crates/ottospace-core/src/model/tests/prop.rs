@@ -2150,6 +2150,7 @@ fn check_out(m: &Model) -> Result<(), String> {
     }
     // The selection history names the main window's tab, never one out.
     let main = m.tabs[m.main_at()].id;
+    ensure!(!m.is_out(main), "the main window shows tab {main}, which is out");
     for space in m.spaces.iter().filter(|space| space.of == *m.shown_space()) {
         ensure!(space.last == Some(main), "the selected space's last tab is {:?}, not {main}", space.last);
     }
@@ -3864,6 +3865,11 @@ impl Run {
         let brief_before = m.brief;
         let (sidebar_was, collapsed_was) = (m.sidebar.is_some(), m.drawer_collapsed());
         let decisions_before = m.decisions.is_some();
+        let (spaced_before, shown_before, out_before) = (
+            m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect::<Vec<_>>(),
+            m.shown_space().clone(),
+            m.out.len(),
+        );
         let talk_before = m.talk.clone();
         // A reorder moves the Repos entries and repositories, never adds or drops one.
         let repo_set = |m: &Model| {
@@ -3898,6 +3904,12 @@ impl Run {
                 rail_shown != Some(*item) || !over_brief || kept,
                 "the user's click over the brief of {item:?} dropped it"
             );
+        }
+        // A fold out loses no tab of any space, and the main window keeps showing its space.
+        if matches!(action, Action::TabOut { .. }) && m.out.len() > out_before {
+            let kept = spaced_before.iter().all(|(id, of)| m.tabs.iter().any(|tab| tab.id == *id && tab.space == *of));
+            ensure!(kept, "a fold out lost a tab: {spaced_before:?}, then {:?}", m.tabs);
+            ensure!(*m.shown_space() == shown_before, "a fold out left {shown_before:?} for {:?}", m.shown_space());
         }
         // The same displays again move no tab: only a display plugged in takes one back.
         if let (Action::SetDisplays { .. }, None) = (&action, &refused) {

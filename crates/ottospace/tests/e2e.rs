@@ -16460,6 +16460,33 @@ fn a_tab_folds_out_to_another_display_and_back_in() {
     });
 }
 
+/// The only tab of a workspace folded out: an empty tab of the workspace stands in for it in the
+/// main window (its empty state, not Home). Folded back in, the tab takes its place again.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_only_tab_folded_out_leaves_an_empty_tab_until_it_folds_back_in() {
+    let otto = Otto::launch_with("tab-out-alone", &[("OTTOSPACE_FEATURES", "multi_monitor")]);
+    let main = json!({"uid": "main", "frame": [0, 0, 1728, 1117]});
+    let other = json!({"uid": "other", "frame": [1728, 0, 1920, 1080], "scale": 1});
+    otto.call(json!({"cmd": "displays_set", "displays": [main, other], "main": "main"}));
+    let state = otto.call(json!({"cmd": "split"}));
+    let only = state["state"]["tabs"][0]["id"].as_u64().expect("the workspace's tab");
+    let count = state["state"]["tabs"].as_array().map(Vec::len).expect("tabs");
+    let state = otto.call(json!({"cmd": "key", "keys": "cmd-shift-o", "as": "user"}));
+    assert_eq!(state["out"], json!([{"tab": only, "display": 1}]), "{state}");
+    let stand_in = state["windows"][0]["tab"].as_u64().expect("the main window's tab");
+    assert_ne!(stand_in, only, "{state}");
+    assert_eq!(state["state"]["tabs"].as_array().map(Vec::len), Some(count + 1), "{state}");
+    assert!(state["home"].is_null(), "the workspace's empty tab, not Home: {state}");
+    otto.drawn();
+    assert!(otto.control_opt("home:terminal").is_some(), "its empty state's rows");
+    // Fold back in from the main window's row: the stand-in, still empty, goes.
+    let [x, y, w, h] = otto.control(&format!("tab-in:{only}"));
+    let state = otto.user_click([x + w / 2., y + h / 2.]);
+    assert_eq!((&state["out"], &state["windows"][0]["tab"]), (&json!([]), &json!(only)), "{state}");
+    assert_eq!(state["state"]["tabs"].as_array().map(Vec::len), Some(count), "{state}");
+}
+
 /// At rest the tick sleeps: each frame only for a moment after something happened, then about
 /// once a second for the slow looks. It wakes for what happens with no request: a terminal's
 /// output, seconds later, is drawn.
