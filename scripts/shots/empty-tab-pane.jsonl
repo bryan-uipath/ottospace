@@ -1,0 +1,5 @@
+# ⌘T: a new tab's empty pane, alone in it, shows every way to fill it (Open an app, Terminal, New task).
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"key","keys":"cmd-t","as":"user"}
+{"shot":"new-tab"}

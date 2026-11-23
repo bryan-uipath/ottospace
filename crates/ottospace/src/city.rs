@@ -537,7 +537,7 @@ impl Workspace {
                 places.map(move |place| (place.id.clone(), colour)).collect::<Vec<_>>()
             })
             .collect();
-        let surface = floor.surface();
+        let surface = floor.surface(&self.model);
         let (dir, drawn, jobs) = (city.dir.to_string(), self.city_drawn.clone(), self.city_painter.jobs.clone());
         let (home, hints) = (self.home.clone(), self.home.clone());
         let shows = {

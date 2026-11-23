@@ -13,8 +13,11 @@ pub enum Surface {
     Home,
     /// A tab of a workspace or a task with no pane, in the main window.
     Tab,
-    /// An empty pane: from a split, `NewEmptyTab`, or a pane whose content went.
+    /// An empty pane beside others: from a split, or a pane whose content went.
     Pane,
+    /// An empty pane alone in its tab (⌘T's): as a tab with no pane, each hint fills it
+    /// (`Model::empty_surface`).
+    LonePane,
     /// A tab with no pane, folded out to a window of its own.
     OutTab,
 }
@@ -24,7 +27,8 @@ pub enum Surface {
 pub enum Hint {
     /// ⌘E: the picker, whose choice fills the place.
     OpenApp,
-    /// ⌘D: a terminal that fills a tab with no pane. Beside a pane it splits, never fills.
+    /// ⌘D: a terminal that fills a tab with no pane, or an empty pane alone in it. Beside a
+    /// pane it splits, never fills.
     Terminal,
     /// ⌘N: a new task, in the workspace on show.
     NewTask,
@@ -85,16 +89,18 @@ const ALL: &[Hint] = &[Hint::OpenApp, Hint::Terminal, Hint::NewTask];
 
 /// What `surface`, `size` points wide and tall, shows; `city`: it has a city (a folder, and the
 /// flag on: `Model::city_at`). A hint only where its action fills that place: beside a pane ⌘D
-/// splits it and ⌘N fills nothing, so a pane shows ⌘E alone; in a folded-out window the picker
+/// splits it and ⌘N fills nothing, so a pane among others shows ⌘E alone, and one alone in its
+/// tab all three, as the tab would; in a folded-out window the picker
 /// opens in the main window and fills its tab, so a folded-out tab shows ⌘D (a terminal there)
 /// and ⌘N (a task in its workspace). Home has no folder, so never a city.
 pub fn empty(surface: Surface, size: (f32, f32), city: bool) -> Empty {
     let hints = match surface {
-        Surface::Home | Surface::Tab => ALL,
+        Surface::Home | Surface::Tab | Surface::LonePane => ALL,
         Surface::Pane => &ALL[..1],
         Surface::OutTab => &ALL[1..],
     };
-    let under = |least: (f32, f32)| surface == Surface::Pane && (size.0 < least.0 || size.1 < least.1);
+    let pane = matches!(surface, Surface::Pane | Surface::LonePane);
+    let under = |least: (f32, f32)| pane && (size.0 < least.0 || size.1 < least.1);
     let backdrop = match () {
         _ if city && surface != Surface::Home && !under(CITY_LEAST) => Backdrop::City,
         _ if under(SMALL) => Backdrop::None,
@@ -107,7 +113,7 @@ pub fn empty(surface: Surface, size: (f32, f32), city: bool) -> Empty {
 mod tests {
     use super::*;
 
-    const EVERY: [Surface; 4] = [Surface::Home, Surface::Tab, Surface::Pane, Surface::OutTab];
+    const EVERY: [Surface; 5] = [Surface::Home, Surface::Tab, Surface::Pane, Surface::LonePane, Surface::OutTab];
 
     /// Every surface's hints are rows of the one list, in its order and words.
     #[test]
@@ -120,6 +126,7 @@ mod tests {
         let big = (1000., 800.);
         assert_eq!(empty(Surface::Tab, big, true).hints, empty(Surface::Home, big, false).hints);
         assert_eq!(empty(Surface::Pane, big, true).hints, [Hint::OpenApp]);
+        assert_eq!(empty(Surface::LonePane, big, true).hints, ALL, "alone in its tab: as the tab");
         assert_eq!(empty(Surface::OutTab, big, false).hints, [Hint::Terminal, Hint::NewTask]);
         let labels: Vec<&str> = ALL.iter().map(|hint| hint.label()).collect();
         assert_eq!(labels, ["Open an app", "Terminal", "New task"]);
@@ -130,7 +137,8 @@ mod tests {
     fn a_small_pane_shows_its_hints_alone() {
         for surface in EVERY {
             assert_eq!(empty(surface, (1000., 800.), false).backdrop, Backdrop::Lattice, "{surface:?}");
-            let small = if surface == Surface::Pane { Backdrop::None } else { Backdrop::Lattice };
+            let pane = matches!(surface, Surface::Pane | Surface::LonePane);
+            let small = if pane { Backdrop::None } else { Backdrop::Lattice };
             assert_eq!(empty(surface, (200., 120.), false).backdrop, small, "{surface:?}");
         }
         assert_eq!(empty(Surface::Pane, (SMALL.0 - 1., 800.), false).backdrop, Backdrop::None);
@@ -145,7 +153,8 @@ mod tests {
         for surface in EVERY {
             let city = if surface == Surface::Home { Backdrop::Lattice } else { Backdrop::City };
             assert_eq!(empty(surface, (1000., 800.), true).backdrop, city, "{surface:?}");
-            let small = if surface == Surface::Pane { Backdrop::Lattice } else { city };
+            let pane = matches!(surface, Surface::Pane | Surface::LonePane);
+            let small = if pane { Backdrop::Lattice } else { city };
             assert_eq!(empty(surface, (CITY_LEAST.0 - 1., 300.), true).backdrop, small, "{surface:?}");
         }
         assert_eq!(empty(Surface::Pane, CITY_LEAST, true).backdrop, Backdrop::City);

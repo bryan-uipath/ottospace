@@ -42,10 +42,10 @@ pub enum Floor {
 }
 
 impl Floor {
-    /// The empty place it draws (`empty::empty`).
-    pub(crate) fn surface(self) -> Surface {
+    /// The empty place it draws (`empty::empty`): a pane alone in its tab is as the tab.
+    pub(crate) fn surface(self, model: &ottospace_core::Model) -> Surface {
         match self {
-            Floor::Pane(_) => Surface::Pane,
+            Floor::Pane(id) => model.empty_surface(id),
             Floor::Out(_) => Surface::OutTab,
             Floor::Main => Surface::Tab,
         }
@@ -330,7 +330,7 @@ impl Workspace {
         held: Modifiers,
         cx: &mut Context<Self>,
     ) -> AnyElement {
-        let surface = floor.surface();
+        let surface = floor.surface(&self.model);
         let (prefix, pane) = match floor {
             Floor::Out(tab) => (format!("empty-out:{tab}"), None),
             Floor::Pane(id) => (format!("empty:{id}"), Some(id)),

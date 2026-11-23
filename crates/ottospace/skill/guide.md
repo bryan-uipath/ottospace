@@ -163,7 +163,8 @@ ottospace ctl '{"cmd":"close","pane":2}'
 ```
 
 `split` puts a new pane beside the focused one: `axis` is `right` (default) or `down`; `kind` is
-`terminal` (default) or `empty`. `dir` is `left`, `right`, `up` or `down`.
+`terminal` (default) or `empty`. A terminal split of an empty pane alone in its tab (one offering
+no window) fills that pane instead: same id, no new pane. `dir` is `left`, `right`, `up` or `down`.
 
 Arranging panes:
 
