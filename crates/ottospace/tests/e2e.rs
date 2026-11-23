@@ -17149,6 +17149,60 @@ fn bug_send_files_a_task_in_a_new_worktree_with_a_brief_of_no_titles() {
     assert!(otto.call(json!({"cmd": "state"}))["bug"]["report"].is_null());
 }
 
+/// A city's first picture rises (or, where a frame of the rise is too slow, fades in) over the
+/// lattice it waited on, then no frame moves; under Reduce Motion it shows at once, no frame.
+/// Covered and shown again, its picture (kept) shows at once: no render, no rise, no fade. The
+/// state says how long the first picture took (`first_ms`).
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_city_rises_once_and_at_once_under_reduce_motion() {
+    let root = support::temp(&format!("ottospace-e2e-city-fade-{}", std::process::id()));
+    let app = root.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    git(&app, &["init", "-q"]);
+    for (file, bytes) in [("src/main.rs", 900), ("src/lib.rs", 4000), ("README.md", 2000)] {
+        std::fs::write(app.join(file), "x".repeat(bytes)).unwrap();
+    }
+    let app = app.canonicalize().unwrap().to_string_lossy().into_owned();
+    for calm in [false, true] {
+        let name = if calm { "city-fade-calm" } else { "city-fade" };
+        let home = user_folder(name, &json!({"repos": [app], "restore_layout": false}).to_string());
+        let mut env = vec![
+            ("OTTOSPACE_HOME", home.to_str().unwrap()),
+            ("OTTOSPACE_FEATURES", "code_city"),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+        ];
+        if calm {
+            env.push(("OTTOSPACE_REDUCE_MOTION", "1"));
+        }
+        let otto = Otto::launch_with(name, &env);
+        let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+        let fades = |o: &Otto| {
+            let counts = state(o)["counts"].clone();
+            counts["city_fade_frames"].as_u64().unwrap() + counts["city_rise_frames"].as_u64().unwrap()
+        };
+        otto.call(json!({"cmd": "open_repo", "path": app}));
+        otto.call(json!({"cmd": "close"}));
+        let city = otto.wait_for("the city", |o| Some(state(o)["city"].clone()).filter(|c| !c["picture"].is_null()));
+        assert!(city["first_ms"].as_u64().is_some(), "{city}");
+        std::thread::sleep(Duration::from_millis(600));
+        let after = fades(&otto);
+        assert_eq!(after == 0, calm, "rises or fades in unless Reduce Motion: {after}");
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(fades(&otto), after, "no frame at rest");
+        // A pane covers it, and goes: the kept picture, at once.
+        let renders = state(&otto)["city"]["renders"].as_u64();
+        otto.call(json!({"cmd": "split"}));
+        otto.call(json!({"cmd": "close"}));
+        otto.wait_for("the city again", |o| Some(state(o)["city"].clone()).filter(|c| !c["picture"].is_null()));
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!((state(&otto)["city"]["renders"].as_u64(), fades(&otto)), (renders, after), "kept, no fade");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The code city on every empty place with a folder (`code_city`). The owner's case: a Repos row
 /// opens a terminal in its checkout, closed, the tab draws that checkout's city (and a worktree's
 /// row its worktree's). An empty pane there draws it too; two empty panes of one size share one

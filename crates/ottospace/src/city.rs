@@ -41,6 +41,14 @@ const NAMED_TIERS: usize = 2;
 /// A beam's label sits this many points beside its dot; the hovered beam fades in over this long.
 const BESIDE: f32 = 8.;
 const FADE: Duration = Duration::from_millis(120);
+/// A place's first city, after its lattice waited for it, rises over this long (its buildings
+/// grow, district by district); where a frame of the rise renders slower than `RISE_BUDGET_US`,
+/// its standing picture fades in over `FADE_IN` instead.
+const RISE: Duration = Duration::from_millis(400);
+const RISE_BUDGET_US: u64 = 12_000;
+const FADE_IN: Duration = Duration::from_millis(250);
+/// Pictures no place shows, kept so a tab come back shows its city at once: the newest this many.
+const KEPT_PICTURES: usize = 2;
 /// Room kept between a name and the empty tab's hints, in points.
 const CLEAR: f32 = 12.;
 /// The hints' backing fades out over this many points, in this many layers: no edge to see.
@@ -89,18 +97,24 @@ type ReadJob = (String, Vec<String>);
 /// its agents are at change, once each (`latest_each`). No timer of its own.
 pub struct Reader {
     jobs: Sender<ReadJob>,
-    reads: Receiver<(ReadJob, Option<Option<Atlas>>)>,
+    reads: Receiver<(ReadJob, Option<(Option<Atlas>, u64)>)>,
     asked: HashMap<String, Asked>,
     held: HashMap<String, Arc<Atlas>>,
-    /// How many reads came: for the state of a test run.
+    /// How many reads came, and how long the last took (µs): for the state of a test run.
     came: usize,
+    read_us: Option<u64>,
 }
 
 impl Reader {
     pub fn new() -> Self {
-        let (jobs, reads) =
-            latest_each(|job: &ReadJob| job.0.clone(), |(dir, roots): &ReadJob| read(Path::new(dir), roots));
-        Self { jobs, reads, asked: HashMap::new(), held: HashMap::new(), came: 0 }
+        let (jobs, reads) = latest_each(
+            |job: &ReadJob| job.0.clone(),
+            |(dir, roots): &ReadJob| {
+                let started = Instant::now();
+                (read(Path::new(dir), roots), started.elapsed().as_micros() as u64)
+            },
+        );
+        Self { jobs, reads, asked: HashMap::new(), held: HashMap::new(), came: 0, read_us: None }
     }
 
     /// The folders on show, each with what it is asked with: one new, or whose roots or lit
@@ -117,11 +131,11 @@ impl Reader {
 
     /// Takes the reads that came. True if one did.
     fn take(&mut self) -> bool {
-        let came: Vec<(String, Option<Atlas>)> =
+        let came: Vec<(String, (Option<Atlas>, u64))> =
             self.reads.try_iter().filter_map(|((dir, _), read)| Some((dir, read?))).collect();
         let any = !came.is_empty();
-        for (dir, read) in came {
-            self.came += 1;
+        for (dir, (read, us)) in came {
+            (self.came, self.read_us) = (self.came + 1, Some(us));
             // Too many kept: those of folders not on show go, never one on show.
             if self.held.len() >= KEPT && !self.held.contains_key(&dir) {
                 self.held.retain(|kept, _| self.asked.contains_key(kept));
@@ -206,6 +220,15 @@ struct Key {
     lit: Vec<(String, u32)>,
     size: (u32, u32),
     glass: bool,
+    /// How far through its rise, in thousandths: 1000 standing.
+    rise: u16,
+}
+
+impl Key {
+    /// The same picture standing (not a frame of its rise).
+    fn standing(&self) -> Key {
+        Key { rise: 1000, ..self.clone() }
+    }
 }
 
 /// A district's name on its plate: where it starts and how wide the plate's edge is there, in
@@ -228,6 +251,8 @@ struct Made {
     places: usize,
     groups: usize,
     render_us: u64,
+    /// When a place last painted it: the newest unused are kept (`KEPT_PICTURES`).
+    used: Instant,
 }
 
 /// One empty place's city, as the last frame drew it.
@@ -256,6 +281,17 @@ struct Place {
     fading: Option<(usize, Instant)>,
     /// The lit buildings' beams the last paint drew: foot and end.
     lit_beams: Vec<[f32; 4]>,
+    /// When it was first laid out; how long after that its first picture painted (ms); whether
+    /// it painted without one first (its lattice waited); since when its first picture fades in.
+    since: Option<Instant>,
+    /// The newest picture made for it: painted until the one asked for comes.
+    newest: Option<Key>,
+    first_ms: Option<u64>,
+    waited: bool,
+    fade: Option<Instant>,
+    /// Since when its first city rises; whether a frame of it was too slow (then it fades).
+    rise: Option<Instant>,
+    rise_off: bool,
 }
 
 /// A hovered box's beam as drawn: whether a file's, whether lit, its foot and end, its label.
@@ -282,6 +318,10 @@ pub struct Drawn {
     paints: usize,
     /// Frames the hovered beam's fade asked for: none under Reduce Motion.
     beam_frames: u64,
+    /// Frames a first picture's fade-in asked for: none at rest, none under Reduce Motion.
+    fade_frames: u64,
+    /// Frames a first city's rise painted: none at rest, none under Reduce Motion.
+    rise_frames: u64,
     /// Pictures no place shows: GPUI keeps each in the window's atlas until it is dropped.
     retired: Vec<Arc<RenderImage>>,
 }
@@ -302,6 +342,8 @@ pub struct Painter {
 impl Painter {
     pub fn new() -> Self {
         let mut gpu: Option<Result<Gpu, String>> = None;
+        // The last scene made, by its key standing: a rise's frames build it once.
+        let mut last: Option<(Key, Scene)> = None;
         let (jobs, made) = latest_each(
             |job: &PaintJob| job.0,
             move |(_, key, plan): &PaintJob| {
@@ -311,7 +353,7 @@ impl Painter {
                 });
                 // A panic in the GPU's code fails this picture, and the GPU is opened again next time.
                 let picture = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    opened.as_ref().map_err(Clone::clone).and_then(|gpu| make(gpu, key, plan))
+                    opened.as_ref().map_err(Clone::clone).and_then(|gpu| make(gpu, key, plan, &mut last))
                 }));
                 picture.unwrap_or_else(|_| {
                     gpu = None;
@@ -324,12 +366,17 @@ impl Painter {
 }
 
 /// The scene of `plan` and its picture, on the picture's thread.
-fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
+fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Option<(Key, Scene)>) -> Result<Made, String> {
     let started = Instant::now();
     let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
     let (w, h) = key.size;
-    let scene = scene::scene(plan, &lit, w as f32 / h as f32);
-    let Picture { width, height, bgra } = gpu.render(&scene, w, h, key.glass)?;
+    let standing = key.standing();
+    let scene = match last.take() {
+        Some((was, scene)) if was == standing => scene,
+        _ => scene::scene(plan, &lit, w as f32 / h as f32),
+    };
+    *last = Some((standing, scene.clone()));
+    let Picture { width, height, bgra } = gpu.render(&scene, w, h, f32::from(key.rise) / 1000., key.glass)?;
     let camera = scene.camera.ok_or("no camera")?;
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
     let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
@@ -366,8 +413,8 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
         .collect();
     let groups = plan.places.iter().filter(|p| p.group).count();
     let render_us = started.elapsed().as_micros() as u64;
-    let (places, plan) = (plan.places.len(), plan.clone());
-    Ok(Made { key: key.clone(), image, lit, names, scene, plan, places, groups, render_us })
+    let (places, plan, used) = (plan.places.len(), plan.clone(), Instant::now());
+    Ok(Made { key: key.clone(), image, lit, names, scene, plan, places, groups, render_us, used })
 }
 
 impl Drawn {
@@ -375,13 +422,24 @@ impl Drawn {
     /// the same folder. None with no GPU, or a place too small.
     fn picture(&self, place: &Place) -> Option<&Made> {
         let dir = &place.asked.as_ref()?.dir;
-        let made = [&place.asked, &place.shown].into_iter().flatten().find_map(|key| self.pictures.get(key));
-        made.filter(|made| !place.small && made.key.dir == *dir && self.failure(place).is_none())
+        // The one asked for, else the newest made for it (a rise's frame, while a newer is on its
+        // way), else the one shown.
+        let made = [&place.asked, &place.newest, &place.shown].into_iter().flatten();
+        let made = made.filter_map(|key| self.pictures.get(key)).find(|made| made.key.dir == *dir);
+        made.filter(|_| !place.small && self.failure(place).is_none())
+    }
+
+    /// The pictures a place asks for or shows: not those kept for a place to come back.
+    fn in_use(&self) -> usize {
+        let used = |key: &Key| {
+            self.places.values().any(|p| [&p.asked, &p.newest, &p.shown].iter().any(|k| k.as_ref() == Some(key)))
+        };
+        self.pictures.keys().filter(|key| used(key)).count()
     }
 
     /// Why `place`'s picture could not be made, if it could not.
     fn failure(&self, place: &Place) -> Option<&String> {
-        self.failed.get(place.asked.as_ref()?)
+        self.failed.get(&place.asked.as_ref()?.standing())
     }
 
     /// The box under `at` (window points) in `floor`'s picture, by its index; none over the
@@ -418,7 +476,8 @@ impl Drawn {
             "picture": made.map(|made| made.key.size), "bounds": [x, y, w, h], "scale": scale,
             "lit": lit, "labels": place.map_or(0, |place| place.labels), "failed": failed, "reads": reads,
             "renders": self.renders, "paints": self.paints, "render_us": made.map(|made| made.render_us),
-            "hovered": hovered, "lit_tops": tops, "lit_beams": lit_beams, "pictures": self.pictures.len(),
+            "hovered": hovered, "lit_tops": tops, "lit_beams": lit_beams, "pictures": self.in_use(),
+            "first_ms": place.and_then(|place| place.first_ms),
             "glass": made.map(|made| made.key.glass),
         })
     }
@@ -438,6 +497,11 @@ impl Workspace {
     /// pictures made; forgets the places gone and drops the pictures none shows. Redraws when
     /// a read or a picture came.
     pub(crate) fn read_city(&mut self, cx: &mut Context<Self>) {
+        // The flag off and nothing left to forget: nothing to look for, each step.
+        let on = self.model.features.on(ottospace_core::features::Feature::CodeCity);
+        if !on && self.city_drawn.borrow().places.is_empty() && self.city_drawn.borrow().pictures.is_empty() {
+            return;
+        }
         let mut roots = None;
         let mut on_show: HashMap<String, (Vec<String>, Vec<(String, bool)>)> = HashMap::new();
         let mut floors = HashSet::new();
@@ -468,11 +532,17 @@ impl Workspace {
         let hints = self.home.clone();
         let mut drawn = self.city_drawn.borrow_mut();
         let made: Vec<(PaintJob, Option<Result<Made, String>>)> = self.city_painter.made.try_iter().collect();
-        for ((_, key, _), picture) in made {
+        for ((floor, key, _), picture) in made {
             drawn.sent.remove(&key);
             redraw = true;
             // Skipped: a newer picture of that place was asked for.
             let Some(picture) = picture else { continue };
+            if let (Ok(_), Some(place)) = (&picture, drawn.places.get_mut(&floor)) {
+                // Not a frame of a rise turned off (too slow, or failed): its lattice waits instead.
+                if key.rise == 1000 || !place.rise_off {
+                    place.newest = Some(key.clone());
+                }
+            }
             drawn.renders += 1;
             match picture {
                 Ok(made) => {
@@ -494,20 +564,46 @@ impl Workspace {
                         }
                     }
                 }
+                // A frame of a rise failed: no rise, its standing picture is tried instead.
+                Err(_) if key.rise < 1000 => {
+                    if let Some(place) = drawn.places.get_mut(&floor) {
+                        (place.rise, place.rise_off, place.newest) = (None, true, None);
+                    }
+                }
+                // The standing picture failed: the place says why, and none of its frames is asked again.
                 Err(why) => drop(drawn.failed.insert(key, why)),
             }
         }
         // Places gone are forgotten; a picture or failure no place asks for or shows is dropped.
         drawn.places.retain(|floor, _| floors.contains(floor));
-        let used: HashSet<Key> =
-            drawn.places.values().flat_map(|place| [place.asked.clone(), place.shown.clone()]).flatten().collect();
-        let unused: Vec<Key> = drawn.pictures.keys().filter(|key| !used.contains(*key)).cloned().collect();
-        for key in unused {
+        // A place whose standing picture is made needs no older one (two panes split to one size
+        // share a picture made for the other: the first's full-size one is not kept). Not in a
+        // rise: its frame shows until the next comes.
+        let Drawn { places, pictures, .. } = &mut *drawn;
+        let made = |k: &Key| k.rise == 1000 && pictures.contains_key(k);
+        // One asking for none (too small) shows none.
+        for place in places.values_mut().filter(|p| p.asked.as_ref().is_none_or(made)) {
+            place.newest = None;
+        }
+        let used: HashSet<Key> = (drawn.places.values())
+            .flat_map(|place| [place.asked.clone(), place.newest.clone(), place.shown.clone()])
+            .flatten()
+            .collect();
+        // A frame of a rise is never kept.
+        let mut unused: Vec<(Instant, Key)> = (drawn.pictures.iter())
+            .filter(|(key, _)| !used.contains(*key) && key.rise == 1000)
+            .map(|(key, made)| (made.used, key.clone()))
+            .collect();
+        // The newest few stay: a tab shown again paints its city at once, with no fade.
+        unused.sort_by(|a, b| b.0.cmp(&a.0));
+        let rises: Vec<Key> =
+            drawn.pictures.keys().filter(|key| key.rise < 1000 && !used.contains(*key)).cloned().collect();
+        for key in unused.into_iter().skip(KEPT_PICTURES).map(|(_, key)| key).chain(rises) {
             if let Some(old) = drawn.pictures.remove(&key) {
                 drawn.retired.push(old.image);
             }
         }
-        drawn.failed.retain(|key, _| used.contains(key));
+        drawn.failed.retain(|key, _| used.iter().any(|used| used.standing() == *key));
         let retired = std::mem::take(&mut drawn.retired);
         drop(drawn);
         for image in retired {
@@ -561,18 +657,40 @@ impl Workspace {
                     window.refresh();
                 }
                 (place.bounds, place.small, place.measured, place.scale) = (bounds, small, true, scale);
-                let key = plan.as_ref().map(|plan| Key {
+                place.since.get_or_insert_with(Instant::now);
+                let mut key = plan.as_ref().map(|plan| Key {
                     dir,
                     plan: Arc::as_ptr(plan) as usize,
                     lit,
                     size: (size(w), size(h)),
+                    rise: 1000,
                     glass: !crate::config::live().developer.city_opaque,
                 });
-                let key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
+                key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
+                // Another folder in the same place (the main window's tab switched): its own first
+                // picture, timed, risen or faded, again.
+                let other = |a: &Key, b: &Key| a.dir != b.dir;
+                if place.shown.as_ref().zip(key.as_ref()).is_some_and(|(a, b)| other(a, b)) && place.first_ms.is_some()
+                {
+                    (place.first_ms, place.fade, place.rise, place.rise_off, place.waited) =
+                        (None, None, None, false, false);
+                    place.since = Some(Instant::now());
+                }
+                // Its plan come after its lattice waited: its city rises, once (none under Reduce
+                // Motion, nor after a frame of it was too slow).
+                let first = place.waited && place.first_ms.is_none() && !place.rise_off;
+                if key.is_some() && first && place.rise.is_none() && !crate::dial::calm() {
+                    place.rise = Some(Instant::now());
+                }
+                let share = place.rise.map(|at| at.elapsed().as_secs_f32() / RISE.as_secs_f32());
+                match (share, key.as_mut()) {
+                    (Some(share), Some(key)) if share < 1. => key.rise = ((share * 100.) as u16) * 10,
+                    _ => place.rise = None,
+                }
                 place.asked = key.clone();
                 // Each picture asked for once: not made, not on its way, not failed.
                 if let (Some(key), Some(plan)) = (key, plan) {
-                    let new = !held.pictures.contains_key(&key) && !held.failed.contains_key(&key);
+                    let new = !held.pictures.contains_key(&key) && !held.failed.contains_key(&key.standing());
                     if new && held.sent.insert(key.clone()) && jobs.send((floor, key, plan)).is_err() {
                         held.sent.clear();
                     }
@@ -634,6 +752,7 @@ impl Workspace {
             floors.iter().find(painted).or_else(|| floors.iter().find(|floor| drawn.places.contains_key(*floor)));
         let Some(first) = first else { return serde_json::Value::Null };
         let mut snapshot = drawn.snapshot(*first, self.city.came);
+        snapshot["read_us"] = self.city.read_us.into();
         // The places too small for a city, drawing their lattice.
         let small = floors.iter().filter(|floor| drawn.places.get(*floor).is_some_and(|place| place.small));
         snapshot["small"] = small.map(|floor| on(*floor)).collect::<Vec<_>>().into();
@@ -648,6 +767,16 @@ impl Workspace {
     /// Frames the hovered beam's fade asked for: for the counts of a test run.
     pub(crate) fn city_beam_frames(&self) -> u64 {
         self.city_drawn.borrow().beam_frames
+    }
+
+    /// Frames a first picture's fade-in asked for: for the counts of a test run.
+    pub(crate) fn city_fade_frames(&self) -> u64 {
+        self.city_drawn.borrow().fade_frames
+    }
+
+    /// Frames a first city's rise painted: for the counts of a test run.
+    pub(crate) fn city_rise_frames(&self) -> u64 {
+        self.city_drawn.borrow().rise_frames
     }
 }
 
@@ -679,10 +808,41 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
     (place.beacon, place.labels, place.window) = (None, 0, Some(window.window_handle().window_id()));
     place.lit_beams.clear();
     let (bounds, hovered) = (place.bounds, place.hovered);
+    let (waited, fade, first_ms, laid) = (place.waited, place.fade, place.first_ms, place.since);
     let drawn = &mut *drawn;
-    let Some(made) = drawn.places.get(&floor).and_then(|place| drawn.picture(place)) else { return };
+    let made = drawn.places.get(&floor).and_then(|place| drawn.picture(place));
+    // A frame of the rise rendered too slowly: no rise for this city, its standing picture fades in.
+    let slow = made.is_some_and(|made| made.key.rise < 1000 && made.render_us > RISE_BUDGET_US);
+    let Some(made) = made.filter(|_| !slow) else {
+        // Its lattice shows while it waits: its first picture will rise, or fade in.
+        if let Some(place) = drawn.places.get_mut(&floor) {
+            place.waited = true;
+            if slow {
+                (place.rise, place.rise_off, place.newest) = (None, true, None);
+                window.refresh();
+            }
+        }
+        return;
+    };
+    let rising = made.key.rise < 1000;
+    if rising {
+        window.request_animation_frame();
+    }
     let shown = made.key.clone();
     let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
+    // A first picture after the lattice waited fades in from the background; one made already
+    // (a tab come back) shows at once, as under Reduce Motion.
+    let fade = fade.or_else(|| (waited && first_ms.is_none() && !rising).then(Instant::now));
+    let faded = match fade {
+        Some(at) if !crate::dial::calm() => (at.elapsed().as_secs_f32() / FADE_IN.as_secs_f32()).min(1.),
+        _ => 1.,
+    };
+    let fading_in = faded < 1.;
+    if fading_in {
+        window.paint_quad(fill(bounds, Hsla::from(rgb(theme::BACKGROUND)).opacity(1. - faded * faded)));
+        window.request_animation_frame();
+    }
+    let first_ms = first_ms.or_else(|| laid.map(|laid| laid.elapsed().as_millis() as u64));
     let clear = hints.dilate(px(CLEAR));
     if hints.size.width > px(0.) {
         // Faint wide pills under tighter ones: about 0.75 dark over the hints, nothing at the edge.
@@ -760,9 +920,15 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
     }
     drawn.paints += 1;
     drawn.beam_frames += u64::from(fades);
+    drawn.fade_frames += u64::from(fading_in);
+    drawn.rise_frames += u64::from(rising);
+    if let Some(made) = drawn.pictures.get_mut(&shown) {
+        made.used = Instant::now();
+    }
     if let Some(place) = drawn.places.get_mut(&floor) {
         (place.labels, place.beacon, place.shown) = (labels, beacon, Some(shown));
         (place.fading, place.lit_beams) = (since, lit_beams);
+        (place.fade, place.first_ms) = (fade, first_ms);
     }
 }
 

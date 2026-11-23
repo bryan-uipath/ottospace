@@ -33,10 +33,15 @@ pub fn run(mut command: Command, timeout: Duration, most: u64) -> Result<Said, S
     let out = read(child.stdout.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let err = read(child.stderr.take().map(|p| Box::new(p) as Box<dyn Read + Send>));
     let deadline = Instant::now() + timeout;
+    // Looked at often first, then less: a git that ends in 5 ms is not waited on for 50.
+    let mut pause = Duration::from_millis(1);
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(50)),
+            Ok(None) if Instant::now() < deadline => {
+                std::thread::sleep(pause);
+                pause = (pause * 2).min(Duration::from_millis(50));
+            }
             Ok(None) => {
                 let _ = child.kill();
                 let _ = child.wait();

@@ -1519,8 +1519,9 @@ impl Workspace {
                         this.poll_sessions(window, cx);
                         this.read_titles(cx);
                         this.read_status_checkout(cx);
-                        this.read_city(cx);
                     }
+                    // Each step: a read or picture made wakes the loop, and shows at once.
+                    this.read_city(cx);
                     this.listen_menu_bar(window, cx);
                     if ticks.every(60, 0) {
                         this.listen_read_past(window, cx);
@@ -4239,6 +4240,10 @@ impl Workspace {
                 "city_reads": self.city_reads(),
                 // Frames the hovered beam's fade in the code city asked for: none under Reduce Motion.
                 "city_beam_frames": self.city_beam_frames(),
+                // Frames a city's first picture fading in over its lattice asked for: none at rest or under Reduce Motion.
+                "city_fade_frames": self.city_fade_frames(),
+                // Frames a city's first picture rising painted: none at rest or under Reduce Motion.
+                "city_rise_frames": self.city_rise_frames(),
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
                 // Frames a working line's sweep asked for: none at rest, none under Reduce Motion.
