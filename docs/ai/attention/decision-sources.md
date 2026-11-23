@@ -1,6 +1,6 @@
 # Decisions from any source
 
-Status: design note, nothing built. Written 2026-11-23 against `main` d5bae2ea. Extends
+Status: design note, nothing built. Written 2026-11-23 against `main` a0c998d3. Extends
 [decisions.md](decisions.md) (the Decisions workspace, slice 1 built behind `decisions`) and
 §3 and §5 of [plan.md](plan.md). Every example is made up.
 
