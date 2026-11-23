@@ -3867,6 +3867,10 @@ pub struct Model {
     /// The tabs folded out, one per display.
     #[serde(skip)]
     pub(crate) out: Vec<displays::Out>,
+    /// Tabs out folded in because their workspace closed, kept for their stand-ins: an Undo drops
+    /// an empty one (`settle_out`).
+    #[serde(skip)]
+    pub(crate) folded_closing: Vec<displays::Out>,
     /// The main window's tab, by id, while the keyboard is on a tab out.
     #[serde(skip)]
     pub(crate) away: Option<u32>,
@@ -4304,6 +4308,7 @@ impl Default for Model {
             displays: Vec::new(),
             main_display: None,
             out: Vec::new(),
+            folded_closing: Vec::new(),
             away: None,
             compose_joins: None,
             sidebar: None,
