@@ -192,17 +192,21 @@ impl Model {
             return effects.push(notice(APPS_STAY));
         }
         let Some(display) = self.display_for(at) else { return effects.push(notice(NO_OTHER)) };
-        // The display's tab, if it shows one, folds in: the two swap.
+        // A stand-in folded out is the user's tab now: no fold in takes it away.
+        for out in self.out.iter_mut().filter(|out| out.stand_in.as_ref().is_some_and(|(tab, _)| *tab == id)) {
+            out.stand_in = None;
+        }
+        // The display's tab, if it shows one, folds in: the two swap. Its stand-in may go: places move.
         let was = self.out.iter().find(|out| out.display == display).map(|out| out.tab);
         if let Some(was) = was {
             self.tab_in(Some(was), effects);
         }
+        let Some(at) = self.tabs.iter().position(|tab| tab.id == id) else { return };
         let main = self.tabs[self.main_at()].id;
         // Its space's only tab in the main window: an empty one stands in for it there, so the
         // space keeps a tab on show (its empty state).
-        let alone = main == id
-            && was.is_none()
-            && !self.space_tabs(&self.tabs[at].space).iter().any(|i| *i != at && !self.is_out(self.tabs[*i].id));
+        let free = |i: &usize| *i != at && !self.is_out(self.tabs[*i].id) && self.tabs[*i].id != HOME_TAB;
+        let alone = main == id && !self.space_tabs(&self.tabs[at].space).iter().any(free);
         let stand_in = alone.then(|| self.stand_in(at));
         let main = match stand_in {
             Some((tab, _)) => tab,
@@ -234,7 +238,7 @@ impl Model {
     fn drop_stand_in(&mut self, out: &Out, effects: &mut Vec<Effect>) {
         let Some((id, title)) = &out.stand_in else { return };
         let Some(at) = self.tabs.iter().position(|tab| tab.id == *id) else { return };
-        let untouched = self.tree_at(at).is_none() && self.tabs[at].title == *title;
+        let untouched = self.tree_at(at).is_none() && self.tabs[at].title == *title && !self.is_out(*id);
         let Some(back) = self.tabs.iter().position(|tab| tab.id == out.tab).filter(|_| untouched) else { return };
         if self.main_at() == at {
             match self.away {
@@ -242,9 +246,15 @@ impl Model {
                 None => self.select_tab(back, effects),
             }
         }
-        if let Some(at) = self.tabs.iter().position(|tab| tab.id == *id) {
-            self.close_background_tab(at, effects);
-        }
+        self.close_background_tab(at, effects);
+    }
+
+    /// The tab out that tab `id` stands in for, while it is still empty and not renamed: a saved
+    /// layout leaves it out, as the tab out folds in at the next start.
+    pub(crate) fn idle_stand_in(&self, id: u32) -> Option<u32> {
+        let out = self.out.iter().find(|out| out.stand_in.as_ref().is_some_and(|(tab, _)| *tab == id))?;
+        let (at, title) = (self.tabs.iter().position(|tab| tab.id == id)?, &out.stand_in.as_ref()?.1);
+        (self.tree_at(at).is_none() && self.tabs[at].title == *title).then_some(out.tab)
     }
 
     /// Tab `at` is display `uid`'s: no other tab is taken back there on a replug.
@@ -535,6 +545,57 @@ mod tests {
         m.update(Action::TabOut { tab: None });
         set(&mut m, &[display("left", 0.)], "left");
         assert_eq!((m.tabs_out(), id(&m), space_tabs(&m)), (vec![], 1, vec![1]));
+    }
+
+    /// A swap (two displays): the tab coming in drops its empty stand-in, and the one going out,
+    /// its space's only tab, gets one. Places move under the swap; the right tab goes out.
+    #[test]
+    fn a_swap_moves_the_stand_in_to_the_space_whose_only_tab_goes_out() {
+        let mut m = one();
+        m.update(Action::TabOut { tab: None });
+        let first = main_id(&m);
+        m.update(Action::KeyWindow { tab: first });
+        // Another workspace, its only tab a terminal, folded out over the first.
+        m.update(Action::SpaceSelect { index: 0 });
+        m.update(Action::NewEmptyTab);
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        let (second, space) = (id(&m), m.tabs[m.active].space.clone());
+        m.update(Action::TabOut { tab: None });
+        assert_eq!((id(&m), m.tabs_out().iter().map(|(tab, _)| *tab).collect::<Vec<_>>()), (second, vec![second]));
+        assert!(!m.tabs.iter().any(|tab| tab.id == first), "the first stand-in went with its tab back in");
+        assert_eq!(m.shown_space(), &space, "the second space keeps the main window");
+        assert!(m.tree_at(m.main_at()).is_none() && main_id(&m) != second);
+    }
+
+    /// A stand-in folded out (three displays) is the user's tab: folding the first one back in
+    /// takes nothing away, and that tab's window stays.
+    #[test]
+    fn a_stand_in_folded_out_is_kept() {
+        let mut m = one();
+        set(&mut m, &[display("left", 0.), display("mid", 1728.), display("right", 3456.)], "left");
+        m.update(Action::TabOut { tab: None });
+        let stand_in = main_id(&m);
+        m.update(Action::KeyWindow { tab: stand_in });
+        m.update(Action::TabOut { tab: None });
+        assert_eq!(m.tabs_out().len(), 2);
+        m.update(Action::TabIn { tab: Some(1) });
+        assert!(m.is_out(stand_in) && m.tabs.iter().any(|tab| tab.id == 1));
+    }
+
+    /// Saved while out: the empty stand-in is not kept, and the tab is the one on show at the next start.
+    #[test]
+    fn a_saved_layout_keeps_the_tab_out_not_its_empty_stand_in() {
+        let mut m = one();
+        m.update(Action::TabOut { tab: None });
+        let stand_in = main_id(&m);
+        m.update(Action::KeyWindow { tab: stand_in });
+        assert_eq!(m.idle_stand_in(stand_in), Some(1));
+        let saved = m.layout_file(&[], &[], 0);
+        assert_eq!(saved.tabs.len(), 1, "{saved:?}");
+        assert_eq!(saved.selected, Some(0));
+        // Filled, it is a tab of its own.
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        assert_eq!(m.idle_stand_in(stand_in), None);
     }
 
     #[test]

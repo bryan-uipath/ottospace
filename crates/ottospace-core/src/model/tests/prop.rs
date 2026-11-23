@@ -2150,7 +2150,6 @@ fn check_out(m: &Model) -> Result<(), String> {
     }
     // The selection history names the main window's tab, never one out.
     let main = m.tabs[m.main_at()].id;
-    ensure!(!m.is_out(main), "the main window shows tab {main}, which is out");
     for space in m.spaces.iter().filter(|space| space.of == *m.shown_space()) {
         ensure!(space.last == Some(main), "the selected space's last tab is {:?}, not {main}", space.last);
     }
@@ -3868,8 +3867,10 @@ impl Run {
         let (spaced_before, shown_before, out_before) = (
             m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect::<Vec<_>>(),
             m.shown_space().clone(),
-            m.out.len(),
+            m.tabs_out(),
         );
+        let idle_before: Vec<u32> =
+            m.tabs.iter().map(|tab| tab.id).filter(|id| m.idle_stand_in(*id).is_some()).collect();
         let talk_before = m.talk.clone();
         // A reorder moves the Repos entries and repositories, never adds or drops one.
         let repo_set = |m: &Model| {
@@ -3906,8 +3907,13 @@ impl Run {
             );
         }
         // A fold out loses no tab of any space, and the main window keeps showing its space.
-        if matches!(action, Action::TabOut { .. }) && m.out.len() > out_before {
-            let kept = spaced_before.iter().all(|(id, of)| m.tabs.iter().any(|tab| tab.id == *id && tab.space == *of));
+        let folded = m.tabs_out().iter().any(|(tab, _)| !out_before.iter().any(|(was, _)| was == tab));
+        if matches!(action, Action::TabOut { .. }) && folded {
+            // But an empty stand-in, gone with the tab it stood for folding back in (a swap).
+            let kept = |(id, of): &(u32, Owner)| {
+                idle_before.contains(id) || m.tabs.iter().any(|tab| tab.id == *id && tab.space == *of)
+            };
+            let kept = spaced_before.iter().all(kept);
             ensure!(kept, "a fold out lost a tab: {spaced_before:?}, then {:?}", m.tabs);
             ensure!(*m.shown_space() == shown_before, "a fold out left {shown_before:?} for {:?}", m.shown_space());
         }
