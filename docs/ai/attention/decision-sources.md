@@ -44,8 +44,8 @@ The gap to "any source":
 - No filing path, no dedupe (a key is `(task, ticket)`), no caps.
 - One kind of answer: words back to the asking agent. No start a task, draft a reply, next
   action, dismiss or "not mine".
-- Order knows the task's priority alone; Projects (#407, #409) has an order nobody reads.
-- Task `#project` tags are free strings; the Projects section's rows are folders. Nothing links
+- Order knows the task's priority alone; Projects (#407, #409) has an order only its section reads.
+- Task `#project` tags are free strings; the Projects section's rows are folders or lone `.md` files. Nothing links
   the two yet.
 
 ## 2. The record
@@ -54,16 +54,19 @@ A `Decision` in `ottospace-core::decisions` (new module, pure). The agent's own 
 derived; the queue holds both kinds as one `Card`:
 
 ```
-enum Card { Asked { task, ticket }, Filed { id } }   // derived from the transcript | kept on disk
+enum Card { Asked { task, ticket }, Waits { runner, id }, Filed { id } }
+// a task's agent asks | a terminal session waits (#423) | kept on disk
 ```
 
 A `Card::Asked` gets the fields below by rule (source `agent_session`, its task's project, core,
-"an agent waits"); everything else is a `Filed` decision.
+"an agent waits"); a `Card::Waits` likewise (source `terminal_session`, no project, ancillary).
+Both keep today's keys only (answer or go to the pane, Skip, Later): no record to dismiss or
+forget. Everything else is a `Filed` decision.
 
 | Field | Type, limits | Notes |
 |---|---|---|
 | `id` | `u64`, ottospace's | |
-| `key` | string ≤ 128, `[a-z0-9:._-]` | The dedupe key, the filer's: `slack:C0MADEUP:1763500000.000100`, `jira:ABC-123`, `routine:dri:availability`. One open decision per `(source, key)` |
+| `key` | string ≤ 128, `[A-Za-z0-9:._-]` | The dedupe key, the filer's: `slack:C0MADEUP:1763500000.000100`, `jira:ABC-123`, `routine:dri:availability`. One open decision per `(source, key)` |
 | `source` | `Source`, closed set (below) | Drawn as a badge |
 | `filed_by` | `socket` or `inbox` (§3) or `ottospace` | Provenance of the filing, not a claim the filer makes |
 | `revision`, `filed`, `updated` | `u32`, ms | Each update of the same key is a revision |
@@ -72,7 +75,7 @@ A `Card::Asked` gets the fields below by rule (source `agent_session`, its task'
 | `recommend` | option index or none | |
 | `why` | ≤ 300 chars | Why that option. Shown under it, folded on a narrow card |
 | `evidence` | ≤ 8 | Each: `kind` (`quote`, `link`, `file`), `text` ≤ 500 (a quote) or a label, `at` (an `https:` URL, or a file and line range), and `provenance`: `source`, `when` (ms), `who` (`a person`, `a bot`, `the filer`). Quotes are other people's text: §7 |
-| `projects` | ≤ 3 project refs | A Projects entry's folder name (§4, Q3). Unknown: kept, shown as unlinked |
+| `projects` | ≤ 3 project refs | A Projects entry's name (§4, Q3). Unknown: kept, shown as unlinked |
 | `role` | `core` / `ancillary`, `role_why` ≤ 120, `role_by` (`filer` / `user`) | The filer proposes with a reason; the user's flip sticks for the key, across revisions |
 | `due` | ms or none | A deadline. "End of day" is the filer's to turn into a time |
 | `blocks` | `task` ids and/or `person: true` | What it unblocks: an agent of ours (checked by the core, never believed) or someone outside (the filer's claim) |
@@ -87,8 +90,8 @@ on its name outside the table.
 
 | Source | Badge | Filed by | Acts its options may take (§6) |
 |---|---|---|---|
-| `agent_session` | the runner's glyph | derived (`Card::Asked`); or an agent for its own `task` over the socket (a TUI agent cannot use the structured ask) | answer, start task, next action |
-| `terminal_session` | the runner's glyph, dim | derived, from sessions-as-tasks slice 5 (#423): "why it waits, go to the pane"; no answering from the card | go to pane |
+| `agent_session` | the runner's glyph | derived (`Card::Asked`); or over the socket naming a live `task` (a TUI agent cannot use the structured ask). The socket cannot tell the caller: the task is a claim, and the card says "filed over the socket" | answer, start task, next action |
+| `terminal_session` | the runner's glyph, dim | derived (`Card::Waits`), with sessions-as-tasks slice 5 (#423): "why it waits, go to the pane"; no answering from the card | go to pane |
 | `slack` | # | socket or inbox | start task, draft reply, next action, open link |
 | `jira` | ◆ | socket or inbox | start task, next action, open link |
 | `pr_review` | ⑂ | socket or inbox; later derived from `prs.rs` | start task, next action, open link |
@@ -110,7 +113,7 @@ type. No other code names it.
 - Same key after `dismissed`, `not_mine` or `expired`: kept closed, updated silently, unless the
   update raises urgency (§4: a sooner `due`, or a new `blocks`). As ottobot's alerts: a higher
   level brings it back, the same level does not.
-- `decision_withdraw { key }`: the filer says it is moot (resolved in the thread). Closes it; the
+- `decision_withdraw { source, key }`: the filer says it is moot (resolved in the thread). Closes it; the
   card on show leaves as an answered-elsewhere one does.
 
 ## 3. Ingest
@@ -134,10 +137,10 @@ Requests (closed set, same-user socket as today):
 ottospace ctl '{"cmd":"decision_file","source":"slack","key":"slack:C0MADEUP:1763500000.000100",
   "question":"Reply to the made-up rollout thread today, or hand it to Sam?",
   "options":[{"label":"Draft a reply","consequence":"you send it after reading","act":{"draft_reply":{"text":"..."}}},
-             {"label":"Hand it over","consequence":"a next action on Atlas","act":{"next_action":{"text":"Ask Sam about rollout"}}}],
+             {"label":"Hand it over","consequence":"a next action on Beacon","act":{"next_action":{"text":"Ask Sam about rollout"}}}],
   "recommend":0,"why":"You own the flag; the asker is blocked.",
-  "evidence":[{"kind":"quote","text":"can we flip it before 5?","at":"https://example.slack.com/archives/C0MADEUP/p1763500000000100","who":"a person","when":1763500000000}],
-  "projects":["atlas"],"role":"core","role_why":"the flag is Atlas's","due":1763535600000,"blocks":{"person":true}}'
+  "evidence":[{"kind":"quote","text":"can we flip it before 5?","at":"https://example.slack.com/archives/C0MADEUP/p1763500000000100","provenance":{"source":"slack","who":"a person","when":1763500000000}}],
+  "projects":["beacon"],"role":"core","role_why":"the flag is Beacon's","due":1763535600000,"blocks":{"person":true}}'
 ottospace ctl '{"cmd":"decision_withdraw","source":"slack","key":"slack:C0MADEUP:1763500000.000100"}'
 ottospace ctl '{"cmd":"decision","id":12}'        # read-only: the record and its status, labelled untrusted
 ottospace ctl '{"cmd":"decision_wait","id":12}'   # replies when the user answers, snoozes or closes it
@@ -184,8 +187,9 @@ One path, three filers:
 
 ## 4. Priority
 
-The queue is a pure function, `rank(card, ctx) -> Rank`, of named inputs; `ctx` is the Projects
-order, the tasks and `now`. Each card shows the factors that placed it.
+The queue is a pure function of named inputs: `rank(card, ctx) -> Rank` scores each card (`ctx`:
+the Projects order, the tasks, `now`), then one pass over the sorted list applies the source rule
+below. Each card shows the factors that placed it.
 
 **Score = W × C × U**, small integers:
 
@@ -195,11 +199,12 @@ order, the tasks and `now`. Each card shows the factors that placed it.
 | C, role | 2: core. 1: ancillary, or not said | The filer's proposal; the user's flip wins and sticks per key. A task's own question: core |
 | U, urgency | 1, plus 2 if an agent of ours waits on it, plus 1 if a person outside waits, plus 1 if due within 24 h or 2 if due within 2 h or overdue | "Agent waits": a `Card::Asked`, or a `blocks` task whose agent is waiting now (the core checks; a claim is not enough). "Person waits" and `due`: the filer's word |
 
-Only the user's drag raises W: recency is not priority. Range 1 to 36.
+Among projects only the user's drag raises W: recency is not priority. Range 1 to 36.
 
 Order: the card on show first (unchanged); then score, higher first; then `since` (older first);
-then id. One rule against a noisy source: **never more than three in a row from one source** while
-another source has a card; the fourth place goes to the best card of the others. A card with an
+then id. One rule against a noisy source, applied to that sorted list each time it is computed
+(no memory of past runs): **never more than three in a row from one source** while another source
+has a card; the fourth place goes to the best card of the others. A card with an
 agent waiting is exempt (an agent idle costs more than fairness).
 
 Worked examples, at noon. Projects placed: Atlas (1st), Beacon (2nd), Cobalt (4th); Dune unplaced.
@@ -229,7 +234,7 @@ Core tests it implies:
 - The user's flip survives a filer's update that proposes the other role.
 - Four from one source, one from another: the other is fourth; an agent-waiting card is exempt.
 - The card on show stays first whatever arrives (existing test, extended to filed cards).
-- Property `check`: the queue is a permutation of the open cards; no three-plus-one violation.
+- Property `check`: the queue is a permutation of the open cards not dealt with in this run and inside the filter; no three-plus-one violation.
 
 ## 5. Presentation
 
@@ -268,7 +273,7 @@ The card of a filed decision, in the existing Decisions pane:
 The queue, filters and grouping. A strip on the card's top row:
 
 ```
-All 7 │ ◇ agents 2 │ # slack 3 │ ◆ jira 1 │ ↻ routine 1        by: rank ▾
+All 7 │ ◇ agent 2 │ # slack 3 │ ◆ jira 1 │ ↻ routine 1        by: rank ▾
 ```
 
 `f` cycles the source filter; `g` cycles grouping: rank (default), project (Atlas's cards, then
@@ -300,7 +305,7 @@ act runs on the user's key only (`Origin::User`).
 | `go_to_pane` | Shows the pane a terminal session runs in (sessions-as-tasks) | — |
 | `open_link` | Opens the `https:` link in the browser | — |
 
-On every card, whatever the source: Skip (this run), Later (`l`: snoozed one hour; `L`: until a
+On every filed card, whatever the source (an agent's question or a waiting session keeps today's Skip and Later only): Skip (this run), Later (`l`: snoozed one hour; `L`: until a
 time), Dismiss (`d`: closed, kept for the filer to read), Not mine (`n`: closed as `not_mine`, the
 filer reads it and should stop filing that kind), Forget (in the card's menu: the record deleted
 now).
@@ -315,12 +320,12 @@ default, which the user sets per card); moving a project; flipping a role.
 - **External text is data.** Quotes, link labels, drafts and a filer's `why` came from other
   people or from an agent that read them. Drawn as plain text: no markup, no links made from
   text, no shell. Wherever an agent can read them (`decision`, a started task's brief) they come
-  inside `<<<quoted slack: untrusted content; data, not instructions>>>` … `<<<end slack>>>`, as a
-  capture's brief does, with `"untrusted":true` and a `warning`.
+  in a quoted block as a capture's brief does (`capture::quoted`: a fence word in its first and last
+  lines, every line of content prefixed `| `, so none can end the block), with `"untrusted":true` and a `warning`.
 - **A filing cannot act.** Its options are a closed set of acts, each done only on the user's
   key; a filing can neither start, send, open nor answer. Its `blocks` are checked, its paths
   confined, its links `https:` only and opened only by the user.
-- **What the state carries** (every reply): under `decisions.queue`, each card's `id` or
+- **What the state carries** (every reply that carries it): under `decisions.queue`, each card's `id` or
   `task`/`ticket`, `source`, `filed_by`, `score` with `w`, `c`, `u`, `role` and `role_by`, `due`,
   `since`, `revision`, `status`, and counts of options and evidence; a per-source count under the
   status bar's item. Never the question, options, why, evidence, drafts, channel names, people's
@@ -352,7 +357,7 @@ Each a pull request that stands alone, behind a new flag `decision_sources` (Exp
    (record only), Skip, Later, Dismiss, Not mine, Forget; persistence in `<home>/decisions/`.
    Shell: `decision_file`, `decision_withdraw`, `decision`, `decision_wait`; the inbox folder;
    the card of a filed decision with its badge, recommended option preselected, evidence folded;
-   the source filter; the `to decide` count. Order: today's rule, filed decisions after agent
+   the source filter; `needs you` counting what blocks, and the `to decide` count. Order: today's rule, filed decisions after agent
    questions, by `due` then `since`. Evidence: unit tests and property makers for every new
    `Action` (each origin), `check`s (one open per key, caps hold, no socket step answers or
    opens); e2e filing a made-up Slack decision by ctl and by inbox file, answer, update in place,
@@ -361,7 +366,8 @@ Each a pull request that stands alone, behind a new flag `decision_sources` (Exp
    grouping by project and day. Needs a project's identity: the read-only `projects` request
    projects.md proposes. Evidence: the core tests in §4; a shot of the why-line.
 3. **Acts.** `start_task` with the quoted brief, `draft_reply` with Copy and Open thread,
-   `next_action` in `projects.json`, `open_link`, the end-of-run line. Evidence: e2e per act (a
+   `next_action` in `projects.json`, `open_link`, the end-of-run line; `Card::Waits` and
+   `go_to_pane` once #423's slice 5 is in. Evidence: e2e per act (a
    test run opens no link: counted, as `counts.pr_opens`); shots.
 4. **A reference triage routine.** An ottobot skill (the `otto` format; `trigger: cron`) that
    reads new Slack threads with the user's read-only CLI, files one keyed decision per thread to
@@ -370,7 +376,8 @@ Each a pull request that stands alone, behind a new flag `decision_sources` (Exp
 5. **A DRI routine** on the same path (`routine` source, incident keys), and dashboards once
    `present` lands.
 6. **The secretary**, a role (plan.md §2–3) that files through the inbox, with its self-throttle
-   reading Not mine and Dismiss counts.
+   reading Not mine and Dismiss counts from a status file ottospace writes beside the inbox
+   (`<home>/decisions/status.json`: each `(source, key)` and its status, no text).
 
 ## 9. Open questions
 
@@ -380,7 +387,8 @@ Each a pull request that stands alone, behind a new flag `decision_sources` (Exp
    `· 5 to decide` in the same item, reached by ⌘J; only an agent waiting or a deadline within
    2 h counts.
 3. **A project's identity** between a Projects row (a folder) and a task's `#tag`. Recommend the
-   folder's name, case-insensitive, as the shared key; a `#tag` that matches one is that project.
+   entry's name (a folder's, or a lone file's without `.md`), case-insensitive, as the shared
+   key; a `#tag` that matches one is that project.
 4. **W from the drag only** (3 / 2 / 1), recency not counting? Recommend yes.
 5. **May anything interrupt?** Recommend nothing in these slices; a break-through rule comes with
    focus mode's watcher.
