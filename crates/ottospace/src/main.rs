@@ -598,13 +598,10 @@ static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
 static DOUBLE_CMD: AtomicBool = AtomicBool::new(false);
 
 /// Listens for ⌘⌘ unless `return_double_cmd` is false. What went wrong, for the status bar.
+/// Never in a test run: a hosting one (`OTTOSPACE_HOST_ONLY`) would hear the user's keys.
 fn listen_double_cmd() -> Option<String> {
-    if config::get().settings.return_double_cmd == Some(false) {
+    if config::get().settings.return_double_cmd == Some(false) || std::env::var_os("OTTOSPACE_E2E").is_some() {
         return None;
-    }
-    // Without Accessibility the monitor hears nothing: say so rather than name a dead key.
-    if !ax::is_trusted(false) {
-        return Some("⌘⌘ is off: ottospace needs Accessibility".into());
     }
     match ottospace_mac::modifiers::listen() {
         Ok(()) => DOUBLE_CMD.store(true, Relaxed),
@@ -1593,6 +1590,10 @@ impl Workspace {
                     let changes = ottospace_mac::modifiers::take();
                     if !changes.is_empty() {
                         this.modifier_changes(changes, window, cx);
+                    }
+                    // In front, the listener hears no release: a ⌘ still down then is forgotten.
+                    if window.is_window_active() && std::env::var_os("OTTOSPACE_E2E").is_none() {
+                        this.cmd_taps = Default::default();
                     }
                     if hotkey::take_capture() {
                         this.key_used(Binding::CaptureKey);
@@ -2667,8 +2668,9 @@ impl Workspace {
 
     /// The user's modifier changes in another app: a double ⌘ returns, as the return key.
     fn modifier_changes(&mut self, changes: Vec<double_cmd::Flags>, window: &Window, cx: &mut Context<Self>) {
-        if self.cmd_taps.run(changes) > 0 {
-            self.double_cmds += 1;
+        let taps = self.cmd_taps.run(changes);
+        if taps > 0 {
+            self.double_cmds += taps as u64;
             self.key_used(Binding::ReturnKey);
             self.return_to_ottospace(window, cx);
         }

@@ -1325,8 +1325,9 @@ The return key works while any app is frontmost. Tap ⌘ twice, alone: either �
 under 250 ms, the second within 300 ms of the first's release, and no other key, modifier or mouse
 button in between. ⌘ held, ⌘C, ⌘Tab, ⌘-click and ⌘⇧ do not count. While ottospace itself has the
 keyboard, ⌘⌘ does nothing. ottospace hears only the modifier keys' changes (never which key you
-type), cannot change or stop them, and needs Accessibility for it: without it, ⌘⌘ is off and the
-status bar says so. `"return_double_cmd": false` turns it off, e.g. for another tool that uses ⌘⌘.
+type), cannot change or stop them, and uses the Accessibility access ottospace already has. A key or
+mouse button held, or Caps Lock toggled, between the taps spoils them. `"return_double_cmd": false`
+turns it off, e.g. for another tool that uses ⌘⌘.
 
 F18 works too. Set `OTTOSPACE_RETURN_KEY` to another of `f13`-`f20`. If another program already
 holds the key, ottospace logs that and runs without it. The status bar names the keys in use. Most
