@@ -1917,6 +1917,8 @@ first brainstorm:
 
 [agent-mode.md](ai/agent-mode.md): a per-pane switch that lets a task See, or See and act on, a hosted app's window; who is asking, what each level grants, what Off closes. Not built.
 
+[agent-awareness.md](ai/agent-awareness.md): how a task's agent learns ottospace is there (it does not, today), sees the workspace through it instead of screenshots, See before a task exists, and what agent mode cannot stop. Proposed.
+
 [meeting-timeline.md](ai/meeting-timeline.md): the meeting timeline as built, how a call is detected, the network decision, and what the calendar reader does not follow.
 
 [transcripts.md](ai/transcripts.md): an app's audio transcribed on the Mac, live, started and stopped by the user alone. Slice 1 is in (behind `transcripts`): the model, ⌘⌃T, the indicator and the drawer's lines, fed only by a test fixture. Then the file in `transcripts_dir`, heard lines handed over on a fixed tick, and the level meter with its label (Hearing speech, Listening, No sound for 30 s), drawn only. Then the app's real audio (ScreenCaptureKit) and Apple's on-device recogniser, the model's download, the menu bar's dot and the start reminder.
