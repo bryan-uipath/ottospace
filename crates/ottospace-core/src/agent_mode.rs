@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Owner, PaneId};
+use crate::model::PaneId;
 use crate::tasks::TaskId;
 
 /// Why a level, or the menu, set by anyone but the user is refused.
@@ -109,13 +109,14 @@ pub struct Grant {
 }
 
 /// A level the user picked on an app pane while no task worked in its workspace. The first task
-/// that works there is offered it (`AgentMode.offers`); only the user's click gives it.
-#[derive(Clone, Debug, PartialEq, Serialize)]
+/// the user starts there is offered it (`AgentMode.offers`); only the user's click gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
 pub struct Ahead {
     pub level: Level,
-    /// The workspace it was picked in: moved to another, the pane forgets it.
+    /// The tab it was picked in (a workspace's tabs keep their ids when a task binds it): moved
+    /// to another, the pane forgets it.
     #[serde(skip)]
-    pub space: Owner,
+    pub tab: u32,
 }
 
 /// The open menu: whose pane, and the item the keys are on (none when a click opened it).

@@ -13333,7 +13333,7 @@ mod tests {
 
     /// The owner's order: Slack placed and set to See, then a task started there. The pick waits
     /// for that task and is only offered to it: the user's click gives it, a client's does not.
-    /// Moved to another workspace first, the pane forgets it.
+    /// A client's task there is offered nothing. Moved to another tab first, the pane forgets it.
     #[test]
     fn a_level_picked_before_any_task_is_only_offered_to_the_first() {
         use crate::agent_mode::{AppUse, Kept, Level, USERS_ALONE};
@@ -13362,6 +13362,16 @@ mod tests {
         m.update(Action::AgentOfferAccept { pane });
         assert_eq!(grant(&m, pane), Some((Level::See, Some(task))));
         assert_eq!(m.app_access(pane, Caller::Task(task), AppUse::Read, 0), Ok(task));
+        // A client's task in such a workspace (its own line, its ↵ in the box) is offered nothing.
+        m.update(Action::WorkbookNew { uid: "00000000000000ef".into() });
+        m.update(Action::Open { kind: app(3), axis: Right, beside: None });
+        let mail = m.focused.unwrap_or_default();
+        m.update(Action::AgentLevel { pane: Some(mail), level: Level::See });
+        m.update(Action::OpenCompose { text: "theirs".into() }.sent_by(Origin::Socket));
+        m.update(Action::ComposeEnter.sent_by(Origin::Socket));
+        m.update(Action::CloseCompose.sent_by(Origin::Socket));
+        assert_eq!(m.agent.offers.get(&mail), None, "a client's task: {:?}", grant(&m, mail));
+        assert!(grant(&m, mail).is_some_and(|(level, _)| level == Level::Off));
         // Picked in one workspace, moved to a task's: forgotten, nothing offered there.
         m.update(Action::WorkbookNew { uid: "00000000000000ee".into() });
         m.update(Action::Open { kind: app(2), axis: Right, beside: None });

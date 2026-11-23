@@ -69,10 +69,12 @@ impl Model {
                     Some(grant) if grant.task.is_some_and(|task| working.contains(&task)) => *grant,
                     Some(_) => {
                         self.agent.chosen.remove(&id);
-                        // Picked before any task worked here: offered to the first that does.
-                        let here = self.space_of(id);
-                        let ahead = self.agent.ahead.get(&id).filter(|ahead| Some(&ahead.space) == here.as_ref());
-                        if let (Some(level), Some(task)) = (ahead.map(|ahead| ahead.level), front) {
+                        // Picked before any task worked here: offered to the first, if the user's
+                        // own step brought it (their ↵ in the box). A client's task gets nothing.
+                        let here = self.tab_of(id);
+                        let ahead = self.agent.ahead.get(&id).filter(|ahead| Some(ahead.tab) == here);
+                        let users = origin == Origin::User;
+                        if let (Some(level), Some(task), true) = (ahead.map(|ahead| ahead.level), front, users) {
                             self.agent.ahead.remove(&id);
                             self.agent.offers.insert(id, Kept { level, task });
                         }
@@ -96,8 +98,7 @@ impl Model {
         // A level picked ahead stands while its pane is in the workspace it was picked in, no task there.
         let ahead = std::mem::take(&mut self.agent.ahead);
         let stays = |pane: &PaneId, ahead: &Ahead| {
-            panes.get(pane).is_some_and(|grant| grant.task.is_none())
-                && self.space_of(*pane).as_ref() == Some(&ahead.space)
+            panes.get(pane).is_some_and(|grant| grant.task.is_none()) && self.tab_of(*pane) == Some(ahead.tab)
         };
         self.agent.ahead = ahead.into_iter().filter(|(pane, ahead)| stays(pane, ahead)).collect();
         // The menu is for the task it showed: its pane gone, or given to another task, it closes.
@@ -223,12 +224,6 @@ impl Model {
         Ok(task)
     }
 
-    /// The space of `pane`'s tab.
-    pub(super) fn space_of(&self, pane: PaneId) -> Option<crate::model::Owner> {
-        let tab = self.tab_of(pane).and_then(|id| self.tabs.iter().find(|tab| tab.id == id));
-        tab.map(|tab| tab.space.clone())
-    }
-
     /// The pane the menu, a level or the key is for: the one named, else the focused one.
     fn agent_pane(&self, pane: Option<PaneId>) -> Option<PaneId> {
         pane.or(self.focused).filter(|pane| self.agent.panes.contains_key(pane))
@@ -293,12 +288,16 @@ impl Model {
                 self.mark_level(pane);
             }
             Some(_) => {
-                let Some(space) = self.space_of(pane) else { return };
+                let Some(tab) = self.tab_of(pane) else { return };
                 match level {
-                    Level::Off => drop(self.agent.ahead.remove(&pane)),
-                    level => drop(self.agent.ahead.insert(pane, Ahead { level, space })),
+                    Level::Off => {
+                        self.agent.ahead.remove(&pane);
+                    }
+                    level => {
+                        self.agent.ahead.insert(pane, Ahead { level, tab });
+                        effects.push(Effect::Notice { text: agent_mode::AHEAD.into() });
+                    }
                 }
-                effects.push(Effect::Notice { text: agent_mode::AHEAD.into() });
             }
             None => {}
         }

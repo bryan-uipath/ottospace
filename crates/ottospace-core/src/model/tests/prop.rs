@@ -2552,10 +2552,9 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(m.agent.from_record.iter().all(empty), "a record's app pane waits on a pane that is not empty");
         let off = |pane: &PaneId| m.agent.level(*pane) == crate::agent_mode::Level::Off && known.contains(pane);
         ensure!(m.agent.offers.keys().all(off), "an offer on a pane above Off, or on no app pane");
-        // A level picked ahead waits on a pane no task works at, in the workspace it was picked in.
+        // A level picked ahead waits on a pane no task works at, in the tab it was picked in.
         let waits = |(pane, ahead): (&PaneId, &crate::agent_mode::Ahead)| {
-            m.agent.panes.get(pane).is_some_and(|grant| grant.task.is_none())
-                && m.space_of(*pane).as_ref() == Some(&ahead.space)
+            m.agent.panes.get(pane).is_some_and(|grant| grant.task.is_none()) && m.tab_of(*pane) == Some(ahead.tab)
         };
         ensure!(m.agent.ahead.iter().all(waits), "a level ahead {:?} on a pane with a task", m.agent.ahead);
     }
@@ -3999,6 +3998,7 @@ impl Run {
         let transcribe_picker = m.picker.as_ref().is_some_and(|picker| picker.transcribe);
         let filled_before = m.fill_display;
         let (grants_before, ahead_before) = (m.agent.panes.clone(), m.agent.ahead.clone());
+        let offers_before = m.agent.offers.clone();
         let (default, last_before) = (m.agent.default, m.agent.last.clone());
         let slots_before = m.slots.clone();
         let ids_before: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
@@ -4165,6 +4165,11 @@ impl Run {
             "{origin:?}'s {action:?} picked {:?} ahead",
             m.agent.ahead
         );
+        // A pick ahead becomes an offer only in the user's own step: never to a client's task.
+        for (pane, kept) in &m.agent.offers {
+            let new = ahead_before.contains_key(pane) && offers_before.get(pane) != Some(kept);
+            ensure!(!new || origin == Origin::User, "{origin:?}'s {action:?} offered pane {pane}'s pick to {kept:?}");
+        }
         // Only ottospace records a use of an app.
         ensure!(
             m.agent.last == last_before
