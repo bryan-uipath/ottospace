@@ -64,6 +64,14 @@ pub struct RunnerSpec {
     pub structured: Structured,
     pub disk: Disk,
     pub attach: Attach,
+    pub introduced: Introduced,
+}
+
+/// Where a task's agent is told of ottospace (`agents::preamble`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Introduced {
+    /// After the task, in its first message: the user sees it in the transcript.
+    FirstMessage,
 }
 
 /// Its TUI in a terminal pane (stage 1). Read from the CLI's `--help`.
@@ -210,6 +218,7 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         // branches the same file. Only a `--bg` session is joined, by `claude attach <id>` (a TUI).
         attach_live: AttachLive::ViaOwnTerminal,
     },
+    introduced: Introduced::FirstMessage,
 };
 
 const CODEX: RunnerSpec = RunnerSpec {
@@ -248,6 +257,7 @@ const CODEX: RunnerSpec = RunnerSpec {
         // running thread and got its live events. A private `codex app-server` refuses it.
         attach_live: AttachLive::ViaDaemon,
     },
+    introduced: Introduced::FirstMessage,
 };
 
 #[cfg(test)]
