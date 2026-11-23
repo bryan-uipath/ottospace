@@ -135,6 +135,7 @@ mod seal;
 mod sessions;
 mod signal_pipe;
 mod slide;
+mod slot_icon;
 mod slot_panes;
 mod sneak;
 mod sneak_apps;
@@ -1151,6 +1152,8 @@ struct Workspace {
     installed: apps::Scan,
     /// Icons of apps seen so far, by app name. Kept: an icon is read and encoded once.
     icons: HashMap<String, Arc<gpui::Image>>,
+    /// A slot's app icon by bundle id, read once a run (`slot_icon`); none: the generic one.
+    slot_icons: std::cell::RefCell<HashMap<String, Option<Arc<gpui::Image>>>>,
     /// A problem found at start (settings, font, tasks folder). It stays: unlike `error`, no
     /// later success makes it untrue.
     notice: Option<String>,
@@ -1832,6 +1835,7 @@ impl Workspace {
             launching: Vec::new(),
             installed: apps::Scan::default(),
             icons: HashMap::new(),
+            slot_icons: Default::default(),
             list_scroll: ScrollHandle::new(),
             calendar_scroll: ScrollHandle::new(),
             calendar_shown: std::cell::Cell::new((0, 0)),

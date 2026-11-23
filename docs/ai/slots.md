@@ -198,8 +198,14 @@ so the next meeting's windows fill them. So, with `slots` on:
   opened itself (`Adopt`), a dialog or other non-standard window (rule 4: never a candidate, so it
   would wait for good), and every app pane with `slots` off. The user's own × or close key on the
   pane is the user saying no: the pane goes, as ever.
-- **As easy to be rid of as to get:** the waiting pane says what it waits for and has `Close this
-  pane` beside `⌘E Put something else here`; × in its header too. Nothing moves or takes focus.
+- **As easy to be rid of as to get:** × in its header, and ⋯'s Clear slot. Nothing moves or takes
+  focus.
+- **Drawn (the owner, 2026-11-23):** a dashed outline inset in the pane, the app's icon (dimmed),
+  `Waiting for a Zoom window`, the rule in the dialog's words, `Offers it here when one opens` (or
+  Takes); no keys and no ⌘E hint (⌘E still works). Offering: a solid accent outline, the window's
+  title and one button, Put it here. A small pane: the icon and one line. The icon is kept by bundle
+  id (`slot_icon.rs`, `<home>/icons`, 64 at most, read again when the app's bundle is newer); the
+  core holds only the bundle id, and the icon is never in the state.
 - The model keeps the panes that are not the user's (`not_placed`, `#[serde(skip)]`), set after
   each step from who put a window in a pane. The property `check`: a standard window's going never
   closes the user's pane.

@@ -1,0 +1,14 @@
+# A waiting slot (`slots` flag): a dashed outline, its app's icon (a test run's fixture app has no
+# bundle: the generic one), what it waits for and whether it offers; offering, a solid outline and
+# Put it here; in a small pane, the icon and one line.
+{"env":{"OTTOSPACE_FEATURES":"slots"}}
+{"cmd":"app_fixture","name":"Meetings","user":true}
+{"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":0,"window":900000,"title":"Weekly sync","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
+{"cmd":"window_fixture_close","window":900000}
+{"shot":"waiting"}
+{"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":1,"window":700001,"title":"Retro","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
+{"shot":"offering"}
+{"cmd":"split","axis":"down"}
+{"cmd":"split","axis":"down"}
+{"cmd":"split","axis":"right"}
+{"shot":"small"}

@@ -17125,8 +17125,8 @@ fn a_users_app_pane_whose_window_closes_stays_a_waiting_slot() {
     );
     assert_eq!(state["slots"][pane.to_string()]["status"], "away");
     assert!(!reply.to_string().contains("SECRET") && !reply.to_string().contains("zm.meeting"), "{reply}");
-    // Its own Close: a client's click is refused, the user's closes it.
-    let close = otto.control(&format!("slot-close:{pane}"));
+    // Its ×: a client's click is refused, the user's closes it.
+    let close = otto.control(&format!("close:{pane}"));
     assert_eq!(otto.click(at(close, 0.5, 0.5), 1)["state"]["panes"].as_array().map(Vec::len), Some(1));
     let reply = otto.user_click(at(close, 0.5, 0.5));
     let left = reply["state"]["panes"].as_array().unwrap().iter().any(|p| p["id"] == json!(pane));
