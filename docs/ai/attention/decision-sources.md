@@ -1,6 +1,6 @@
 # Decisions from any source
 
-Status: design note, nothing built. Written 2026-11-23 against `main` a0c998d3. Extends
+Status: design note, decided (§9), nothing built. Written 2026-11-23 against `main` c87849c9. Extends
 [decisions.md](decisions.md) (the Decisions workspace, slice 1 built behind `decisions`) and
 §3 and §5 of [plan.md](plan.md). Every example is made up.
 
@@ -75,7 +75,7 @@ forget. Everything else is a `Filed` decision.
 | `recommend` | option index or none | |
 | `why` | ≤ 300 chars | Why that option. Shown under it, folded on a narrow card |
 | `evidence` | ≤ 8 | Each: `kind` (`quote`, `link`, `file`), `text` ≤ 500 (a quote) or a label, `at` (an `https:` URL, or a file and line range), and `provenance`: `source`, `when` (ms), `who` (`a person`, `a bot`, `the filer`). Quotes are other people's text: §7 |
-| `projects` | ≤ 3 project refs | A Projects entry's name (§4, Q3). Unknown: kept, shown as unlinked |
+| `projects` | ≤ 3 project refs | A Projects entry's name (§4, Decided 3). Unknown: kept, shown as unlinked |
 | `role` | `core` / `ancillary`, `role_why` ≤ 120, `role_by` (`filer` / `user`) | The filer proposes with a reason; the user's flip sticks for the key, across revisions |
 | `due` | ms or none | A deadline. "End of day" is the filer's to turn into a time |
 | `blocks` | `task` ids and/or `person: true` | What it unblocks: an agent of ours (checked by the core, never believed) or someone outside (the filer's claim) |
@@ -129,7 +129,7 @@ action (`Action::DecisionFile { record, via, now }`):
 
 Why two: routines.md §6 keeps the socket away from unattended runs ("an unattended run gets
 neither ottospace's grants nor its socket"): the socket can `type` into a terminal. A drop folder
-gives a run one power only, filing. Q1.
+gives a run one power only, filing. Decided 1.
 
 Requests (closed set, same-user socket as today):
 
@@ -224,7 +224,7 @@ The card's header says the line; hover (or `?`) shows the sum: "3 (Atlas, 1st pl
 your call) × 3 (an agent waits) = 18".
 
 How the user re-ranks: drag a project (W changes for all its cards); `c` flips core/ancillary on
-the card; Later; Skip. No per-card drag: the order stays a rule the user can predict. Q7.
+the card; Later; Skip. No per-card drag: the order stays a rule the user can predict. Decided 7.
 
 Core tests it implies:
 
@@ -284,7 +284,7 @@ Batching (the attention principle): a filing never pings, never opens Decisions,
 It shows in one place: the status bar's `needs you` item, which counts what blocks (an agent
 waits, or due within 2 h), and adds the rest as a quiet second number, `● 2 needs you · 5 to
 decide`; its hover lists counts by source. ⌘J reaches all of them. Nothing interrupts in these
-slices; a break-through rule belongs to focus mode's watcher (plan.md §7), Q5.
+slices; a break-through rule belongs to focus mode's watcher (plan.md §7), Decided 5.
 
 How answering feels ("Joy follows the user"): ↵ and the next card takes keys at once while the
 answered one seals (#278); the progress bar fills. The run ends on one line of outcomes, "7
@@ -379,24 +379,23 @@ Each a pull request that stands alone, behind a new flag `decision_sources` (Exp
    reading Not mine and Dismiss counts from a status file ottospace writes beside the inbox
    (`<home>/decisions/status.json`: each `(source, key)` and its status, no text).
 
-## 9. Open questions
+## 9. Decided (owner, 2026-11-23)
 
-1. **How unattended routines file**: the socket, or a write-only inbox folder? Recommend the
-   folder: a run gets the power to file and no other (routines.md §6).
-2. **Does a filed decision that blocks nobody count in `needs you`?** Recommend no: it shows as
-   `· 5 to decide` in the same item, reached by ⌘J; only an agent waiting or a deadline within
-   2 h counts.
-3. **A project's identity** between a Projects row (a folder) and a task's `#tag`. Recommend the
-   entry's name (a folder's, or a lone file's without `.md`), case-insensitive, as the shared
-   key; a `#tag` that matches one is that project.
-4. **W from the drag only** (3 / 2 / 1), recency not counting? Recommend yes.
-5. **May anything interrupt?** Recommend nothing in these slices; a break-through rule comes with
-   focus mode's watcher.
-6. **Retention**: closed decisions deleted after 14 days? Recommend yes; Forget for sooner.
-7. **A per-card "first" pin** besides the inputs? Recommend no: flip, drag a project, or Later.
-8. **A dismissed thread comes back** only when it becomes more urgent? Recommend yes.
-9. **Slack authors' names**: inside quotes only, drawn, never a field? Recommend yes.
-10. **Next actions** kept in `projects.json` beside the order, never in the notes? Recommend yes.
+The owner took every default proposed here.
+
+1. **Unattended routines file through the inbox folder**, never the socket: a run gets the power
+   to file and no other (routines.md §6).
+2. **A filed decision that blocks nobody is not in `needs you`**: it shows as `· 5 to decide` in
+   the same item, reached by ⌘J. Only an agent waiting or a deadline within 2 h counts.
+3. **A project's identity** is the Projects entry's name (a folder's, or a lone file's without
+   `.md`), case-insensitive; a task's `#tag` that matches one is that project.
+4. **W comes from the drag only** (3 / 2 / 1); recency does not count.
+5. **Nothing interrupts** in these slices; a break-through rule comes with focus mode's watcher.
+6. **Retention**: a closed decision is deleted 14 days after it closed; Forget for sooner.
+7. **No per-card "first" pin**: flip core, drag a project, or Later.
+8. **A dismissed thread comes back** only when it becomes more urgent.
+9. **Slack authors' names** stay inside quotes, drawn; never a field.
+10. **Next actions** are kept in `projects.json` beside the order, never in the notes.
 
 ## Not verified
 
