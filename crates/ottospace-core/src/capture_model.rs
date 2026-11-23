@@ -361,15 +361,14 @@ impl Model {
             && bar.material(n).is_none_or(|m| !shown.contains(&m.pane) || live == Some(m.pane))
         {
             bar.stop_annotating();
-            // The box's ✎ round ends with it, as ↵ ends it: the box is back with what was marked.
-            if bar.boxed {
-                bar.round = None;
-            }
         }
-        // The box's own draft, not marking up, is the box: its line has the keys, whatever came
-        // after the round (a press that reached no picture, seed 42928).
-        if let Some(bar) = self.capture.as_mut().filter(|bar| bar.boxed && bar.annotating.is_none()) {
-            bar.typing = true;
+        // The box's own draft, not marking up, is the box: a round that ended any other way than
+        // ↵ or Esc (its tab put away, its capture removed) ends as ↵ ends it, and the line has the
+        // keys whatever came after (a press that reached no picture, seed 42928).
+        let ended = |bar: &Collection| bar.boxed && bar.annotating.is_none() && (!bar.typing || bar.round.is_some());
+        if let Some(bar) = self.capture.as_mut().filter(|bar| ended(bar)) {
+            (bar.typing, bar.round) = (true, None);
+            self.leave(effects);
         }
         self.back_to = self.back_to.filter(|pane| self.pane(*pane).is_some());
         self.settle_brief();
@@ -1161,8 +1160,25 @@ mod tests {
             (m.pen_marking(), m.mode(), bar(&m).round, bar(&m).materials.len()),
             (false, Mode::Compose, None, 1)
         );
+        assert!(!shapes(&m, 1).is_empty(), "what was marked is kept");
         m.update(Action::AnnotatePress { at: [0.1, 0.1], shift: false, alt: false, size: [800., 600.] });
         assert_eq!((m.mode(), m.compose_keys(), title(&m)), (Mode::Compose, true, Some("fix the cart")));
+    }
+
+    /// A round ended by removing the capture it marks: it ends as ↵ ends it. An app entered beside
+    /// it is left, and a later round's Esc drops only its own.
+    #[test]
+    fn a_pen_round_ends_with_its_capture_removed() {
+        let mut m = boxed();
+        pen(&mut m);
+        m.update(Action::AnnotateLeave { title: true });
+        pen(&mut m);
+        m.update(Action::Enter { pane: 2 });
+        m.update(Action::CaptureRemove { material: 2 });
+        assert_eq!((m.mode(), m.live, bar(&m).round), (Mode::Compose, None, None));
+        pen(&mut m);
+        m.update(Action::AnnotateLeave { title: false });
+        assert_eq!(bar(&m).materials.iter().map(|m| m.n).collect::<Vec<_>>(), [1]);
     }
 
     /// Only the user's ✎ starts one; a client's capture stays refused. Over a draft in the bar
