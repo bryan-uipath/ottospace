@@ -1210,7 +1210,21 @@ pub fn paint(
     window: &mut Window,
     cx: &mut App,
 ) {
+    paint_scaled(screen, bounds, cell, 1., focused, window, cx)
+}
+
+/// `paint`, every cell and glyph `scale` times its size: a zoomed-out tile's terminal (`zoom`).
+pub fn paint_scaled(
+    screen: &Screen,
+    bounds: Bounds<Pixels>,
+    cell: Size<Pixels>,
+    scale: f32,
+    focused: bool,
+    window: &mut Window,
+    cx: &mut App,
+) {
     let chosen = terminal_font();
+    let cell = size(cell.width * scale, cell.height * scale);
     let mut art = 0;
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (r, spans) in screen.rows.iter().enumerate() {
@@ -1272,7 +1286,7 @@ pub fn paint(
                 // in its cells, whatever font fell back for it (`⎿` is 13 points wide in Hiragino).
                 let force = (!s.alone).then_some(cell.width);
                 let text = s.text.clone().into();
-                let line = window.text_system().shape_line(text, px(chosen.font_size), &[run], force);
+                let line = window.text_system().shape_line(text, px(chosen.font_size * scale), &[run], force);
                 let mut origin = at(s);
                 if s.alone {
                     origin.x += (cell.width * s.cells as f32 - line.width) / 2.;

@@ -69,6 +69,7 @@ macro_rules! commands {
                     (_, Group::Marks) => Some(Feature::Marks),
                     (Command::Transcribe | Command::PauseTranscript, _) => Some(Feature::Transcripts),
                     (Command::FoldTab, _) => Some(Feature::MultiMonitor),
+                    (Command::ZoomOut, _) => Some(Feature::ZoomOut),
                     (Command::Decisions, _) => Some(Feature::Decisions),
                     (Command::QuickNote, _) => Some(Feature::OverlayPanels),
                     (Command::AgentMenu | Command::AgentOff | Command::AgentSee | Command::AgentAct, _) => {
@@ -108,6 +109,7 @@ commands! {
     PrevTab: "Previous Tab", Tabs;
     CloseTab: "Close Tab", Tabs;
     FoldTab: "Fold Tab Out or In", Tabs;
+    ZoomOut: "Zoom Out or In", View;
     NewTask: "New Task", Tasks;
     QuickNote: "Quick Note", Tasks;
     // After New Task: a query of a name ranks a later tie lower.

@@ -17990,3 +17990,117 @@ fn a_project_dragged_up_stays_placed_and_a_click_opens_its_note_read_only() {
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// Zoom-out (`zoom_out`): ⌘⇧\ shows the space's tabs as tiles on a grid with room between, in the
+/// panes area, at CI's window and the default. Arrows select, ↵ or a click goes in, Esc and ⌘⇧\
+/// go back to the tab it opened on; sneak labels the tiles. Only the user zooms. Under Reduce
+/// Motion no frame is asked for.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn zoomed_out_the_tabs_are_tiles_on_a_grid_and_the_keys_go_in_and_back() {
+    for size in ["1024x674", "1400x900"] {
+        let env =
+            [("OTTOSPACE_FEATURES", "zoom_out"), ("OTTOSPACE_REDUCE_MOTION", "1"), ("OTTOSPACE_E2E_WINDOW", size)];
+        let otto = Otto::launch_with(&format!("zoom-{size}"), &env);
+        // Four tabs of one terminal each; the first on show.
+        otto.call(json!({"cmd": "split"}));
+        for _ in 1..4 {
+            otto.call(json!({"cmd": "new_tab"}));
+            otto.call(json!({"cmd": "split"}));
+        }
+        let state = otto.call(json!({"cmd": "select_tab", "index": 0}));
+        let tabs: Vec<u64> = (0..4).map(|at| state["state"]["tabs"][at]["id"].as_u64().unwrap()).collect();
+        let pane = state["state"]["focused"].as_u64().unwrap();
+        let area = rect(&otto.drawn()["bounds"][pane.to_string()]);
+        let shown = |s: &Value| s["state"]["tabs"][s["state"]["active"].as_u64().unwrap() as usize]["id"].clone();
+        // A client's ⌘⇧\ is refused: the overview covers the user's work.
+        let refused = otto.call(json!({"cmd": "key", "keys": "cmd-|"}));
+        assert_eq!((&refused["state"]["zoom"], &refused["zoom_tiles"]), (&Value::Null, &Value::Null), "{size}");
+        let zoomed = otto.user_key("cmd-|");
+        assert_eq!(zoomed["state"]["zoom"], json!({"from": tabs[0], "selected": tabs[0]}), "{size}");
+        let drawn = otto.drawn();
+        let tiles: Vec<[f64; 4]> = tabs.iter().map(|id| rect(&drawn["zoom_tiles"][id.to_string()])).collect();
+        // A 2×2 grid inside the panes area, each tile its shape, room between.
+        for (i, t) in tiles.iter().enumerate() {
+            let inside = t[0] >= area[0] - 1. && t[1] >= area[1] - 1.;
+            assert!(
+                inside && t[0] + t[2] <= area[0] + area[2] + 1. && t[1] + t[3] <= area[1] + area[3] + 1.,
+                "{size}: {t:?} in {area:?}"
+            );
+            assert!((t[2] / t[3] - area[2] / area[3]).abs() < 0.05, "{size}: tile {i} {t:?} keeps {area:?}'s shape");
+            assert!(t[2] > area[2] / 4., "{size}: tile {i} {t:?} is not a speck");
+        }
+        assert!(
+            (tiles[0][1] - tiles[1][1]).abs() < 1. && tiles[1][0] >= tiles[0][0] + tiles[0][2] + 20.,
+            "{size}: {tiles:?}"
+        );
+        assert!(
+            (tiles[0][0] - tiles[2][0]).abs() < 1. && tiles[2][1] >= tiles[0][1] + tiles[0][3] + 20.,
+            "{size}: {tiles:?}"
+        );
+        // Nothing moves at rest, and under Reduce Motion nothing moved at all.
+        assert_eq!(drawn["counts"]["zoom_frames"], 0, "{size}");
+        // Sneak labels each tile.
+        let labelled = otto.control(&format!("zoom-tile:{}", tabs[3]));
+        assert!(
+            (labelled[0] - tiles[3][0]).abs() < 2. && (labelled[1] - tiles[3][1]).abs() < 2.,
+            "{size}: {labelled:?}"
+        );
+        // → ↓ ↵: into the fourth tab.
+        otto.user_key("right");
+        let moved = otto.user_key("down");
+        assert_eq!(moved["state"]["zoom"]["selected"], tabs[3], "{size}");
+        let typed = otto.user_key("x");
+        assert_eq!(typed["state"]["zoom"]["selected"], tabs[3], "{size}: a letter types nowhere");
+        let entered = otto.user_key("enter");
+        assert_eq!((&entered["state"]["zoom"], shown(&entered)), (&Value::Null, json!(tabs[3])), "{size}");
+        assert_eq!(otto.drawn()["zoom_tiles"], Value::Null, "{size}");
+        // Out again, a move, and Esc: back to the tab it opened on.
+        otto.user_key("cmd-|");
+        otto.user_key("left");
+        let back = otto.user_key("escape");
+        assert_eq!((&back["state"]["zoom"], shown(&back)), (&Value::Null, json!(tabs[3])), "{size}");
+        // A client's click on a tile is refused; the user's goes into its tab.
+        otto.user_key("cmd-|");
+        let tile = rect(&otto.drawn()["zoom_tiles"][tabs[1].to_string()]);
+        let theirs = otto.click(at(tile, 0.5, 0.5), 1);
+        assert_eq!(shown(&theirs), json!(tabs[3]), "{size}");
+        let clicked = otto.user_click(at(tile, 0.5, 0.5));
+        assert_eq!((&clicked["state"]["zoom"], shown(&clicked)), (&Value::Null, json!(tabs[1])), "{size}");
+        // ⌘⇧\ twice: back where it was.
+        otto.user_key("cmd-|");
+        let toggled = otto.user_key("cmd-|");
+        assert_eq!((&toggled["state"]["zoom"], shown(&toggled)), (&Value::Null, json!(tabs[1])), "{size}");
+        assert_eq!(otto.drawn()["counts"]["zoom_frames"], 0, "{size}");
+    }
+}
+
+/// The zoom plays both ways and never holds up a key: the model has moved before it starts, the
+/// zoom back in is drawn only, and at rest no frame is asked for.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_zoom_plays_both_ways_and_asks_for_no_frame_at_rest() {
+    let otto = Otto::launch_with("zoom-motion", &[("OTTOSPACE_FEATURES", "zoom_out")]);
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split"}));
+    let zoomed = otto.user_key("cmd-|");
+    assert!(zoomed["state"]["zoom"].is_object(), "open at once: {}", zoomed["state"]["zoom"]);
+    let frames = |o: &Otto| o.drawn()["counts"]["zoom_frames"].as_u64().unwrap_or(0);
+    // It plays, then rests: two looks a moment apart ask for no frame between them.
+    let rest = otto.wait_for("the zoom out at rest", |o| {
+        let was = frames(o);
+        std::thread::sleep(Duration::from_millis(400));
+        (was > 0 && frames(o) == was).then_some(was)
+    });
+    // ↵ at once: in the tab, while the tiles still play back, drawn only.
+    let entered = otto.user_key("enter");
+    assert!(entered["state"]["zoom"].is_null());
+    otto.wait_for("the zoom back at rest", |o| {
+        let drawn = o.drawn();
+        (drawn["zoom_tiles"].is_null() && frames(o) > rest).then_some(())
+    });
+    let at_rest = frames(&otto);
+    std::thread::sleep(Duration::from_millis(400));
+    assert_eq!(frames(&otto), at_rest, "a frame asked for at rest");
+}

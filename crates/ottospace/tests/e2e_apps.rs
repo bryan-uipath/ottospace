@@ -3146,3 +3146,39 @@ fn a_window_picked_into_its_apps_slot_fills_it_and_the_apps_quit_leaves_it_waiti
     wait_for("the slot absent", || (slot() == "absent").then_some(()));
     assert_eq!(state()["state"]["panes"][0]["kind"]["type"], "slot", "{}", state());
 }
+
+/// Zoom-out (`zoom_out`): no real window floats over the tiles. A parked canary window stays parked
+/// while zoomed out; one the user is in is parked as the overview opens, and is live over its
+/// pane again, where it was, on the way back.
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn zooming_out_parks_the_live_window_and_going_back_makes_it_live_again() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let env = [("OTTOSPACE_FEATURES", "zoom_out"), ("OTTOSPACE_REDUCE_MOTION", "1")];
+    let otto = otto_for(&canary, "zoom", &env);
+    let state = || otto.call(json!({"cmd": "state"}));
+    otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    wait_for("the pane layout", || rect(&state()["bounds"]["1"]).filter(|b| b[2] > 1.0));
+    let spot = rect(&json!([state()["parking"][0], state()["parking"][1], 0, 0])).expect("parking spot");
+    let hosted = || rect(&state()["hosted"]["1"]);
+    let at_spot = |f: &[f64; 4]| close(f[0], spot[0]) && f[1] <= spot[1] && f[1] > spot[1] - 200.0;
+    wait_for("the window parked", || hosted().filter(at_spot));
+    // Parked: it stays parked while zoomed out, and its tile is drawn.
+    let zoomed = otto.call(json!({"cmd": "key", "keys": "cmd-|", "as": "user"}));
+    assert!(zoomed["state"]["zoom"].is_object(), "{}", zoomed["state"]["zoom"]);
+    assert!(zoomed["zoom_tiles"].is_object(), "{}", zoomed["zoom_tiles"]);
+    std::thread::sleep(Duration::from_millis(600));
+    assert!(hosted().is_some_and(|f| at_spot(&f)), "still parked: {:?}", hosted());
+    otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
+    // Live: parked as it opens, live again on the way back, over its pane where it was.
+    assert_eq!(otto.call(json!({"cmd": "enter", "pane": 1}))["mode"], "app");
+    let live = wait_for("the window over its pane", || hosted().filter(|f| !at_spot(f)));
+    let zoomed = otto.call(json!({"cmd": "key", "keys": "cmd-|", "as": "user"}));
+    assert_eq!((&zoomed["mode"], &zoomed["state"]["live"]), (&json!("normal"), &Value::Null), "{}", zoomed["state"]);
+    wait_for("the window to park as it zooms out", || hosted().filter(at_spot));
+    let back = otto.call(json!({"cmd": "key", "keys": "cmd-|", "as": "user"}));
+    assert_eq!((&back["mode"], &back["state"]["live"]), (&json!("app"), &json!(1)), "{}", back["state"]);
+    wait_for("the window live where it was", || hosted().filter(|f| (0..4).all(|i| close(f[i], live[i]))));
+    otto.call(json!({"cmd": "leave"}));
+}

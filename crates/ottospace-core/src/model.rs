@@ -1825,6 +1825,17 @@ pub enum Action {
     },
     /// Esc on the card, or its workspace closed: Decisions ends, nothing answered.
     DecisionsClose,
+    /// ⌘⇧\: every tab of the space on show as a tile (`zoom_out`); zoomed out, back to the tab it
+    /// opened on. Only the user's.
+    ZoomOut,
+    /// Zoomed out: the selection one tile that way.
+    ZoomMove {
+        dir: Dir,
+    },
+    /// Zoomed out: into `tab` (a click, a label), or the selected tile (↵).
+    ZoomEnter {
+        tab: Option<u32>,
+    },
     /// A key or click on the shown question card (`ask::Act`), `ticket` as in `TalkAnswer`: a
     /// move, a pick, ↵ (the answers go) or Esc (declined). Only the user's.
     TalkAsk {
@@ -2478,6 +2489,9 @@ impl Action {
                 | Action::TabIn { .. }
                 | Action::KeyWindow { .. }
                 | Action::DecisionsOpen
+                | Action::ZoomOut
+                | Action::ZoomMove { .. }
+                | Action::ZoomEnter { .. }
         )
     }
 
@@ -2499,6 +2513,7 @@ impl Action {
             | Action::ToggleKeys
             | Action::ToggleVisual
             | Action::ToggleAxOverlay
+            | Action::ZoomOut
             // The Apps section's filter is a text field: typing in it takes the keyboard.
             | Action::AppsFilter { on: true }
             | Action::QuitAsked { .. }
@@ -2877,7 +2892,9 @@ impl Action {
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose
-            | Action::CityCamera { .. } => false,
+            | Action::CityCamera { .. }
+            | Action::ZoomMove { .. }
+            | Action::ZoomEnter { .. } => false,
         }
     }
 
@@ -2913,6 +2930,7 @@ impl Action {
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose => Some(Feature::Decisions),
             Action::SessionUnhide { .. } => Some(Feature::TerminalTasks),
+            Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. } => Some(Feature::ZoomOut),
             Action::ListenStart { .. }
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
@@ -3838,6 +3856,7 @@ pub mod slots;
 mod transcribe;
 mod viewer;
 pub mod worktrees;
+pub mod zoom;
 pub(crate) use worktrees::subagent_path;
 #[cfg(test)]
 use worktrees::{MOVE_RETRY_MS, MOVE_WAIT_MS};
@@ -4300,6 +4319,8 @@ pub struct Model {
     window_rules: Vec<crate::rules::Rule>,
     /// The Decisions workspace, while open. In the state: ids, counts and times, never a question.
     pub decisions: Option<decisions::Run>,
+    /// The overview of the space's tabs, while zoomed out (`zoom_out`). In the state: tab ids.
+    pub zoom: Option<zoom::Zoom>,
     /// When each waiting card was first seen waiting, for the queue's age.
     #[serde(skip)]
     pub(crate) waiting: Vec<decisions::Seen>,
@@ -4481,6 +4502,7 @@ impl Default for Model {
             offer_list: None,
             window_rules: Vec::new(),
             decisions: None,
+            zoom: None,
             waiting: Vec::new(),
         };
         // Home's own tab, on show.
@@ -4590,7 +4612,9 @@ impl Model {
         let filtering = self.app_lists.filtering;
         let menu = self.row_menu.is_some();
         let bug = self.bug.is_some();
-        boxed || filtering || menu || bug || self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some()
+        // Zoomed out: no terminal has the keyboard, and no client's task changes the tab under it.
+        let held = self.visual.is_some() || self.sneak.is_some() || self.confirm.is_some() || self.zoom.is_some();
+        boxed || filtering || menu || bug || held
     }
 
     /// Why an action does nothing because of who sent it. Only the user may take the keyboard
@@ -4898,6 +4922,9 @@ impl Model {
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose => Some(decisions::USERS_ALONE),
+            // The overview covers the user's work: only they zoom, and nothing takes the keyboard under it.
+            Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. } => Some(zoom::USERS_ALONE),
+            action if self.zoom.is_some() && action.takes_keyboard() => Some(zoom::ZOOMED_OUT),
             // Nor closes its card or its workspace, or moves its card out (`touches_decisions`).
             action if origin == Origin::Socket && self.touches_decisions(action) => Some(decisions::USERS_ALONE),
             // Done, Later and its Undo are the user's; so is the answer to "Stop it and put it away?".
@@ -5343,6 +5370,7 @@ impl Model {
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         // After the tabs out: a fold-in may move the main window's tab (seed 37143).
         self.settle_selected();
+        self.settle_zoom();
         self.settle_confirm();
         // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its space's default.
         for effect in &effects {
@@ -5419,6 +5447,11 @@ impl Model {
         );
         if user && !own {
             self.sneak = None;
+        }
+        // Zoomed out, any other move of the user's ends the overview, and does what it does.
+        let zooms = matches!(action, Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. });
+        if user && !own && !zooms {
+            self.zoom = None;
         }
         // A mark's wait for a letter or a name ends the same way, and for the same reason.
         let own_mark = matches!(
@@ -7414,6 +7447,9 @@ impl Model {
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose) => self.decisions_act(action, effects),
+            Action::ZoomOut => self.zoom_toggle(effects),
+            Action::ZoomMove { dir } => self.zoom_move(dir),
+            Action::ZoomEnter { tab } => self.zoom_enter(tab, effects),
             action @ (Action::BtwOpen
             | Action::BtwKeys { .. }
             | Action::BtwAsk
@@ -11477,6 +11513,9 @@ mod tests {
         Action::DecisionsSkip { .. },
         Action::DecisionsLater { .. },
         Action::DecisionsClose,
+        Action::ZoomOut,
+        Action::ZoomMove { .. },
+        Action::ZoomEnter { .. },
         Action::TalkAsk { .. },
         Action::TalkDenyNote,
         Action::TalkEscape,
@@ -11885,6 +11924,9 @@ mod tests {
             Action::DecisionsSkip { task: 1, ticket: 1 },
             Action::DecisionsLater { task: 1, ticket: 1, until: 0 },
             Action::DecisionsClose,
+            Action::ZoomOut,
+            Action::ZoomMove { dir: Dir::Right },
+            Action::ZoomEnter { tab: None },
             Action::TalkAsk { ticket: 1, act: crate::ask::Act::Submit },
             Action::TalkDenyNote,
             Action::TalkEscape,
@@ -12500,6 +12542,7 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
+                    _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
@@ -19725,6 +19768,7 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
+                    _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),

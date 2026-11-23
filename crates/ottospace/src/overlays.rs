@@ -181,7 +181,7 @@ impl Workspace {
 
 /// Its child painted, but its hitboxes put under an empty mask: none is ever under the pointer, so
 /// the click, the wheel and the hover go to what lies beneath it (a closing overlay's pane).
-struct Inert(AnyElement);
+pub(crate) struct Inert(pub(crate) AnyElement);
 
 impl IntoElement for Inert {
     type Element = Self;

@@ -1,0 +1,62 @@
+# Zoom-out (`zoom_out` flag): ⌘⇧\ shows the workspace's tabs as tiles on a grid. One tab, then
+# four, then seven: made-up terminal lines in each. Then ↵ into the selected tile. `--record` films
+# the zoom out and back in.
+{"env":{"OTTOSPACE_FEATURES":"zoom_out"}}
+{"click":"top:new_workspace"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"type","text":"clear; echo cargo test: 14 passed\r"}
+{"cmd":"key","keys":"cmd-d","as":"user"}
+{"cmd":"type","text":"clear; echo notes: rate limits on promo codes\r"}
+{"settle":300}
+{"shot":"tab"}
+{"cmd":"key","keys":"cmd-|","as":"user"}
+{"until":"state.zoom.from"}
+{"settle":400}
+{"shot":"one"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"cmd":"new_tab"}
+{"cmd":"split"}
+{"cmd":"type","text":"clear; echo api: cargo run\r"}
+{"cmd":"split","axis":"down"}
+{"cmd":"type","text":"clear; echo second pane of tab 2\r"}
+{"cmd":"new_tab"}
+{"cmd":"split"}
+{"cmd":"type","text":"clear; echo web: npm run dev\r"}
+{"cmd":"new_tab"}
+{"cmd":"split"}
+{"cmd":"type","text":"clear; echo logs: tail -f app.log\r"}
+{"cmd":"split","axis":"down"}
+{"cmd":"type","text":"clear; echo second pane of tab 4\r"}
+{"cmd":"select_tab","index":0}
+{"cmd":"key","keys":"cmd-|","as":"user"}
+{"until":"state.zoom.from"}
+{"cmd":"key","keys":"right","as":"user"}
+{"settle":400}
+{"shot":"four"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"cmd":"select_tab","index":3}
+{"cmd":"new_tab"}
+{"cmd":"split"}
+{"cmd":"type","text":"clear; echo db: psql shop\r"}
+{"cmd":"new_tab"}
+{"cmd":"split"}
+{"cmd":"type","text":"clear; echo docs: mdbook serve\r"}
+{"cmd":"split","axis":"down"}
+{"cmd":"type","text":"clear; echo second pane of tab 6\r"}
+{"cmd":"new_tab"}
+{"cmd":"split"}
+{"cmd":"type","text":"clear; echo tests: cargo nextest\r"}
+{"cmd":"select_tab","index":0}
+{"record":"start"}
+{"cmd":"key","keys":"cmd-|","as":"user"}
+{"until":"state.zoom.from"}
+{"sleep_ms":400}
+{"cmd":"key","keys":"down","as":"user"}
+{"cmd":"key","keys":"down","as":"user"}
+{"settle":400}
+{"shot":"seven"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"sleep_ms":400}
+{"record":"stop"}
+{"settle":300}
+{"shot":"entered"}

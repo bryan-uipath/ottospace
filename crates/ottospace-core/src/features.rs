@@ -41,10 +41,11 @@ pub enum Feature {
     SessionWaits,
     Projects,
     TerminalTasks,
+    ZoomOut,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 12] = [
+pub const ALL: [Feature; 13] = [
     Feature::Marks,
     Feature::AppsSection,
     Feature::Transcripts,
@@ -57,6 +58,7 @@ pub const ALL: [Feature; 12] = [
     Feature::SessionWaits,
     Feature::Projects,
     Feature::TerminalTasks,
+    Feature::ZoomOut,
 ];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
@@ -78,6 +80,7 @@ impl Feature {
             Feature::SessionWaits => "session_waits",
             Feature::Projects => "projects",
             Feature::TerminalTasks => "terminal_tasks",
+            Feature::ZoomOut => "zoom_out",
         }
     }
 
@@ -94,7 +97,8 @@ impl Feature {
             | Feature::CodeCity
             | Feature::SessionWaits
             | Feature::Projects
-            | Feature::TerminalTasks => Stage::Experimental,
+            | Feature::TerminalTasks
+            | Feature::ZoomOut => Stage::Experimental,
         }
     }
 
@@ -118,6 +122,7 @@ impl Feature {
             Feature::SessionWaits => "Waiting sessions",
             Feature::Projects => "Projects",
             Feature::TerminalTasks => "Terminal sessions as tasks",
+            Feature::ZoomOut => "Zoom out",
         }
     }
 
@@ -128,6 +133,7 @@ impl Feature {
             Feature::AgentMode => Some("⌘⌃V"),
             Feature::MultiMonitor => Some("⌘⇧O"),
             Feature::Decisions => Some("⌘J"),
+            Feature::ZoomOut => Some("⌘⇧\\"),
             _ => None,
         }
     }
@@ -157,6 +163,7 @@ impl Feature {
             Feature::TerminalTasks => {
                 "A live Claude Code or Codex you started in a terminal is listed with the tasks, read-only, until it ends"
             }
+            Feature::ZoomOut => "Every tab of the workspace on show at once, as tiles on a grid",
         }
     }
 
@@ -179,6 +186,7 @@ impl Feature {
             Feature::SessionWaits => "feature off: session_waits",
             Feature::Projects => "feature off: projects",
             Feature::TerminalTasks => "feature off: terminal_tasks",
+            Feature::ZoomOut => "feature off: zoom_out",
         }
     }
 }
@@ -247,7 +255,8 @@ pub fn table() -> String {
     for feature in ALL {
         let default = if feature.default_on() { "on" } else { "off" };
         let (name, stage, title) = (feature.name(), feature.stage().label(), feature.title());
-        let key = feature.key().map(|key| format!(" ({key})")).unwrap_or_default();
+        // Markdown: ⌘⇧\ is written `⌘⇧\\`.
+        let key = feature.key().map(|key| format!(" ({})", key.replace('\\', "\\\\"))).unwrap_or_default();
         table += &format!("| `{name}` | {stage} | {default} | {title}{key}: {} |\n", feature.description());
     }
     table
@@ -307,7 +316,8 @@ mod tests {
                 Feature::CodeCity,
                 Feature::SessionWaits,
                 Feature::Projects,
-                Feature::TerminalTasks
+                Feature::TerminalTasks,
+                Feature::ZoomOut
             ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
@@ -322,10 +332,11 @@ mod tests {
                 .with(Feature::CodeCity, true)
                 .with(Feature::SessionWaits, true)
                 .with(Feature::Projects, true)
-                .with(Feature::TerminalTasks, true),
+                .with(Feature::TerminalTasks, true)
+                .with(Feature::ZoomOut, true),
             Features::all()
         );
-        let list = " terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " zoom_out,terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
@@ -437,7 +448,8 @@ mod tests {
                     ("code_city", false),
                     ("session_waits", false),
                     ("projects", false),
-                    ("terminal_tasks", false)
+                    ("terminal_tasks", false),
+                    ("zoom_out", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -462,7 +474,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

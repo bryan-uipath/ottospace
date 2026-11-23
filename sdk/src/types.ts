@@ -173,7 +173,8 @@ export type Feature =
   | "code_city"
   | "session_waits"
   | "projects"
-  | "terminal_tasks";
+  | "terminal_tasks"
+  | "zoom_out";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** The clone dialog and the clone on its way, in a test run. */
@@ -1367,6 +1368,14 @@ export interface Model {
   viewers: Record<string, Viewer>;
   /** The Decisions workspace while it is open (the `decisions` flag), else null. */
   decisions: Decisions | null;
+  /** Zoomed out (the `zoom_out` flag): the tab it opened on and the selected tile, by tab id; else null. Only the user zooms. */
+  zoom: Zoom | null;
+}
+
+/** The overview of the space's tabs while zoomed out. */
+export interface Zoom {
+  from: number;
+  selected: number;
 }
 
 /**
@@ -1825,6 +1834,8 @@ export interface Snapshot {
   overlays: { sidebar: Rect | null; drawer: Rect | null; box: Rect | null };
   /** The Tasks rail cell's needs-you dot, whichever section is open (null: no task needs you). */
   tasks_dot: Rect | null;
+  /** Zoomed out, or zooming back in (the `zoom_out` flag): each tile as drawn, by tab id; else null. */
+  zoom_tiles: Record<string, Rect> | null;
   /** While a pane is dragged: where a drop would land, both null over anything else. */
   drag: { target: PaneId | null; zone: Zone | null } | null;
   /** Each drawn app pane's preview: the part of the window it shows, where it is drawn. */
