@@ -7083,6 +7083,8 @@ impl Model {
             Action::ListUndo if self.sidebar == Some(Section::Marks) => self.mark_undo(),
             Action::ListUndo if self.sidebar == Some(Section::Apps) => self.apps_undo(effects),
             Action::ListUndo if self.sidebar == Some(Section::Workbook) => self.workbook_undo(effects),
+            // Nothing in Projects to take back: not the tasks' last move either.
+            Action::ListUndo if self.sidebar == Some(Section::Projects) => {}
             Action::ListUndo => self.tasks.undo(),
             Action::MarkRemove { mark } => {
                 if let Some(id) = self.marks.find(&mark) {
@@ -7527,7 +7529,7 @@ impl Model {
             Action::TabIn { tab } => self.tab_in(tab, effects),
             Action::KeyWindow { tab } => self.key_window(tab, effects),
             Action::SetProjects { on, listed } => {
-                (self.projects.on, self.projects.listed) = (on, Vec::new());
+                self.projects.on = on;
                 self.projects.set(listed);
                 if !on {
                     self.section_gone(Section::Projects);

@@ -26,6 +26,8 @@ pub struct Reader {
     reads: Receiver<Read>,
     last: Option<u64>,
     open: bool,
+    /// The folder the list is of: another one empties it.
+    dir: Option<PathBuf>,
 }
 
 impl Reader {
@@ -45,7 +47,7 @@ impl Reader {
                 ottospace_mac::wake::post();
             }
         });
-        Self { asks, reads, last: None, open: false }
+        Self { asks, reads, last: None, open: false, dir: None }
     }
 }
 
@@ -54,10 +56,10 @@ impl Workspace {
     /// (`projects::due`).
     pub(crate) fn tick_projects(&mut self, window: &gpui::Window, cx: &mut Context<Self>) {
         let dir = config::projects_dir();
-        if dir.is_some() != self.model.projects.on {
+        if dir != self.projects.dir || dir.is_some() != self.model.projects.on {
             let set = Action::SetProjects { on: dir.is_some(), listed: Vec::new() };
             self.dispatch(set, Origin::System, window, cx);
-            self.projects.last = None;
+            (self.projects.last, self.projects.dir) = (None, dir.clone());
         }
         let open = self.model.sidebar == Some(Section::Projects);
         let opened = open && !self.projects.open;
@@ -129,11 +131,11 @@ fn project(path: &Path) -> Option<Project> {
     }
     let (note, modified) = if meta.is_dir() {
         let files = markdown_in(path);
-        let at = projects::note_of(&files.iter().map(|(name, at)| (name.clone(), *at)).collect::<Vec<_>>());
+        let at = projects::note_of(&files);
         let note = at.map(|at| path.join(&files[at].0));
         let note_at = at.map_or(0, |at| files[at].1);
         (note, ms(&meta).max(note_at))
-    } else if meta.is_file() && name.to_lowercase().ends_with(".md") {
+    } else if meta.is_file() && projects::md_stem(&name).is_some() {
         (Some(path.to_path_buf()), ms(&meta))
     } else {
         return None;
@@ -155,7 +157,7 @@ fn markdown_in(dir: &Path) -> Vec<(String, u64)> {
     let file = |entry: fs::DirEntry| {
         let name = entry.file_name().into_string().ok()?;
         let meta = fs::symlink_metadata(entry.path()).ok()?;
-        let plain = meta.is_file() && !name.starts_with('.') && name.to_lowercase().ends_with(".md");
+        let plain = meta.is_file() && !name.starts_with('.') && projects::md_stem(&name).is_some();
         plain.then(|| (name, ms(&meta)))
     };
     entries.flatten().take(MAX_ENTRIES).filter_map(file).collect()

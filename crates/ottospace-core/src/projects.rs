@@ -89,7 +89,7 @@ pub fn due(open: bool, opened: bool, last: Option<u64>, now: u64) -> bool {
 /// Which of a project folder's files is its note, by name: `README.md`, else `index.md` (any
 /// case), else its only `.md`, else the most recently changed `.md`. `files`: name and ms.
 pub fn note_of(files: &[(String, u64)]) -> Option<usize> {
-    let md = |name: &str| name.to_lowercase().ends_with(".md");
+    let md = |name: &str| md_stem(name).is_some();
     let named = |want: &str| files.iter().position(|(name, _)| name.eq_ignore_ascii_case(want));
     let newest = files.iter().enumerate().filter(|(_, (name, _))| md(name)).max_by_key(|(_, (name, at))| (*at, name));
     named("README.md").or_else(|| named("index.md")).or(newest.map(|(at, _)| at))
@@ -99,10 +99,16 @@ pub fn note_of(files: &[(String, u64)]) -> Option<usize> {
 /// code block), else its name without `.md`. e.g. `checkout-redesign.md` → `checkout-redesign`.
 pub fn title_of(note: Option<&str>, name: &str) -> String {
     let heading = note.and_then(first_heading).filter(|title| !title.is_empty());
-    let name = name.strip_suffix(".md").or_else(|| name.strip_suffix(".MD")).unwrap_or(name);
+    let name = md_stem(name).unwrap_or(name);
     let title = heading.unwrap_or_else(|| name.to_string());
     let title: String = title.chars().filter(|c| !c.is_control()).collect();
     crate::ax::truncate(title.trim(), MAX_TITLE)
+}
+
+/// A Markdown file's name without `.md`, in any case: `Plan.Md` → `Plan`. None: not one.
+pub fn md_stem(name: &str) -> Option<&str> {
+    let at = name.len().checked_sub(3)?;
+    (name.is_char_boundary(at) && name[at..].eq_ignore_ascii_case(".md")).then(|| &name[..at])
 }
 
 /// The first ATX heading's words, past a front matter block (`---` … `---` at the top) and
@@ -117,20 +123,36 @@ fn first_heading(text: &str) -> Option<String> {
             }
         }
     }
-    let mut fenced = false;
+    // The open fence's character and length: only a run as long of it closes it.
+    let mut fence: Option<(char, usize)> = None;
     for line in lines {
         let line = line.trim_start();
-        if line.starts_with("```") || line.starts_with("~~~") {
-            fenced = !fenced;
+        let mark = line.chars().next().filter(|c| *c == '`' || *c == '~');
+        let run = mark.map_or(0, |c| line.chars().take_while(|x| *x == c).count());
+        match (fence, mark) {
+            (None, Some(c)) if run >= 3 => fence = Some((c, run)),
+            (Some((open, len)), Some(c)) if c == open && run >= len && line[run..].trim().is_empty() => fence = None,
+            _ => {}
+        }
+        if fence.is_some() || run >= 3 {
             continue;
         }
         let hashes = line.chars().take_while(|c| *c == '#').count();
         let rest = &line[hashes..];
-        if !fenced && (1..=6).contains(&hashes) && (rest.is_empty() || rest.starts_with([' ', '\t'])) {
-            return Some(rest.trim().trim_end_matches('#').trim().to_string());
+        if (1..=6).contains(&hashes) && (rest.is_empty() || rest.starts_with([' ', '\t'])) {
+            return Some(closing_hashes_off(rest.trim()).to_string());
         }
     }
     None
+}
+
+/// A heading's text without its closing `#`s, which count only after a space: `C# ##` → `C#`.
+fn closing_hashes_off(text: &str) -> &str {
+    let kept = text.trim_end_matches('#');
+    match kept.is_empty() || kept.ends_with([' ', '\t']) {
+        true => kept.trim_end(),
+        false => text,
+    }
 }
 
 #[cfg(test)]
@@ -194,6 +216,12 @@ mod tests {
         assert_eq!(title_of(Some("#   \n"), "spike"), "spike");
         assert_eq!(title_of(None, "rate-limiter"), "rate-limiter");
         assert_eq!(title_of(Some("# a\u{7}b"), "x"), "ab");
+        assert_eq!(title_of(Some("# Learn C#"), "x"), "Learn C#");
+        assert_eq!(title_of(Some("# Learn C# ##"), "x"), "Learn C#");
+        assert_eq!(title_of(Some("````\n```\n# Example\n````\n# Release"), "x"), "Release");
+        assert_eq!(title_of(None, "Plan.Md"), "Plan");
+        assert_eq!(md_stem("é.md"), Some("é"));
+        assert_eq!(md_stem("md"), None);
         assert!(title_of(Some(&format!("# {}", "w".repeat(500))), "x").chars().count() <= MAX_TITLE + 1);
     }
 
