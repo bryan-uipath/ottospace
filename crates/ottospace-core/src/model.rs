@@ -1514,6 +1514,11 @@ pub enum Action {
         panes: Vec<(PaneId, [f64; 4])>,
         picture: bool,
     },
+    /// The code city's camera of an empty place, moved by the user's pointer (`model::city`).
+    CityCamera {
+        at: city::At,
+        step: city::CameraStep,
+    },
     /// The button went down on the report's picture, at `at` (0..1 of it).
     BugPress {
         at: [f64; 2],
@@ -2871,7 +2876,8 @@ impl Action {
             | Action::DecisionsAsk { .. }
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
-            | Action::DecisionsClose => false,
+            | Action::DecisionsClose
+            | Action::CityCamera { .. } => false,
         }
     }
 
@@ -2900,6 +2906,7 @@ impl Action {
             | Action::AppsFilter { .. } => Some(Feature::AppsSection),
             Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(Feature::MultiMonitor),
             Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(Feature::OverlayPanels),
+            Action::CityCamera { .. } => Some(Feature::CodeCity),
             Action::DecisionsOpen
             | Action::DecisionsAsk { .. }
             | Action::DecisionsSkip { .. }
@@ -4234,6 +4241,9 @@ pub struct Model {
     pub projects: crate::projects::Projects,
     /// The features that are on (`SetFeatures`). In the state, their names.
     pub features: Features,
+    /// The code city's camera of each tab and folder, and the drag in flight (`model::city`).
+    #[serde(skip)]
+    pub(crate) cameras: city::Cameras,
     /// The pane Open Settings opened (or a restore opened again), while it may still be there.
     #[serde(skip)]
     pub(crate) settings_pane: Option<PaneId>,
@@ -4451,6 +4461,7 @@ impl Default for Model {
                 Features::default()
             },
             settings_pane: None,
+            cameras: city::Cameras::default(),
             viewers: Default::default(),
             settings_file: crate::settings::Watch::default(),
             editing: None,
@@ -4978,6 +4989,7 @@ impl Model {
             // How the user keeps their drawer, and the layout file that keeps it.
             Action::DialToggle => Some(chat::DIAL_USERS),
             Action::FillDisplay => Some(crate::fill::USERS_ALONE),
+            Action::CityCamera { .. } => Some(city::USERS_ALONE),
             Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(displays::USERS_ALONE),
             // Only the shell's display watcher says what the displays are.
             Action::SetDisplays { .. } if origin == Origin::Socket => Some(displays::SHELLS_ALONE),
@@ -7290,6 +7302,7 @@ impl Model {
             Action::BugStart { word, size, controls, panes, picture } => {
                 self.bug_start(word, size, (controls, panes), picture, effects)
             }
+            Action::CityCamera { at, step } => self.camera(at, step),
             Action::BugPress { at } => drop(self.bug.as_mut().map(|report| report.press(at))),
             Action::BugDrag { to } => drop(self.bug.as_mut().map(|report| report.drag_to(to))),
             Action::BugRelease { at } => drop(self.bug.as_mut().map(|report| report.release(at))),
@@ -11361,6 +11374,7 @@ mod tests {
         Action::ListReorder { .. },
         Action::CaptureStart { .. },
         Action::BugStart { .. },
+        Action::CityCamera { .. },
         Action::BugPress { .. },
         Action::BugDrag { .. },
         Action::BugRelease { .. },
@@ -11753,6 +11767,7 @@ mod tests {
                 panes: Vec::new(),
                 picture: true,
             },
+            Action::CityCamera { at: city::At::Tab(1), step: city::CameraStep::Reset },
             Action::BugPress { at: [0.5, 0.5] },
             Action::BugDrag { to: [0.5, 0.5] },
             Action::BugRelease { at: [0.5, 0.5] },
@@ -12473,6 +12488,7 @@ mod tests {
                     }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::LinkOpen { .. } => Some(crate::term_links::USERS_ALONE),
+                    Action::CityCamera { .. } => Some(city::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
@@ -19697,6 +19713,7 @@ mod tests {
                     }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::LinkOpen { .. } => Some(crate::term_links::USERS_ALONE),
+                    Action::CityCamera { .. } => Some(city::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),

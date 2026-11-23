@@ -1,0 +1,23 @@
+# The code city's camera (`code_city`), moved by the user's pointer: the fitted view; turned by a
+# left drag; zoomed in by the mouse wheel (the e2e test covers the middle drag); its Reset view. 400 made-up files in
+# a repository's tab, its terminal closed.
+{"env":{"OTTOSPACE_FEATURES":"code_city"}}
+{"tree":"repos/app","files":400}
+{"cmd":"repo_add","path":"{ROOT}/repos/app"}
+{"until":"repos_bar.0"}
+{"cmd":"section","section":"repos"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"close"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"until":"city.picture"}
+{"settle":800}
+{"shot":"fitted"}
+{"drag":{"rect":"city.bounds"},"at":[0.5,0.85],"by":[160,-40]}
+{"settle":800}
+{"shot":"orbited"}
+{"wheel":{"rect":"city.bounds"},"at":[0.45,0.75],"dy":6}
+{"settle":800}
+{"shot":"zoomed"}
+{"click":"city:reset:tab"}
+{"settle":800}
+{"shot":"reset"}

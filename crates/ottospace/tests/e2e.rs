@@ -17574,6 +17574,119 @@ fn every_empty_place_with_a_folder_draws_its_city() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The code city's camera (`code_city`), moved by the user's pointer only: a middle drag pans,
+/// the wheel's lines zoom (clamped), a left drag past a click turns it (pitch clamped), Esc
+/// during a drag puts it back, the Reset view button (only on a moved camera, and only the
+/// user's click) brings back the fitted view. Each move renders the
+/// picture again; at rest no frame is asked for. A client's drag moves nothing.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_users_pointer_moves_the_citys_camera() {
+    let root = support::temp(&format!("ottospace-e2e-city-camera-{}", std::process::id()));
+    let app = root.join("repos/app");
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q"]);
+    for (file, bytes) in [("src/main.rs", 900), ("src/lib.rs", 4000), ("docs/a.md", 300), ("README.md", 2000)] {
+        std::fs::create_dir_all(app.join(file).parent().unwrap()).unwrap();
+        std::fs::write(app.join(file), "x".repeat(bytes)).unwrap();
+    }
+    let app = app.canonicalize().unwrap();
+    let home = user_folder("city-camera", &json!({"repos": [app], "restore_layout": false}).to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "code_city"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ];
+    let otto = Otto::launch_with("city-camera", &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    let first = otto.wait_for("a city", |o| Some(city(o)).filter(|c| !c["picture"].is_null()));
+    let b: Vec<f64> = first["bounds"].as_array().unwrap().iter().map(|v| v.as_f64().unwrap()).collect();
+    // Under the hints, on the city.
+    let p = [b[0] + b[2] / 2., b[1] + b[3] * 0.8];
+    let view = |o: &Otto| city(o)["view"].clone();
+    let fitted = view(&otto);
+    let num = |v: &Value, key: &str| v[key].as_f64().unwrap();
+    let mouse = |action: &str, at: [f64; 2], button: &str, user: bool| {
+        let mut event = json!({"cmd": "mouse", "action": action, "x": at[0], "y": at[1], "button": button});
+        if user {
+            event["as"] = json!("user");
+        }
+        otto.call(event);
+    };
+    let drag = |button: &str, by: [f64; 2], user: bool| {
+        mouse("down", p, button, user);
+        for i in 1..=6 {
+            mouse("move", [p[0] + by[0] * i as f64 / 6., p[1] + by[1] * i as f64 / 6.], button, user);
+        }
+        mouse("up", [p[0] + by[0], p[1] + by[1]], button, user);
+    };
+    // A client's middle drag: refused, the camera stays.
+    drag("middle", [80., 0.], false);
+    assert_eq!(view(&otto), fitted, "a client's drag");
+    // The user's wheel over the hints is theirs: the camera stays.
+    let hint = otto.control("home:terminal");
+    otto.call(json!({"cmd": "mouse", "action": "wheel", "x": hint[0] + 4., "y": hint[1] + 4., "dy": 3, "as": "user"}));
+    assert_eq!(view(&otto), fitted, "a wheel over the hints");
+    // The user's: the city moves with the pointer, and is drawn again.
+    let renders = city(&otto)["renders"].as_u64().unwrap();
+    drag("middle", [80., 0.], true);
+    let panned = view(&otto);
+    assert!(panned["pan"] != fitted["pan"] && panned["zoom"] == fitted["zoom"], "{panned}");
+    assert_eq!(city(&otto)["grabbed"], json!(false));
+    otto.wait_for("the picture again", |o| (city(o)["renders"].as_u64() > Some(renders)).then_some(()));
+    // The wheel's lines zoom in, about the pointer, no nearer than the clamp.
+    otto.call(json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dy": 3, "as": "user"}));
+    let near = num(&view(&otto), "zoom");
+    assert!(near < 1., "{near}");
+    for _ in 0..12 {
+        otto.call(json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dy": 10, "as": "user"}));
+    }
+    assert_eq!(num(&view(&otto), "zoom"), 0.05_f32 as f64);
+    // A left drag turns it; far down, the pitch stops at its clamp. A press that hardly moves
+    // is a click: nothing turns.
+    let before = view(&otto);
+    drag("left", [3., 0.], true);
+    assert_eq!(view(&otto), before, "a click");
+    drag("left", [60., 0.], true);
+    let turned = view(&otto);
+    assert!(num(&turned, "yaw") != num(&before, "yaw"), "{turned}");
+    // 120 points (48°, past the clamp), inside the window: a move off it reaches no element.
+    drag("left", [0., 120.], true);
+    assert_eq!(num(&view(&otto), "pitch"), 80.);
+    // Esc during a drag: back where it began.
+    let before = view(&otto);
+    mouse("down", p, "left", true);
+    mouse("move", [p[0] + 40., p[1]], "left", true);
+    mouse("move", [p[0] + 90., p[1] - 30.], "left", true);
+    assert!(view(&otto) != before && city(&otto)["grabbed"] == json!(true));
+    otto.user_key("escape");
+    mouse("up", [p[0] + 90., p[1] - 30.], "left", true);
+    assert_eq!(view(&otto), before, "Esc puts it back");
+    // Moved: its Reset view button. A client's click on it does nothing; the user's brings back
+    // the fitted view, eased, and the button goes.
+    let reset = otto.control("city:reset:tab");
+    let centre = [reset[0] + reset[2] / 2., reset[1] + reset[3] / 2.];
+    for action in ["down", "up"] {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": centre[0], "y": centre[1]}));
+    }
+    assert!(view(&otto) != fitted, "a client's click");
+    for action in ["down", "up"] {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": centre[0], "y": centre[1], "as": "user"}));
+    }
+    assert_eq!(view(&otto), fitted, "reset");
+    assert!(otto.control_opt("city:reset:tab").is_none(), "no button on a fitted camera");
+    // At rest: no frame asked for.
+    std::thread::sleep(Duration::from_millis(600));
+    let frames = otto.call(json!({"cmd": "state"}))["counts"]["city_frames"].clone();
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["counts"]["city_frames"], frames);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a 3D
 /// picture rendered on the GPU, where the lattice was, as large as the tab in pixels. The file
 /// the agent reads is lit, and only it, its agent's icon over it; an ignored file is no building;

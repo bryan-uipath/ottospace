@@ -90,6 +90,7 @@ import type {
   CityAgent,
   CityHovered,
   CityOn,
+  CityView,
   HomeNode,
   InboxReply,
   InboxRow,
@@ -2206,9 +2207,12 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     paints: num(o.paints, `${at}.paints`),
     render_us: orNull(num)(o.render_us, `${at}.render_us`),
     glass: orNull(bool)(o.glass, `${at}.glass`),
+    lower: orNull(num)(o.lower, `${at}.lower`),
     hovered: orNull(cityHovered)(o.hovered, `${at}.hovered`),
     first_ms: orNull(num)(o.first_ms, `${at}.first_ms`),
     read_us: orNull(num)(o.read_us, `${at}.read_us`),
+    view: cityView(o.view, `${at}.view`),
+    grabbed: bool(o.grabbed, `${at}.grabbed`),
     agents: list(cityAgent)(o.agents, `${at}.agents`),
   };
 }
@@ -2221,6 +2225,16 @@ function cityAgent(value: unknown, at: string): CityAgent {
     cone: bool(o.cone, `${at}.cone`),
     fan: pair(o.fan, `${at}.fan`),
     hovered: bool(o.hovered, `${at}.hovered`),
+  };
+}
+
+function cityView(value: unknown, at: string): CityView {
+  const o = fields(value, at);
+  return {
+    yaw: num(o.yaw, `${at}.yaw`),
+    pitch: num(o.pitch, `${at}.pitch`),
+    zoom: num(o.zoom, `${at}.zoom`),
+    pan: pair(o.pan, `${at}.pan`),
   };
 }
 

@@ -55,9 +55,25 @@ pub struct Layout {
     /// The window filled its display (`Action::FillDisplay`): it does again.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub fill: bool,
+    /// Each code city's camera the user moved, by its checkout (`code_city`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub cameras: Vec<SavedCamera>,
     #[serde(flatten)]
     pub extra: Extra,
 }
+
+/// A code city's camera as the user left it: its checkout and its view (`scene::View`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedCamera {
+    pub folder: String,
+    pub yaw: f32,
+    pub pitch: f32,
+    pub zoom: f32,
+    pub pan: [f32; 2],
+}
+
+/// At most this many cameras kept: the most recent folders' are enough.
+const MAX_CAMERAS: usize = 64;
 
 /// A space of the top row. Of a `kind` this build does not know, or a task or workbook gone, its
 /// tabs are of no space, as a session's, which is not kept: read, they go to the workspace
@@ -242,6 +258,9 @@ impl Layout {
         if self.repos_folded.len() > MAX_FOLDED || !self.repos_folded.iter().all(|p| folded_path(p)) {
             return Some("it folds too many repositories, or one by what is not a path");
         }
+        if self.cameras.len() > MAX_CAMERAS || !self.cameras.iter().all(|camera| folded_path(&camera.folder)) {
+            return Some("it keeps too many cameras, or one of what is not a path");
+        }
         if self.spaces.iter().any(|space| space.workbook.as_ref().is_some_and(|uid| !workbook::valid_uid(uid))) {
             return Some("a space names a workbook by what is not an id");
         }
@@ -388,8 +407,31 @@ impl Model {
         let repos_folded = self.repos_folded.iter().filter(listed).take(MAX_FOLDED).cloned().collect();
         let home = *self.shown_space() == Owner::Home;
         let (fill, extra) = (self.fill_display, Extra::new());
-        let mut layout =
-            Layout { version: VERSION, selected, home, section, drawer, tabs, spaces, repos_folded, fill, extra };
+        // A camera moved from its fitted view, of a folder that is a path.
+        let cameras = (self.cameras.views.iter())
+            .filter(|(folder, view)| folded_path(folder) && **view != crate::scene::View::default())
+            .take(MAX_CAMERAS)
+            .map(|(folder, v)| SavedCamera {
+                folder: folder.clone(),
+                yaw: v.yaw,
+                pitch: v.pitch,
+                zoom: v.zoom,
+                pan: v.pan,
+            })
+            .collect();
+        let mut layout = Layout {
+            version: VERSION,
+            selected,
+            home,
+            section,
+            drawer,
+            tabs,
+            spaces,
+            repos_folded,
+            fill,
+            cameras,
+            extra,
+        };
         // What is written always reads back: the last histories go first, then the last tabs.
         while write(&layout).len() > MAX_FILE_BYTES {
             let held = layout.tabs.iter_mut().flat_map(|saved| saved.tab.panes.iter_mut()).rev();
@@ -445,6 +487,13 @@ impl Model {
             return;
         }
         self.repos_folded.clone_from(&layout.repos_folded);
+        // A camera out of its clamps (a file edited by hand) is not kept.
+        for c in &layout.cameras {
+            let view = crate::scene::View { yaw: c.yaw, pitch: c.pitch, zoom: c.zoom, pan: c.pan };
+            if view.sound() {
+                self.cameras.views.insert(c.folder.clone(), view);
+            }
+        }
         // The user's own choice of a run before: the shell fills again once its window is there.
         if layout.fill {
             self.fill_display = true;
@@ -698,6 +747,27 @@ mod tests {
         m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
         m.update(Action::ToggleSection { section: Section::Tasks });
         m
+    }
+
+    /// A code city's camera the user moved is kept, by its folder, and comes back; a fitted
+    /// one is not written; one out of its clamps, or of what is not a path, is not read.
+    #[test]
+    fn a_moved_city_camera_is_kept_by_its_folder() {
+        let mut m = workspace();
+        let moved = crate::scene::View::default().orbited(40., -10.).zoomed(0.5, [0.1, 0.]);
+        m.cameras.views.insert("/code/app".into(), moved);
+        m.cameras.views.insert("/code/web".into(), crate::scene::View::default());
+        let file = m.layout_file(&[], &[], 0);
+        assert_eq!(file.cameras.iter().map(|c| c.folder.as_str()).collect::<Vec<_>>(), ["/code/app"]);
+        let file = parse(&write(&file)).unwrap();
+        let (back, _) = restored(&m, file.clone(), &[], false);
+        assert_eq!(back.cameras.views.get("/code/app"), Some(&moved));
+        let mut odd = file.clone();
+        odd.cameras[0].pitch = 200.;
+        assert!(restored(&m, odd, &[], false).0.cameras.views.is_empty(), "out of its clamps");
+        let mut odd = file;
+        odd.cameras[0].folder = "app".into();
+        assert!(odd.unsound().is_some(), "not a path");
     }
 
     /// A fresh model with `m`'s tasks and workspaces, and the file of `m` restored into it.

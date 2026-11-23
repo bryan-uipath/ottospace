@@ -202,7 +202,8 @@ pub enum Request {
     /// `precise` points of a trackpad, both rounded to whole numbers; positive `dy` scrolls
     /// back. `exit` and `enter`: the pointer leaves the window, and comes back. `"as":"user"`:
     /// the user's event, not a client's, as on `key`. `"button":"right"`: a `down` or `up` of
-    /// the right button (a right click), never a drag.
+    /// the right button (a right click), never a drag. `"button":"middle"`: a `down` or `up` of the
+    /// middle button (a mouse's wheel, pressed), and every `move` between them its drag.
     Mouse {
         action: MouseAction,
         #[serde(default)]
@@ -668,6 +669,7 @@ pub enum Button {
     #[default]
     Left,
     Right,
+    Middle,
 }
 
 /// `"as":"user"`: whose input an injected key or pointer event is. For tests (`test_refusal`).
@@ -1005,6 +1007,7 @@ mod tests {
             r#"{"cmd":"mouse","action":"down","x":300,"y":60}"#,
             r#"{"cmd":"mouse","action":"down","x":300,"y":60,"as":"user"}"#,
             r#"{"cmd":"mouse","action":"down","button":"right","x":300,"y":60,"as":"user"}"#,
+            r#"{"cmd":"mouse","action":"down","button":"middle","x":300,"y":60,"as":"user"}"#,
             r#"{"cmd":"mouse","action":"wheel","x":300,"y":60,"dy":3}"#,
             r#"{"cmd":"mouse","action":"exit","x":300,"y":60}"#,
             r#"{"cmd":"drag","from":[300,60],"to":[900,400]}"#,
