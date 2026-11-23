@@ -173,6 +173,68 @@ pub(crate) fn pill(text: impl Into<SharedString>, kind: Pill) -> Div {
     }
 }
 
+/// Depth for a dialog over the panes (the new-task box first; others may follow): a faint ring, a
+/// close shadow under its edge and a deep wide one under the whole, and a soft light along its top.
+pub(crate) fn lifted(d: Div) -> Div {
+    let layer = |opacity: f32, y: f32, blur: f32| BoxShadow {
+        color: black().opacity(opacity),
+        offset: point(px(0.), px(y)),
+        blur_radius: px(blur),
+        spread_radius: px(0.),
+    };
+    let light = div()
+        .absolute()
+        .top_0()
+        .left(px(crate::dialog::RADIUS))
+        .right(px(crate::dialog::RADIUS))
+        .h(px(1.))
+        .bg(Hsla::white().opacity(0.09));
+    d.relative()
+        .rounded(px(crate::dialog::RADIUS))
+        .bg(rgb(theme::RAISED))
+        .border_1()
+        .border_color(Hsla::white().opacity(0.07))
+        .shadow(vec![layer(0.5, 1., 2.), layer(0.3, 8., 16.), layer(0.45, 28., 72.)])
+        .child(light)
+}
+
+/// A field set slightly into a `lifted` dialog: the darkest fill, its edge in `accent`, and a
+/// shade along its top edge, as if under a lip.
+pub(crate) fn well(d: Div, accent: u32) -> Div {
+    let shade = div().absolute().top_0().left_0().right_0().h(px(3.)).rounded_t(px(crate::dialog::INNER_RADIUS)).bg(
+        gpui::linear_gradient(
+            180.,
+            gpui::linear_color_stop(black().opacity(0.35), 0.),
+            gpui::linear_color_stop(black().opacity(0.), 1.),
+        ),
+    );
+    d.relative()
+        .rounded(px(crate::dialog::INNER_RADIUS))
+        .bg(rgb(theme::BACKGROUND))
+        .border_1()
+        .border_color(rgb(accent))
+        .child(shade)
+}
+
+/// An attachment in the new-task box (a meeting, the workspace in front, a folder): its label in a
+/// quiet fill, `accent` its text's colour (none: the text's). The caller adds its × and click.
+pub(crate) fn chip(text: impl Into<SharedString>, accent: Option<u32>) -> Div {
+    div()
+        .flex()
+        .flex_none()
+        .items_center()
+        .gap(px(theme::SPACE_1))
+        .max_w(px(260.))
+        .h(px(theme::CONTROL))
+        .pl(px(theme::SPACE_2))
+        .pr(px(theme::SPACE_0_5))
+        .rounded(px(theme::CONTROL / 2.))
+        .bg(rgb(theme::SELECTED))
+        .text_size(px(theme::TEXT_XS))
+        .text_color(rgb(accent.unwrap_or(theme::TEXT)))
+        .child(div().min_w_0().truncate().child(text.into()))
+}
+
 /// A list row's kind. `Normal`: a sidebar section's row, `ROW` tall, its title in full colour.
 /// `Dim`: a row under a heading (a checkout), muted until the pointer or the keys are on it.
 #[derive(Clone, Copy)]

@@ -41,6 +41,8 @@ pub struct Drawn {
     /// Where the new-task box's content was last drawn, and its dropdown.
     panel: Bounds<Pixels>,
     pub menu: Bounds<Pixels>,
+    /// The new-task box's status line in full, and as it fit its room when last drawn.
+    pub status: (String, String),
     /// A field of several lines (the conversation's composer): each line drawn, where it starts
     /// in the text and its top; and the pointer's last height, to pick the line it is over.
     rows: Vec<(usize, ShapedLine, Pixels)>,

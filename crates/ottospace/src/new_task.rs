@@ -6,11 +6,11 @@
 use std::path::PathBuf;
 
 use gpui::{
-    Bounds, Context, Div, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions,
+    App, Bounds, Context, Div, ExternalPaths, FontWeight, KeyDownEvent, MouseButton, MouseDownEvent, PathPromptOptions,
     Pixels, Point, Window, div, prelude::*, px, rgb,
 };
-use ottospace_core::complete::{self, Dropdown, Enter, Row};
-use ottospace_core::model::{Pointed, TAG_KEYS, TerminalInfo};
+use ottospace_core::complete::{self, Dropdown, Row};
+use ottospace_core::model::{Pointed, TAG_KEYS, TerminalInfo, fit_status};
 use ottospace_core::{Action, Origin, theme};
 
 use crate::{Workspace, dialog, ui};
@@ -134,7 +134,9 @@ impl Workspace {
     /// The tab or pane drawn at a window position: what an ⌥-click there would reference.
     /// Nothing under the box's own panel: that click is the box's.
     fn pointed_at(&self, position: Point<Pixels>) -> Option<(Pointed, Bounds<Pixels>)> {
-        if self.field.borrow().over_panel(position) {
+        // Nor under its dropdown, which may hang past it.
+        let menu = self.model.dropdown().is_some() && self.field.borrow().menu.contains(&position);
+        if menu || self.field.borrow().over_panel(position) {
             return None;
         }
         let tab = self.model.tabs.iter().find_map(|tab| {
@@ -275,9 +277,9 @@ impl Workspace {
         div().flex_1().min_w_0().flex().flex_wrap().items_center().gap_x_3().gap_y_1().children(tags)
     }
 
-    /// The dropdown, and whether it goes above the line: under the tag it finishes, unless
-    /// the window has no room below.
-    fn render_dropdown(&self, menu: &Dropdown, cx: &mut Context<Self>) -> (Div, bool) {
+    /// The dropdown, hung under the line at its tag (over it, if the window has no room below),
+    /// over what is under it: nothing in the box moves when it opens.
+    fn render_dropdown(&self, menu: &Dropdown, cx: &mut Context<Self>) -> gpui::Deferred {
         let rows = menu.rows.iter().enumerate().map(|(i, row)| self.dropdown_row(i, row, menu, cx).into_any_element());
         let note = menu.note.clone().map(|note| {
             div().h(px(ROW)).px_2().flex().items_center().text_xs().text_color(rgb(theme::MUTED)).child(note)
@@ -290,10 +292,10 @@ impl Workspace {
         let above = place.is_some_and(|(_, field, viewport)| field.bottom() + height + px(90.) > viewport);
         let drawn = self.field.clone();
         let list = div()
-            .relative()
+            .absolute()
+            .left(indent.max(px(0.)))
             .w(px(MENU_WIDTH))
             .max_w_full()
-            .ml(indent.max(px(0.)))
             .py_1()
             .flex()
             .flex_col()
@@ -301,7 +303,9 @@ impl Workspace {
             .bg(rgb(theme::BACKGROUND))
             .border_1()
             .border_color(rgb(theme::BORDER_STRONG))
+            .shadow(dialog::shadow())
             .overflow_hidden()
+            .occlude()
             .child(
                 gpui::canvas(move |bounds, _, _| drawn.borrow_mut().menu = bounds, |_, _, _, _| {})
                     .absolute()
@@ -309,49 +313,75 @@ impl Workspace {
             )
             .children(rows)
             .children(note);
-        (list, above)
+        let list = if above { list.bottom_full().mb_1() } else { list.top_full().mt_1() };
+        gpui::deferred(list)
     }
 
-    /// The new-task box's content, for any host: the line, with the tags it understands in
-    /// their colours, and the dropdown for the tag at the cursor. As wide as the host makes it.
-    /// Files dropped on it go into the line.
-    pub fn new_task_content(&self, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
-        let menu = self.model.dropdown();
-        let dropdown = menu.as_ref().map(|menu| self.render_dropdown(menu, cx));
-        let (over, under) = match dropdown {
-            Some((list, true)) => (Some(list), None),
-            Some((list, false)) => (None, Some(list)),
-            None => (None, None),
+    /// What the box will point at, inside its field: the quick note's pills (a meeting, a
+    /// transcript, what is in front) and the folder its agent runs in, each with × to leave it out.
+    /// A meeting's title is drawn from the calendar here, never kept in the state.
+    fn attachments(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        use ottospace_core::model::{Owner, quick::Pill};
+        let off = |id: String, mark: Option<String>, action: Action| {
+            div()
+                .id(gpui::SharedString::from(id))
+                .relative()
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .text_color(rgb(theme::MUTED))
+                .hover(|s| s.bg(rgb(theme::BORDER_STRONG)).text_color(rgb(theme::TEXT)))
+                .child("×")
+                .children(mark.map(|mark| self.controls.mark(mark)))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(
+                    cx.listener(move |this, _, window, cx| drop(this.dispatch(action.clone(), this.input, window, cx))),
+                )
         };
-        let muted = |text: &'static str| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
-        // What ↵ does when it is not "add": it finishes the tag. Else the one key a text box does not have.
-        let keys: &[&'static str] = match self.model.enter() {
-            Enter::Wait => &[],
-            _ if self.model.enter_completes() => &["↵", "completes"],
-            _ => &["⇧", "↵", "later"],
+        let label = |pill: &Pill, at: u64| match pill {
+            Pill::Meeting(meeting) => format!("Meeting · {}", meeting.title),
+            Pill::Transcript(_) => {
+                format!("Transcript · {}", ottospace_core::calendar::clock(at, crate::calendar::zone_offset(at)))
+            }
+            Pill::Front { of: of @ Owner::Task { .. } } => format!("Task · {}", self.model.space_title(of)),
+            Pill::Front { of } => format!("Workspace · {}", self.model.space_title(of)),
         };
-        // As wide whatever it says: the tags beside it wrap the same, and the line above stays put.
-        let caps = keys.split_last().map(|(word, caps)| {
-            let caps = caps.iter().map(|text| ui::pill(*text, ui::Pill::Key { lit: false, small: true }));
-            div().flex().items_center().gap_1().children(caps).child(muted(*word))
+        let pills = self.model.quick_pills().zip(self.model.quick_at()).into_iter().flat_map(|(pills, at)| {
+            pills.iter().map(move |pill| {
+                let kind = pill.kind();
+                let name = serde_json::json!(kind).as_str().unwrap_or_default().to_string();
+                // A meeting's title is another's words: in its own colour, as data.
+                let accent = matches!(pill, Pill::Meeting(_)).then_some(theme::VISUAL);
+                let x = off(format!("pill-off:{name}"), Some(format!("pill:{name}")), Action::QuickPill { kind });
+                ui::chip(label(pill, at), accent).child(x).into_any_element()
+            })
         });
-        let keys = div().w(px(96.)).flex_none().flex().justify_end().children(caps);
-        // The tags, a cap each: dimmer once something is typed.
-        let typed = self.model.compose_line().is_some_and(|line| !line.is_empty());
-        let hint = self.model.compose_hint().map(|_| self.tag_caps(cx).when(typed, |d| d.opacity(0.6)));
+        let pills: Vec<_> = pills.collect();
+        // The folder taken from the dropdown: the agent runs there. × leaves the path in the line.
+        let folder = self.model.compose_folder().map(|folder| {
+            let text = format!("runs in {}", ottospace_core::transcript::clean(folder));
+            let x = off("compose-folder-clear".into(), None, Action::ComposeFolderClear);
+            ui::chip(text, None).id("compose-folder").child(x).into_any_element()
+        });
+        pills.into_iter().chain(folder).collect()
+    }
+
+    /// The new-task box's content, for any host, top to bottom: the field (the line, with the tags
+    /// it understands in their colours; what it will point at; + to attach files), the one line
+    /// that says what ↵ does, and the tags' sheet when asked for. The dropdown for the tag at the
+    /// cursor hangs over what is below. As wide as the host makes it. Files dropped on it go in.
+    pub fn new_task_content(&self, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let menu = self.model.dropdown().map(|menu| self.render_dropdown(&menu, cx));
         // What the box could not do: a name with no room, files left out.
         let note =
             self.model.compose_note().map(|note| div().text_xs().text_color(rgb(theme::ERROR)).child(note.to_string()));
         let panel = self.field.clone();
-        let attach = div()
-            .id("compose-attach")
-            .px_1p5()
-            .rounded_sm()
-            .text_xs()
-            .text_color(rgb(theme::MUTED))
-            .cursor_pointer()
-            .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-            .child("+ file  ⌘O")
+        let tip = |text: &'static str| {
+            move |_: &mut Window, cx: &mut gpui::App| gpui::AnyView::from(cx.new(|_| crate::Tooltip(text.into())))
+        };
+        let attach = ui::button("compose-attach", ui::Button::Ghost(ui::Face::Icon("icons/plus.svg")), ui::State::Rest)
+            .child(self.controls.mark("compose-attach"))
+            .tooltip(tip("Attach files · ⌘O"))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, window, cx| {
@@ -359,51 +389,79 @@ impl Workspace {
                     cx.stop_propagation();
                 }),
             );
-        // The folder taken from the dropdown: the agent runs there. × leaves the path in the line.
-        let folder = self.model.compose_folder().map(|folder| {
-            let clear = div()
-                .id("compose-folder-clear")
-                .px_1()
-                .rounded_sm()
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-                .child("×")
-                .on_mouse_down(
-                    MouseButton::Left,
-                    cx.listener(|this, _, window, cx| {
-                        this.dispatch(Action::ComposeFolderClear, this.input, window, cx);
-                        cx.stop_propagation();
-                    }),
-                );
-            div()
-                .id("compose-folder")
-                .h(px(20.))
-                .max_w(px(220.))
-                .overflow_hidden()
-                .flex()
-                .items_center()
-                .gap_1()
-                .pl_2()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(theme::BORDER_STRONG))
-                .text_xs()
-                .text_color(rgb(theme::MUTED))
-                .child("runs in")
-                .child(crate::cut_text(ottospace_core::transcript::clean(folder)).text_color(rgb(theme::TEXT)))
-                .child(div().flex_none().child(clear))
-        });
+        let quick = self.model.quick_pills().is_some();
         let line = div()
-            .min_h(px(34.))
-            .px_2()
+            .relative()
+            .min_h(px(40.))
+            .px_3()
             .flex()
             .items_center()
-            .rounded(px(dialog::INNER_RADIUS))
-            .bg(rgb(theme::BACKGROUND))
-            .border_1()
-            .border_color(rgb(theme::BACKGROUND))
             .text_base()
-            .child(self.render_field_of("compose", "What needs doing?", cx));
+            .child(self.render_field_of("compose", if quick { "Jot it down" } else { "What needs doing?" }, cx))
+            .children(menu);
+        let attached = self.attachments(cx);
+        let attached =
+            (!attached.is_empty()).then(|| div().px_2().pb_1().flex().flex_wrap().gap_1().children(attached));
+        let edge = div()
+            .h(px(32.))
+            .px_1()
+            .flex()
+            .items_center()
+            .gap_1()
+            .border_t_1()
+            .border_color(rgb(theme::BORDER))
+            .child(attach);
+        let field = ui::well(div().flex().flex_col(), theme::COMPOSE).child(line).children(attached).child(edge);
+        let sheet_open = self.model.compose_hint().is_some();
+        let tags = ui::button(
+            "compose-sheet",
+            ui::Button::Ghost(ui::Face::Label("? tags".into())),
+            if sheet_open { ui::State::Pressed } else { ui::State::Rest },
+        )
+        .child(self.controls.mark("compose-sheet"))
+        .tooltip(tip("Tags a line may hold · ⌘/"))
+        // On the press, and no further: the line keeps the keyboard and its cursor.
+        .on_mouse_down(
+            MouseButton::Left,
+            cx.listener(|this, _, window, cx| {
+                this.dispatch(Action::ComposeSheet, this.input, window, cx);
+                cx.stop_propagation();
+            }),
+        );
+        // As it fit its room when last drawn; measured again as drawn, and drawn again if it changed.
+        let full = self.model.compose_status().unwrap_or_default();
+        let status_text =
+            Some(self.field.borrow().status.clone()).filter(|(of, _)| *of == full).map_or(full.clone(), |(_, fit)| fit);
+        let room = self.field.clone();
+        let measure = move |bounds: Bounds<Pixels>, window: &mut Window, _: &mut App| {
+            let width = f32::from(bounds.size.width);
+            let fit = fit_status(&full, |text| crate::status_bar::width(window, text) <= width);
+            let mut room = room.borrow_mut();
+            if room.status != (full.clone(), fit.clone()) {
+                room.status = (full, fit);
+                window.refresh();
+            }
+        };
+        // One line: what ↵ does with the line as it is, then the other keys.
+        let status = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            // One line, whatever it says: what is under it never moves. Too long, its trailing
+            // keys go, then words of what ↵ does (the core says which), never part of a word.
+            .child(
+                div()
+                    .relative()
+                    .flex_1()
+                    .min_w_0()
+                    .truncate()
+                    .child(gpui::canvas(measure, |_, _, _, _| {}).absolute().size_full())
+                    .child(status_text),
+            )
+            .child(tags);
+        let sheet = sheet_open.then(|| self.tag_caps(cx));
         div()
             .id("compose-content")
             .relative()
@@ -415,18 +473,10 @@ impl Workspace {
             .on_drop(cx.listener(|this, dropped: &ExternalPaths, window, cx| {
                 this.compose_attach(dropped.paths(), this.input, window, cx);
             }))
-            .child(
-                div()
-                    // As high with the folder as without: the line under it stays put.
-                    .h(px(20.))
-                    .flex()
-                    .items_center()
-                    .justify_between()
-                    // The draft's title says what it is; the drawer's header does that in its new-task state.
-                    .child(div().text_xs().text_color(rgb(theme::COMPOSE)).children(
-                        (self.model.compose_host() == Some(ottospace_core::model::Host::Bar)).then_some("NEW TASK"),
-                    ))
-                    .child(div().flex().items_center().gap_2().children(folder).child(attach)),
+            // The draft's title says what it is; the drawer's header does that in its new-task state.
+            .children(
+                (self.model.compose_host() == Some(ottospace_core::model::Host::Bar))
+                    .then(|| div().text_xs().text_color(rgb(theme::COMPOSE)).child("NEW TASK")),
             )
             // Where the content is drawn: an ⌥-click over it references nothing.
             .child(
@@ -434,12 +484,10 @@ impl Workspace {
                     .absolute()
                     .size_full(),
             )
-            .children(over)
-            .child(line)
-            .children(under)
+            .child(field)
             .children(note)
-            // One row while the box is open: the tags, then the key. A narrow box wraps it, never clips.
-            .child(div().min_h(px(16.)).flex().items_start().gap_3().children(hint).child(keys))
+            .child(status)
+            .children(sheet)
     }
 
     /// The drawer in its new-task state, `width` points wide: one-click picks for where and who,
@@ -490,7 +538,7 @@ impl Workspace {
     /// The box centred over the dimmed panes (`Model::compose_centred`), `width` points wide: the
     /// drawer's picks and lines, then the line. Its bounds are where ↵'s grow starts (`fly.rs`).
     pub(crate) fn render_new_task_centred(&self, width: f32, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
-        dialog::panel(theme::COMPOSE)
+        ui::lifted(div())
             .id("new-task-centred")
             .relative()
             .w(px(width))
@@ -498,61 +546,6 @@ impl Workspace {
             .child(self.new_task_body(cx))
             .child(self.controls.mark("new-task-centred"))
             .child(crate::mark(&self.marks, crate::Mark::CentredBox))
-    }
-
-    /// The quick note box's pills: what its note will point at, each with × to leave it out, and
-    /// what its keys do. A meeting's title is drawn from the calendar here, never kept in the state.
-    fn quick_pills(&self, cx: &mut Context<Self>) -> Option<Div> {
-        use ottospace_core::model::{Owner, quick::Pill};
-        let (pills, at) = (self.model.quick_pills()?, self.model.quick_at()?);
-        let label = |pill: &Pill| match pill {
-            Pill::Meeting(meeting) => format!("Meeting · {}", meeting.title),
-            Pill::Transcript(_) => {
-                format!("Transcript · {}", ottospace_core::calendar::clock(at, crate::calendar::zone_offset(at)))
-            }
-            Pill::Front { of: of @ Owner::Task { .. } } => format!("Task · {}", self.model.space_title(of)),
-            Pill::Front { of } => format!("Workspace · {}", self.model.space_title(of)),
-        };
-        let pill = |pill: &Pill| {
-            let kind = pill.kind();
-            let name = serde_json::json!(kind).as_str().unwrap_or_default().to_string();
-            let off = div()
-                .id(gpui::SharedString::from(format!("pill-off:{name}")))
-                .relative()
-                .px_1()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_color(rgb(theme::MUTED))
-                .hover(|s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)))
-                .child("×")
-                .child(self.controls.mark(format!("pill:{name}")))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    drop(this.dispatch(Action::QuickPill { kind }, this.input, window, cx))
-                }));
-            div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .max_w(px(260.))
-                .pl_2()
-                .py_0p5()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(theme::COMPOSE))
-                .text_xs()
-                .child(div().truncate().child(label(pill)))
-                .child(off)
-        };
-        let keys = div().text_xs().text_color(rgb(theme::MUTED)).child("↵ files it for later · ⌘↵ starts it now · Esc");
-        Some(
-            div()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .child(div().flex().flex_wrap().gap_1().children(pills.iter().map(pill)))
-                .child(keys),
-        )
     }
 
     /// The new-task state's picks, lines and box (or, closed, the line to open it).
@@ -630,8 +623,6 @@ impl Workspace {
                 .child(side(true, "new worktree"))
                 .child(key)
         });
-        let plan =
-            self.model.compose_plan_line().map(|text| div().text_xs().text_color(rgb(theme::COMPOSE)).child(text));
         // The view moved on while the box was open: it still goes where it was opened; Switch brings it here.
         let pinned = self.model.compose_space().filter(|_| self.model.compose_elsewhere()).map(|of| {
             let switch = div()
@@ -664,19 +655,25 @@ impl Workspace {
                 .child(self.controls.mark("drawer:new_task"))
                 .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
         });
+        // The box on top; the picks of where and who under it.
+        let quick = self.model.quick_pills().is_some();
+        let picks = (!quick).then(|| {
+            div()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(div().flex().flex_wrap().gap_1().children(wheres).child(none))
+                .child(div().flex().flex_wrap().gap_1().children(whos))
+                .children(choice)
+        });
         div()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_3()
             .p_3()
-            .child(div().flex().flex_wrap().gap_1().children(wheres).child(none))
-            .child(div().flex().flex_wrap().gap_1().children(whos))
-            .children(choice)
-            .child(div().flex_1())
             .children(pinned)
-            .children(plan)
-            .children(self.quick_pills(cx))
             .children(open.then(|| self.new_task_content(cx)))
             .children(idle)
+            .children(picks)
     }
 }

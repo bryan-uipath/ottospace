@@ -4147,7 +4147,9 @@ fn the_users_enter_with_the_dropdown_open_completes_the_tag_and_starts_nothing()
         (field(&reply).0.as_str(), reply["mode"].as_str(), tasks(&reply)),
         ("fix it >flow-app ", Some("compose"), Some(0))
     );
-    // The tags stay under the line; a cap types its mark, and its dropdown opens.
+    // The tags show only when asked for: "? tags". A cap types its mark, and its dropdown opens.
+    assert_eq!((&reply["compose_hint"], &reply["compose_tags"]), (&Value::Null, &json!({})));
+    let reply = otto.user_click(at(rect(&reply["compose_rects"]["compose-sheet"]), 0.5, 0.5));
     assert!(reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")));
     let reply = otto.user_click(at(rect(&reply["compose_tags"][">"]), 0.5, 0.5));
     assert_eq!(
@@ -4208,7 +4210,11 @@ fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
     );
     assert_eq!(reply["compose_plan"]["dir"], "~/notes/2026/");
     // The pane is in the workspace made for it (Home holds none): ↵ starts it there.
-    assert_eq!(reply["compose_plan_line"], "↵ will start claude in ~/notes/2026/, in this workspace");
+    // Once the folder's own rows are read: until then ↵ waits for the list.
+    let said = "↵ starts @claude in ~/notes/2026/, in this workspace · ⇧↵ later · Esc";
+    otto.wait_for("↵ to start the agent there", |o| {
+        (o.call(json!({"cmd": "state"}))["compose_status"] == said).then_some(())
+    });
     // Esc closes the list and leaves the text as typed.
     let reply = key("escape");
     assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("plan my week ~/notes/2026/", &Value::Null));
@@ -4323,6 +4329,13 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The box's one line says ↵ starts the task in the workspace on show.
+fn binds(reply: &Value) -> bool {
+    reply["compose_status"]
+        .as_str()
+        .is_some_and(|said| said.starts_with("↵ starts ") && said.contains(", in this workspace · "))
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn with_nothing_open_the_drawer_offers_a_new_task() {
@@ -4344,9 +4357,9 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     });
     let plan = json!({"agent": "codex", "starts": true, "dir": null, "branch": null});
     assert_eq!(reply["compose_plan"], plan);
-    // Not the default agent: the drawer says what ↵ does. Something typed: the tag hint stays.
-    assert_eq!(reply["compose_plan_line"], json!("↵ will start codex in your home folder"));
-    assert!(reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")));
+    // One line says what ↵ does; the tags only on demand.
+    assert_eq!(reply["compose_status"], json!("Type, then ↵ starts @codex in your home folder · ⇧↵ later · Esc"));
+    assert_eq!(reply["compose_hint"], Value::Null);
     // Typing goes into it; ⇧↵ files the task for later and the box closes. A task is open now:
     // the drawer goes.
     key("cmd-a t i d y space # x");
@@ -4356,15 +4369,19 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
         (&reply["compose_host"], &reply["welcome"], &reply["mode"]),
         (&Value::Null, &json!(false), &json!("normal"))
     );
-    // ⌘N opens it again, empty: the tag hint, and no plan line for the default.
+    // ⌘N opens it again, empty: what ↵ will do once it has words; ⌘/ shows the tags, again every key.
     let reply = key("cmd-n");
     assert_eq!(reply["compose_host"], "drawer");
+    assert_eq!(reply["compose_status"], "Type, then ↵ starts @claude in your home folder · ⇧↵ later · Esc");
+    let reply = otto.user_key("cmd-/");
     assert!(
         reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")),
         "{}",
         reply["compose_hint"]
     );
-    assert_eq!(reply["compose_plan_line"], Value::Null);
+    let reply = otto.user_key("cmd-/");
+    assert!(reply["compose_hint"].is_null() && reply["key_reference"].is_object(), "{}", reply["key_reference"]);
+    otto.user_key("escape");
     // Esc leaves.
     // Its left edge drags: 100 pt to the right narrows it by 100. (Wider is capped at half a
     // window, which may be no wider than it is.)
@@ -7894,7 +7911,7 @@ fn a_task_started_in_a_workspace_makes_it_the_tasks_in_place() {
         // it was, with its tabs and panes, and the drawer is on the task.
         otto.user_key("cmd-n");
         let typed = otto.user_key("m i n e");
-        assert_eq!(typed["compose_plan_line"], "↵ starts it in this workspace");
+        assert!(binds(&typed), "{}", typed["compose_status"]);
         let bound = otto.user_key("enter");
         let task = bound["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task");
         let its = json!({"kind": "task", "id": task});
@@ -7977,7 +7994,7 @@ fn several_tasks_share_a_workspace_and_the_drawers_rail_switches_between_them() 
         // A second task, started here: in the same space, in front; nothing moved.
         otto.user_key("cmd-n");
         let typed = otto.user_key("t w o");
-        assert_eq!(typed["compose_plan_line"], "↵ starts it in this workspace");
+        assert!(binds(&typed), "{}", typed["compose_status"]);
         let second = otto.user_key("enter");
         let two = second["state"]["talk"]["task"].as_u64().expect("the drawer is on the second task");
         assert_ne!(one, two);
@@ -8102,7 +8119,7 @@ fn a_repos_click_makes_a_workspace_of_its_worktree_where_terminals_and_tasks_sta
     // A task started there: its agent in the default worktree.
     otto.user_key("cmd-n");
     let typed = otto.user_key("o n e");
-    assert_eq!(typed["compose_plan_line"], "↵ will start claude in app-2 on fix/zoom, in this workspace");
+    assert_eq!(typed["compose_status"], "↵ starts @claude in app-2 on fix/zoom, in this workspace · ⇧↵ later · Esc");
     otto.user_key("enter");
     let started = |dir: String| {
         let bin = bin.clone();
@@ -8185,8 +8202,8 @@ fn the_new_task_box_makes_a_new_worktree_and_starts_the_task_there() {
     assert_eq!(reply["compose_worktree"]["new"], false, "a client chose: {}", reply["compose_worktree"]);
     let chosen = otto.user_key("cmd-alt-n");
     assert_eq!(chosen["compose_worktree"]["new"], true);
-    let said = "↵ will start claude in a new worktree of app on fix-the-zoom, in this workspace";
-    assert_eq!(chosen["compose_plan_line"], said);
+    let said = "↵ starts @claude in a new worktree of app on fix-the-zoom, in this workspace · ⇧↵ later · Esc";
+    assert_eq!(chosen["compose_status"], said);
 
     // ↵: the worktree is made, the agent starts there, the workspace's default follows it.
     otto.user_key("enter");
@@ -8944,8 +8961,10 @@ fn quick_note_files_for_later_with_its_pills_and_note_gives_them() {
     let open = otto.drawn();
     assert_eq!((&open["quick_pills"], &open["compose_centred"]), (&json!(["meeting", "front"]), &json!(true)));
     assert!(!open.to_string().contains("Made-up review"), "a meeting's title in the state");
-    // ↵: a task for later; nothing starts, the box is gone.
-    let filed = otto.user_key("f o l l o w space u p enter");
+    // One line says what ↵ does, and it does that: a task for later; nothing starts, the box is gone.
+    let typed = otto.user_key("f o l l o w space u p");
+    assert_eq!(typed["compose_status"], "↵ files it for later · ⌘↵ starts it now · Esc");
+    let filed = otto.user_key("enter");
     assert!(filed["quick_pills"].is_null() && filed["compose_host"].is_null(), "{}", filed["quick_pills"]);
     let tasks = filed["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
     let task = tasks.iter().find(|task| task["title"] == "follow up").cloned().expect("filed");
@@ -15274,7 +15293,7 @@ fn a_task_started_on_home_gets_its_own_workspace() {
     assert!(on_home["home"].is_object(), "{on_home}");
     otto.user_key("cmd-n");
     let typed = otto.user_key("m i n e");
-    assert_eq!(typed["compose_plan_line"], Value::Null, "it joins no workspace: {typed}");
+    assert!(!binds(&typed) && typed["compose_status"].is_string(), "it joins no workspace: {typed}");
     let started = otto.user_key("enter");
     let task = started["state"]["talk"]["task"].as_u64().expect("the drawer is on the new task");
     // Its own space at the row's end, selected, with one empty tab; the workspace keeps its tab

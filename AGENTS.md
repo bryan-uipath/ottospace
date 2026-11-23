@@ -182,6 +182,9 @@ Design note: `docs/ai/attention/plan.md`.
     `OTTOSPACE_GH` a stand-in that makes a local repository; no request clones.
   - State field `repos_bar[n].name_cut`: a repository's name as drawn in its heading (`cut_text`), its box
     (`room`) and its shaped width (`drawn`). Null outside a test run.
+  - State field `compose_rects`: where the open new-task box's controls were drawn, by id
+    (`compose-attach`, `compose-sheet`): sneak mode labels none while its line has the keyboard.
+    Null outside a test run and while the box is closed.
   - State field `offer_rects`: where an offer chip's words (`words:<pane>`) and their tooltip (`tip`,
     while it shows) were drawn; never the words. Null outside a test run.
   - State field `viewers[n].marked_rect` (drawn): where a viewer's first marked line is drawn, while

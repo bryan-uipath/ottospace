@@ -50,6 +50,21 @@ fn pills() -> Div {
     group("pill", keys.into_iter().chain(modes))
 }
 
+/// The new-task box's attachments: plain, and in an accent, each with its ×.
+fn chips() -> Div {
+    let x = || div().px(px(theme::SPACE_1)).text_color(rgb(theme::MUTED)).child("×");
+    let cases = [("plain", None, "Workspace · checkout"), ("accent", Some(theme::VISUAL), "Meeting · Team sync")]
+        .map(|(name, accent, text)| case(name, super::chip(text, accent).child(x())));
+    group("chip", cases)
+}
+
+/// Depth: a lifted dialog with a well in it.
+fn depth() -> Div {
+    let well = super::well(div().h(px(36.)), theme::COMPOSE);
+    let dialog = super::lifted(div().w(px(260.)).p(px(theme::SPACE_3))).child(well);
+    group("lifted, well", [case("dialog", dialog)])
+}
+
 fn rows() -> Div {
     let width = |d: gpui::Stateful<Div>| div().w(px(220.)).child(d);
     let rows = [("normal", Row::Normal), ("dim", Row::Dim)].map(|(name, row)| {
@@ -186,6 +201,8 @@ pub(crate) fn view() -> Div {
         .gap(px(theme::SPACE_3))
         .child(buttons())
         .child(pills())
+        .child(chips())
+        .child(depth())
         .child(tips())
         .child(filter_rows());
     let right = div()

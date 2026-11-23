@@ -1260,6 +1260,7 @@ const MAKERS: &[Make] = &[
     |_| Action::ComposeHere,
     // Every mark a cap types, and one no cap does.
     |g| Action::ComposeTag { mark: g.rng.pick(&['#', '>', '@', '/', '$', '^', 'p']) },
+    |_| Action::ComposeSheet,
     |g| {
         // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
         // one too long, one that is no path.
@@ -2790,6 +2791,9 @@ fn check(m: &Model) -> Result<(), String> {
     let offered: Vec<String> = m.ref_candidates().into_iter().map(|(r, _)| r.name).collect();
     ensure!(unique(&offered), "two things are offered by one name: {offered:?}");
     ensure!(m.compose_host().is_some() == m.compose.is_some(), "the box is open nowhere, or closed somewhere");
+    // One line under an open box says what ↵ does; the tags' sheet only while asked for.
+    ensure!(m.compose_status().is_some() == m.compose.is_some(), "an open box with no status line, or the reverse");
+    ensure!(m.compose_hint().is_none() || m.compose_sheet, "the tags' sheet shows unasked");
     if let Some((of, field)) = m.open_field() {
         let most = match of {
             "compose" => MAX_TITLE,
@@ -7451,13 +7455,15 @@ fn a_mark_made_here_reads_back() {
     check_file(&m).unwrap();
 }
 
-/// ⌘/ over the new-task box. No slip: the picker closes for the key reference, the box stays
-/// open under it. Its line is kept and nothing edits it there (the shell sends the reference
-/// its keys), and Esc gives the box the keyboard back.
+/// ⌘/ twice over the new-task box (once is its tags). No slip: the picker closes for the key
+/// reference, the box stays open under it. Its line is kept and nothing edits it there (the shell
+/// sends the reference its keys), and Esc gives the box the keyboard back.
 #[test]
 fn the_new_task_box_keeps_its_line_under_the_key_reference() {
     let mut m = Model::default();
     m.update(Action::OpenCompose { text: "fix".into() });
+    m.update(Action::ToggleKeys);
+    assert_eq!((m.keys, m.compose_hint().is_some()), (false, true));
     m.update(Action::ToggleKeys);
     assert_eq!((m.keys, m.mode(), m.field().is_none()), (true, Mode::Compose, true));
     m.update(Action::FieldEdit { edit: Edit::Insert("x".into()) });

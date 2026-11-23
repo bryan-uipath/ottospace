@@ -10,7 +10,7 @@ use ottospace_core::{fly, theme};
 use crate::Workspace;
 
 /// The box's width at most, and its margin from the panes' edges.
-const WIDTH: f32 = 560.;
+const WIDTH: f32 = 680.;
 const MARGIN: f32 = 24.;
 /// How dark the dim over the panes is.
 const DIM: f32 = 0.45;
