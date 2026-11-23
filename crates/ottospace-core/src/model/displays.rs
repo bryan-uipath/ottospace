@@ -346,7 +346,9 @@ impl Model {
                 && self.other_display(&out.display)
                 && !seen.contains(&out.display)
                 && !self.out.iter().any(|kept| kept.tab == out.tab)
-                && at.is_some_and(|at| !self.holds_app(at));
+                && at.is_some_and(|at| !self.holds_app(at))
+                // A closing workspace's tab folds in: nothing but its Undo or time changes it.
+                && at.is_some_and(|at| !self.closing(&self.tabs[at].space));
             if keeps {
                 seen.push(out.display.clone());
                 self.out.push(out);
@@ -358,8 +360,11 @@ impl Model {
         if gone.iter().any(|out| out.tab == self.tabs[self.active].id) {
             self.key_main(effects);
         }
+        // A hide changes no tab: a closing workspace keeps its stand-in.
         for out in &gone {
-            self.drop_stand_in(out, effects);
+            if !self.tabs.iter().any(|tab| tab.id == out.tab && self.closing(&tab.space)) {
+                self.drop_stand_in(out, effects);
+            }
         }
         let main = |model: &Self, id: u32| model.tabs.iter().any(|tab| tab.id == id && !model.is_out(id));
         match (self.is_out(self.tabs[self.active].id), self.away) {
