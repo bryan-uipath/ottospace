@@ -1842,6 +1842,7 @@ first brainstorm:
 [session-restore.md](ai/session-restore.md): the workspace back after quitting, in layers; layer 1, the layout file, as built.
 [terminal-persistence.md](ai/terminal-persistence.md): terminals and agents that outlive a quit or an update, held outside the app; with session restore, tasks come back as they were.
 [task-conversation.md](ai/task-conversation.md): a task's agent in a right drawer, the three zones, how an agent is started; stage 1 as built (the agent's terminal in the drawer), and what is later.
+[sessions-as-tasks.md](ai/sessions-as-tasks.md): a `claude` or `codex` started in a terminal as a read-only card among tasks: live, aged out, hidden until it needs you. Design note, not built.
 
 [routines.md](ai/routines.md): routines and agents from ottobot, in stages, toward ottospace subsuming it.
 
