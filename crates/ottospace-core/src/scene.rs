@@ -69,6 +69,8 @@ pub struct Block {
     pub kind: Kind,
     /// The atlas place it stands for (an index into `Atlas::places`); none for the ground.
     pub place: Option<usize>,
+    /// The top-level district it is (or stands in), counted from 0; none outside every district.
+    pub district: Option<usize>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -201,7 +203,7 @@ fn frame(blocks: &[Block], aspect: f32) -> Option<Camera> {
     if blocks.is_empty() || aspect.is_nan() || aspect <= 0. {
         return None;
     }
-    let all = Block { min: lo, max: hi, kind: Kind::Ground, place: None };
+    let all = Block { min: lo, max: hi, kind: Kind::Ground, place: None, district: None };
     let target = [(lo[0] + hi[0]) / 2., 0., (lo[2] + hi[2]) / 2.];
     let (pitch, yaw) = (PITCH.to_radians(), YAW.to_radians());
     // From the camera to the target: down by the pitch, into the plan turned by the yaw.
@@ -268,6 +270,7 @@ struct Room {
     from: Area,
     to: Area,
     tier: usize,
+    district: Option<usize>,
 }
 
 /// The city of `atlas` for a picture `aspect` wide to 1 tall. `lit`: places (by id) an agent is
@@ -280,7 +283,7 @@ struct Room {
 /// terrace, and any building between the camera and a lit one's top is cut down to below the
 /// sight line: a lit building is never hidden.
 pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
-    let ground = Block { min: [0., -0.01, 0.], max: [WIDE, 0., 1.], kind: Kind::Ground, place: None };
+    let ground = Block { min: [0., -0.01, 0.], max: [WIDE, 0., 1.], kind: Kind::Ground, place: None, district: None };
     let mut blocks = vec![ground];
     // A typical lot's side: e.g. 0.24 for 28 files, 0.018 for 5,000 (where the constants rule).
     let lot = (WIDE / atlas.places.iter().filter(|p| !p.group).count().max(1) as f32).sqrt();
@@ -304,7 +307,8 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
         }
     }
     let whole = Area { x0: 0., z0: 0., x1: WIDE, z1: 1. };
-    let root = Room { depth: 0, from: whole, to: whole.shrunk(street), tier: 0 };
+    let root = Room { depth: 0, from: whole, to: whole.shrunk(street), tier: 0, district: None };
+    let mut districts = 0;
     let mut rooms = vec![root];
     let mut highest = 0f32;
     let mut buildings = Vec::new();
@@ -318,15 +322,20 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
         let lot = parent.from.map(from, parent.to);
         let floor = terrace(parent.tier);
         if place.group {
-            let mut room = Room { depth: place.depth, from, to: lot, tier: parent.tier };
+            let mut room = Room { depth: place.depth, from, to: lot, tier: parent.tier, district: parent.district };
             if children[i] != 1 && lot.short() >= LEAST_DISTRICT {
                 let plate = lot.shrunk((street * DISTRICT_STREET).min(lot.short() / 4.));
                 let to = plate.shrunk(street.min(plate.short() * KERB));
-                room = Room { depth: place.depth, from, to, tier: parent.tier + 1 };
+                // A district on the ground is a top-level one: the next number.
+                let district = parent.district.or_else(|| {
+                    districts += 1;
+                    Some(districts - 1)
+                });
+                room = Room { depth: place.depth, from, to, tier: parent.tier + 1, district };
                 let top = terrace(room.tier);
                 highest = highest.max(top);
                 let (min, max) = ([plate.x0, floor, plate.z0], [plate.x1, top, plate.z1]);
-                blocks.push(Block { min, max, kind: Kind::Plate(room.tier), place: Some(i) });
+                blocks.push(Block { min, max, kind: Kind::Plate(room.tier), place: Some(i), district });
             }
             rooms.push(room);
             continue;
@@ -341,6 +350,7 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
             max: [lot.x1 - sx, top, lot.z1 - sz],
             kind,
             place: Some(i),
+            district: parent.district,
         });
     }
     for block in buildings.iter_mut().filter(|b| matches!(b.kind, Kind::Lit(_))) {
@@ -390,6 +400,44 @@ impl Scene {
     /// How high a beam rises: the city's highest top, at least `BEAM`.
     fn beam_height(&self) -> f32 {
         self.blocks.iter().map(|b| b.max[1]).fold(BEAM, f32::max)
+    }
+}
+
+/// The share of a city's rise by which its last district's buildings start: the largest
+/// district rises first, the others after it by size, the last this far in.
+pub const STAGGER: f32 = 0.35;
+
+/// How tall a building stands at share `t` of the city's rise, starting at `delay`, as a share
+/// of its height: 0 to 1, eased out (cubic). The renderer's shader computes the same.
+pub fn risen(t: f32, delay: f32) -> f32 {
+    let at = ((t - delay) / (1. - STAGGER)).clamp(0., 1.);
+    1. - (1. - at).powi(3)
+}
+
+impl Scene {
+    /// When each box starts to rise, a share of the rise: buildings by their top-level
+    /// district, the one with most buildings first (0), the one with fewest last (`STAGGER`),
+    /// those on no district with the first; ground and districts never rise (-1: they are
+    /// there from the start, the footprints the buildings grow on).
+    pub fn rise_delays(&self) -> Vec<f32> {
+        let mut sizes: Vec<(usize, usize)> = Vec::new();
+        let rising = self.blocks.iter().filter(|b| matches!(b.kind, Kind::Building | Kind::Lit(_)));
+        for d in rising.filter_map(|b| b.district) {
+            match sizes.iter_mut().find(|(of, _)| *of == d) {
+                Some((_, n)) => *n += 1,
+                None => sizes.push((d, 1)),
+            }
+        }
+        // Most buildings first; ties by number, so the order never depends on hashing.
+        sizes.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+        let last = sizes.len().saturating_sub(1).max(1) as f32;
+        let rank = |d: usize| sizes.iter().position(|(of, _)| *of == d).unwrap_or(0) as f32;
+        (self.blocks.iter())
+            .map(|b| match b.kind {
+                Kind::Building | Kind::Lit(_) => b.district.map_or(0., |d| rank(d) / last * STAGGER),
+                _ => -1.,
+            })
+            .collect()
     }
 }
 
@@ -642,6 +690,32 @@ mod tests {
         let (foot, end) = s.beam(s.blocks.len() - 1).unwrap();
         assert!(end[1] - foot[1] > BEAM, "{foot:?} {end:?}");
         assert_eq!(scene(&atlas, &[], 1.6).beam(0), None, "the ground has none");
+    }
+
+    /// A city rises district by district, the one with most buildings first and the one with
+    /// fewest last; ground and districts stand from the start; a building grows from nothing to
+    /// its height, eased.
+    #[test]
+    fn the_largest_district_rises_first_on_standing_footprints() {
+        let mut files: Vec<(String, u64)> = (0..9).map(|i| (format!("big/f{i}.rs"), 900)).collect();
+        files.extend((0..4).map(|i| (format!("mid/f{i}.rs"), 900)));
+        files.extend([("small/a.rs".to_string(), 900), ("small/b.rs".to_string(), 900), ("root.rs".to_string(), 9)]);
+        let atlas = atlas(&repo(&files));
+        let s = scene(&atlas, &[], 1.6);
+        let delays = s.rise_delays();
+        let of = |dir: &str| {
+            let at = |b: &Block| b.place.is_some_and(|p| atlas.places[p].id.starts_with(dir) && !atlas.places[p].group);
+            s.blocks.iter().zip(&delays).filter(|(b, _)| at(b)).map(|(_, d)| *d).collect::<Vec<_>>()
+        };
+        assert!(of("big/").iter().all(|d| *d == 0.), "{:?}", of("big/"));
+        assert!(of("mid/").iter().all(|d| *d > 0. && *d < STAGGER));
+        assert!(of("small/").iter().all(|d| *d == STAGGER));
+        assert_eq!(of("root.rs"), [0.]);
+        for (b, d) in s.blocks.iter().zip(&delays) {
+            assert_eq!(*d < 0., matches!(b.kind, Kind::Ground | Kind::Plate(_)), "{b:?}");
+        }
+        assert_eq!((risen(0., 0.), risen(1., STAGGER), risen(STAGGER, STAGGER)), (0., 1., 0.));
+        assert!(risen(0.3, 0.) > 0.3, "eased out: fast first");
     }
 
     #[test]

@@ -23,6 +23,9 @@ temp folder, `/bin/sh` terminals, no apps, no repositories or sessions of the us
   ticks_idle           runs of the app's tick over those 30 s (`counts.ticks`): a second of each
                        frame after the first request, then about one a second.
   cpu_stream_pct       its CPU over 10 s while one terminal prints about 2500 lines a second.
+  city_2000_ms, city_20000_ms   with `code_city` on, a repository's tab emptied (its terminal
+                       closed) to its code city's picture in the state, for a made-up tree of
+                       2,000 and 20,000 files (scripts/shot's): read, render and painted.
 
 Startups: median and p90 of --runs launches (cold: --cold-runs). With --compare, both sides
 run alternately, so drift of the machine falls on both; the deltas are printed and the exit
@@ -72,8 +75,11 @@ THRESHOLDS = [
     ("rss_idle_mb", 0.25, 10, 0),
     ("rss_8_terms_mb", 0.25, 10, 0),
     ("cpu_idle_pct", None, 1.0, 2.0),
+    ("city_2000_ms", 0.25, 100, 0),
+    ("city_20000_ms", 0.25, 150, 0),
 ]
-LIMITS = "startup median +20% and +50 ms; RSS +25% and +10 MB; idle CPU above 2% of a core and +1 point."
+LIMITS = ("startup median +20% and +50 ms; RSS +25% and +10 MB; idle CPU above 2% of a core and +1 point; "
+          "code city +25% and +100 ms (20,000 files: +150 ms).")
 
 
 # proc_pid_rusage(2): CPU times, wakeups, resident size and phys_footprint of a pid we started.
@@ -273,10 +279,35 @@ def long_run(binary):
         inst.close()
 
 
+def city(binary, scratch, files):
+    """Milliseconds from a repository's tab emptied to its code city painted (`city.picture`),
+    a made-up tree of `files` files."""
+    # Resolved: the repository listed and the one opened are the same string (`/tmp` is a link).
+    tree = os.path.realpath(os.path.join(scratch, f"city-{files}"))
+    if not os.path.isdir(tree):
+        shot.made_up_tree(tree, files)
+    inst = launch(binary, {"OTTOSPACE_FEATURES": "code_city", "GIT_CONFIG_GLOBAL": "/dev/null"})
+    try:
+        inst.ok({"cmd": "repo_add", "path": tree})
+        inst.wait("the repository listed", lambda: shot.path_get(inst.state(), "repos_bar.0") is not None)
+        inst.ok({"cmd": "open_repo", "path": tree})
+        start = time.perf_counter()
+        inst.ok({"cmd": "close"})
+        inst.wait("the city", lambda: shot.path_get(inst.state(), "city.picture") is not None, timeout=60)
+        return (time.perf_counter() - start) * 1000
+    finally:
+        inst.close()
+
+
 def stats(values):
     values = sorted(values)
     p90 = values[min(len(values) - 1, max(0, -(-len(values) * 9 // 10) - 1))]  # nearest rank
     return {"median": statistics.median(values), "p90": p90, "runs": [round(v, 1) for v in values]}
+
+
+def order_of(names, i):
+    """Each side in turn, alternating which goes first."""
+    return names if i % 2 == 0 else names[::-1]
 
 
 def startups(sides, args, scratch, raw, templates):
@@ -344,10 +375,17 @@ def bench(sides, args, scratch):
         for name in names:
             for key, runs in again[name].items():
                 raw[name][key] += runs
+    say("code city ...")
+    cities = {name: {2000: [], 20000: []} for name in names}
+    for i in range(max(1, args.runs // 2)):
+        for name in order_of(names, i):
+            for files in cities[name]:
+                cities[name][files].append(city(sides[name], scratch, files))
     result = {}
     for name in names:
         say(f"memory and CPU, {name} ({IDLE_S + STREAM_S + 20} s) ...")
         result[name] = {**startup_stats(raw[name]), **{k: v if v is None else round(v, 2) for k, v in long_run(sides[name]).items()}}
+        result[name].update({f"city_{files}_ms": stats(runs) for files, runs in cities[name].items()})
     return result, sorted(held)
 
 
@@ -368,6 +406,8 @@ ROWS = [
     ("dial_frames_idle", f"  dial frames, idle {IDLE_S} s"),
     ("ticks_idle", f"  tick runs, idle {IDLE_S} s"),
     ("cpu_stream_pct", f"CPU, a terminal streaming {STREAM_S} s (%)"),
+    ("city_2000_ms", "code city, 2,000 files: tab emptied to picture (ms)"),
+    ("city_20000_ms", "code city, 20,000 files (ms)"),
 ]
 
 
