@@ -19,6 +19,7 @@ use gpui::{
 };
 use ottospace_core::Action;
 use ottospace_core::atlas::{self, Atlas};
+use ottospace_core::city_labels::{self, Candidate, Tier};
 use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::model::Origin;
 use ottospace_core::model::city::{At, CameraStep, Who};
@@ -59,12 +60,13 @@ const MOST_BYTES: u64 = 4 << 20;
 const MOST_FILES: usize = 20_000;
 /// Cities kept, by folder: a task's tab shown again draws at once.
 const KEPT: usize = 8;
-/// Names of districts on their plates, at most, and their tier at most (2: a folder of the root
-/// and the districts on it).
-const MOST_NAMES: usize = 24;
-const NAMED_TIERS: usize = 2;
+/// Folders of this tier and outer are named on their front wall (2: a folder of the root and
+/// the districts on it).
+const WALL_TIERS: usize = 2;
+/// Names are shaped for this many things at most, the largest: a few placed of each.
+const SHAPED: usize = 4 * city_labels::MOST;
 /// A beam's label sits this many points beside its dot; the hovered beam fades in over this long.
-const BESIDE: f32 = 8.;
+const BESIDE: f32 = 6.;
 const FADE: Duration = Duration::from_millis(120);
 /// A place's first city, after its lattice waited for it, rises over this long (its buildings
 /// grow, district by district); where a frame of the rise renders slower than `RISE_BUDGET_US`,
@@ -272,21 +274,23 @@ impl Key {
     }
 }
 
-/// A district's name on its plate: where it starts and how wide the plate's edge is there, in
-/// shares of the picture.
-struct Name {
+/// A thing the picture may name (`city_labels`): its place, how it is named, its name, its
+/// bounds and the edge its name hangs from, in shares of the picture.
+struct Mark {
+    place: usize,
+    tier: Tier,
     text: String,
-    at: (f32, f32),
-    room: f32,
+    bounds: [f32; 4],
+    edge: [(f32, f32); 2],
 }
 
-/// A picture made: where, in shares of it, the lit buildings and the districts' names are; the
-/// scene and plan it shows, for what the pointer is over.
+/// A picture made: where, in shares of it, the lit buildings and the things it may name are;
+/// the scene and plan it shows, for what the pointer is over.
 struct Made {
     key: Key,
     image: Arc<RenderImage>,
     lit: Vec<([f32; 4], (f32, f32))>,
-    names: Vec<Name>,
+    marks: Vec<Mark>,
     scene: Scene,
     plan: Arc<Atlas>,
     places: usize,
@@ -309,10 +313,11 @@ struct Place {
     measured: bool,
     /// The scale of the window it is in.
     scale: f32,
-    /// Of the last paint: where, in window points, in which window, and how many names.
+    /// Of the last paint: where, in window points, in which window, and its names (by place,
+    /// where); kept first by the next (`city_labels::place`).
     bounds: Bounds<Pixels>,
     window: Option<WindowId>,
-    labels: usize,
+    names: Vec<(usize, Tier, Bounds<Pixels>)>,
     /// The box the user's pointer is over (an index into the scene's blocks), where that pointer
     /// was (found again in a new picture), and its beam as the last paint drew it.
     hovered: Option<usize>,
@@ -366,12 +371,14 @@ struct Icon {
     fan: (usize, usize),
 }
 
-/// A hovered box's beam as drawn: whether a file's, whether lit, its foot and end, its label.
+/// A hovered box's beacon as drawn: whether a file's, whether lit; a file's beam (foot and end)
+/// or a folder's outline (its top face's corners); its label.
 #[derive(Clone, Copy)]
 struct Beacon {
     file: bool,
     lit: bool,
-    beam: [f32; 4],
+    beam: Option<[f32; 4]>,
+    outline: Option<[[f32; 2]; 4]>,
     label: Bounds<Pixels>,
 }
 
@@ -462,33 +469,32 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Option<(Key, Scene)>
             Some(([x, y, w, h], (tx, ty)))
         })
         .collect();
-    // A district is named along the back edge of its plate, from its left end on screen, outer
-    // tiers first; a district on another is named from it (`ui` on `src`, not `src/ui`).
-    let mut plates: Vec<(usize, usize, &scene::Block)> = (scene.blocks.iter())
-        .filter_map(|b| match (b.kind, b.place) {
-            (Kind::Plate(tier), Some(place)) if tier <= NAMED_TIERS => Some((tier, place, b)),
-            _ => None,
+    // What may be named: the top two folder tiers on their front wall, deeper folders and files
+    // over their top (folders in capitals). None while the city rises.
+    let rising = key.rise < 1000;
+    let marks = (scene.blocks.iter().enumerate())
+        .filter(|_| !rising)
+        .filter_map(|(i, b)| {
+            let place = b.place?;
+            let tier = match b.kind {
+                Kind::Plate(tier) if tier <= WALL_TIERS => Tier::Wall,
+                Kind::Plate(_) => Tier::Folder,
+                Kind::Building | Kind::Lit(_) => Tier::File,
+                Kind::Ground => return None,
+            };
+            let edge = match tier {
+                Tier::Wall => scene.front_edge(i)?,
+                _ => camera.project(b.top()).map(|top| [top, top])?,
+            };
+            let label = &plan.places[place].label;
+            let text = if tier == Tier::File { label.clone() } else { label.to_uppercase() };
+            Some(Mark { place, tier, text, bounds: camera.bounds(b)?, edge })
         })
-        .collect();
-    plates.sort_by_key(|(tier, ..)| *tier);
-    let ids: Vec<&str> =
-        plates.iter().filter(|(tier, ..)| *tier < NAMED_TIERS).map(|(_, p, _)| plan.places[*p].id.as_str()).collect();
-    let names = (plates.iter())
-        .filter_map(|(_, place, b)| {
-            let id = plan.places[*place].id.as_str();
-            let outer =
-                ids.iter().filter_map(|outer| id.strip_prefix(outer)?.strip_prefix('/')).min_by_key(|rest| rest.len());
-            let one = camera.project([b.min[0], b.max[1], b.max[2]])?;
-            let other = camera.project([b.max[0], b.max[1], b.max[2]])?;
-            let at = if one.0 <= other.0 { one } else { other };
-            Some(Name { text: outer.unwrap_or(id).to_string(), at, room: (other.0 - one.0).abs() })
-        })
-        .take(MOST_NAMES)
         .collect();
     let groups = plan.places.iter().filter(|p| p.group).count();
     let render_us = started.elapsed().as_micros() as u64;
     let (places, plan, used) = (plan.places.len(), plan.clone(), Instant::now());
-    Ok(Made { key: key.clone(), image, lit, names, scene, plan, places, groups, render_us, used })
+    Ok(Made { key: key.clone(), image, lit, marks, scene, plan, places, groups, render_us, used })
 }
 
 impl Drawn {
@@ -543,7 +549,7 @@ impl Drawn {
             (made.iter().flat_map(|made| &made.lit)).map(|(_, (tx, ty))| [x + tx * w, y + ty * h]).collect();
         let beacon = place.and_then(|place| place.beacon);
         let hovered = beacon
-            .map(|b| serde_json::json!({ "file": b.file, "lit": b.lit, "beam": b.beam, "beacon": rect(b.label) }));
+            .map(|b| serde_json::json!({ "file": b.file, "lit": b.lit, "beam": b.beam, "outline": b.outline, "beacon": rect(b.label) }));
         let lit_beams = place.map(|place| place.lit_beams.clone()).unwrap_or_default();
         let agents: Vec<serde_json::Value> = (place.iter().flat_map(|place| &place.icons))
             .map(|i| {
@@ -553,10 +559,18 @@ impl Drawn {
                 })
             })
             .collect();
+        let tier = |t: Tier| match t {
+            Tier::Wall => "wall",
+            Tier::Folder => "folder",
+            Tier::File => "file",
+        };
+        let names: Vec<_> = (place.iter().flat_map(|place| &place.names))
+            .map(|(_, t, r)| serde_json::json!({ "tier": tier(*t), "rect": rect(*r) }))
+            .collect();
         serde_json::json!({
             "on": on(floor), "places": made.map(|made| made.places), "groups": made.map(|made| made.groups),
             "picture": made.map(|made| made.key.size), "bounds": [x, y, w, h], "scale": scale,
-            "lit": lit, "labels": place.map_or(0, |place| place.labels), "failed": failed, "reads": reads,
+            "lit": lit, "labels": names.len(), "names": names, "spots": made.map(|made| spots(made, [x, y, w, h])), "failed": failed, "reads": reads,
             "renders": self.renders, "paints": self.paints, "render_us": made.map(|made| made.render_us),
             "hovered": hovered, "lit_tops": tops, "lit_beams": lit_beams, "pictures": self.in_use(),
             "first_ms": place.and_then(|place| place.first_ms),
@@ -1139,6 +1153,31 @@ impl Workspace {
     }
 }
 
+/// For the state of a test run: a point of the picture (window points) over a folder's own
+/// ground (an outer district's), and one over a building's top, for a test's pointer; each null
+/// with none. A few of each are tried: the state is asked often.
+fn spots(made: &Made, [x, y, w, h]: [f32; 4]) -> serde_json::Value {
+    let s = &made.scene;
+    let hits = |i: usize, (px, py): (f32, f32)| (s.hit(px, py) == Some(i)).then(|| [x + px * w, y + py * h]);
+    let folder = (s.blocks.iter().enumerate()).filter(|(_, b)| b.kind == Kind::Plate(1)).take(8).find_map(|(i, _)| {
+        // From the middle of its near edge toward its middle: the kerb first.
+        let [l, r] = s.front_edge(i)?;
+        let o = s.outline(i)?;
+        let mid = (o.iter().map(|p| p.0).sum::<f32>() / 4., o.iter().map(|p| p.1).sum::<f32>() / 4.);
+        let near = ((l.0 + r.0) / 2., (l.1 + r.1) / 2.);
+        (1..10).find_map(|k| {
+            let t = k as f32 / 20.;
+            hits(i, (near.0 + (mid.0 - near.0) * t, near.1 + (mid.1 - near.1) * t))
+        })
+    });
+    let camera = s.camera;
+    let file = (s.blocks.iter().enumerate()).filter(|(_, b)| b.kind == Kind::Building).take(64).find_map(|(i, b)| {
+        let (tx, ty) = camera?.project(b.top())?;
+        hits(i, (tx, ty + 1. / h))
+    });
+    serde_json::json!({ "folder": folder, "file": file })
+}
+
 /// Where a place is, for the state of a test run: `"tab"`, `{"pane": id}` or `{"out": tab}`.
 fn on(floor: Floor) -> serde_json::Value {
     match floor {
@@ -1171,7 +1210,8 @@ fn paint(
     let mut drawn = drawn.borrow_mut();
     let Some(place) = drawn.places.get_mut(&floor) else { return };
     // Nothing of an earlier paint is on show until this one draws it.
-    (place.beacon, place.labels, place.window) = (None, 0, Some(window.window_handle().window_id()));
+    let kept: Vec<usize> = place.names.drain(..).map(|(key, ..)| key).collect();
+    (place.beacon, place.window) = (None, Some(window.window_handle().window_id()));
     place.lit_beams.clear();
     let (bounds, hovered, pointer) = (place.bounds, place.hovered, place.pointer);
     let was = std::mem::take(&mut place.icons);
@@ -1234,23 +1274,46 @@ fn paint(
         window.text_system().shape_line(text.to_string().into(), px(size), &[run], None)
     };
     let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
-    let mut drawn_names: Vec<Bounds<Pixels>> = Vec::new();
-    // A name with a line break in it is not drawn: `shape_line` takes one line. Nor one wider
-    // than its plate's edge, or over the hints or another name.
-    for name in made.names.iter().filter(|name| !name.text.contains(char::is_control)) {
-        let line = shape(&name.text, Hsla::from(rgb(theme::MUTED)), theme::TEXT_2XS, window);
-        let at = bounds.origin + point(px(name.at.0 * w + 4.), px(name.at.1 * h + 2.));
-        let room = Bounds { origin: at, size: gpui::size(line.width, px(14.)) };
-        if f32::from(line.width) + 8. <= name.room * w
-            && !room.intersects(&clear)
-            && bounds.contains(&room.bottom_right())
-            && !drawn_names.iter().any(|other| other.intersects(&room))
-            && line.paint(at, px(14.), window, cx).is_ok()
-        {
-            drawn_names.push(room);
+    // Names by `city_labels`: the things large enough on screen, the largest shaped, placed with
+    // no overlap and clear of the hints. One with a line break is not named: `shape_line` takes one.
+    let at = |(x, y): (f32, f32)| [x * w, y * h];
+    let local = |b: Bounds<Pixels>| {
+        let o = b.origin - bounds.origin;
+        [f32::from(o.x), f32::from(o.y), f32::from(b.size.width), f32::from(b.size.height)]
+    };
+    let avoid: Vec<[f32; 4]> = (hints.size.width > px(0.)).then(|| local(clear)).into_iter().collect();
+    let mut marks: Vec<(&Mark, [f32; 4])> = (made.marks.iter())
+        .filter(|m| !m.text.contains(char::is_control))
+        .map(|m| (m, [m.bounds[0] * w, m.bounds[1] * h, m.bounds[2] * w, m.bounds[3] * h]))
+        .filter(|(m, b)| city_labels::sized(m.tier, *b, [w, h]))
+        .collect();
+    let extent = |b: &[f32; 4]| b[2].max(b[3]);
+    marks.sort_by(|a, b| a.0.tier.cmp(&b.0.tier).then(extent(&b.1).total_cmp(&extent(&a.1))));
+    marks.truncate(SHAPED);
+    let style_of = |tier: Tier| match tier {
+        Tier::Wall => (theme::TEXT_XS, Hsla::from(rgb(theme::MUTED))),
+        Tier::Folder => (theme::TEXT_2XS, Hsla::from(rgb(theme::MUTED))),
+        Tier::File => (theme::TEXT_2XS, Hsla::from(rgb(theme::MUTED)).opacity(0.8)),
+    };
+    let lines: Vec<gpui::ShapedLine> =
+        marks.iter().map(|(m, _)| shape(&m.text, style_of(m.tier).1, style_of(m.tier).0, window)).collect();
+    let candidates: Vec<Candidate> = (marks.iter().zip(&lines))
+        .map(|((m, b), line)| Candidate {
+            key: m.place,
+            tier: m.tier,
+            bounds: *b,
+            edge: m.edge.map(at),
+            size: [f32::from(line.width), style_of(m.tier).0 + 4.],
+        })
+        .collect();
+    let mut names = Vec::new();
+    for (key, r) in city_labels::place(&candidates, [w, h], &avoid, &kept) {
+        let Some(i) = candidates.iter().position(|c| c.key == key) else { continue };
+        let origin = bounds.origin + point(px(r[0]), px(r[1]));
+        if lines[i].paint(origin, px(r[3]), window, cx).is_ok() {
+            names.push((key, candidates[i].tier, Bounds { origin, size: gpui::size(px(r[2]), px(r[3])) }));
         }
     }
-    let labels = drawn_names.len();
     let to_window = |p: [f32; 3]| {
         let (x, y) = made.scene.camera?.project(p)?;
         Some(bounds.origin + point(px(x * w), px(y * h)))
@@ -1265,7 +1328,7 @@ fn paint(
         let Kind::Lit(colour) = block.kind else { continue };
         let Some((foot, end)) = beam_of(i) else { continue };
         if let Some((end, _)) = fit_beam(foot, end, None, bounds, clear) {
-            paint_beam(window, foot, end, Hsla::from(rgb(colour)).opacity(0.85), 1., 2.);
+            paint_beam(window, foot, end, Hsla::from(rgb(colour)).opacity(0.85), 1., 2., false);
             lit_beams.push([foot.x, foot.y, end.x, end.y].map(f32::from));
         }
     }
@@ -1287,9 +1350,11 @@ fn paint(
     };
     let shown_for = since.map_or(FADE, |(_, since)| since.elapsed());
     let alpha = if crate::dial::calm() { 1. } else { (shown_for.as_secs_f32() / FADE.as_secs_f32()).min(1.) };
+    // A folder's has no beam: none worked out for it.
+    let folder = |i: usize| made.scene.blocks.get(i).is_some_and(|b| matches!(b.kind, Kind::Plate(_)));
     let beacon = hovered.and_then(|i| {
-        let (foot, end) = beam_of(i)?;
-        beacon(made, i, (foot, end), alpha, bounds, clear, window, cx, &shape)
+        let beam = if folder(i) { None } else { beam_of(i) };
+        beacon(made, i, beam, pointer, alpha, bounds, clear, window, cx, &shape)
     });
     let fades = beacon.is_some() && alpha < 1.;
     if fades {
@@ -1307,7 +1372,7 @@ fn paint(
         made.used = Instant::now();
     }
     if let Some(place) = drawn.places.get_mut(&floor) {
-        (place.labels, place.beacon, place.shown) = (labels, beacon, Some(shown));
+        (place.names, place.beacon, place.shown) = (names, beacon, Some(shown));
         (place.fading, place.lit_beams) = (since, lit_beams);
         (place.fade, place.first_ms) = (fade, first_ms);
         (place.icons, place.hovered_agent) = (icons, hovered_agent);
@@ -1451,17 +1516,35 @@ fn fit_beam(
             return None;
         }
         let Some(size) = label else { return Some((end, None)) };
-        let at = |left: Pixels| Bounds { origin: point(left, end.y - size.height / 2.), size };
-        let sides = [at(end.x + px(BESIDE)), at(end.x - px(BESIDE) - size.width)];
-        let label = sides.into_iter().find(|b| clear_of(b) && inside(b))?;
-        Some((end, Some(label)))
+        let o = bounds.origin;
+        let (dot, view) = ([end.x - o.x, end.y - o.y], [bounds.size.width, bounds.size.height]);
+        let avoid = [[clear.origin.x - o.x, clear.origin.y - o.y, clear.size.width, clear.size.height].map(f32::from)];
+        let size_of = [f32::from(size.width), f32::from(size.height)];
+        let r = city_labels::beside(dot.map(f32::from), size_of, BESIDE, view.map(f32::from), &avoid)?;
+        Some((end, Some(Bounds { origin: o + point(px(r[0]), px(r[1])), size })))
     })
 }
 
 /// A beam: a line from `foot` up to `end`, faint at the box and brightest at its dot (as light
-/// falling from it), and the dot.
-fn paint_beam(window: &mut Window, foot: Point<Pixels>, end: Point<Pixels>, colour: Hsla, width: f32, dot: f32) {
+/// falling from it), and the dot; with `glow`, a soft halo round both (the hovered one).
+#[allow(clippy::too_many_arguments)]
+fn paint_beam(
+    window: &mut Window,
+    foot: Point<Pixels>,
+    end: Point<Pixels>,
+    colour: Hsla,
+    width: f32,
+    dot: f32,
+    glow: bool,
+) {
     const STEPS: usize = 6;
+    if glow {
+        let mut halo = PathBuilder::stroke(px(width * 4.));
+        halo.move_to(foot);
+        halo.line_to(end);
+        crate::dial::stroke(window, halo, colour.opacity(colour.a * 0.18));
+        crate::dial::disc(window, end, dot * 2.6, colour.opacity(colour.a * 0.22));
+    }
     for step in 0..STEPS {
         let (a, b) = (step as f32 / STEPS as f32, (step + 1) as f32 / STEPS as f32);
         let mut line = PathBuilder::stroke(px(width));
@@ -1472,14 +1555,17 @@ fn paint_beam(window: &mut Window, foot: Point<Pixels>, end: Point<Pixels>, colo
     crate::dial::disc(window, end, dot, colour);
 }
 
-/// The hovered box's beacon: its beam (`foot` to `end`, window points) in the text's colour, and
-/// beside its dot a label: the file's path in the checkout, or the district's, cut in the middle
-/// if long. Never over the hints (`fit_beam`). `alpha`: how far it has faded in.
+/// The hovered box's beacon, and beside it a label: the file's path in the checkout, or the
+/// district's, cut in the middle if long. A file's is its beam (`beam`: foot to end, window
+/// points) in the text's colour with the label by its dot, never over the hints (`fit_beam`); a
+/// folder's is the outline of its top face, its label under its near edge or at the `pointer`
+/// (`city_labels::callout`). `alpha`: how far it has faded in.
 #[allow(clippy::too_many_arguments)]
 fn beacon(
     made: &Made,
     i: usize,
-    (foot, end): (Point<Pixels>, Point<Pixels>),
+    beam: Option<(Point<Pixels>, Point<Pixels>)>,
+    pointer: Option<Point<Pixels>>,
     alpha: f32,
     bounds: Bounds<Pixels>,
     clear: Bounds<Pixels>,
@@ -1490,9 +1576,21 @@ fn beacon(
     let block = made.scene.blocks.get(i)?;
     let place = made.plan.places.get(block.place?)?;
     let colour = Hsla::from(rgb(theme::TEXT)).opacity(alpha);
-    // One line, as wide as the wider side of the dot allows: `src/…/views/list.rs`.
-    let side = (bounds.right() - foot.x.max(end.x)).max(foot.x.min(end.x) - bounds.left());
-    let most = (side - px(BESIDE + 12.)).max(px(40.));
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let to_window = |(x, y): (f32, f32)| bounds.origin + point(px(x * w), px(y * h));
+    // A folder: its outline, none if the camera cuts its top face (then its label by the pointer).
+    let folder = matches!(block.kind, Kind::Plate(_));
+    let outline = folder.then(|| made.scene.outline(i)).flatten().map(|o| o.map(to_window));
+    let beam = if folder { None } else { Some(beam?) };
+    // One line, as wide as the wider side of the dot allows (a folder's: two thirds of the city):
+    // `src/…/views/list.rs`.
+    let most = match beam {
+        Some((foot, end)) => {
+            (bounds.right() - foot.x.max(end.x)).max(foot.x.min(end.x) - bounds.left()) - px(BESIDE + 12.)
+        }
+        None => bounds.size.width * (2. / 3.),
+    };
+    let most = most.max(px(40.));
     let mut text: String = place.id.chars().map(|c| if c.is_control() { '?' } else { c }).collect();
     let line = loop {
         let line = shape(&text, colour, theme::TEXT_XS, window);
@@ -1506,14 +1604,40 @@ fn beacon(
         text = chars[..head].iter().chain(['…'].iter()).chain(&chars[count - tail..]).collect();
     };
     let size = gpui::size(line.width + px(12.), px(18.));
-    let (end, label) = fit_beam(foot, end, Some(size), bounds, clear)?;
-    let label = label?;
-    paint_beam(window, foot, end, colour, 1.5, 3.);
+    let (label, beam, outline) = match beam {
+        Some((foot, end)) => {
+            let (end, label) = fit_beam(foot, end, Some(size), bounds, clear)?;
+            paint_beam(window, foot, end, colour, 2., 3.5, true);
+            (label?, Some([foot.x, foot.y, end.x, end.y].map(f32::from)), None)
+        }
+        None => {
+            // Its outline in the accent colour, a soft halo under it.
+            let cyan = Hsla::from(rgb(theme::PRIMARY)).opacity(alpha);
+            for (width, colour) in [(5., cyan.opacity(0.2 * alpha)), (1.5, cyan)] {
+                let Some(corners) = outline else { break };
+                let mut path = PathBuilder::stroke(px(width));
+                path.move_to(corners[3]);
+                corners.iter().for_each(|c| path.line_to(*c));
+                crate::dial::stroke(window, path, colour);
+            }
+            let local = |p: Point<Pixels>| [f32::from(p.x - bounds.origin.x), f32::from(p.y - bounds.origin.y)];
+            let avoid = [
+                local(clear.origin)[0],
+                local(clear.origin)[1],
+                f32::from(clear.size.width),
+                f32::from(clear.size.height),
+            ];
+            let at = pointer.map_or_else(|| local(bounds.center()), local);
+            let size_of = [f32::from(size.width), f32::from(size.height)];
+            let r = city_labels::callout(outline.map(|o| o.map(local)), size_of, at, [w, h], &[avoid]);
+            let label = Bounds { origin: bounds.origin + point(px(r[0]), px(r[1])), size };
+            (label, None, outline.map(|o| o.map(|c| [f32::from(c.x), f32::from(c.y)])))
+        }
+    };
     let backing = Hsla::from(rgb(theme::BACKGROUND)).opacity(0.8 * alpha);
     window.paint_quad(fill(label, backing).corner_radii(px(theme::RADIUS_MD)));
     let _ = line.paint(label.origin + point(px(6.), px(2.)), px(14.), window, cx);
-    let beam = [foot.x, foot.y, end.x, end.y].map(f32::from);
-    Some(Beacon { file: !place.group, lit: matches!(block.kind, Kind::Lit(_)), beam, label })
+    Some(Beacon { file: !place.group, lit: matches!(block.kind, Kind::Lit(_)), beam, outline, label })
 }
 
 #[cfg(test)]

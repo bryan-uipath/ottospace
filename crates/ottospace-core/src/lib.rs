@@ -16,6 +16,7 @@ pub mod caps_return;
 pub mod capture;
 pub mod capture_model;
 pub mod cell_art;
+pub mod city_labels;
 pub mod clip;
 pub mod clone;
 pub mod commands;

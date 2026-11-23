@@ -1,0 +1,32 @@
+# The code city's hover (`code_city`): the user's pointer on a folder's own ground (`city.spots`:
+# its outline, its label by its near edge) and on a building (its beam, its label beside the
+# dot). code-city's small repository (`app`; city-hover/ is a link to code-city/) and a made-up
+# tree of 2,000 (`big`). After only: the base has no `city.spots`.
+{"env":{"OTTOSPACE_FEATURES":"code_city"}}
+{"tree":"repos/big","files":2000}
+{"cmd":"repo_add","path":"{ROOT}/repos/big"}
+{"until":"repos_bar.1"}
+{"cmd":"section","section":"repos"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"close"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"until":"city.picture","timeout_ms":30000}
+{"settle":800}
+{"hover":{"rect":"city.spots.folder"}}
+{"settle":300}
+{"shot":"app-folder"}
+{"hover":{"rect":"city.spots.file"}}
+{"settle":300}
+{"shot":"app-file"}
+{"cmd":"open_repo","path":"{ROOT}/repos/big"}
+{"cmd":"close"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"until":"city.places","is":2096,"timeout_ms":60000}
+{"settle":800}
+{"hover":{"rect":"city.spots.folder"}}
+{"settle":300}
+{"shot":"big-folder"}
+{"hover":{"rect":"city.spots.file"}}
+{"settle":300}
+{"shot":"big-file"}

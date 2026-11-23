@@ -1686,8 +1686,11 @@ export interface CityDrawn {
   lit_tops: [number, number][];
   /** Each lit building's beam as drawn: its foot and its dot, `[x0, y0, x1, y1]`. */
   lit_beams: [number, number, number, number][];
-  /** Districts named on the last paint. */
+  /** Things named on the last paint, and each name's box and tier (`city_labels`): never the name. */
   labels: number;
+  names: CityName[];
+  /** A point over an outer district's own ground and one over a building, for a test's pointer. */
+  spots: CitySpots | null;
   /** Why there is no picture (no GPU, a failed render): the lattice is drawn instead. */
   failed: string | null;
   /** How often the file list was read, a picture made, and the city painted. */
@@ -1733,10 +1736,22 @@ export interface CityView {
 export interface CityHovered {
   file: boolean;
   lit: boolean;
-  /** Its foot and its dot, `[x0, y0, x1, y1]`. */
-  beam: [number, number, number, number];
-  /** Its label, beside the dot. */
+  /** A file's beam: its foot and its dot, `[x0, y0, x1, y1]`; null for a folder. */
+  beam: [number, number, number, number] | null;
+  /** A folder's outline: its top face's four corners; null for a file. */
+  outline: [number, number][] | null;
+  /** Its label: beside the dot, or by the folder's near edge or the pointer. */
   beacon: Rect;
+}
+
+export interface CitySpots {
+  folder: [number, number] | null;
+  file: [number, number] | null;
+}
+
+export interface CityName {
+  tier: "wall" | "folder" | "file";
+  rect: Rect;
 }
 
 /** What the home screen drew, in window points. */

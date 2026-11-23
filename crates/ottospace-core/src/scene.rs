@@ -51,6 +51,8 @@ pub const LOWER: f32 = 0.1;
 /// A beam rises above a box's top as high as the city's highest top stands, and at least this
 /// (plan units: the plan is 1 deep): in a city of few files towers are tall, and so are beams.
 const BEAM: f32 = 0.2;
+/// And on screen at least this share of the picture's height, where the picture's top allows.
+const BEAM_SHARE: f32 = 0.22;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Kind {
@@ -288,7 +290,11 @@ impl Camera {
     /// Where a point is in the picture, as shares of it (0,0 top left; 1,1 bottom right).
     /// `None` behind the camera.
     pub fn project(&self, p: [f32; 3]) -> Option<(f32, f32)> {
-        let m = self.matrix();
+        self.project_by(&self.matrix(), p)
+    }
+
+    /// `project`, by the camera's matrix made once.
+    fn project_by(&self, m: &[[f32; 4]; 4], p: [f32; 3]) -> Option<(f32, f32)> {
         let clip = |row: usize| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row];
         let w = clip(3);
         (w > self.near * 0.5).then(|| ((clip(0) / w + 1.) / 2., (1. - clip(1) / w) / 2.))
@@ -296,7 +302,8 @@ impl Camera {
 
     /// Where a box is in the picture: the bounds of its corners, as shares (x, y, w, h).
     pub fn bounds(&self, block: &Block) -> Option<[f32; 4]> {
-        let points: Option<Vec<(f32, f32)>> = block.corners().map(|p| self.project(p)).collect();
+        let m = self.matrix();
+        let points: Option<Vec<(f32, f32)>> = block.corners().map(|p| self.project_by(&m, p)).collect();
         let points = points?;
         let (x0, y0) = points.iter().fold((f32::MAX, f32::MAX), |(x, y), p| (x.min(p.0), y.min(p.1)));
         let (x1, y1) = points.iter().fold((f32::MIN, f32::MIN), |(x, y), p| (x.max(p.0), y.max(p.1)));
@@ -510,9 +517,20 @@ impl Scene {
     pub fn beam(&self, i: usize) -> Option<([f32; 3], [f32; 3])> {
         let (camera, block) = (self.camera?, self.blocks.get(i).filter(|b| b.kind != Kind::Ground)?);
         let foot = block.top();
-        let beam = self.beam_height();
         let up = |h: f32| [foot[0], foot[1] + h, foot[2]];
         let inside = |h: f32| camera.project(up(h)).is_some_and(|(_, y)| y >= MARGIN);
+        // Long enough to see: at least `BEAM_SHARE` of the picture (a small city's was a stub).
+        let (_, foot_y) = camera.project(foot)?;
+        let short = |h: f32| camera.project(up(h)).is_none_or(|(_, y)| foot_y - y < BEAM_SHARE);
+        let mut beam = self.beam_height();
+        if short(beam) && inside(beam) {
+            let (mut low, mut high) = (beam, beam * 16.);
+            for _ in 0..24 {
+                let mid = (low + high) / 2.;
+                if short(mid) && inside(mid) { low = mid } else { high = mid }
+            }
+            beam = high;
+        }
         if inside(beam) {
             return Some((foot, up(beam)));
         }
@@ -549,6 +567,35 @@ impl Scene {
                 Mark { over: *here, at: point, fan: (k, over.iter().filter(|other| *other == here).count()) }
             })
             .collect()
+    }
+
+    /// Box `i`'s top face on screen (shares of the picture), its corners in turn; none behind
+    /// the camera or for the ground.
+    pub fn outline(&self, i: usize) -> Option<[(f32, f32); 4]> {
+        let (camera, b) = (self.camera?, self.blocks.get(i).filter(|b| b.kind != Kind::Ground)?);
+        let y = b.max[1];
+        let corners =
+            [[b.min[0], y, b.min[2]], [b.max[0], y, b.min[2]], [b.max[0], y, b.max[2]], [b.min[0], y, b.max[2]]];
+        let [a, b, c, d] = corners.map(|p| camera.project(p));
+        Some([a?, b?, c?, d?])
+    }
+
+    /// The top edge of box `i`'s side that faces the camera most, on screen (shares of the
+    /// picture), its left end first: where a terrace's name is written.
+    pub fn front_edge(&self, i: usize) -> Option<[(f32, f32); 2]> {
+        let (camera, b) = (self.camera?, self.blocks.get(i).filter(|b| b.kind != Kind::Ground)?);
+        let (y, mid) = (b.max[1], b.top());
+        // Each side: its outward direction and its top edge's ends.
+        let sides = [
+            ([0., 0., -1.], [b.min[0], y, b.min[2]], [b.max[0], y, b.min[2]]),
+            ([0., 0., 1.], [b.min[0], y, b.max[2]], [b.max[0], y, b.max[2]]),
+            ([-1., 0., 0.], [b.min[0], y, b.min[2]], [b.min[0], y, b.max[2]]),
+            ([1., 0., 0.], [b.max[0], y, b.min[2]], [b.max[0], y, b.max[2]]),
+        ];
+        let facing = |n: [f32; 3]| dot(n, unit(sub(camera.eye, mid)));
+        let (_, p, q) = sides.into_iter().max_by(|a, b| facing(a.0).total_cmp(&facing(b.0)))?;
+        let (p, q) = (camera.project(p)?, camera.project(q)?);
+        Some(if p.0 <= q.0 { [p, q] } else { [q, p] })
     }
 
     /// How high a beam rises: the city's highest top, at least `BEAM`.
@@ -834,11 +881,14 @@ mod tests {
                 let (foot, end) = s.beam(i).unwrap();
                 assert_eq!(foot, b.top());
                 assert_eq!((end[0], end[2]), (foot[0], foot[2]), "vertical");
-                assert!(end[1] >= foot[1] && end[1] <= foot[1] + tall + 1e-6, "{foot:?} {end:?}");
+                assert!(end[1] >= foot[1] && end[1] <= foot[1] + 16. * tall + 1e-6, "{foot:?} {end:?}");
                 let (_, y) = camera.project(end).unwrap();
                 assert!(y >= MARGIN - 1e-4, "{aspect}: {y}");
-                assert!(y < camera.project(foot).unwrap().1 || end[1] == foot[1], "up in the picture");
-                full += usize::from(end[1] == foot[1] + tall);
+                let foot_y = camera.project(foot).unwrap().1;
+                assert!(y < foot_y || end[1] == foot[1], "up in the picture");
+                // A share of the picture tall, unless the picture's top cuts it.
+                assert!(foot_y - y >= BEAM_SHARE - 1e-3 || y < MARGIN + 1e-3, "{aspect}: {foot_y} to {y}");
+                full += usize::from(end[1] >= foot[1] + tall - 1e-6);
             }
             assert!(full > 0, "{aspect}: some beam has its whole height");
         }
@@ -849,6 +899,30 @@ mod tests {
         let (foot, end) = s.beam(s.blocks.len() - 1).unwrap();
         assert!(end[1] - foot[1] > BEAM, "{foot:?} {end:?}");
         assert_eq!(scene(&atlas, &[], 1.6, &View::default()).beam(0), None, "the ground has none");
+    }
+
+    /// A district's outline is its top face on screen, and its front edge is the one of those
+    /// four edges nearest the camera: lower in the picture than the edge behind it.
+    #[test]
+    fn a_districts_outline_and_front_edge_are_on_its_top_face() {
+        let atlas = many();
+        for yaw in [0., 34., 120., 250.] {
+            let view = View { yaw, ..View::default() };
+            let s = scene(&atlas, &[], 1.6, &view);
+            let camera = s.camera.unwrap();
+            let (i, b) = s.blocks.iter().enumerate().find(|(_, b)| b.kind == Kind::Plate(1)).unwrap();
+            let outline = s.outline(i).unwrap();
+            let [x, y, w, h] = camera.bounds(b).unwrap();
+            for (px, py) in outline {
+                assert!(px >= x - 1e-4 && px <= x + w + 1e-4 && py >= y - 1e-4 && py <= y + h + 1e-4, "{yaw}");
+            }
+            let [l, r] = s.front_edge(i).unwrap();
+            assert!(l.0 <= r.0 && [l, r].iter().all(|p| outline.contains(p)), "{yaw}: {l:?} {r:?} {outline:?}");
+            // The far edge: the two corners that are not on the front one.
+            let far: Vec<_> = outline.iter().filter(|p| **p != l && **p != r).collect();
+            assert!((l.1 + r.1) / 2. > (far[0].1 + far[1].1) / 2., "{yaw}: front {l:?} {r:?}, far {far:?}");
+        }
+        assert_eq!(scene(&atlas, &[], 1.6, &View::default()).outline(0), None, "the ground has none");
     }
 
     /// A city rises district by district, the one with most buildings first and the one with
