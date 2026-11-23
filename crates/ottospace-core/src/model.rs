@@ -10235,7 +10235,6 @@ impl Model {
         }
     }
 
-    /// The `id` of the tab that holds `pane`, active tab included.
     /// An empty pane alone in its tab, offering no window: its hints and ⌘D fill it.
     pub fn lone_empty(&self, pane: PaneId) -> bool {
         self.pane(pane).is_some_and(|p| p.kind == Kind::Empty)
@@ -10251,6 +10250,7 @@ impl Model {
         }
     }
 
+    /// The `id` of the tab that holds `pane`, active tab included.
     pub fn tab_of(&self, pane: PaneId) -> Option<u32> {
         let index = self.tab_panes().iter().position(|panes| panes.contains(&pane))?;
         self.tabs.get(index).map(|tab| tab.id)

@@ -2637,7 +2637,10 @@ fn the_home_screen_shows_tasks_as_nodes_until_a_pane_opens() {
     assert!(reply["home"].is_null() && otto.control_opt("home:terminal").is_none(), "a pane takes the list's place");
     otto.bounds(&pane_ids(&reply));
     // The empty pane's lattice is kept too: a terminal printing beside it does not build it again.
-    otto.call(json!({"cmd": "split"}));
+    // (A split would fill the lone empty pane: a second one, filled from the picker.)
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "picker"}));
+    otto.call(json!({"cmd": "picker_choose", "index": 0}));
     let printed = |o: &Otto, word: &str| {
         o.call(json!({"cmd": "type", "pane": 2, "text": format!("echo {word}-$((6*7))\r")}));
         o.call(json!({"cmd": "wait", "pane": 2, "pattern": format!("^{word}-42$"), "timeout_ms": 40000}));
@@ -6878,8 +6881,11 @@ fn a_held_key_is_sent_only_for_keys_that_exist() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_users_click_in_a_marks_name_keeps_the_rename_and_one_outside_ends_it() {
     let otto = Otto::launch_with("marks-field", &[MARKS]);
+    // An empty pane 1 and a terminal 2 (a split would fill the lone empty pane: the picker fills a second).
     otto.call(json!({"cmd": "split", "kind": "empty"}));
-    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "picker"}));
+    otto.call(json!({"cmd": "picker_choose", "index": 0}));
     otto.call(json!({"cmd": "mark_add", "pane": 2, "name": "notes"}));
     otto.call(json!({"cmd": "section", "section": "marks"}));
     let rows = otto.wait_for("the row to be drawn", |o| Some(o.drawn()).filter(|s| s["marks"][0]["row"].is_array()));
@@ -8040,7 +8046,7 @@ fn a_task_started_in_a_workspace_makes_it_the_tasks_in_place() {
     let (first, book) = (json!({"kind": "home"}), json!({"kind": "workbook", "id": 1}));
     let task = {
         let mut otto = Otto::launch_with("binds-1", &env);
-        // A workspace made with +, after Home: two tabs, a terminal in each (⌘T's with its empty pane).
+        // A workspace made with +, after Home: two tabs, a terminal in each (⌘D fills ⌘T's empty pane).
         otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
         otto.user_key("cmd-d");
         otto.user_key("cmd-t");
@@ -8048,7 +8054,7 @@ fn a_task_started_in_a_workspace_makes_it_the_tasks_in_place() {
         let tabs = row(&before)[1].1.clone();
         assert_eq!(
             (row(&before).len(), tabs.len(), pane_ids(&before).len(), selected(&before)),
-            (2, 2, 3, book.clone())
+            (2, 2, 2, book.clone())
         );
         // A client's task, opened: the workspace stays the user's. ⇧↵ (for later): so it does.
         otto.call(json!({"cmd": "task_new", "line": "theirs", "open": true}));
