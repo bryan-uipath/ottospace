@@ -1210,16 +1210,16 @@ pub fn paint(
     window: &mut Window,
     cx: &mut App,
 ) {
-    paint_scaled(screen, bounds, cell, 1., focused, window, cx)
+    paint_scaled(screen, bounds, (cell, 1.), focused, link, window, cx)
 }
 
 /// `paint`, every cell and glyph `scale` times its size: a zoomed-out tile's terminal (`zoom`).
 pub fn paint_scaled(
     screen: &Screen,
     bounds: Bounds<Pixels>,
-    cell: Size<Pixels>,
-    scale: f32,
+    (cell, scale): (Size<Pixels>, f32),
     focused: bool,
+    link: &[(usize, usize, usize)],
     window: &mut Window,
     cx: &mut App,
 ) {

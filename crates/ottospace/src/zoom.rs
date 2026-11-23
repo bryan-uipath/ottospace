@@ -223,7 +223,7 @@ impl Workspace {
         let body = if let Some(terminal) = self.terminals.get(&id) {
             let (screen, cell) = (terminal.screen(), self.cell);
             let paint = move |bounds, _, window: &mut Window, cx: &mut gpui::App| {
-                terminal::paint_scaled(&screen, bounds, cell, scale, false, window, cx)
+                terminal::paint_scaled(&screen, bounds, (cell, scale), false, &[], window, cx)
             };
             body.child(canvas(|_, _, _| {}, paint).size_full())
         } else if let Some((buffer, _)) = self.hosted.get(&id).and_then(|hosted| hosted.held()) {
