@@ -19,6 +19,11 @@ pub fn caps_as(n: u8) -> Option<Mapping> {
     (13..=20).contains(&n).then(|| Mapping { src: CAPS_LOCK, dst: 0x7_0000_0068 + u64::from(n - 13) })
 }
 
+/// Whether ottospace could have added `m`: a record naming anything else is not trusted.
+pub fn could_be_ours(m: &Mapping) -> bool {
+    (13..=20).filter_map(caps_as).any(|ours| ours == *m)
+}
+
 /// What to do at start.
 #[derive(Debug, PartialEq)]
 pub enum Start {
@@ -30,14 +35,14 @@ pub enum Start {
     Theirs(u64),
 }
 
-/// The table with `ours` added. `left`: the entry an earlier run recorded as its own.
+/// The table with `ours` added. `left`: the entries an earlier run recorded as its own.
 /// E.g. `[A→B]` → `Set([A→B, ⇪→F18])`; `[⇪→Esc]` → `Theirs(Esc)`.
-pub fn add(table: &[Mapping], ours: Mapping, left: Option<Mapping>) -> Start {
+pub fn add(table: &[Mapping], ours: Mapping, left: &[Mapping]) -> Start {
     match table.iter().position(|m| m.src == ours.src) {
         None => Start::Set(table.iter().copied().chain([ours]).collect()),
-        Some(at) if Some(table[at]) == left && table[at] == ours => Start::Kept,
+        Some(at) if left.contains(&table[at]) && table[at] == ours => Start::Kept,
         // Its own, to another return key: changed in place.
-        Some(at) if Some(table[at]) == left => {
+        Some(at) if left.contains(&table[at]) => {
             let mut table = table.to_vec();
             table[at] = ours;
             Start::Set(table)
@@ -46,12 +51,15 @@ pub fn add(table: &[Mapping], ours: Mapping, left: Option<Mapping>) -> Start {
     }
 }
 
-/// The table without `ours`, every other entry as it was. None: it is not there.
-pub fn remove(table: &[Mapping], ours: Mapping) -> Option<Vec<Mapping>> {
-    let at = table.iter().position(|m| *m == ours)?;
-    let mut table = table.to_vec();
-    table.remove(at);
-    Some(table)
+/// The table without `owned` (one entry each), every other entry as it was. None: none is there.
+pub fn remove(table: &[Mapping], owned: &[Mapping]) -> Option<Vec<Mapping>> {
+    let mut left = table.to_vec();
+    for m in owned {
+        if let Some(at) = left.iter().position(|t| t == m) {
+            left.remove(at);
+        }
+    }
+    (left.len() < table.len()).then_some(left)
 }
 
 /// `hidutil property --get UserKeyMapping`'s output: `(null)`, or `( { …Dst = n; …Src = n; }, … )`.
@@ -119,35 +127,45 @@ mod tests {
 
     #[test]
     fn the_entry_is_added_after_the_users_and_only_it_is_taken_out() {
-        assert_eq!(add(&[], ours(), None), Start::Set(vec![ours()]));
-        let added = add(&[A], ours(), None);
+        assert_eq!(add(&[], ours(), &[]), Start::Set(vec![ours()]));
+        let added = add(&[A], ours(), &[]);
         assert_eq!(added, Start::Set(vec![A, ours()]));
         // At quit, the user's entries stay, also one they added meanwhile.
         let b = Mapping { src: 1, dst: 2 };
-        assert_eq!(remove(&[A, ours(), b], ours()), Some(vec![A, b]));
+        assert_eq!(remove(&[A, ours(), b], &[ours()]), Some(vec![A, b]));
         // Gone already (the user set the table again): nothing to set.
-        assert_eq!(remove(&[A], ours()), None);
+        assert_eq!(remove(&[A], &[ours()]), None);
     }
 
     #[test]
     fn a_caps_lock_the_user_mapped_is_left_alone() {
         let theirs = Mapping { src: CAPS_LOCK, dst: ESC };
-        assert_eq!(add(&[A, theirs], ours(), None), Start::Theirs(ESC));
+        assert_eq!(add(&[A, theirs], ours(), &[]), Start::Theirs(ESC));
         // Even to F18, by hand (no record): it is theirs, never taken out.
-        assert_eq!(add(&[ours()], ours(), None), Start::Theirs(F18));
+        assert_eq!(add(&[ours()], ours(), &[]), Start::Theirs(F18));
         // A record of ours that no longer matches does not make theirs ours.
-        assert_eq!(add(&[theirs], ours(), Some(ours())), Start::Theirs(ESC));
+        assert_eq!(add(&[theirs], ours(), &[ours()]), Start::Theirs(ESC));
     }
 
     #[test]
     fn after_a_crash_its_own_leftover_is_kept_not_stacked() {
         // The record matches the entry: nothing to set, the user's entries untouched.
-        assert_eq!(add(&[A, ours()], ours(), Some(ours())), Start::Kept);
+        assert_eq!(add(&[A, ours()], ours(), &[ours()]), Start::Kept);
         // Its leftover to another return key: changed in place, nothing stacked.
         let f13 = caps_as(13).expect("F13");
-        assert_eq!(add(&[f13, A], ours(), Some(f13)), Start::Set(vec![ours(), A]));
+        assert_eq!(add(&[f13, A], ours(), &[f13]), Start::Set(vec![ours(), A]));
         // A record but no entry (it crashed before setting it): added again.
-        assert_eq!(add(&[A], ours(), Some(ours())), Start::Set(vec![A, ours()]));
+        assert_eq!(add(&[A], ours(), &[ours()]), Start::Set(vec![A, ours()]));
+        // Crashed mid-change (both recorded): either one found is its own.
+        assert_eq!(add(&[f13, A], ours(), &[f13, ours()]), Start::Set(vec![ours(), A]));
+        assert_eq!(remove(&[f13, A], &[f13, ours()]), Some(vec![A]));
+    }
+
+    #[test]
+    fn only_a_caps_lock_to_a_spare_f_key_could_be_ours() {
+        assert!(could_be_ours(&ours()) && could_be_ours(&caps_as(13).expect("F13")));
+        assert!(!could_be_ours(&A));
+        assert!(!could_be_ours(&Mapping { src: CAPS_LOCK, dst: ESC }));
     }
 
     #[test]
