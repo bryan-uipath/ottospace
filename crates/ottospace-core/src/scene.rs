@@ -85,6 +85,19 @@ pub struct Camera {
     pub far: f32,
 }
 
+/// Where an agent's icon floats: over box `over` (its cone falls on that box's top) or, with
+/// none, at the city's edge; at `at` in the world; `fan`: its place among the icons there
+/// (`k` of `n`), spread side by side as drawn.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Mark {
+    pub over: Option<usize>,
+    pub at: [f32; 3],
+    pub fan: (usize, usize),
+}
+
+/// An agent at no file floats this high over the city's leftmost corner (plan units).
+const EDGE_RISE: f32 = 0.05;
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
     pub blocks: Vec<Block>,
@@ -395,6 +408,32 @@ impl Scene {
             if inside(mid) { low = mid } else { high = mid }
         }
         Some((foot, up(low)))
+    }
+
+    /// Each agent's mark, given the box it is at (none: no file known, or a file not in the
+    /// city). Over a box: at its beam's end (`beam`), where a lit building's beam has its dot.
+    /// At none: over the ground's corner leftmost in the picture. Several at one place are
+    /// fanned in the order given.
+    pub fn marks(&self, at: &[Option<usize>]) -> Vec<Mark> {
+        let camera = self.camera;
+        let edge = (self.blocks.iter().find(|b| b.kind == Kind::Ground)).and_then(|ground| {
+            let corners = [[ground.min[0], 0., ground.min[2]], [ground.min[0], 0., ground.max[2]]];
+            let corners =
+                corners.into_iter().chain([[ground.max[0], 0., ground.min[2]], [ground.max[0], 0., ground.max[2]]]);
+            let left = corners.min_by(|a, b| {
+                let x = |p: &[f32; 3]| camera.and_then(|c| c.project(*p)).map_or(f32::MAX, |(x, _)| x);
+                x(a).total_cmp(&x(b))
+            })?;
+            Some([left[0], EDGE_RISE, left[2]])
+        });
+        let over: Vec<Option<usize>> = at.iter().map(|i| i.filter(|i| self.beam(*i).is_some())).collect();
+        (over.iter().enumerate())
+            .map(|(n, here)| {
+                let point = here.and_then(|i| self.beam(i)).map(|(_, end)| end).or(edge).unwrap_or_default();
+                let k = over[..n].iter().filter(|other| *other == here).count();
+                Mark { over: *here, at: point, fan: (k, over.iter().filter(|other| *other == here).count()) }
+            })
+            .collect()
     }
 
     /// How high a beam rises: the city's highest top, at least `BEAM`.
@@ -716,6 +755,29 @@ mod tests {
         }
         assert_eq!((risen(0., 0.), risen(1., STAGGER), risen(STAGGER, STAGGER)), (0., 1., 0.));
         assert!(risen(0.3, 0.) > 0.3, "eased out: fast first");
+    }
+
+    /// An agent at a box floats at its beam's end; two at one box share it, fanned; one at
+    /// none floats over the ground's leftmost corner in the picture, inside it.
+    #[test]
+    fn an_agent_floats_at_its_boxes_beam_and_one_at_none_at_the_edge() {
+        let s = scene(&many(), &[], 1.6);
+        let (a, b) = (s.blocks.len() - 1, s.blocks.len() - 5);
+        let marks = s.marks(&[Some(a), None, Some(b), Some(a), None, Some(0)]);
+        let end = |i: usize| s.beam(i).unwrap().1;
+        assert_eq!((marks[0].over, marks[0].at, marks[0].fan), (Some(a), end(a), (0, 2)));
+        assert_eq!((marks[3].over, marks[3].at, marks[3].fan), (Some(a), end(a), (1, 2)));
+        assert_eq!((marks[2].at, marks[2].fan), (end(b), (0, 1)));
+        // At none, and at the ground (no box of a file): the edge, three of them.
+        let edge = marks[1].at;
+        for (i, k) in [(1, 0), (4, 1), (5, 2)] {
+            assert_eq!((marks[i].over, marks[i].at, marks[i].fan), (None, edge, (k, 3)), "{i}");
+        }
+        let camera = s.camera.unwrap();
+        let (x, y) = camera.project(edge).unwrap();
+        assert!((0. ..=1.).contains(&x) && (0. ..=1.).contains(&y), "{x} {y}");
+        let left = s.blocks.iter().flat_map(|b| camera.bounds(b)).map(|[x, ..]| x).fold(f32::MAX, f32::min);
+        assert!((x - left).abs() < 0.02, "the leftmost corner: {x} {left}");
     }
 
     #[test]

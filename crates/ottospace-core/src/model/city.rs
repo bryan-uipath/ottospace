@@ -3,9 +3,10 @@
 //! files and draws.
 
 use crate::PaneId;
+use crate::activity::{Pulse, Station};
 use crate::features::Feature;
-use crate::model::Model;
 use crate::model::spaces::Owner;
+use crate::model::{Action, Model, Origin};
 use crate::tasks::TaskId;
 
 /// A file an agent is at, as its call names it (the last two parts of its path), and the
@@ -18,11 +19,35 @@ pub struct Lit<'a> {
     pub running: bool,
 }
 
+/// An agent working now in the city's checkout: whose, its task's identity colour (none for a
+/// session no task has), and the file it is at (`Activity::at`; none: a shell line, between calls).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Agent<'a> {
+    pub who: Who<'a>,
+    pub colour: Option<u8>,
+    pub at: Option<&'a str>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Who<'a> {
+    Task(TaskId),
+    /// A session no task has, at work (a `claude` the user runs in a terminal): its runner's
+    /// name, its id and its title, as read from its file (`SessionsAtWork`).
+    Session {
+        runner: &'a str,
+        id: &'a str,
+        title: Option<&'a str>,
+    },
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct City<'a> {
     /// The checkout it is the map of.
     pub dir: &'a str,
     pub lit: Vec<Lit<'a>>,
+    /// Its agents that work now, by task, then the sessions no task has: each floats over its
+    /// file, or at the city's edge.
+    pub agents: Vec<Agent<'a>>,
 }
 
 /// An empty place on show: a tab with no pane (by its id), or an empty pane.
@@ -91,14 +116,53 @@ impl Model {
             Some(Owner::Task { id }) => Some(*id),
             _ => None,
         };
-        let agents = self.chats.iter().filter_map(|chat| {
+        let chats = self.chats.iter().filter_map(|chat| {
             let task = chat.subject.task()?;
             let works = own.map_or(self.task_worktree(task) == Some(dir), |own| own == task);
-            works.then(|| Some((self.tasks.get(task)?.colour, chat.transcript.files())))?
+            works.then(|| Some((task, self.tasks.get(task)?.colour, &chat.transcript)))?
         });
-        let lit = agents
-            .flat_map(|(colour, files)| files.into_iter().map(move |(label, running)| Lit { label, colour, running }));
-        Some(City { dir, lit: lit.collect() })
+        let chats: Vec<_> = chats.collect();
+        let lit = (chats.iter()).flat_map(|(_, colour, transcript)| {
+            transcript.files().into_iter().map(move |(label, running)| Lit { label, colour: *colour, running })
+        });
+        let working = chats.iter().filter(|(.., transcript)| transcript.pulse() == Pulse::Running);
+        let mut tasks: Vec<(TaskId, Agent)> = (working)
+            .map(|(task, colour, transcript)| {
+                (*task, Agent { who: Who::Task(*task), colour: *colour, at: transcript.file_at() })
+            })
+            .collect();
+        tasks.sort_by_key(|(task, _)| *task);
+        // A session no task has, at work in this checkout (as its Repos dot says): not in a task's space.
+        let sessions = (self.at_work.iter())
+            .filter(|s| own.is_none() && s.repo == dir && !self.tasks.adopted(&s.runner, &s.id))
+            .map(|s| {
+                // Its station as serialized: `files`.
+                let file =
+                    s.station.as_deref().is_some_and(|station| station.eq_ignore_ascii_case(Station::Files.name()));
+                let at = s.label.as_deref().filter(|_| file);
+                Agent {
+                    who: Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() },
+                    colour: None,
+                    at,
+                }
+            });
+        let agents: Vec<Agent> = tasks.into_iter().map(|(_, agent)| agent).chain(sessions).collect();
+        // A session's file is lit too, in no task's colour.
+        let lit = lit.chain(
+            agents
+                .iter()
+                .filter(|agent| matches!(agent.who, Who::Session { .. }))
+                .filter_map(|agent| Some(Lit { label: agent.at?, colour: None, running: true })),
+        );
+        Some(City { dir, lit: lit.collect(), agents })
+    }
+
+    /// What a click on an agent's icon over a city does: the user's own goes to its task (as
+    /// its row does); a client's click, a task gone, or a session no task has (which pane it
+    /// runs in is not known), nothing.
+    pub fn city_agent_click(&self, who: Who, origin: Origin) -> Option<Action> {
+        let Who::Task(task) = who else { return None };
+        (origin == Origin::User && self.tasks.live(task).is_some()).then_some(Action::TaskGo { id: Some(task) })
     }
 }
 
@@ -268,5 +332,96 @@ mod tests {
         let lit = city(&m).map(|city| city.lit.into_iter().map(|lit| (lit.label, lit.colour)).collect::<Vec<_>>());
         let colour = m.tasks.get(two).and_then(|task| task.colour);
         assert_eq!(lit, Some(vec![("src/main.rs", one), ("src/lib.rs", colour)]));
+    }
+
+    fn agents(m: &Model) -> Option<Vec<(TaskId, Option<&str>)>> {
+        let task = |agent: &Agent| match agent.who {
+            Who::Task(task) => task,
+            Who::Session { .. } => 0,
+        };
+        city(m).map(|city| city.agents.iter().map(|agent| (task(agent), agent.at)).collect())
+    }
+
+    /// A session no task has, at work in the checkout (a `claude` in the user's terminal): an
+    /// agent of the city at the file it reads, that file lit; not in a task's space; idle, gone.
+    #[test]
+    fn a_session_in_a_terminal_floats_over_its_file() {
+        let mut m = listed();
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Axis::Right });
+        m.update(Action::Close { pane: None });
+        let found = |active: bool, station: &str, label: &str| crate::sessions::Found {
+            runner: "claude".into(),
+            id: "s1".into(),
+            cwd: "/code/app".into(),
+            repo: "/code/app".into(),
+            started: Some(1),
+            last_activity: Some(2),
+            active,
+            station: Some(station.into()),
+            label: Some(label.into()),
+            title: Some("fix the loop".into()),
+            model: None,
+            held: true,
+        };
+        m.update(Action::SessionsAtWork { found: vec![found(true, "files", "src/main.rs")] });
+        let city = city(&m).unwrap();
+        let who = Who::Session { runner: "claude", id: "s1", title: Some("fix the loop") };
+        assert_eq!(city.agents, vec![Agent { who, colour: None, at: Some("src/main.rs") }]);
+        assert_eq!(city.lit, vec![Lit { label: "src/main.rs", colour: None, running: true }]);
+        m.update(Action::SessionsAtWork { found: vec![found(true, "shell", "cargo test")] });
+        assert_eq!(agents(&m), Some(vec![(0, None)]), "a shell line: at no file");
+        m.update(Action::SessionsAtWork { found: vec![found(false, "files", "src/main.rs")] });
+        assert_eq!(agents(&m), Some(vec![]));
+    }
+
+    /// An agent floats over the file it is at now: its newest call's; with a shell line its
+    /// newest, at none, still working; its turn over, it is gone.
+    #[test]
+    fn an_agent_is_at_its_newest_file_while_it_works() {
+        let mut m = task_in_app();
+        assert_eq!(agents(&m), Some(vec![(1, None)]), "its first turn runs, at no file yet");
+        events(&mut m, vec![Event::TurnStarted, call("a", Station::Files, "src/main.rs")]);
+        assert_eq!(agents(&m), Some(vec![(1, Some("src/main.rs"))]));
+        assert_eq!(city(&m).unwrap().agents[0].colour, m.tasks.get(1).and_then(|task| task.colour));
+        // Two calls run: the newer one's file, whichever sorts first.
+        events(&mut m, vec![call("b", Station::Files, "docs/a.md")]);
+        assert_eq!(agents(&m), Some(vec![(1, Some("docs/a.md"))]));
+        // The newer ends: the older still runs, and is where it is.
+        events(&mut m, vec![end("b"), call("c", Station::Shell, "cargo test")]);
+        assert_eq!(agents(&m), Some(vec![(1, Some("src/main.rs"))]));
+        events(&mut m, vec![end("a")]);
+        assert_eq!(agents(&m), Some(vec![(1, None)]), "a shell line: at no file");
+        events(&mut m, vec![end("c"), Event::TurnFinished { outcome: Outcome::Completed }]);
+        assert_eq!(agents(&m), Some(vec![]));
+    }
+
+    /// A workspace's city floats every task working in its folder, by task; a task's only its own.
+    #[test]
+    fn a_workspace_floats_every_working_task_and_a_task_only_its_own() {
+        let mut m = task_in_app();
+        events(&mut m, vec![Event::TurnStarted, call("a", Station::Files, "src/main.rs")]);
+        m.update(Action::OpenCompose { text: "second >app".into() });
+        m.update(Action::ComposeEnter);
+        m.update(Action::AgentStarted { task: Subject::Task(2), session: None, at: 1 }.sent_by(Origin::System));
+        let read = vec![Event::TurnStarted, call("b", Station::Files, "src/main.rs")];
+        m.update(Action::AgentEvents { task: Subject::Task(2), events: read, at: 5 }.sent_by(Origin::System));
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        assert_eq!(agents(&m), Some(vec![(1, Some("src/main.rs"))]));
+        m.update(Action::SpaceOpen { space: Owner::Home });
+        m.update(Action::OpenRepo { path: "/code/app".into(), axis: Axis::Right });
+        m.update(Action::Close { pane: None });
+        assert_eq!(agents(&m), Some(vec![(1, Some("src/main.rs")), (2, Some("src/main.rs"))]));
+    }
+
+    /// Only the user's own click on an agent goes to its task.
+    #[test]
+    fn only_the_users_click_on_an_agent_goes_to_its_task() {
+        let m = task_in_app();
+        assert_eq!(m.city_agent_click(Who::Task(1), Origin::User), Some(Action::TaskGo { id: Some(1) }));
+        assert_eq!(m.city_agent_click(Who::Task(1), Origin::Socket), None);
+        assert_eq!(m.city_agent_click(Who::Task(1), Origin::System), None);
+        assert_eq!(m.city_agent_click(Who::Task(9), Origin::User), None, "no such task");
+        let session = Who::Session { runner: "claude", id: "s1", title: None };
+        assert_eq!(m.city_agent_click(session, Origin::User), None, "a session's pane is not known");
     }
 }

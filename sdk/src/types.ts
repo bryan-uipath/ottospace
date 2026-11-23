@@ -1693,6 +1693,17 @@ export interface CityDrawn {
   first_ms: number | null;
   /** How long the last file list took to read (µs): null before one. */
   read_us: number | null;
+  /** Each agent's icon drawn over the city: its task (null: a session no task has), its box,
+   * whether its cone shines on a building, its place in a fan `[k, n]`, under the user's pointer. */
+  agents: CityAgent[];
+}
+
+export interface CityAgent {
+  task: number | null;
+  rect: Rect;
+  cone: boolean;
+  fan: [number, number];
+  hovered: boolean;
 }
 
 export interface CityHovered {

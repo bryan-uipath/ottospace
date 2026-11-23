@@ -17486,8 +17486,9 @@ fn every_empty_place_with_a_folder_draws_its_city() {
 
 /// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a 3D
 /// picture rendered on the GPU, where the lattice was, as large as the tab in pixels. The file
-/// the agent reads is lit, and only it; an ignored file is no building; nothing is read or
-/// rendered again while nothing changes; the state has counts and rectangles, never a name. With
+/// the agent reads is lit, and only it, its agent's icon over it; an ignored file is no building;
+/// nothing is read or rendered again while nothing changes; the state has counts and rectangles,
+/// never a name. The user's click on the icon goes to its task, a client's does not. With
 /// no GPU (`OTTOSPACE_CITY_NO_GPU`), the lattice, and the state says why. With the flag off, no
 /// city and no read.
 #[test]
@@ -17599,6 +17600,25 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     assert_eq!(city(&otto)["renders"].as_u64(), renders, "hover renders nothing");
     assert_eq!(point(hints[0] + 4., hints[1] + 4., true), Value::Null, "over a hint, the hint wins");
     assert_eq!(point(top[0], top[1] + 1., false), Value::Null, "a client's pointer shows none");
+    // The agent floats over the file it reads: its icon over the lit building's top, its cone
+    // on it, alone in its fan; at rest no frame glides it. The user's pointer on it names it,
+    // and wins over the building under it.
+    let agents = city(&otto)["agents"].clone();
+    let icon = numbers(&agents[0]["rect"]);
+    let one = (agents.as_array().map(Vec::len), &agents[0]["task"], &agents[0]["cone"], &agents[0]["fan"]);
+    assert_eq!(one, (Some(1), &json!(1), &json!(true), &json!([0, 1])), "{agents}");
+    // On its beam (vertical in the world, slanted in perspective), above the top.
+    let centre = (icon[0] + icon[2] / 2., icon[1] + icon[3] / 2.);
+    let beam = numbers(&beams[0]);
+    let x = beam[0] + (centre.1 - beam[1]) / (beam[3] - beam[1]) * (beam[2] - beam[0]);
+    assert!((centre.0 - x).abs() < 2. && centre.1 < top[1], "{icon:?} on {beam:?} over {top:?}");
+    assert!(apart(&icon, &hints), "{icon:?} over {hints:?}");
+    let glides = || otto.call(json!({"cmd": "state"}))["counts"]["city_agent_frames"].as_u64().unwrap();
+    let still = glides();
+    std::thread::sleep(Duration::from_millis(600));
+    assert_eq!(glides(), still, "no frames at rest");
+    assert_eq!(point(centre.0, centre.1, true), Value::Null, "the icon wins over the building");
+    assert_eq!(city(&otto)["agents"][0]["hovered"], json!(true));
     // A pane in the tab covers the floor: no city. Closed: the same city, the same place.
     otto.call(json!({"cmd": "split"}));
     assert_eq!(city(&otto), Value::Null);
@@ -17606,6 +17626,32 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     // Its picture is made again for the tab (none is kept for a place gone): wait for it.
     let again = otto.wait_for("the city back", |o| Some(city(o)).filter(|city| !city["picture"].is_null()));
     assert_eq!(again["lit"], lit["lit"]);
+    // In a workspace on the checkout the task's agent floats too: a client's click on it stays,
+    // the user's own goes to its task. The user folds the drawer (⌘⇧R: a client moves no space
+    // while their keys are in the chat) and makes the workspace (from Home a client's terminal
+    // would go to the task's space, the one selected last).
+    otto.call(json!({"cmd": "key", "keys": "cmd-shift-r", "as": "user"}));
+    otto.user_click(at(otto.control("top:new_workspace"), 0.5, 0.5));
+    // Listed resolved: the temp dir is behind a symlink.
+    otto.call(json!({"cmd": "open_repo", "path": root.join("repos/app").canonicalize().unwrap()}));
+    otto.call(json!({"cmd": "close"}));
+    let icon = otto.wait_for("the agent over the workspace's city", |o| {
+        Some(city(o)["agents"][0]["rect"].clone()).filter(|rect| !rect.is_null())
+    });
+    let icon = numbers(&icon);
+    let click = |user: bool| {
+        for action in ["down", "up"] {
+            let mut press =
+                json!({"cmd": "mouse", "action": action, "x": icon[0] + icon[2] / 2., "y": icon[1] + icon[3] / 2.});
+            if user {
+                press["as"] = json!("user");
+            }
+            otto.call(press);
+        }
+        selected_space(&otto)["of"].clone()
+    };
+    assert_eq!(click(false)["kind"], "workbook", "a client's click goes nowhere");
+    assert_eq!(click(true), json!({"kind": "task", "id": 1}));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 

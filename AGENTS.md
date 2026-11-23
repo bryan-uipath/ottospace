@@ -204,10 +204,13 @@ Design note: `docs/ai/attention/plan.md`.
     the user's pointer: `file`, `lit`, `beam` its foot and dot `[x0, y0, x1, y1]`, `beacon` its label's rect; null with
     none), `lit_beams` (each lit building's beam drawn, as `beam`), `glass` (its buildings see-through:
     `developer.city_opaque` off), `first_ms` (the place laid out to its first picture painted),
-    `read_us` (the last file list's read). `counts.city_reads`: the reads, a city on show or not;
+    `read_us` (the last file list's read), `agents` (each agent's icon drawn: `task` (null: a session no
+    task has), `rect`, `cone` (it shines on a building), `fan` `[k, n]`, `hovered`). `counts.city_reads`: the reads, a city on show or not;
     `counts.city_beam_frames`: the frames the hovered beam's fade asked for (none under Reduce Motion);
     `counts.city_fade_frames`: the frames a first picture's fade-in over the lattice asked for, and
-    `counts.city_rise_frames` those its rise painted (none at rest, none under Reduce Motion). Never a path or a name.
+    `counts.city_rise_frames` those its rise painted (none at rest, none under Reduce Motion);
+    `counts.city_agent_frames`: the frames an icon gliding to another file asked for (none at rest
+    or under Reduce Motion). Never a path or a name; a task's title is drawn, never in the state.
     Null outside a test run and while none is on show. `OTTOSPACE_CITY_NO_GPU` (read only under
     `OTTOSPACE_E2E`) stands for a machine with no GPU: every picture fails, the lattice stays.
   - State fields `keys_known` (the ids of the key bindings the user knows) and `key_reference`

@@ -1,0 +1,39 @@
+# Agents over the code city (`code_city`): each task's agent floats as its badge over the file
+# it reads, a cone of its colour on the building. Two tasks in one made-up repository replay
+# city-agents/fixtures (read f0, a shell line, read f49): one agent (`one`), both on one file
+# (`two`, fanned), one at a shell line (`no-file`, at the city's edge), moved on (`moved`), and the
+# user's pointer on an icon (`hover`: the task's title). The city is a workspace's the user made
+# (`space:1`, next to Home) and goes back to; the user folds the chat first.
+{"env": {"OTTOSPACE_FEATURES": "code_city"}}
+{"tree": "repos/app", "files": 60}
+{"cmd": "repo_add", "path": "{ROOT}/repos/app"}
+{"until": "repos_bar.0"}
+{"cmd": "task_new", "line": "fix the login loop >app"}
+{"cmd": "task_new", "line": "tidy the parser >app"}
+{"cmd": "section", "section": "tasks"}
+{"click": "task:1", "at": [0.3, 0.3]}
+{"click": "talk:talk-start"}
+{"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
+{"click": "top:new_workspace"}
+{"cmd": "open_repo", "path": "{ROOT}/repos/app"}
+{"cmd": "close"}
+{"until": "city.agents.0.cone", "is": true, "timeout_ms": 30000}
+{"settle": 500}
+{"shot": "one"}
+{"click": "task:2", "at": [0.3, 0.3]}
+{"click": "talk:talk-start"}
+{"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
+{"click": "space:1"}
+{"until": "city.agents.1.fan", "is": [1, 2], "timeout_ms": 30000}
+{"settle": 500}
+{"shot": "two"}
+{"until": "city.agents.0.cone", "is": false, "timeout_ms": 30000}
+{"settle": 500}
+{"shot": "no-file"}
+{"until": "city.agents.0.cone", "is": true, "timeout_ms": 30000}
+{"until": "city.agents", "len": 2, "timeout_ms": 30000}
+{"settle": 800}
+{"shot": "moved"}
+{"hover": {"rect": "city.agents.0.rect"}}
+{"settle": 300}
+{"shot": "hover"}
