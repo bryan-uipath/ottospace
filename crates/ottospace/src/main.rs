@@ -24,7 +24,7 @@ use gpui::{
     Context, CursorStyle, Div, ElementId, FocusHandle, FontWeight, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
     MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString,
     Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div,
-    img, point, prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
+    fill, img, point, prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::agent_mode::AppUse;
@@ -1018,10 +1018,12 @@ struct Workspace {
     marks: Marks,
     /// Where every copy goes and every paste comes from: a stand-in in an E2E run.
     clipboard: clipboard::Clipboard,
-    /// A paste that asks first ("Paste 4 lines?"): its pane and the text read at ⌘V.
+    /// The text read at ⌘V and its pane, until `Effect::Paste` sends it.
     pasting: Option<(PaneId, String)>,
     /// Reduce motion, as read at the last copy or paste: the pulse holds still.
     clip_reduced: bool,
+    /// Frames a copy's or paste's pulse asked for (`counts.clip_frames`, test runs).
+    clip_frames: u64,
     /// Where the pointer is while a selection drag is held: past an edge, the terminal scrolls.
     drag_at: Option<gpui::Point<Pixels>>,
     /// The open text field as last drawn: the new-task line, and a note's and the picker's own.
@@ -1609,6 +1611,7 @@ impl Workspace {
                         // A pulse after a copy or paste is drawn frame by frame, and once more as it ends.
                         let pulse = this.model.clip.as_ref().filter(|clip| clip.pane.is_some());
                         if pulse.is_some_and(|clip| now_ms().saturating_sub(clip.at) < clip::PULSE_MS + 100) {
+                            this.clip_frames += 1;
                             cx.notify();
                         }
                         this.sync_agents(window, cx);
@@ -1754,6 +1757,7 @@ impl Workspace {
             clipboard: clipboard::Clipboard::new(std::env::var_os("OTTOSPACE_E2E").is_some()),
             pasting: None,
             clip_reduced: false,
+            clip_frames: 0,
             drag_at: None,
             field: field::Shared::default(),
             pointing: None,
@@ -2050,7 +2054,7 @@ impl Workspace {
         // And the offer to take a pin, an unpin or a hidden suggestion back.
         let pins = matches!(action, Action::AppPin { .. } | Action::AppHide { .. } | Action::ListPin);
         // And a paste: its pane pulses from now.
-        let pastes = matches!(action, Action::Paste { .. } | Action::QuitConfirm);
+        let pastes = matches!(action, Action::Paste { .. });
         if files || row || unmarks || pins || captures || pastes {
             self.tick_now();
         }
@@ -3735,13 +3739,7 @@ impl Workspace {
             }
         }
         if let Some(confirm) = &self.model.confirm {
-            let why = if confirm.paste.is_some() {
-                clip::USERS_ALONE
-            } else if confirm.delete.is_some() {
-                ottospace_core::repos::DELETE_USERS
-            } else {
-                CONFIRM_UP
-            };
+            let why = if confirm.delete.is_some() { ottospace_core::repos::DELETE_USERS } else { CONFIRM_UP };
             return self.confirm_answer(key, Origin::Socket).is_none().then_some(why);
         }
         // ⌘V into a terminal: the user's clipboard, theirs alone to paste (`Action::Paste`).
@@ -4247,6 +4245,8 @@ impl Workspace {
                 "pr_opens": self.pr_opens,
                 // Terminal links the user's ⌘-click opened (a test run opens none).
                 "link_opens": self.link_opens,
+                // Frames a copy's or paste's pulse asked for: none once it is over.
+                "clip_frames": self.clip_frames,
                 // "File…" choices: the open panel a test run does not show.
                 "file_prompts": self.file_prompts,
                 // Local folder… choices: the folder picker a test run does not show.
@@ -4332,6 +4332,12 @@ impl Workspace {
             // Test runs only: where an offer chip's words (`words:<pane>`), their tooltip (`tip`,
             // while it shows) and a listed offer's picture (`thumb:<window>`) were drawn. Never the
             // words. Null outside a test run.
+            // Test runs only: what a copy or paste lights now (`Clip::lights`): the cells, by
+            // (row, first column, last column), and whether the pane's border. Null outside a test run.
+            "clip_lights": std::env::var_os("OTTOSPACE_E2E").and_then(|_| {
+                let (lit, _) = self.model.clip.as_ref().and_then(|clip| self.clip_lights(clip.pane?))?;
+                Some(serde_json::json!({"cells": lit.cells, "ring": lit.ring}))
+            }),
             "offer_rects": std::env::var_os("OTTOSPACE_E2E").map(|_| {
                 let named = |(mark, bounds): (&Mark, &Bounds<Pixels>)| match mark {
                     Mark::OfferWords(pane) => Some((format!("words:{pane}"), rect(*bounds))),
@@ -5522,16 +5528,29 @@ impl Workspace {
     /// `pane`: where the text came from, which pulses. None: a text field or a chat's Copy.
     pub(crate) fn copy_text(&mut self, text: String, pane: Option<PaneId>, verb: Verb, cx: &mut Context<Self>) {
         let amount = clip::Amount::of(&text);
+        // A terminal's selection: its cells pulse.
+        let range = pane.and_then(|id| self.terminals.get(&id)).and_then(Terminal::selection_range);
         self.clipboard.copy(text, cx);
         self.clip_reduced = ottospace_mac::meeting::reduce_motion();
         // The notice has no effects, so needs no window: a chat's Copy button has none to give.
         self.tick_now();
-        self.model.update(Action::Copied { pane, verb, amount }.sent_by(self.input));
+        self.model.update(Action::Copied { pane, verb, amount, range }.sent_by(self.input));
         cx.notify();
     }
 
+    /// What a copy or paste in pane `id` lights now (`Clip::lights`), and how strongly (`Clip::glow`).
+    fn clip_lights(&self, id: PaneId) -> Option<(clip::Lights, f32)> {
+        let now = now_ms();
+        let clip = self.model.clip.as_ref().filter(|clip| clip.pane == Some(id) && clip.shows(now))?;
+        let lit = match self.terminals.get(&id) {
+            Some(terminal) => clip.lights(terminal.scrollback().0, terminal.grid_size().1, terminal.grid_size().0),
+            None => clip::Lights { cells: Vec::new(), ring: true },
+        };
+        Some((lit, clip.glow(now, self.clip_reduced)))
+    }
+
     /// ⌘V: pastes the clipboard's text into the open text field, else the focused terminal.
-    /// There the core decides: the user's alone, and text with a line break asks first.
+    /// There the core decides: the user's alone.
     fn paste(&mut self, window: &Window, cx: &mut Context<Self>) {
         if self.field_paste(window, cx) {
             return;
@@ -5545,10 +5564,8 @@ impl Workspace {
         self.pasting = Some((pane, text));
         self.clip_reduced = ottospace_mac::meeting::reduce_motion();
         self.dispatch(Action::Paste { pane, amount }, self.input, window, cx);
-        // Refused, or pasted at once: nothing waits.
-        if self.model.confirm.as_ref().is_none_or(|confirm| confirm.paste.is_none()) {
-            self.pasting = None;
-        }
+        // Refused, or pasted: nothing waits.
+        self.pasting = None;
     }
 
     /// ⌘E / ⌘⇧E: the picker for a pane right of / below the focused one; either closes an open one.
@@ -7086,7 +7103,9 @@ impl Workspace {
         // After a copy from it or a paste into it: "Copied 3 lines" in the header, and one pulse.
         let now = now_ms();
         let clip = self.model.clip.as_ref().filter(|clip| clip.pane == Some(id) && clip.shows(now));
-        let glow = clip.map_or(0., |clip| clip.glow(now, self.clip_reduced));
+        // The border: a paste's, or a copy's with no cells on screen; a paste's tints the pane too.
+        let ring = self.clip_lights(id).filter(|(lit, _)| lit.ring).map_or(0., |(_, glow)| glow);
+        let tint = clip.is_some_and(|clip| clip.verb == Verb::Pasted);
         let clip = clip.map(|clip| div().flex_none().text_color(rgb(theme::PRIMARY)).child(clip.text.clone()));
         // The pane being annotated has its tools in its header.
         let drawn_on = self.model.annotated().filter(|m| m.pane == id && self.shots.contains_key(&m.n));
@@ -7297,6 +7316,24 @@ impl Workspace {
                 move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, &underline, window, cx),
             )
             .size_full();
+            // A copy's cells pulse in the focus colour, over the text.
+            let flash =
+                self.clip_lights(id).filter(|(lit, glow)| !lit.cells.is_empty() && *glow > 0.).map(|(lit, glow)| {
+                    let color = gpui::Hsla::from(rgb(theme::PRIMARY)).opacity(glow * 0.35);
+                    canvas(
+                        |_, _, _| {},
+                        move |bounds, _, window, _| {
+                            for (row, from, to) in &lit.cells {
+                                let origin =
+                                    bounds.origin + point(cell.width * *from as f32, cell.height * *row as f32);
+                                let size = size(cell.width * (to + 1 - from) as f32, cell.height);
+                                window.paint_quad(fill(Bounds { origin, size }, color));
+                            }
+                        },
+                    )
+                    .absolute()
+                    .size_full()
+                });
             // The scrollback as a scroll area: the screen is its last page.
             let ((_, rows), (back, history), line) =
                 (terminal.grid_size(), terminal.scrollback(), f32::from(cell.height));
@@ -7345,6 +7382,7 @@ impl Workspace {
                 )
                 .when(link.is_some(), |d| d.cursor(CursorStyle::PointingHand))
                 .child(grid)
+                .children(flash)
                 .children(target)
                 .child(scrollbar)
                 .into_any_element()
@@ -7422,19 +7460,11 @@ impl Workspace {
             .child(body)
             .children(top_line)
             // The pulse: the border and a tint in the focus colour, over the pane, taking no clicks.
-            .when(glow > 0., |d| {
+            .when(ring > 0., |d| {
                 let color = gpui::Hsla::from(rgb(theme::PRIMARY));
-                let ring = div().absolute().inset_0().border_2().border_color(color.opacity(glow));
-                d.child(ring.bg(color.opacity(glow * 0.1)))
+                let border = div().absolute().inset_0().border_2().border_color(color.opacity(ring));
+                d.child(border.when(tint, |b| b.bg(color.opacity(ring * 0.1))))
             })
-            .children(
-                self.model
-                    .confirm
-                    .as_ref()
-                    .and_then(|c| c.paste)
-                    .filter(|ask| ask.pane == id)
-                    .map(|ask| self.render_paste_ask(&ask)),
-            )
             .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
                 let zone = this.drop_zone(dragged.0, window.mouse_position()).filter(|(target, _)| *target == id);
                 if let Some((target, zone)) = zone {

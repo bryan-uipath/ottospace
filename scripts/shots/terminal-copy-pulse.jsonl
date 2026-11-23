@@ -1,0 +1,9 @@
+# A terminal's ⌘C: the copied cells pulse, not the pane (taken mid-pulse).
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear && printf 'alpha beta gamma\\ndelta epsilon\\nzeta eta theta\\n'\r"}
+{"cmd":"wait","pattern":"^zeta eta theta$"}
+{"cmd":"mouse_down","x":6.25,"y":0.5}
+{"cmd":"mouse_drag","x":5.75,"y":1.5}
+{"cmd":"key","keys":"cmd-c"}
+{"shot":"pulse"}

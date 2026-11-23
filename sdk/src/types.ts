@@ -1059,12 +1059,6 @@ export interface Amount {
   newline: boolean;
 }
 
-/** A paste with a line break, waiting for the user's answer. */
-export interface PasteAsk {
-  pane: PaneId;
-  amount: Amount;
-}
-
 /** What the title strip of `pane` and the status bar say for 2 seconds after a copy or paste. */
 export interface Clip {
   /** Null: a copy from no pane (a text field, a chat's Copy). */
@@ -1082,8 +1076,6 @@ export interface Confirm {
   running: Running[];
   /** Not the quit question: "Stop its agent and dismiss?" for this task. Only the user answers it. */
   dismiss: TaskId | null;
-  /** Not the quit question: "Paste 4 lines?" over that terminal pane. Only the user answers it. */
-  paste: PasteAsk | null;
   /** Not the quit question: "Unlist this repository?" for the one at this path, which a task works in. Only the user answers it. */
   unlist: string | null;
   /** Not the quit question: "Close this workspace?" for this temporary one, whose terminals in `running` end once its Undo runs out. Only the user answers it. */
@@ -1904,6 +1896,9 @@ export interface Snapshot {
   /** Test runs only: where each Tasks heading's fold mark, name and count were drawn
    * (`done:fold`, `done:label`, `done:count`). Else null. */
   heading_rects: Record<string, Rect> | null;
+  /** Test runs only: what a copy or paste lights now: cells (row, first column, last column) or
+   * the pane's border (`ring`). Else null. */
+  clip_lights: { cells: Array<[number, number, number]>; ring: boolean } | null;
   /** The marks, in the user's order. */
   marks: Mark[];
   /** The name of the mark just taken off, while the Marks section offers to put it back. */
