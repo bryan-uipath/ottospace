@@ -145,6 +145,14 @@ impl Model {
 
     pub fn agents(&self) -> Agents {
         let Segments { needs_you, running, .. } = Segments::of(&self.tasks.inbox());
+        if self.features.on(crate::features::Feature::TerminalTasks) {
+            // The terminal sessions listed with the tasks, as their cards say: an ended one, nowhere.
+            let cards = self.session_cards();
+            let count = |state| cards.iter().filter(|c| c.state == state).count();
+            let (waiting, in_terminal) =
+                (count(crate::sessions::CardState::NeedsYou), count(crate::sessions::CardState::Running));
+            return Agents { working: running + in_terminal, in_terminal, needs_you: needs_you + waiting };
+        }
         let in_terminal = self.in_terminal().len();
         // A session in a terminal that waits on you counts as a task that needs you.
         Agents { working: running + in_terminal, in_terminal, needs_you: needs_you + self.waits_unadopted().count() }
@@ -153,6 +161,10 @@ impl Model {
     /// The agents in a terminal, as their hover lists them: `Fix the form · claude`, else the
     /// repository's name for the title.
     pub fn in_terminal_names(&self) -> Vec<String> {
+        if self.features.on(crate::features::Feature::TerminalTasks) {
+            let running = self.session_cards().into_iter().filter(|c| c.state == crate::sessions::CardState::Running);
+            return running.map(|c| format!("{} · {}", c.row.title(), c.row.runner)).collect();
+        }
         let name = |s: &crate::sessions::Found| s.title.clone().unwrap_or_else(|| self.session_name(s));
         self.in_terminal().into_iter().map(|s| format!("{} · {}", name(s), s.runner)).collect()
     }

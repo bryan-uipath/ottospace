@@ -1212,10 +1212,20 @@ pub enum Action {
         runner: String,
         id: String,
     },
-    /// Stop listing a session, until the app starts again.
+    /// Stop listing a session, until the app starts again. With `terminal_tasks`: its card too,
+    /// until its file changes and it needs the user again; kept on disk.
     SessionHide {
         runner: String,
         id: String,
+    },
+    /// List a hidden session again (`terminal_tasks`).
+    SessionUnhide {
+        runner: String,
+        id: String,
+    },
+    /// The sessions hidden in an earlier run, as the shell read them from its file (`terminal_tasks`).
+    SetHiddenSessions {
+        hidden: Vec<sessions::Hidden>,
     },
     /// A click on a session's row: focus the pane it runs in, if that is known; else select the row.
     SessionClick {
@@ -2643,6 +2653,8 @@ impl Action {
             | Action::SessionsAtWork { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
+            | Action::SessionUnhide { .. }
+            | Action::SetHiddenSessions { .. }
             | Action::SessionClick { .. }
             | Action::TerminalAgentGo
             | Action::SessionsRange { .. }
@@ -2894,6 +2906,7 @@ impl Action {
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose => Some(Feature::Decisions),
             Action::SessionsInPanes { .. } => Some(Feature::SessionWaits),
+            Action::SessionUnhide { .. } | Action::SetHiddenSessions { .. } => Some(Feature::TerminalTasks),
             Action::ListenStart { .. }
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
@@ -3498,6 +3511,10 @@ pub enum Effect {
     Notice {
         text: String,
     },
+    /// Write the hidden sessions to their file (`terminal_tasks`): the whole list, replacing it.
+    SaveHiddenSessions {
+        hidden: Vec<sessions::Hidden>,
+    },
     /// Done's removal of the task's own worktree at `path` (in `worktrees_dir`), of the repository
     /// at `repo`, or (`task` none) the user's delete of any linked one: `git worktree remove`
     /// without `--force`, so a dirty one stays; then `WorktreeRemoved`.
@@ -4026,9 +4043,16 @@ pub struct Model {
     /// How long an adopted session is quiet before its task needs the user. 0: never.
     #[serde(skip)]
     session_quiet_ms: u64,
-    /// Sessions the user hid, as (runner, id). Not kept between runs.
+    /// Sessions the user hid. Kept between runs only with `terminal_tasks` (its own file).
     #[serde(skip)]
-    hidden: Vec<(String, String)>,
+    hidden: Vec<sessions::Hidden>,
+    /// The terminal sessions' cards that were live at the last read (`terminal_tasks`): what a
+    /// read that no longer has one compares with.
+    #[serde(skip)]
+    cards_live: Vec<sessions::Card>,
+    /// Cards a read showed ended, each as last seen and when: shown for `CARD_GRACE_MS`.
+    #[serde(skip)]
+    cards_gone: Vec<(sessions::Card, u64)>,
     /// Which sessions Elsewhere lists (`sessions_range` in the settings), and the start of
     /// the local day the shell last read them in.
     #[serde(skip)]
@@ -4331,6 +4355,8 @@ impl Default for Model {
             in_panes: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
+            cards_live: Vec::new(),
+            cards_gone: Vec::new(),
             sessions_range: sessions::Range::default(),
             session_day: 0,
             now: 0,
@@ -4798,6 +4824,7 @@ impl Model {
             Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
             Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
             Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
+            Action::SetHiddenSessions { .. } if origin == Origin::Socket => Some("only ottospace reads its files"),
             Action::FieldEdit { .. }
             | Action::MarkSubmit
             | Action::MarkType { .. }
@@ -5891,6 +5918,12 @@ impl Model {
             Action::TaskGo { id: None } if self.by_user => {
                 if let Some(id) = self.tasks.next().map(|task| task.id) {
                     self.talk_to(Subject::Task(id), false, effects);
+                } else if self.features.on(Feature::TerminalTasks) {
+                    // No task needs you: the first terminal session that does, in its pane, else its conversation.
+                    let cards = self.session_cards().into_iter();
+                    if let Some(card) = cards.into_iter().find(|c| c.state == sessions::CardState::NeedsYou) {
+                        self.card_go(card, effects);
+                    }
                 } else {
                     // No task needs you: a session in a terminal that waits on you does.
                     let pane = self.waits_unadopted().next().map(|(at, _)| at.pane);
@@ -6394,6 +6427,7 @@ impl Model {
                 self.session_day = day;
                 let seen = self.found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
                 self.follow_sessions(seen.collect());
+                self.note_cards();
             }
             Action::SessionQuiet { ms } => self.session_quiet_ms = ms,
             Action::SessionsAtWork { found } => {
@@ -6403,6 +6437,7 @@ impl Model {
                 let seen = found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
                 self.follow_sessions(seen.collect());
                 self.at_work = found.into_iter().filter(|s| s.active).collect();
+                self.note_cards();
             }
             Action::SessionsSeen { seen } => {
                 let seen = seen.into_iter().map(|s| (s.runner, s.id, s.active, Some(s.last_activity)));
@@ -6412,6 +6447,7 @@ impl Model {
                 self.in_panes = sessions::in_panes_kept(found);
                 let seen = self.in_panes.iter().map(|at| (at.runner.clone(), at.id.clone(), false, None));
                 self.follow_sessions(seen.collect());
+                self.note_cards();
             }
             Action::SessionAdopt { runner, id } => {
                 if let Some(session) = self.session(&runner, &id).cloned() {
@@ -6439,24 +6475,52 @@ impl Model {
                 }
             }
             Action::SessionHide { runner, id } => {
-                if self.session(&runner, &id).is_some() {
-                    self.hidden.push((runner, id));
+                let cards = self.features.on(Feature::TerminalTasks);
+                let card =
+                    self.session_cards().into_iter().find(|card| (&card.row.runner, &card.row.id) == (&runner, &id));
+                let listed = self.session(&runner, &id).map(|s| s.last_activity);
+                if let Some(at) = listed.or(card.filter(|_| cards).map(|card| card.last_activity)) {
+                    self.hidden.retain(|h| (&h.runner, &h.id) != (&runner, &id));
+                    self.cards_gone.retain(|(card, _)| (&card.row.runner, &card.row.id) != (&runner, &id));
+                    self.hidden.push(sessions::Hidden { runner, id, at });
+                    self.hidden = sessions::hidden_kept(std::mem::take(&mut self.hidden));
+                    if cards {
+                        effects.push(Effect::SaveHiddenSessions { hidden: self.hidden.clone() });
+                    }
                 }
             }
+            Action::SessionUnhide { runner, id } => {
+                let before = self.hidden.len();
+                self.hidden.retain(|h| (&h.runner, &h.id) != (&runner, &id));
+                if self.hidden.len() != before {
+                    effects.push(Effect::SaveHiddenSessions { hidden: self.hidden.clone() });
+                }
+            }
+            Action::SetHiddenSessions { hidden } => self.hidden = sessions::hidden_kept(hidden),
             Action::TerminalAgentGo => {
-                let first = self.in_terminal().first().map(|s| (s.runner.clone(), s.id.clone()));
+                // The first terminal session at work: with `terminal_tasks` its card, under Running.
+                let cards = self.features.on(Feature::TerminalTasks);
+                let first = match cards {
+                    true => self
+                        .session_cards()
+                        .into_iter()
+                        .find(|c| c.state == sessions::CardState::Running)
+                        .map(|c| (c.row.runner, c.row.id)),
+                    false => self.in_terminal().first().map(|s| (s.runner.clone(), s.id.clone())),
+                };
                 match first.map(|(runner, id)| (self.runs_in(&runner, &id), runner, id)) {
                     None => {}
                     Some((Some(pane), ..)) => {
                         (self.list, self.rail_focus) = (None, None);
                         self.focus(pane, effects);
                     }
-                    // Its row selected, Tasks open and Elsewhere unfolded: no guess at a pane.
+                    // Its row selected, Tasks open and its heading unfolded: no guess at a pane.
                     Some((None, runner, id)) => {
                         if self.sidebar != Some(Section::Tasks) {
                             self.act(Action::ToggleSection { section: Section::Tasks }, effects);
                         }
-                        self.collapsed.retain(|heading| *heading != Heading::Sessions);
+                        let heading = if cards { Heading::Running } else { Heading::Sessions };
+                        self.collapsed.retain(|h| *h != heading);
                         let row = self
                             .list_rows()
                             .into_iter()
@@ -7922,7 +7986,11 @@ impl Model {
     /// True if something other than our own ended agent has the session: at work, or held by a
     /// live process.
     pub(crate) fn in_use(&self, session: &Found) -> bool {
-        (session.active && !self.ours(session)) || self.held_elsewhere(session)
+        let in_pane = self
+            .in_panes
+            .iter()
+            .any(|at| (&at.runner, &at.id) == (&session.runner, &session.id) && self.in_pane_live(at));
+        (session.active && !self.ours(session)) || self.held_elsewhere(session) || in_pane
     }
 
     /// True if a live process other than our ended agent holds the session. A read made for a
@@ -9310,7 +9378,7 @@ impl Model {
         for TaskPlace { heading, group, task } in self.task_places() {
             if sections.last().is_none_or(|s| s.heading != heading) {
                 let collapsed = self.collapsed.contains(&heading);
-                sections.push(TaskSection { heading, count: 0, collapsed, rows: Vec::new() });
+                sections.push(TaskSection { heading, count: 0, collapsed, rows: Vec::new(), cards: Vec::new() });
             }
             let Some(section) = sections.last_mut() else { continue };
             section.count += 1;
@@ -9318,7 +9386,34 @@ impl Model {
                 section.rows.push(self.task_row(task, group, now));
             }
         }
+        // The terminal sessions, after the tasks of their heading; an ended one counts nowhere.
+        for card in self.session_cards() {
+            let heading = Self::card_heading(&card);
+            let at = match sections.iter().position(|s| s.heading >= heading) {
+                Some(at) if sections[at].heading == heading => at,
+                place => {
+                    let at = place.unwrap_or(sections.len());
+                    let collapsed = self.collapsed.contains(&heading);
+                    sections
+                        .insert(at, TaskSection { heading, count: 0, collapsed, rows: Vec::new(), cards: Vec::new() });
+                    at
+                }
+            };
+            let section = &mut sections[at];
+            section.count += usize::from(card.state != sessions::CardState::Ended);
+            if !section.collapsed {
+                section.cards.push(card);
+            }
+        }
         sections
+    }
+
+    /// The heading a terminal session's card is under: Needs you while it waits, else Running.
+    fn card_heading(card: &sessions::Card) -> Heading {
+        match card.state {
+            sessions::CardState::NeedsYou => Heading::NeedsYou,
+            sessions::CardState::Running | sessions::CardState::Ended => Heading::Running,
+        }
     }
 
     /// The Project view as drawn: a group a project, by name, then the tasks of none
@@ -9502,19 +9597,187 @@ impl Model {
         Some((at, at.needs(self.now, self.session_quiet_ms)?)).filter(|(at, _)| self.in_pane_live(at))
     }
 
+    /// True if the user hid the session and it stays hidden. With `terminal_tasks`, until its file
+    /// changed after the hide and it needs the user (`Hidden::holds`).
+    fn is_hidden(&self, runner: &str, id: &str) -> bool {
+        let Some(entry) = self.hidden.iter().find(|h| (h.runner.as_str(), h.id.as_str()) == (runner, id)) else {
+            return false;
+        };
+        if !self.features.on(Feature::TerminalTasks) {
+            return true;
+        }
+        let (needs, last) = self.needs_now(runner, id);
+        entry.holds(needs.is_some(), last)
+    }
+
+    /// Why a terminal session needs the user now, and when its file last changed. In one of our
+    /// panes: `waiting`. Listed and held elsewhere (`terminal_tasks`): its turn, once quiet.
+    fn needs_now(&self, runner: &str, id: &str) -> (Option<WaitsFor>, Option<u64>) {
+        let listed = self.found.iter().find(|s| (s.runner.as_str(), s.id.as_str()) == (runner, id));
+        let pane = self.in_panes.iter().find(|at| (at.runner.as_str(), at.id.as_str()) == (runner, id));
+        let last = listed.and_then(|s| s.last_activity).max(pane.and_then(|at| at.last_activity));
+        if let Some((_, why)) = self.waiting(runner, id) {
+            return (Some(why), last);
+        }
+        let held = listed.is_some_and(|s| {
+            RunnerId::named(runner).is_some_and(|r| r.spec().disk.held && sessions::live(r, false, s.held, s.active))
+        });
+        let quiet =
+            self.session_quiet_ms > 0 && last.is_some_and(|at| self.now.saturating_sub(at) >= self.session_quiet_ms);
+        let on = self.features.on(Feature::TerminalTasks);
+        ((on && held && quiet && self.runs_in(runner, id).is_none()).then_some(WaitsFor::Turn), last)
+    }
+
+    /// The terminal sessions that run now, as cards (`terminal_tasks`): each in one of our panes,
+    /// and each listed one its runner says runs (`sessions::live`); not a task's, not our own
+    /// agent's, not hidden. In a steady order: by when each started, then runner and id.
+    fn live_cards(&self) -> Vec<sessions::Card> {
+        if !self.features.on(Feature::TerminalTasks) {
+            return Vec::new();
+        }
+        let mut keys: Vec<(String, String)> = Vec::new();
+        let in_pane = self.in_panes.iter().filter(|at| self.runs_in(&at.runner, &at.id).is_some());
+        keys.extend(in_pane.map(|at| (at.runner.clone(), at.id.clone())));
+        let runs = |s: &&Found| RunnerId::named(&s.runner).is_some_and(|r| sessions::live(r, false, s.held, s.active));
+        keys.extend(self.found.iter().filter(runs).map(|s| (s.runner.clone(), s.id.clone())));
+        let mut cards: Vec<sessions::Card> = Vec::new();
+        for (runner, id) in keys {
+            let ours = |last| {
+                self.ours_at(&runner, &id, last)
+                    || self.agent_runs(&Subject::Session { runner: runner.clone(), id: id.clone() })
+            };
+            let again = cards.iter().any(|c| (&c.row.runner, &c.row.id) == (&runner, &id));
+            let (needs, last) = self.needs_now(&runner, &id);
+            if again || ours(last) || self.tasks.adopted(&runner, &id) || self.is_hidden(&runner, &id) {
+                continue;
+            }
+            let listed = self.found.iter().find(|s| (&s.runner, &s.id) == (&runner, &id));
+            let at = self.in_panes.iter().find(|at| (&at.runner, &at.id) == (&runner, &id));
+            let name = match (listed, at.and_then(|at| at.cwd.as_deref())) {
+                (Some(session), _) => self.session_name(session),
+                (None, Some(cwd)) => self.checkout_of(cwd).unwrap_or_else(|| repos::name_of(cwd)),
+                (None, None) => runner.clone(),
+            };
+            let row = sessions::Row {
+                runner: runner.clone(),
+                id: id.clone(),
+                name,
+                active: listed.is_some_and(|s| s.active),
+                doing: needs.map(|w| format!("needs you · {}", w.label())).or(listed.and_then(Found::doing)),
+                age: last.map(|at| tasks::age(at, self.now)),
+                pane: self.runs_in(&runner, &id),
+                quoted_title: listed.and_then(|s| s.title.clone()),
+                model: listed.and_then(|s| s.model.clone()),
+                waits_for: needs,
+            };
+            let state = if needs.is_some() { sessions::CardState::NeedsYou } else { sessions::CardState::Running };
+            let started = listed.and_then(|s| s.started);
+            cards.push(sessions::Card { row, state, started, last_activity: last, take_over: false });
+        }
+        cards.sort_by(|a, b| (a.started, &a.row.runner, &a.row.id).cmp(&(b.started, &b.row.runner, &b.row.id)));
+        cards
+    }
+
+    /// The name of the listed checkout `dir` is in or below: the deepest one.
+    fn checkout_of(&self, dir: &str) -> Option<String> {
+        let within = self.repo_names().filter(|(_, path)| sessions::below(dir, path));
+        within.max_by_key(|(_, path)| path.len()).map(|(name, _)| name.to_string())
+    }
+
+    /// The terminal sessions listed with the tasks (`terminal_tasks`): those that run, then those a
+    /// read showed ended in the last `CARD_GRACE_MS`, dim and counted nowhere.
+    pub fn session_cards(&self) -> Vec<sessions::Card> {
+        if !self.features.on(Feature::TerminalTasks) {
+            return Vec::new();
+        }
+        let mut cards = self.live_cards();
+        let live = cards.len();
+        for (card, at) in &self.cards_gone {
+            let (runner, id) = (&card.row.runner, &card.row.id);
+            let again = cards[..live].iter().any(|c| (&c.row.runner, &c.row.id) == (runner, id));
+            let shown = self.now.saturating_sub(*at) < sessions::CARD_GRACE_MS;
+            if again || !shown || self.is_hidden(runner, id) || self.tasks.adopted(runner, id) {
+                continue;
+            }
+            let mut card = card.clone();
+            card.state = sessions::CardState::Ended;
+            (card.row.active, card.row.doing, card.row.waits_for, card.row.pane) = (false, None, None, None);
+            card.row.age = Some(tasks::age(*at, self.now));
+            let can = RunnerId::named(runner).is_some_and(|r| r.spec().attach.take_over_when_idle == Support::Yes);
+            card.take_over = can && self.session(runner, id).is_some_and(|s| !self.in_use(s));
+            cards.push(card);
+        }
+        cards
+    }
+
+    /// After a read: a card that ran and no longer does is kept for `CARD_GRACE_MS` if the read
+    /// shows it ended (its pane no longer has it, or the listing has it not running). One that is
+    /// only not known now (the Tasks section closed) leaves with no grace.
+    fn note_cards(&mut self) {
+        if !self.features.on(Feature::TerminalTasks) {
+            (self.cards_live, self.cards_gone) = (Vec::new(), Vec::new());
+            return;
+        }
+        let live = self.live_cards();
+        let now = self.now;
+        let same = |a: &sessions::Card, b: &sessions::Card| (&a.row.runner, &a.row.id) == (&b.row.runner, &b.row.id);
+        for card in std::mem::take(&mut self.cards_live) {
+            let listed = self.found.iter().any(|s| (&s.runner, &s.id) == (&card.row.runner, &card.row.id));
+            if !live.iter().any(|c| same(c, &card)) && (listed || card.row.pane.is_some()) {
+                self.cards_gone.retain(|(gone, _)| !same(gone, &card));
+                self.cards_gone.push((card, now));
+            }
+        }
+        self.cards_gone.retain(|(gone, at)| {
+            now.saturating_sub(*at) < sessions::CARD_GRACE_MS && !live.iter().any(|c| same(c, gone))
+        });
+        self.cards_live = live;
+    }
+
+    /// Goes to a terminal session's card: its pane when one of ours runs it, else its conversation
+    /// in the drawer (read-only while another program has it).
+    fn card_go(&mut self, card: sessions::Card, effects: &mut Vec<Effect>) {
+        match card.row.pane {
+            Some(pane) => {
+                (self.list, self.rail_focus) = (None, None);
+                self.focus(pane, effects);
+            }
+            None => self.talk_to(Subject::Session { runner: card.row.runner, id: card.row.id }, false, effects),
+        }
+    }
+
+    /// The hidden sessions that run now (`terminal_tasks`): what the Tasks section's "N hidden"
+    /// line brings back.
+    pub fn hidden_live(&self) -> Vec<(String, String)> {
+        let runs = |h: &sessions::Hidden| {
+            let listed = self.found.iter().find(|s| (&s.runner, &s.id) == (&h.runner, &h.id));
+            let held = listed.is_some_and(|s| {
+                RunnerId::named(&s.runner).is_some_and(|r| sessions::live(r, false, s.held, s.active))
+            });
+            held || self.runs_in(&h.runner, &h.id).is_some()
+        };
+        let on = self.features.on(Feature::TerminalTasks);
+        let hidden = self.hidden.iter().filter(|h| on && runs(h) && self.is_hidden(&h.runner, &h.id));
+        hidden.map(|h| (h.runner.clone(), h.id.clone())).collect()
+    }
+
+    /// How many things need the user: the tasks, and with `terminal_tasks` the terminal sessions.
+    pub fn needs_you(&self) -> usize {
+        let cards = self.session_cards().into_iter().filter(|c| c.state == sessions::CardState::NeedsYou).count();
+        self.tasks.needs_you() + cards
+    }
+
     /// The sessions in panes that need the user and are no task's nor hidden: each counts as a task would.
     pub(crate) fn waits_unadopted(&self) -> impl Iterator<Item = (&sessions::InPane, WaitsFor)> {
-        let hidden =
-            |at: &sessions::InPane| self.hidden.iter().any(|(runner, id)| (runner, id) == (&at.runner, &at.id));
-        let free = move |at: &sessions::InPane| !hidden(at) && !self.tasks.adopted(&at.runner, &at.id);
+        let free =
+            move |at: &sessions::InPane| !self.is_hidden(&at.runner, &at.id) && !self.tasks.adopted(&at.runner, &at.id);
         self.in_panes.iter().filter(move |at| free(at)).filter_map(|at| self.waiting(&at.runner, &at.id))
     }
 
     /// Sessions at work in a terminal that are no task's, not hidden and not waiting on you (those
     /// count as needing you): the status bar's agents in a terminal. As the Repos dots read them.
     pub fn in_terminal(&self) -> Vec<&Found> {
-        let hidden = |s: &Found| self.hidden.iter().any(|(runner, id)| (runner, id) == (&s.runner, &s.id));
-        let free = |s: &&Found| !hidden(s) && !self.tasks.adopted(&s.runner, &s.id);
+        let free = |s: &&Found| !self.is_hidden(&s.runner, &s.id) && !self.tasks.adopted(&s.runner, &s.id);
         self.at_work.iter().filter(free).filter(|s| self.waiting(&s.runner, &s.id).is_none()).collect()
     }
 
@@ -9531,8 +9794,10 @@ impl Model {
 
     /// The sessions that are no task's and not hidden, in the order listed. At most `MAX_FOUND`.
     fn unadopted(&self) -> impl Iterator<Item = &Found> {
-        let hidden = |s: &&Found| self.hidden.iter().any(|(runner, id)| (runner, id) == (&s.runner, &s.id));
-        let listed = self.found.iter().filter(move |s| !hidden(s) && !self.tasks.adopted(&s.runner, &s.id));
+        let listed = self
+            .found
+            .iter()
+            .filter(move |s| !self.is_hidden(&s.runner, &s.id) && !self.tasks.adopted(&s.runner, &s.id));
         listed.take(sessions::MAX_FOUND)
     }
 
@@ -9578,7 +9843,11 @@ impl Model {
     /// no task's, active first, those in the range alone.
     pub fn sessions_bar(&self) -> sessions::Bar {
         let (range, now, day) = (self.sessions_range, self.now, self.session_day);
-        let (shown, out): (Vec<&Found>, Vec<&Found>) = self.unadopted().partition(|s| s.in_range(range, now, day));
+        // A terminal session listed with the tasks is not one of Elsewhere's too.
+        let cards = self.session_cards();
+        let card = |s: &&Found| cards.iter().any(|c| (&c.row.runner, &c.row.id) == (&s.runner, &s.id));
+        let listed = self.unadopted().filter(|s| !card(s));
+        let (shown, out): (Vec<&Found>, Vec<&Found>) = listed.partition(|s| s.in_range(range, now, day));
         let collapsed = self.collapsed.contains(&Heading::Sessions);
         let drawn = shown.iter().filter(|_| !collapsed);
         let row = |s: &&Found| sessions::Row {
@@ -9736,6 +10005,22 @@ impl Model {
                     }
                     if !collapsed(&place.heading) {
                         rows.push(ListRow::Task(place.task.id));
+                    }
+                }
+                // Each terminal session after the tasks of its heading, as `task_sections` draws it.
+                for card in self.session_cards() {
+                    let heading = Self::card_heading(&card);
+                    let head = rows.iter().position(|row| *row == ListRow::Heading(heading));
+                    let head = head.unwrap_or_else(|| {
+                        let before = |row: &ListRow| matches!(row, ListRow::Heading(h) if *h > heading);
+                        let at = rows.iter().position(before).unwrap_or(rows.len());
+                        rows.insert(at, ListRow::Heading(heading));
+                        at
+                    });
+                    let end = rows[head + 1..].iter().position(|row| matches!(row, ListRow::Heading(_)));
+                    let end = end.map_or(rows.len(), |n| head + 1 + n);
+                    if !collapsed(&heading) {
+                        rows.insert(end, ListRow::Session(card.row.runner, card.row.id));
                     }
                 }
             }
@@ -10953,6 +11238,8 @@ mod tests {
         Action::SessionsAtWork { .. },
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
+        Action::SessionUnhide { .. },
+        Action::SetHiddenSessions { .. },
         Action::SessionClick { .. },
         Action::TerminalAgentGo,
         Action::SessionOpen { .. },
@@ -11333,6 +11620,8 @@ mod tests {
             Action::SessionsAtWork { found: Vec::new() },
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
+            Action::SessionUnhide { runner: text(), id: text() },
+            Action::SetHiddenSessions { hidden: Vec::new() },
             Action::SessionClick { runner: text(), id: text() },
             Action::TerminalAgentGo,
             Action::SessionOpen { runner: text(), id: text() },
@@ -12111,6 +12400,9 @@ mod tests {
                     Action::EditSettings => Some(SETTINGS_USERS),
                     Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
+                    }
+                    Action::SetHiddenSessions { .. } if origin == Origin::Socket => {
+                        Some("only ottospace reads its files")
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),
@@ -16973,6 +17265,8 @@ mod tests {
     #[test]
     fn a_session_in_a_terminal_needs_you_the_same_way_for_every_runner() {
         let mut m = Model::default();
+        // Elsewhere's rows: the terminal sessions are not listed with the tasks here.
+        m.features = m.features.with(Feature::TerminalTasks, false);
         m.update(Action::SetRepos { repos: listed() });
         term(&mut m); // pane 1
         term(&mut m); // pane 2
@@ -16985,6 +17279,7 @@ mod tests {
             id: id.into(),
             last_activity: Some(now - ago),
             waits_for,
+            cwd: None,
         };
         let found = |m: &mut Model, found| m.update(Action::SessionsInPanes { found }.sent_by(Origin::System));
         // A Codex at work and a Claude Code at work: nothing needs you.
@@ -17016,7 +17311,7 @@ mod tests {
         assert_eq!(m.agents().needs_you, 1);
         m.update(Action::SetFeatures { features: Features::all().with(Feature::SessionWaits, false) });
         assert_eq!(m.agents().needs_you, 0);
-        m.update(Action::SetFeatures { features: Features::all() });
+        m.update(Action::SetFeatures { features: Features::all().with(Feature::TerminalTasks, false) });
         m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() });
         assert_eq!(m.agents().needs_you, 0);
     }
@@ -17039,6 +17334,7 @@ mod tests {
             id: "s1".into(),
             last_activity: Some(now),
             waits_for,
+            cwd: None,
         };
         m.update(
             Action::SessionsInPanes { found: vec![at(Some(sessions::WaitsFor::Question))] }.sent_by(Origin::System),
@@ -17053,9 +17349,202 @@ mod tests {
         assert_eq!(state(&m), State::Running);
     }
 
+    /// A model with a listed repository and two terminal panes, at `now`, for `terminal_tasks`.
+    fn cards_model(now: u64) -> Model {
+        let mut m = Model::default();
+        m.update(Action::SetRepos { repos: listed() });
+        term(&mut m); // pane 1
+        term(&mut m); // pane 2, focused
+        m.update(Action::Tick { now }.sent_by(Origin::System));
+        m
+    }
+
+    /// A session in a pane of ours, last written `ago` before `now`.
+    fn in_pane(pane: PaneId, runner: &str, id: &str, last: u64, waits_for: Option<WaitsFor>) -> sessions::InPane {
+        let (runner, id, cwd) = (runner.into(), id.into(), Some("/code/app/crates".into()));
+        sessions::InPane { pane, runner, id, last_activity: Some(last), waits_for, cwd }
+    }
+
+    /// The cards as (id, state).
+    fn cards(m: &Model) -> Vec<(String, sessions::CardState)> {
+        m.session_cards().into_iter().map(|c| (c.row.id, c.state)).collect()
+    }
+
+    #[test]
+    fn a_terminal_session_that_runs_is_a_card_among_the_tasks_by_what_its_runner_can_say() {
+        use sessions::CardState::{NeedsYou, Running};
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let panes = |m: &mut Model, found| m.update(Action::SessionsInPanes { found }.sent_by(Origin::System));
+        // In a pane: a Codex quiet past its turn, a Claude Code at work.
+        panes(
+            &mut m,
+            vec![in_pane(1, "codex", "x", now - sessions::QUIET_MS, None), in_pane(2, "claude", "c", now, None)],
+        );
+        // Listed, outside our panes: Claude Code held by a live process (idle, not yet quiet); one no
+        // process holds (ended, file quiet); a Codex written just now (no process record: its file says).
+        let held = Found { held: true, ..session("claude", "h", "/code/app", false, now - 60_000) };
+        let ended = session("claude", "e", "/code/app", false, now - 60_000);
+        let codex = session("codex", "w", "/code/app-2", true, now);
+        m.update(Action::SetSessions { found: vec![held, ended.clone(), codex], day: 0 }.sent_by(Origin::System));
+        assert_eq!(
+            cards(&m),
+            [("c".into(), Running), ("h".into(), Running), ("w".into(), Running), ("x".into(), NeedsYou)],
+            "steady order: when each started (unknown here), then runner and id"
+        );
+        // Named after the listed checkout it runs in, and its pane.
+        let x = m.session_cards().into_iter().find(|c| c.row.id == "x").unwrap();
+        assert_eq!((x.row.name.as_str(), x.row.pane, x.row.waits_for), ("app", Some(1), Some(WaitsFor::Turn)));
+        // Counted once, as the tasks are; not Elsewhere's rows too (the ended one is).
+        assert_eq!((m.agents().needs_you, m.agents().in_terminal, m.needs_you()), (1, 3, 1));
+        m.update(Action::ToggleGroup { heading: Heading::Sessions });
+        assert_eq!(session_rows(&m).1, ["e"]);
+        // Under their headings, after the tasks there; list mode walks them in that order.
+        m.update(Action::TaskAdd {
+            title: "fix it".into(),
+            priority: 1,
+            state: State::NeedsYou,
+            tab: None,
+            assign: Assign::default(),
+        });
+        let sections = m.task_sections(now);
+        let heads: Vec<(Heading, usize, usize, usize)> =
+            sections.iter().map(|s| (s.heading, s.count, s.rows.len(), s.cards.len())).collect();
+        assert_eq!(heads, [(Heading::NeedsYou, 2, 1, 1), (Heading::Running, 3, 0, 3)]);
+        m.update(Action::ToggleSection { section: Section::Tasks });
+        let rows = m.list_rows();
+        let session = |id: &str, runner: &str| ListRow::Session(runner.into(), id.into());
+        assert_eq!(
+            rows[..6],
+            [
+                ListRow::Heading(Heading::NeedsYou),
+                ListRow::Task(1),
+                session("x", "codex"),
+                ListRow::Heading(Heading::Running),
+                session("c", "claude"),
+                session("h", "claude"),
+            ]
+        );
+        // A task's session, or one hidden, is no card.
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "h".into() }.sent_by(Origin::Socket));
+        m.update(Action::SessionHide { runner: "codex".into(), id: "w".into() });
+        assert_eq!(cards(&m), [("c".into(), Running), ("x".into(), NeedsYou)]);
+        // The flag off: none, and Elsewhere as before.
+        m.update(Action::SetFeatures { features: Features::all().with(Feature::TerminalTasks, false) });
+        assert!(m.session_cards().is_empty() && m.task_sections(now).iter().all(|s| s.cards.is_empty()));
+    }
+
+    #[test]
+    fn j_goes_to_the_terminal_session_that_needs_you_when_no_task_does() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        m.update(Action::SetFeatures { features: Features::all().with(Feature::Decisions, false) });
+        let waits = in_pane(1, "claude", "c", now, Some(WaitsFor::Permission));
+        m.update(Action::SessionsInPanes { found: vec![waits] }.sent_by(Origin::System));
+        // A client's ⌘J goes nowhere; the user's goes to its pane.
+        m.update(Action::TaskGo { id: None }.sent_by(Origin::Socket));
+        assert_eq!(m.focused, Some(2));
+        m.update(Action::TaskGo { id: None });
+        assert_eq!(m.focused, Some(1));
+        // One outside our panes, held and quiet: its turn. ⌘J shows its conversation; no tab changes.
+        m.update(Action::SessionsInPanes { found: Vec::new() }.sent_by(Origin::System));
+        let held = Found { held: true, ..session("claude", "h", "/code/app", false, now - sessions::QUIET_MS) };
+        m.update(Action::SetSessions { found: vec![held], day: 0 }.sent_by(Origin::System));
+        assert_eq!(cards(&m)[0], ("h".into(), sessions::CardState::NeedsYou));
+        m.update(Action::TaskGo { id: None });
+        let shown = Subject::Session { runner: "claude".into(), id: "h".into() };
+        assert_eq!(m.talk.as_ref().map(|t| &t.task), Some(&shown));
+    }
+
+    #[test]
+    fn an_ended_card_stays_dim_for_the_grace_and_one_only_unknown_leaves_at_once() {
+        use sessions::CardState::{Ended, Running};
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let pane = in_pane(1, "codex", "x", now, None);
+        m.update(Action::SessionsInPanes { found: vec![pane] }.sent_by(Origin::System));
+        let held = Found { held: true, ..session("claude", "h", "/code/app", true, now) };
+        m.update(Action::SetSessions { found: vec![held.clone()], day: 0 }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("h".into(), Running), ("x".into(), Running)]);
+        // Its program left the pane: ended, counted nowhere, at the end of Running.
+        m.update(Action::SessionsInPanes { found: Vec::new() }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("h".into(), Running), ("x".into(), Ended)]);
+        assert_eq!((m.agents().in_terminal, m.task_sections(now)[0].count), (1, 1));
+        // The section closed: the listed one is not known now, not ended. It leaves with no grace.
+        m.update(Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("x".into(), Ended)]);
+        // Read again: it runs. Then its process is gone (the listing has it, not held): ended.
+        m.update(Action::SetSessions { found: vec![held.clone()], day: 0 }.sent_by(Origin::System));
+        let gone = Found { held: false, active: false, ..held.clone() };
+        m.update(Action::SetSessions { found: vec![gone], day: 0 }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("x".into(), Ended), ("h".into(), Ended)]);
+        // Listed, idle, its runner goes on with an idle session: the user may take it over.
+        let h = m.session_cards().into_iter().find(|c| c.row.id == "h").unwrap();
+        assert!(h.take_over && !m.session_cards()[0].take_over, "an unlisted one cannot be resumed");
+        // The grace passes: gone.
+        let later = now + sessions::CARD_GRACE_MS;
+        m.update(Action::Tick { now: later - 1 }.sent_by(Origin::System));
+        assert_eq!(cards(&m).len(), 2);
+        m.update(Action::Tick { now: later }.sent_by(Origin::System));
+        assert!(cards(&m).is_empty());
+        // Live again (resumed in a terminal): a card again.
+        let back = in_pane(1, "codex", "x", later, None);
+        m.update(Action::SessionsInPanes { found: vec![back] }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("x".into(), Running)]);
+    }
+
+    #[test]
+    fn a_hidden_card_comes_back_when_its_file_changes_and_it_needs_you_again() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let waits = |last| in_pane(1, "claude", "c", last, Some(WaitsFor::Permission));
+        let read = |m: &mut Model, at| m.update(Action::SessionsInPanes { found: vec![at] }.sent_by(Origin::System));
+        read(&mut m, waits(now));
+        assert_eq!(m.needs_you(), 1);
+        // Hidden: counted nowhere, kept on disk. A client may hide too, as Elsewhere's rows.
+        let effects = m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() }.sent_by(Origin::Socket));
+        let kept = vec![sessions::Hidden { runner: "claude".into(), id: "c".into(), at: Some(now) }];
+        assert_eq!(effects, [Effect::SaveHiddenSessions { hidden: kept.clone() }]);
+        assert_eq!((m.needs_you(), m.session_cards().len()), (0, 0));
+        assert_eq!(m.hidden_live(), [("claude".to_string(), "c".to_string())], "the section's \"1 hidden\"");
+        // The same wait after a restart: still hidden.
+        let mut again = cards_model(now + 5_000);
+        again.update(Action::SetHiddenSessions { hidden: kept }.sent_by(Origin::System));
+        read(&mut again, waits(now));
+        assert_eq!(again.needs_you(), 0);
+        // It works (answered), then asks again: its file changed since the hide. Back.
+        read(&mut m, in_pane(1, "claude", "c", now + 1_000, None));
+        assert_eq!(m.session_cards().len(), 0, "at work: still hidden");
+        read(&mut m, waits(now + 2_000));
+        assert_eq!(m.needs_you(), 1);
+        // Unhide: the user's, or a client's.
+        m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() });
+        assert_eq!(m.needs_you(), 0);
+        let effects =
+            m.update(Action::SessionUnhide { runner: "claude".into(), id: "c".into() }.sent_by(Origin::Socket));
+        assert_eq!((effects, m.needs_you()), (vec![Effect::SaveHiddenSessions { hidden: Vec::new() }], 1));
+        // Only ottospace says what its file held.
+        let file = Action::SetHiddenSessions { hidden: Vec::new() }.sent_by(Origin::Socket);
+        assert!(m.update(file).is_empty());
+    }
+
+    #[test]
+    fn a_session_running_in_one_of_our_panes_is_in_use_whatever_its_file_says() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let idle = session("codex", "x", "/code/app", false, now - sessions::QUIET_MS);
+        m.update(Action::SetSessions { found: vec![idle.clone()], day: 0 }.sent_by(Origin::System));
+        assert!(!m.in_use(&idle));
+        let pane = in_pane(1, "codex", "x", now - sessions::QUIET_MS, None);
+        m.update(Action::SessionsInPanes { found: vec![pane] }.sent_by(Origin::System));
+        assert!(m.in_use(&idle) && !m.take_over_ready(&Subject::Session { runner: "codex".into(), id: "x".into() }));
+    }
+
     #[test]
     fn agents_at_work_in_a_terminal_count_as_working_once_and_a_click_goes_to_them() {
         let mut m = Model::default();
+        // Elsewhere's rows: the terminal sessions are not listed with the tasks here.
+        m.features = m.features.with(Feature::TerminalTasks, false);
         m.update(Action::SetRepos { repos: listed() });
         term(&mut m); // pane 1
         m.update(Action::NewTab); // pane 2's tab on show
@@ -17089,6 +17578,7 @@ mod tests {
             id: "a".into(),
             last_activity: Some(now),
             waits_for,
+            cwd: None,
         };
         m.update(Action::SessionsInPanes { found: vec![at(None)] }.sent_by(Origin::System));
         m.update(Action::TerminalAgentGo);
@@ -17121,6 +17611,7 @@ mod tests {
             id: "s1".into(),
             last_activity: Some(now),
             waits_for: Some(sessions::WaitsFor::Permission),
+            cwd: None,
         };
         m.update(Action::SessionsInPanes { found: vec![waits] }.sent_by(Origin::System));
         assert_eq!(m.agents().needs_you, 1);
@@ -17131,6 +17622,8 @@ mod tests {
     #[test]
     fn a_click_on_a_session_focuses_its_pane_only_when_there_is_no_doubt() {
         let mut m = Model::default();
+        // Elsewhere's rows: the terminal sessions are not listed with the tasks here.
+        m.features = m.features.with(Feature::TerminalTasks, false);
         m.update(Action::ToggleGroup { heading: Heading::Sessions }); // folded at first
         m.update(Action::SetRepos { repos: listed() });
         term(&mut m); // pane 1, opened nowhere in particular
@@ -19105,6 +19598,9 @@ mod tests {
                     Action::EditSettings => Some(SETTINGS_USERS),
                     Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                         Some("only ottospace reads settings.json")
+                    }
+                    Action::SetHiddenSessions { .. } if origin == Origin::Socket => {
+                        Some("only ottospace reads its files")
                     }
                     Action::EditorOpen | Action::EditorKeys { .. } => Some(editor::USERS_ALONE),
                     Action::EditorDone { .. } if origin == Origin::Socket => Some(editor::SHELLS_ALONE),

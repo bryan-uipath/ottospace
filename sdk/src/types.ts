@@ -172,7 +172,8 @@ export type Feature =
   | "decisions"
   | "code_city"
   | "session_waits"
-  | "projects";
+  | "projects"
+  | "terminal_tasks";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** The clone dialog and the clone on its way, in a test run. */
@@ -876,6 +877,16 @@ export interface TaskSection {
   collapsed: boolean;
   /** None while collapsed. */
   rows: TaskRow[];
+  /** The terminal sessions under it, after its tasks (flag `terminal_tasks`). None while collapsed. */
+  cards: SessionCard[];
+}
+
+/** A live terminal session listed with the tasks (flag `terminal_tasks`): not a task; nothing can be sent to it. */
+export interface SessionCard extends SessionRow {
+  /** `needs_you` or `running`; `ended`: a read showed it ended, a few minutes ago, counted nowhere. */
+  state: "needs_you" | "running" | "ended";
+  /** The user may take it over here (an ended one, listed, that no program has). */
+  take_over: boolean;
 }
 
 /** The Tasks section as drawn. */

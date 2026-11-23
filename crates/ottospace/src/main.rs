@@ -2377,6 +2377,7 @@ impl Workspace {
                     let root = Some(root.clone()).filter(|root| config::worktrees_dir().as_ref() == Some(root));
                     worktree::start(repo.clone(), branch.clone(), path.clone(), root, *fresh, done);
                 }
+                Effect::SaveHiddenSessions { hidden } => sessions::hidden_write(hidden),
                 Effect::RemoveWorktree { task, repo, path } => {
                     let root = config::worktrees_dir();
                     worktree::start_remove(*task, repo.clone(), path.clone(), root, self.removals.0.clone());
@@ -3722,6 +3723,10 @@ impl Workspace {
             self.sessions_quiet_told = true;
             let live = config::live();
             self.dispatch(Action::SessionQuiet { ms: live.quiet_ms() }, Origin::System, window, cx);
+            let hidden = sessions::hidden_read();
+            if !hidden.is_empty() && self.model.features.on(Feature::TerminalTasks) {
+                self.dispatch(Action::SetHiddenSessions { hidden }, Origin::System, window, cx);
+            }
             // Told with it, once: the models (read only at start) and the default agent a task starts with.
             let models = ottospace_core::agents::Models::with(config::get().settings.agent_models.as_ref());
             let agents = Action::SetAgents {
@@ -4250,7 +4255,7 @@ impl Workspace {
             "field": self.field_snapshot(),
             // Tasks as the Tasks section lists them, and how many need the user.
             "inbox": self.inbox(),
-            "needs_you": self.model.tasks.needs_you(),
+            "needs_you": self.model.needs_you(),
             // True once what the tags of the line in the new-task box may name has been read:
             // they are read on another thread, a moment after the line changes.
             "compose_read": self.model.compose_read(),
@@ -6160,7 +6165,7 @@ impl Workspace {
         let header = ui::panel_header(title)
             .child(mark(&self.marks, Mark::BarHeader))
             // How many tasks wait for the user.
-            .children(Some(self.model.tasks.needs_you()).filter(|n| section == Section::Tasks && *n > 0).map(|n| {
+            .children(Some(self.model.needs_you()).filter(|n| section == Section::Tasks && *n > 0).map(|n| {
                 let badge = div().ml_2().h(px(18.)).min_w(px(18.)).px_1().pt(px(1.)).flex_none().flex();
                 let badge = badge.items_center().justify_center().rounded_full().bg(rgb(theme::SELECTED));
                 badge.line_height(px(16.)).text_color(rgb(theme::task(Group::NeedsYou))).child(n.to_string())
@@ -6585,16 +6590,47 @@ impl Workspace {
         listed += 1;
         let mut group = Vec::new();
         for row in &bar.rows {
-            group.push(self.session_row(row, self.model.list == Some(listed), cx));
+            group.push(self.session_row(row, None, self.model.list == Some(listed), cx));
             listed += 1;
         }
         rows.extend(well(group, 4.));
         rows
     }
 
+    /// "2 hidden" under the Tasks section while hidden terminal sessions run (`terminal_tasks`): a
+    /// click lists them again.
+    fn hidden_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let hidden = self.model.hidden_live();
+        let line = div()
+            .id("sessions-hidden")
+            .px_2()
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .cursor_pointer()
+            .hover(|s| s.text_color(rgb(theme::TEXT)))
+            .child(format!("{} hidden · Show", hidden.len()))
+            .relative()
+            .child(self.controls.mark("sessions-hidden"))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                for (runner, id) in this.model.hidden_live() {
+                    this.dispatch(Action::SessionUnhide { runner, id }, this.input, window, cx);
+                }
+                cx.notify();
+            }));
+        (!hidden.is_empty()).then(|| line.into_any_element())
+    }
+
     /// A session's row, one line: a dot (lit while it is active), its title (`Row::title`) and its
     /// runner. The rest is in its hover card. Hover (or list mode's selection) shows Track and Hide.
-    fn session_row(&self, row: &ottospace_core::sessions::Row, selected: bool, cx: &mut Context<Self>) -> AnyElement {
+    /// A card (a terminal session listed with the tasks) offers Take over once it ended, and Hide;
+    /// an ended one is dim.
+    fn session_row(
+        &self,
+        row: &ottospace_core::sessions::Row,
+        card: Option<&ottospace_core::sessions::Card>,
+        selected: bool,
+        cx: &mut Context<Self>,
+    ) -> AnyElement {
         let key = format!("{}:{}", row.runner, row.id);
         let button = |name: &'static str, label: &'static str, tip: &'static str| {
             let (runner, id) = (row.runner.clone(), row.id.clone());
@@ -6604,10 +6640,15 @@ impl Workspace {
             self.word(format!("{name}:{key}"), (label, tip), click, cx)
         };
         // A click on the row opens it: no Open word.
+        let take = match card {
+            None => Some(("Track", "Track as a task")),
+            Some(card) => card.take_over.then_some(("Take over", "Track as a task and go on with it here")),
+        };
         let actions = words::words("session-row", selected)
             .top(px(3.5))
-            .child(button("session-adopt", "Track", "Track as a task"))
+            .children(take.map(|(label, tip)| button("session-adopt", label, tip)))
             .child(button("session-hide", "Hide", "Hide"));
+        let ended = card.is_some_and(|card| card.state == ottospace_core::sessions::CardState::Ended);
         let color = match (row.waits_for, row.active) {
             (Some(_), _) => theme::task(Group::NeedsYou),
             (None, true) => theme::task(Group::Running),
@@ -6616,6 +6657,7 @@ impl Workspace {
         let (runner, id, card) = (row.runner.clone(), row.id.clone(), row.clone());
         sidebar_row(ElementId::Name(format!("session:{key}").into()), selected)
             .group("session-row")
+            .when(ended, |row| row.opacity(0.55))
             .child(home::dot(color))
             // The title may be text a model wrote: drawn as it is, on one line.
             .child(cut_text(row.title().to_string()).flex_1())
@@ -6652,6 +6694,11 @@ impl Workspace {
                 }
                 listed += 1;
             }
+            // The terminal sessions under it, after its tasks (`terminal_tasks`).
+            for card in &section.cards {
+                group.push(self.session_row(&card.row, Some(card), self.model.list == Some(listed), cx));
+                listed += 1;
+            }
             rows.extend(well(group, 4.));
         }
         // Nothing listed: say so, with the button that files a task.
@@ -6673,9 +6720,11 @@ impl Workspace {
                 .on_click(cx.listener(|this, _, window, cx| this.click_undo(window, cx)))
         });
         let sessions = self.render_sessions(listed, cx);
+        let hidden = self.hidden_line(cx);
         let list = div().id("tasks").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
         let list = list.track_scroll(&self.list_scroll).children(notice).children(empty).children(rows);
-        let list = self.bars.tracked("tasks", list.children(sessions), &self.list_scroll, theme::RAISED);
+        let list =
+            self.bars.tracked("tasks", list.children(sessions).children(hidden), &self.list_scroll, theme::RAISED);
         // The footer stays under the list as it scrolls.
         let footer = (!self.model.tasks.list.is_empty()).then(|| self.render_today());
         div().flex_1().min_h_0().flex().flex_col().child(list).children(footer)
