@@ -58,7 +58,7 @@ use ottospace_core::terminal::{
 };
 use ottospace_core::{
     Action, Axis, Dir, Effect, Kind, Mode, Model, Node, Origin, Pane, PaneId, PickItem, Picker, Rect, Section, Zone,
-    cadence, theme,
+    cadence, double_cmd, theme,
     titlebar::{self, TitleBar},
 };
 use ottospace_mac::window::{Mouse, MouseKind};
@@ -594,6 +594,31 @@ const SKILL_STUB: &str = include_str!("../skill/SKILL.md");
 
 /// The return key's name (e.g. "F18") once it is registered. Unset: there is no return key.
 static RETURN_KEY: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+/// ⌘⌘ is listened for (`return_double_cmd`, Accessibility).
+static DOUBLE_CMD: AtomicBool = AtomicBool::new(false);
+
+/// Listens for ⌘⌘ unless `return_double_cmd` is false. What went wrong, for the status bar.
+fn listen_double_cmd() -> Option<String> {
+    if config::get().settings.return_double_cmd == Some(false) {
+        return None;
+    }
+    // Without Accessibility the monitor hears nothing: say so rather than name a dead key.
+    if !ax::is_trusted(false) {
+        return Some("⌘⌘ is off: ottospace needs Accessibility".into());
+    }
+    match ottospace_mac::modifiers::listen() {
+        Ok(()) => DOUBLE_CMD.store(true, Relaxed),
+        Err(err) => return Some(format!("⌘⌘ is off: {err}")),
+    }
+    None
+}
+
+/// The return keys that work, as the status bar and ⌘/ name them: `⌘⌘ or F18`. None: none.
+fn return_keys() -> Option<String> {
+    let double = DOUBLE_CMD.load(Relaxed).then_some("⌘⌘");
+    let keys: Vec<&str> = double.into_iter().chain(RETURN_KEY.get().map(String::as_str)).collect();
+    (!keys.is_empty()).then(|| keys.join(" or "))
+}
 
 /// The window while it fills its display, in Accessibility's coordinates.
 #[derive(Clone, Copy)]
@@ -1099,6 +1124,9 @@ struct Workspace {
     /// Frames that stopped coming (`stall`), and how often GPUI was kicked to draw again.
     stall: stall::Stall,
     redraws: u64,
+    /// Where ⌘⌘ has got to, and the double taps that returned (`counts.double_cmds`).
+    cmd_taps: ottospace_core::double_cmd::Taps,
+    double_cmds: u64,
     /// Stalls in a row, so a locked screen does not fill the log.
     stall_log: event_log::Streak,
     /// The display the window was last on, by number, for the log.
@@ -1562,6 +1590,10 @@ impl Workspace {
                         this.key_used(Binding::ReturnKey);
                         this.return_to_ottospace(window, cx);
                     }
+                    let changes = ottospace_mac::modifiers::take();
+                    if !changes.is_empty() {
+                        this.modifier_changes(changes, window, cx);
+                    }
                     if hotkey::take_capture() {
                         this.key_used(Binding::CaptureKey);
                         // From any app: ottospace comes forward with the picture to draw on.
@@ -1819,6 +1851,8 @@ impl Workspace {
             frame_start: Rc::default(),
             stall: stall::Stall::new(),
             redraws: 0,
+            cmd_taps: Default::default(),
+            double_cmds: 0,
             stall_log: event_log::Streak::default(),
             on_display: None,
             displays_told: None,
@@ -2625,7 +2659,19 @@ impl Workspace {
     /// front from wherever the user is.
     fn return_to_ottospace(&mut self, window: &Window, cx: &mut Context<Self>) {
         self.dispatch(Action::Leave, self.input, window, cx);
-        cx.activate(true);
+        // A test run never takes the user's front window.
+        if std::env::var_os("OTTOSPACE_E2E").is_none() {
+            cx.activate(true);
+        }
+    }
+
+    /// The user's modifier changes in another app: a double ⌘ returns, as the return key.
+    fn modifier_changes(&mut self, changes: Vec<double_cmd::Flags>, window: &Window, cx: &mut Context<Self>) {
+        if self.cmd_taps.run(changes) > 0 {
+            self.double_cmds += 1;
+            self.key_used(Binding::ReturnKey);
+            self.return_to_ottospace(window, cx);
+        }
     }
 
     /// Answers queued control-socket calls. Each reply is the state after the call.
@@ -3461,6 +3507,11 @@ impl Workspace {
                         // It would zoom the test's window over the user's screen.
                         None => failure = Some("the window's zoom does not fill the display".into()),
                     }
+                    None
+                }
+                // A test run only: modifier changes, as the user's in another app.
+                Request::ModifierFlags { changes } => {
+                    self.modifier_changes(changes, window, cx);
                     None
                 }
                 // A test run only: made-up displays, from now on in place of the real ones.
@@ -4347,6 +4398,8 @@ impl Workspace {
                 // How often GPUI's own handlers were kicked to draw again (`stall`): after a change
                 // of the displays, or frames that stopped.
                 "redraws": self.redraws,
+                // ⌘⌘ double taps that returned (`modifier_flags`).
+                "double_cmds": self.double_cmds,
                 // Runs of the tick (`cadence`): each frame just after a change, else few at rest.
                 "ticks": self.ticks,
                 "frame_reads": self.hosted.values().map(|h| h.frame_reads).sum::<u64>(),
@@ -8156,8 +8209,8 @@ impl Workspace {
     fn render_status(&self, window: &Window, cx: &mut Context<Self>) -> impl IntoElement {
         let color = theme::accent(self.model.mode());
         // Name the return key only if it works: a wrong hint strands the user in the app.
-        let app_hint = match RETURN_KEY.get() {
-            Some(key) => format!("{key} returns"),
+        let app_hint = match return_keys() {
+            Some(keys) => format!("{keys} returns"),
             None => "click to return".to_string(),
         };
         let (mode, hint) = match self.model.mode() {
@@ -9578,8 +9631,9 @@ fn main() {
             if returns.is_none() {
                 let _ = RETURN_KEY.set(name.to_uppercase());
             }
+            let double = listen_double_cmd();
             let captures = collect::register_key(host_only.is_some());
-            let notice: Vec<String> = returns.into_iter().chain(captures).collect();
+            let notice: Vec<String> = returns.into_iter().chain(double).chain(captures).collect();
             if !notice.is_empty() {
                 eprintln!("{}", notice.join("; "));
                 let _ = workspace.update(cx, |this, _, cx| {
@@ -9659,7 +9713,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 21] = [
+        const TESTS_ONLY: [&str; 22] = [
             "capture_start",
             "bug_start",
             "repo_add",
@@ -9673,6 +9727,7 @@ mod tests {
             "audio_probe_start",
             "audio_probe_stop",
             "zoom_press",
+            "modifier_flags",
             "window_width",
             "display_change",
             "ui_gallery",

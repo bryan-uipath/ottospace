@@ -111,7 +111,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘⇧P closes |
 | ⌘P | [Go to](#go-to): a place by name, Tab or `/` for its files, `>` for the commands |
 | ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
-| F18 | From any app: take the keyboard back and bring ottospace forward |
+| ⌘⌘ or F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it |
 | ⌘1 … ⌘9 | Select a tab of the selected task (the second row) |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
@@ -1321,9 +1321,16 @@ a window the app opened by itself, and a dialog close with their window, as befo
 
 ## The return key
 
-The return key works while any app is frontmost. It is F18 by default; set `OTTOSPACE_RETURN_KEY`
-to another of `f13`-`f20`. If another program already holds the key, ottospace logs that and runs
-without a return key. Most keyboards have no F18, so map Caps Lock to it (lasts until restart):
+The return key works while any app is frontmost. Tap ⌘ twice, alone: either ⌘ key, each press
+under 250 ms, the second within 300 ms of the first's release, and no other key, modifier or mouse
+button in between. ⌘ held, ⌘C, ⌘Tab, ⌘-click and ⌘⇧ do not count. While ottospace itself has the
+keyboard, ⌘⌘ does nothing. ottospace hears only the modifier keys' changes (never which key you
+type), cannot change or stop them, and needs Accessibility for it: without it, ⌘⌘ is off and the
+status bar says so. `"return_double_cmd": false` turns it off, e.g. for another tool that uses ⌘⌘.
+
+F18 works too. Set `OTTOSPACE_RETURN_KEY` to another of `f13`-`f20`. If another program already
+holds the key, ottospace logs that and runs without it. The status bar names the keys in use. Most
+keyboards have no F18; to use Caps Lock for it (lasts until restart):
 
 ```sh
 hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}'
@@ -1426,6 +1433,7 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
   "conversation_view": "native",
   "agent_mode": "act",
   "capture_key": "ctrl-alt-cmd-space",
+  "return_double_cmd": true,
   "capture": { "keep_images": true, "ax": true },
   "workbook_scrollback_lines": 500,
   "restore_layout": true,
@@ -1464,6 +1472,7 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
 | `tasks_view` | How the Tasks section groups: `state` or `project`. Written when you pick one in the section's header | `state` |
 | `sessions_range` | Which sessions Elsewhere lists: `today`, `week` (7 days), `month` (30 days) or `all`. Set by hand: nothing on screen picks it | `week` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
+| `return_double_cmd` | ⌘ tapped twice, alone, takes the keyboard back from any app, as the return key does ([the return key](#the-return-key)). `false`: only F18. Read at start | `true` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `developer.ottospace_repo` | A git checkout of ottospace (`~` is your home). While it is one, the [bug button](#bug-reports) shows. Applies at once | none |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |

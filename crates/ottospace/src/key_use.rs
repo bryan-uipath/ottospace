@@ -11,7 +11,7 @@ use ottospace_core::commands::{ALL, Command};
 use ottospace_core::key_use::{self, Binding, KeyUse, Line, Reference, Unread};
 use ottospace_core::{Action, Origin, theme};
 
-use crate::{CopySelection, PasteText, RETURN_KEY, Workspace, collect, commands, config, now_ms};
+use crate::{CopySelection, PasteText, Workspace, collect, commands, config, now_ms, return_keys};
 
 /// A burst of keys makes one write.
 const SETTLE: Duration = Duration::from_secs(5);
@@ -60,7 +60,7 @@ pub fn keys_text(keymap: &Keymap, binding: Binding) -> Option<String> {
         return Some(keys.into());
     }
     match binding {
-        Binding::ReturnKey => return RETURN_KEY.get().cloned(),
+        Binding::ReturnKey => return return_keys(),
         Binding::CaptureKey => return collect::KEY.get().map(|key| collect::key_label(key)),
         _ => {}
     }

@@ -22,6 +22,7 @@ pub mod complete;
 pub mod compose;
 pub mod copy_ask;
 pub mod diff;
+pub mod double_cmd;
 pub mod edit;
 pub mod empty;
 pub mod features;

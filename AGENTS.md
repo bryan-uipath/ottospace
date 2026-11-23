@@ -228,6 +228,10 @@ Design note: `docs/ai/attention/plan.md`.
   - `zoom_press`: the window's green button, pressed as the user would (`performZoom:`). The zoom
     fills the display instead (`ottospace_mac::window::zoom_asks`); refused if that hook is not in,
     so it never zooms the test's window. Outside a test run only the user's hand fills the display.
+  - `modifier_flags` (`"changes": [{"at", "cmd", "others", "input_at"}]`): modifier changes as ⌘⌘'s
+    listener would hear them in another app (`double_cmd`; a test run listens to no keyboard); a
+    double tap returns as the return key, without bringing the window forward. The state's
+    `counts.double_cmds` counts them. Outside a test run only the user's own ⌘⌘ returns.
   - `display_change`: the displays changed, as macOS's reconfiguration callback says (a test
     cannot unplug one). The shell then kicks GPUI to draw again, as after a real change
     (`stall.rs`, `ottospace_mac::window::redraw`); the state's `counts.redraws` counts the kicks.
