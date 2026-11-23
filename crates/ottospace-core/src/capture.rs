@@ -580,8 +580,27 @@ pub struct Kept {
     pub stale: bool,
     /// The user's own: what they drew and typed.
     pub annotations: Vec<Shape>,
+    /// The part of the picture the marks cover, a little wider (`crop`): `[x, y, w, h]`, 0..1.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop: Option<[f64; 4]>,
     pub captured: Captured<Taken>,
     pub at: u64,
+}
+
+/// How far a crop reaches past the marks it covers, as a part of the picture.
+const CROP_MARGIN: f64 = 0.04;
+
+/// The part of a picture its marks cover, `CROP_MARGIN` wider each side and within the picture:
+/// what the new-task box shows of a capture (`[x, y, w, h]`, 0..1). `None`: nothing marked.
+pub fn crop(shapes: &[Shape]) -> Option<[f64; 4]> {
+    let regions = shapes.iter().map(Shape::region);
+    let (x, y, r, b) = regions.fold(None, |all: Option<(f64, f64, f64, f64)>, f| {
+        let (x, y, r, b) = (f.x, f.y, f.x + f.w, f.y + f.h);
+        Some(all.map_or((x, y, r, b), |(ax, ay, ar, ab)| (ax.min(x), ay.min(y), ar.max(r), ab.max(b))))
+    })?;
+    let (x, y) = ((x - CROP_MARGIN).clamp(0.0, 1.0), (y - CROP_MARGIN).clamp(0.0, 1.0));
+    let (r, b) = ((r + CROP_MARGIN).clamp(0.0, 1.0), (b + CROP_MARGIN).clamp(0.0, 1.0));
+    Some([x, y, r - x, b - y])
 }
 
 impl Kept {
@@ -821,6 +840,7 @@ pub fn brief(task: &Task, materials: &[Material], open: Open, images: bool, fenc
             n: m.n,
             stale: m.stale,
             annotations: m.marks.shapes.iter().map(kept_shape).collect(),
+            crop: crop(&m.marks.shapes),
             captured: Captured::of(taken(m)),
             at: m.at,
         }
@@ -974,6 +994,11 @@ pub fn markdown_in(brief: &Brief, dir: Option<&str>) -> String {
         }
         if material.stale {
             out.push_str("The picture may be stale: the window's stream had stopped when it was taken.\n\n");
+        }
+        if let Some([x, y, w, h]) = material.crop {
+            out.push_str(&format!(
+                "The part the user marked (0–1 of the picture, from its top left): x {x:.3}, y {y:.3}, w {w:.3}, h {h:.3}.\n\n"
+            ));
         }
         if !material.annotations.is_empty() {
             out.push_str("The user's annotations (positions are 0–1 of the picture, from its top left):\n\n");
@@ -1630,6 +1655,7 @@ mod tests {
                     || line.starts_with("No picture was kept of it. The text listed below is ")
                     || line == "(no title typed)"
                     || line.starts_with("The user's annotations (")
+                    || line.starts_with("The part the user marked (")
                     || line.starts_with("1. box over x ")
                     || line == "2. note at (0.20, 0.20): \"mine\""
             };

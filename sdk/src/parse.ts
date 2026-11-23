@@ -795,6 +795,7 @@ function briefMaterial(value: unknown, at: string): BriefMaterial {
     n: num(o.n, `${at}.n`),
     stale: bool(o.stale ?? false, `${at}.stale`),
     annotations: list(shape)(o.annotations, `${at}.annotations`),
+    ...(o.crop === undefined ? {} : { crop: rect(o.crop, `${at}.crop`) }),
     captured: {
       ...labelled(c, `${at}.captured`),
       source: captureSource(c.source, `${at}.captured.source`),

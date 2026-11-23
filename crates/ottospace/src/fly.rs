@@ -59,6 +59,15 @@ impl Workspace {
             let place = place.pt(px((h * 0.2).max(MARGIN))).child(self.render_new_task_centred(width, cx));
             return Some(div().absolute().size_full().child(dim).child(place).into_any_element());
         }
+        // The box's ✎ marks up: the box is tucked away to a line at the bottom that says the keys,
+        // clear of the pane's header and its tools.
+        // It takes no click: the panes under it are what is marked.
+        if self.model.pen_marking() {
+            let hint = "Marking up · drag: circle · ⇧ box · ⌥ pen · click: note · ↵ back to the box · Esc cancel";
+            let pill = crate::ui::lifted(div()).px_3().py_1().text_xs().text_color(rgb(theme::TEXT)).child(hint);
+            let place = div().absolute().bottom(px(crate::STATUS_BAR + 12.)).left_0().right_0().flex().justify_center();
+            return Some(place.child(pill).into_any_element());
+        }
         let flying = self.fly.now.as_ref()?;
         let t = flying.since.elapsed().as_secs_f32() * 1000.;
         let Some(frame) = fly::frame(t, flying.grow, crate::dial::calm()) else {

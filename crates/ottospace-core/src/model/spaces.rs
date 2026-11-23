@@ -761,8 +761,8 @@ impl Model {
     /// The space the box's ↵ starts its task in: the one it was opened in (or switched to),
     /// followed by a tab of it through renames. None while nothing pins it.
     pub fn compose_space(&self) -> Option<Owner> {
-        // A capture's draft is no box of the drawer: its task goes where the user is.
-        let (tab, of) = self.compose_to.as_ref().filter(|_| self.capture.is_none())?;
+        // A capture's draft in the bar is no box of the drawer: its task goes where the user is.
+        let (tab, of) = self.compose_to.as_ref().filter(|_| self.bar_draft().is_none())?;
         let by_tab = self.tabs.iter().find(|t| t.id == *tab).map(|t| t.space.clone());
         let of = by_tab.unwrap_or_else(|| of.clone());
         // Closed or hidden: it pins nothing.
@@ -805,7 +805,7 @@ impl Model {
             if let Some((_, was)) = &mut self.compose_to {
                 *was = of;
             }
-        } else if self.capture.is_none() {
+        } else if self.bar_draft().is_none() {
             self.compose_here();
         }
     }

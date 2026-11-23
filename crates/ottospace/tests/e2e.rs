@@ -6469,6 +6469,57 @@ fn names_in(dir: &Path) -> Option<Vec<String>> {
     Some(names)
 }
 
+/// The box's ✎ (⌘⇧M, `overlay_panels`): the box tucks away and the pane in use freezes to mark
+/// up, the capture key's way, with no bar; ↵ is the box again, centred, its line as typed, the
+/// capture a pill. Esc in a second round attaches nothing. ⇧↵ files the task with its capture.
+/// A client's ⌘⇧M starts none.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_boxs_pen_captures_a_pane_and_comes_back_to_the_box() {
+    let home = user_folder("pen", r#"{"repos": []}"#);
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), OVERLAYS[0], OVERLAYS[1]];
+    let otto = Otto::launch_with("pen", &env);
+    let panes = overlay_panes(&otto);
+    let pane = pane_ids(&panes)[0];
+    otto.call(json!({"cmd": "type", "pane": pane, "text": "echo marker-$((40+2))\r"}));
+    otto.call(json!({"cmd": "wait", "pane": pane, "pattern": "^marker-42$", "timeout_ms": 40000}));
+    otto.user_key("cmd-n");
+    otto.user_key("f i x space i t");
+    let theirs = otto.call(json!({"cmd": "key", "keys": "cmd-shift-m"}));
+    assert_eq!((&theirs["mode"], &theirs["state"]["capture"]), (&json!("compose"), &Value::Null), "a client's ✎");
+    let marking = otto.user_key("cmd-shift-m");
+    assert_eq!(
+        (&marking["mode"], &marking["compose_centred"], &marking["compose_host"]),
+        (&json!("annotate"), &json!(false), &json!("drawer")),
+        "the box tucked away, no bar"
+    );
+    let state = pictured(&otto);
+    assert_eq!(state["capture"]["bar"], Value::Null, "no bar opens");
+    let picture = rect(&state["capture"]["picture"]);
+    otto.user_drag(at(picture, 0.1, 0.1), at(picture, 0.4, 0.3));
+    let back = otto.user_key("enter");
+    assert_eq!(
+        (&back["mode"], &back["compose_centred"], field(&back).0.as_str()),
+        (&json!("compose"), &json!(true), "fix it")
+    );
+    let materials = |reply: &Value| reply["state"]["capture"]["materials"].as_array().map_or(0, Vec::len);
+    assert_eq!(materials(&back), 1);
+    // A second round, Esc: nothing of it is attached; the line is as it was.
+    otto.user_key("cmd-shift-m");
+    let state = pictured(&otto);
+    let picture = rect(&state["capture"]["picture"]);
+    otto.user_drag(at(picture, 0.5, 0.5), at(picture, 0.7, 0.7));
+    let esc = otto.user_key("escape");
+    assert_eq!((&esc["mode"], materials(&esc), field(&esc).0.as_str()), (&json!("compose"), 1, "fix it"));
+    // ⇧↵, as the line says: for later, with its capture.
+    let filed = otto.user_key("shift-enter");
+    let tasks = filed["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
+    let task = tasks.iter().find(|task| task["title"] == "fix it").cloned().expect("filed");
+    assert_eq!(task["materials"].as_array().map(Vec::len), Some(1), "{task}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// Waits until the capture being annotated has its picture drawn (the bar opens first, then
 /// the pane is drawn beside it and frozen) and its text read. Returns that state.
 fn pictured(otto: &Otto) -> Value {

@@ -149,6 +149,7 @@ Key Counts forgets it.
 | I want to | Do |
 |---|---|
 | Start a task | ⌘N, type a line, ↵: its agent starts in the drawer on the right, beside your workspace. The + on the Tasks bar or the top row opens the same box; its pickers (#project, >repo, @agent) show what ↵ uses: click one, or Tab through them, to change it |
+| Show the agent a bug on screen | In the box (⌘N or ⌘⇧N): ⌘⇧M (or ✎), circle or comment on the pane, ↵: it is a pill in the box, and in the task's brief |
 | Change the default agent | ⌘N, Tab to the @agent picker, ↓ to one, ⌥↵ |
 | Start a task in a new worktree | ⌘N in a repository's workspace, type a line, ⌥⌘N (or `new worktree`), ↵: git makes a branch named for the task and its agent starts there. A name taken: the notice says so and the task waits in the checkout |
 | Add a task for later | ⌘N, type a line, ⇧↵ |

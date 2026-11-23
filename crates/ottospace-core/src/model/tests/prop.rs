@@ -1264,6 +1264,7 @@ const MAKERS: &[Make] = &[
     |g| Action::ComposePicker { mark: g.rng.pick(&[None, Some('#'), Some('>'), Some('@'), Some('/')]) },
     |g| Action::ComposePickerStep { delta: g.delta() },
     |_| Action::ComposeDefault,
+    |_| Action::ComposePen,
     |g| {
         // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
         // one too long, one that is no path.
@@ -5353,6 +5354,13 @@ impl Run {
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
                 }
+                // The box's ✎ asks the shell for a capture: the user's alone, as the capture key is.
+                Effect::PenStart => {
+                    ensure!(
+                        user && matches!(action, Action::ComposePen) && m.compose_pen,
+                        "{origin:?}'s {action:?} started the pen"
+                    )
+                }
                 Effect::SaveDefaultAgent { agent } => {
                     let held = m.default_agent.as_deref() == Some(agent.as_str());
                     ensure!(
@@ -5492,7 +5500,9 @@ impl Run {
                     let text = capture::markdown(brief);
                     let last = capture::fence_lines(&brief.fence).1;
                     let ends = text.lines().filter(|line| **line == last).count();
-                    ensure!(ends == brief.materials.len() + 1, "a quoted block of the brief ends twice, or not at all");
+                    // One block a capture, one for what is open, one for a quick note's note.
+                    let blocks = brief.materials.len() + 1 + usize::from(brief.note.is_some());
+                    ensure!(ends == blocks, "a quoted block of the brief ends twice, or not at all");
                     self.shell.kept.retain(|kept| kept.0 != *draft);
                 }
                 // The window's picture: let go when its report goes; filed by the user's Send, with

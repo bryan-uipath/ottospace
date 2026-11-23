@@ -60,6 +60,8 @@ impl Workspace {
             // The line in the user's editor.
             "g" if plain && m.control => Action::EditorOpen,
             "n" if m.platform && m.alt && !m.shift && !m.control => Action::ComposeWorktree { new: None },
+            // ✎: mark up a pane for the task, and come back.
+            "m" if m.platform && m.shift && !m.alt && !m.control => Action::ComposePen,
             "o" if m.platform && !m.shift && !m.alt && !m.control => {
                 self.pick_files(window, cx);
                 return cx.stop_propagation();
@@ -368,7 +370,64 @@ impl Workspace {
             let x = off("compose-folder-clear".into(), None, Action::ComposeFolderClear);
             ui::chip(text, None).id("compose-folder").child(x).into_any_element()
         });
-        pills.into_iter().chain(folder).collect()
+        pills.into_iter().chain(folder).chain(self.snapshots(cx)).collect()
+    }
+
+    /// The box's ✎ captures, a pill each: the part marked, cropped from its picture, where it is
+    /// from and how many marks; × drops it.
+    fn snapshots(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let Some(draft) = self.model.capture.as_ref().filter(|draft| draft.boxed) else { return Vec::new() };
+        let pill = |material: &ottospace_core::capture::Material| {
+            let n = material.n;
+            let marks = material.marks.shapes.len();
+            let label =
+                format!("Snapshot · {} · {marks} mark{}", material.source.label(), if marks == 1 { "" } else { "s" });
+            let off = self.pill_off(
+                format!("snapshot-off:{n}"),
+                Some(format!("snapshot:{n}")),
+                Action::CaptureRemove { material: n },
+                cx,
+            );
+            let crop = ottospace_core::capture::crop(&material.marks.shapes).unwrap_or([0., 0., 1., 1.]);
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(self.crop_thumb(n, crop))
+                .child(ui::chip(label, None).child(off))
+                .into_any_element()
+        };
+        draft.materials.iter().map(pill).collect()
+    }
+
+    /// The part `crop` (`[x, y, w, h]`, 0..1) of capture `n`'s picture, 44 by 28 points: the
+    /// picture scaled so the part fills it.
+    fn crop_thumb(&self, n: u32, crop: [f64; 4]) -> Div {
+        use crate::collect::{Frozen, Shot};
+        let (w, h) = (44., 28.);
+        let picture = match self.shots.get(&n) {
+            Some(Shot { frozen: Frozen::App { buffer, .. }, .. }) => {
+                Some(gpui::surface(buffer.clone()).object_fit(gpui::ObjectFit::Fill).size_full().into_any_element())
+            }
+            Some(Shot { png: Some(png), .. }) => {
+                Some(gpui::img(png.clone()).object_fit(gpui::ObjectFit::Fill).size_full().into_any_element())
+            }
+            _ => None,
+        };
+        let [x, y, cw, ch] = crop.map(|v| v as f32);
+        let (sw, sh) = (w / cw.max(0.01), h / ch.max(0.01));
+        let scaled = div().absolute().left(px(-x * sw)).top(px(-y * sh)).w(px(sw)).h(px(sh)).children(picture);
+        div()
+            .relative()
+            .flex_none()
+            .w(px(w))
+            .h(px(h))
+            .overflow_hidden()
+            .rounded(px(theme::RADIUS_SM))
+            .border_1()
+            .border_color(rgb(theme::BORDER_STRONG))
+            .bg(rgb(theme::SELECTED))
+            .child(scaled)
     }
 
     /// A picker in the box's edge: its sigil and what ↵ will use, ▾; a click opens its list under
@@ -497,6 +556,19 @@ impl Workspace {
                     cx.stop_propagation();
                 }),
             );
+        // Not over a draft in the bar: that one is the capture key's.
+        let pen = self.model.bar_draft().is_none().then(|| {
+            ui::button("compose-pen", ui::Button::Ghost(ui::Face::Icon("icons/pen.svg")), ui::State::Rest)
+                .child(self.controls.mark("compose-pen"))
+                .tooltip(tip("Mark up a pane for it · ⌘⇧M"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.dispatch(Action::ComposePen, this.input, window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+        });
         let quick = self.model.quick_pills().is_some();
         let line = div()
             .relative()
@@ -523,6 +595,7 @@ impl Workspace {
             .border_t_1()
             .border_color(rgb(theme::BORDER))
             .child(attach)
+            .children(pen)
             .children(self.pickers(cx))
             .child(div().flex_1())
             .children(self.agent_picker(cx))

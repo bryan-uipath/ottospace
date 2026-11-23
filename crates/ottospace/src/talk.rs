@@ -463,6 +463,11 @@ impl Workspace {
             ("home", "terminal", _) => Action::Split { axis: Axis::Right, kind: Kind::Terminal },
             // The box's "? tags" and its +.
             ("compose-sheet", _, _) => Action::ComposeSheet,
+            ("compose-pen", _, _) => Action::ComposePen,
+            ("snapshot", n, _) => {
+                let Ok(material) = n.parse() else { return true };
+                Action::CaptureRemove { material }
+            }
             ("compose-attach", _, _) => {
                 self.pick_files(window, cx);
                 return true;
@@ -901,7 +906,8 @@ impl Workspace {
     /// drags to set its width.
     pub(crate) fn render_drawer(&self, width: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
         // The box centred over the panes: the drawer is drawn again once it leaves.
-        if self.model.compose_centred() {
+        // Nor while its ✎ marks up: the panes are what is marked.
+        if self.model.compose_centred() || self.model.pen_marking() {
             return None;
         }
         let drawer = if self.model.editor_shown() && self.model.compose.is_some() {
