@@ -1813,6 +1813,8 @@ first brainstorm:
 
 [slots.md](ai/slots.md): slots, panes that wait for a window (one window selector for slots, `windows` rules and transcripts' `meeting`), offer it, and empty when it closes. In: the selector (`windows` rules take `identifier`) and, behind `slots`, the model (its states, who may, the record in `layout.json`) and slice 3 on screen: ⋯ and its dialog, a slot's pane, new windows a slot selects. Next: the Zoom measurements, Launch and Close the pane.
 
+[zoom-out.md](ai/zoom-out.md): every tab of a workspace at once (⌘⇧\\), in three slices: the overview on a grid, free placement, the canvas. Not built.
+
 [multi-monitor.md](ai/multi-monitor.md): a tab folded out to another display (⌘⇧O), focus arrows across displays, unplug folds it back in; behind `multi_monitor`. Built: the model, ⌘⇧O and the window out (see [Displays](#displays)); its own drawer and the arrows across, not yet.
 
 [dock-strip.md](ai/dock-strip.md): a strip at the workspace's top or bottom edge for an app's small accessory window (Zoom's share control bar), sized by the window, not a ratio; options weighed, slices. Not built.
