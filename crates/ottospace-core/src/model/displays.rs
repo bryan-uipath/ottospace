@@ -522,7 +522,8 @@ mod tests {
         m.update(Action::KeyWindow { tab: 1 });
         m.update(Action::TabOut { tab: None });
         assert_eq!((m.tabs_out(), id(&m), space_tabs(&m)), (vec![], 1, vec![1]));
-        assert_eq!(m.tree_at(m.active).map(crate::layout::Node::leaves), Some(vec![1, 2]));
+        // `one`'s split filled its lone empty pane (#413): one leaf.
+        assert_eq!(m.tree_at(m.active).map(crate::layout::Node::leaves), Some(vec![1]));
         // From the main window's row, too.
         m.update(Action::TabOut { tab: None });
         let stand_in = main_id(&m);
