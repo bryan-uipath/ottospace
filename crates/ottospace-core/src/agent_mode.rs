@@ -20,6 +20,8 @@ pub const FOCUS_APP: &str = "focus an app pane to set what its task may do there
 pub const NO_OFFER: &str = "nothing to restore on this pane";
 /// What the menu says on a pane whose workspace no task works in: it grants nothing.
 pub const NO_TASK: &str = "No task works in this workspace";
+/// What a level picked there does: the next task that works there is offered it (`Ahead`).
+pub const AHEAD: &str = "For the next task here: offered, never given";
 /// What See and act grants in this build: what See does. Presses come in stage (c).
 pub const ACT_LATER: &str = "Pressing arrives later: for now See and act lets the task see, as See does";
 /// A request with no pass: no task asked.
@@ -106,6 +108,17 @@ pub struct Grant {
     pub task: Option<TaskId>,
 }
 
+/// A level the user picked on an app pane while no task worked in its workspace. The first task
+/// the user starts there is offered it (`AgentMode.offers`); only the user's click gives it.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
+pub struct Ahead {
+    pub level: Level,
+    /// The tab it was picked in (a workspace's tabs keep their ids when a task binds it): moved
+    /// to another, the pane forgets it.
+    #[serde(skip)]
+    pub tab: u32,
+}
+
 /// The open menu: whose pane, and the item the keys are on (none when a click opened it).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct Menu {
@@ -120,6 +133,8 @@ pub struct AgentMode {
     /// The level an app pane starts at in a task's workspace (`agent_mode` in the settings).
     pub default: Level,
     pub menu: Option<Menu>,
+    /// Levels picked on panes where no task works yet, for the next task there.
+    pub ahead: BTreeMap<PaneId, Ahead>,
     /// When each pane was last read and looked at, for the limit and the header's tip.
     #[serde(skip)]
     pub last: BTreeMap<PaneId, BTreeMap<AppUse, u64>>,
@@ -150,8 +165,9 @@ impl Default for AgentMode {
         // The owner's choice (2026-11-16): Act, changeable in the settings.
         let (panes, last, by_user) = (BTreeMap::new(), BTreeMap::new(), BTreeMap::new());
         let (chosen, restored, offers) = (BTreeSet::new(), BTreeMap::new(), BTreeMap::new());
-        let from_record = BTreeSet::new();
-        Self { panes, default: Level::Act, menu: None, last, by_user, chosen, restored, offers, from_record }
+        let (from_record, ahead) = (BTreeSet::new(), BTreeMap::new());
+        let default = Level::Act;
+        Self { panes, default, menu: None, ahead, last, by_user, chosen, restored, offers, from_record }
     }
 }
 

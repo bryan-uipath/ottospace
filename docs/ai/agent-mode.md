@@ -28,6 +28,11 @@ These override the leans below where they differ.
   pane's workspace, and a workspace with no task grants nothing.
 - **Off also closes today's open read** of app panes (`ax_tree`), section 4.
 - **The control** is one dropdown with a robot glyph (section 1).
+- **A level before a task (2026-11-23, a default the owner may reverse):** picked on a pane where no
+  task works, it waits (`AgentMode.ahead`), and the first task the user starts there (their own ↵)
+  is offered it, as a restored level is; only the user's click gives it. A client's task there is
+  offered nothing, and the pick is dropped. Section 1's "a task that binds later starts at Off"
+  still holds: Off, with the offer. Moved to another tab first, the pick is forgotten.
 
 ## Probes with the real CLIs (2026-11-16)
 

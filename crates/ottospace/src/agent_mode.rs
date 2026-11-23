@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::mpsc::Sender;
 
 use gpui::{AnyElement, AnyView, Context, MouseDownEvent, Window, actions, div, prelude::*, px, rgb, svg};
-use ottospace_core::agent_mode::{self, AppUse, Level, menu_key};
+use ottospace_core::agent_mode::{self, AppUse, Grant, Level, menu_key};
 use ottospace_core::ax::{Frame, Tree};
 use ottospace_core::features::Feature;
 use ottospace_core::tasks::{Caller, TaskId};
@@ -74,7 +74,8 @@ fn item_control(index: usize) -> String {
 /// What the robot says on hover, at a level, for a task or none.
 fn tip(level: Level, task: Option<TaskId>) -> String {
     match (task, level) {
-        (None, _) => agent_mode::NO_TASK.into(),
+        (None, Level::Off) => agent_mode::NO_TASK.into(),
+        (None, level) => format!("{}: {} offered to the next task here", agent_mode::NO_TASK, level.label()),
         (Some(task), Level::Off) => format!("Agent mode off: task {task} cannot see this window"),
         (Some(task), Level::See) => format!("Task {task} can see this window"),
         (Some(task), Level::Act) => format!("Task {task} can see this window. {}", agent_mode::ACT_LATER),
@@ -107,7 +108,8 @@ impl Workspace {
         let grant = self.model.agent.panes.get(&pane).copied().filter(|_| self.on(Feature::AgentMode))?;
         let colour = if grant.task.is_some() { colour(grant.level) } else { theme::BORDER_STRONG };
         let open = self.model.agent.menu.is_some_and(|menu| menu.pane == pane);
-        let tip = tip(grant.level, grant.task);
+        let shown = self.shown_level(pane, grant);
+        let tip = tip(shown, grant.task);
         let robot = div()
             .id(("agent", pane as usize))
             .relative()
@@ -122,18 +124,22 @@ impl Workspace {
             .when(open, |d| d.bg(rgb(theme::BORDER_STRONG)))
             .hover(|s| s.bg(rgb(theme::SELECTED)))
             .child(svg().path("icons/robot.svg").size(px(13.)).text_color(rgb(colour)))
-            .child(grant.level.word())
+            .child(shown.word())
             .child("▾")
             .child(self.controls.mark(robot_control(pane)))
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone().into()))))
             // The press must not reach the header: an unsteady click would start a drag.
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| this.agent_open(Some(pane), false, window, cx)));
-        // A level kept from a run before is only offered: the user's click gives it.
+        // A level kept from a run before, or picked before the task came, is only offered: the
+        // user's click gives it.
         let offer = self.model.agent.offers.get(&pane).map(|kept| {
             let task = self.model.tasks.get(kept.task).map(|task| task.title.lines().next().unwrap_or_default());
             let task: String = task.unwrap_or_default().chars().take(40).collect();
-            let text = format!("Restore {} for {task}?", kept.level.label());
+            let text = match kept.level {
+                Level::Act => format!("Let {task} see and act here?"),
+                _ => format!("Let {task} see this?"),
+            };
             div()
                 .id(("agent-offer", pane as usize))
                 .flex_none()
@@ -150,6 +156,14 @@ impl Workspace {
                 }))
         });
         Some(div().flex().items_center().gap_1().child(robot).children(offer).into_any_element())
+    }
+
+    /// The level the robot shows: the grant's, or with no task the one picked for the next.
+    fn shown_level(&self, pane: PaneId, grant: Grant) -> Level {
+        match grant.task {
+            Some(_) => grant.level,
+            None => self.model.agent.ahead.get(&pane).map_or(Level::Off, |ahead| ahead.level),
+        }
     }
 
     /// The colour of the pane's header line where a task may use it: See's blue, See and act's
@@ -231,12 +245,9 @@ impl Workspace {
         let left = (x as f32).min(f32::from(view.width) - WIDTH - 4.).max(4.);
         let list =
             dialog::floating(WIDTH).absolute().left(px(left)).top(px((y + h) as f32 + 2.)).p_1().text_sm().occlude();
-        let Some(task) = grant.task else {
-            let none = div().h(px(ITEM)).px_2().flex().items_center().text_color(rgb(theme::MUTED));
-            return Some(list.child(none.child(agent_mode::NO_TASK)));
-        };
+        let shown = self.shown_level(menu.pane, grant);
         let rows = Level::ALL.into_iter().enumerate().map(|(index, level)| {
-            let ticked = level == grant.level;
+            let ticked = level == shown;
             let later = (level == Level::Act)
                 .then(|| div().text_xs().text_color(rgb(theme::MUTED)).child(agent_mode::ACT_LATER));
             div()
@@ -265,8 +276,12 @@ impl Workspace {
                     this.agent_send(Action::AgentMenuChoose { index: Some(index) }, window, cx);
                 }))
         });
-        let head =
-            div().px_2().py_1().text_xs().text_color(rgb(theme::MUTED)).child(format!("What task {task} may do here"));
+        // Where no task works yet: the pick is for the next task here, offered to it.
+        let head = match grant.task {
+            Some(task) => format!("What task {task} may do here"),
+            None => format!("{}. {}", agent_mode::NO_TASK, agent_mode::AHEAD),
+        };
+        let head = div().px_2().py_1().text_xs().text_color(rgb(theme::MUTED)).child(head);
         Some(list.child(head).children(rows))
     }
 

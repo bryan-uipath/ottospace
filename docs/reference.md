@@ -1723,7 +1723,8 @@ empty and not renamed, and the main window shows the tab again.
   the grants are kept as they are (turning it on again raises none), and every read of an app pane by a client (`app_read`,
   `app_look`, `ax_tree`) answers `feature off: agent_mode` (design: [agent-mode.md](ai/agent-mode.md)).
   On: an app pane's header has a robot with its level (`Off`, `See`, `Act`, a caret), dimmed where
-  no task works; See in the app's blue with the task's tip, See and act in amber; the pane's
+  no task works (a level picked there waits, and the first task you start there is offered it in
+  the header: only your click gives it; a client's task gets nothing; `state.agent_mode.ahead`); See in the app's blue with the task's tip, See and act in amber; the pane's
   header line in the level's colour. Only the task the pane is granted to (its agent's pass) may `app_read` its tree or
   `app_look` at its picture (a PNG at most 1600 px, 0600, in `materials/agent-<pid>-<task>-<word>/`,
   the last 10 kept, gone when the level goes below See and at the next start; none while the pane is live), at See or more, one read and one look a second; `ax_tree` is

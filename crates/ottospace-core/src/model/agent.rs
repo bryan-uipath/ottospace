@@ -3,7 +3,7 @@
 //! send each action is `Model::refusal`.
 
 use super::{Action, Effect, Kind, Model, Origin, PaneId, STALE_PASS};
-use crate::agent_mode::{self, AppUse, Grant, Kept, Level, Menu};
+use crate::agent_mode::{self, Ahead, AppUse, Grant, Kept, Level, Menu};
 use crate::features::Feature;
 use crate::tasks::{Caller, State, TaskId};
 use crate::transcript::Notice;
@@ -69,6 +69,15 @@ impl Model {
                     Some(grant) if grant.task.is_some_and(|task| working.contains(&task)) => *grant,
                     Some(_) => {
                         self.agent.chosen.remove(&id);
+                        // Picked before any task worked here: offered to the first, if the user's
+                        // own step brought it (their ↵ in the box). A client's task gets nothing.
+                        let here = self.tab_of(id);
+                        let ahead = self.agent.ahead.get(&id).filter(|ahead| Some(ahead.tab) == here);
+                        let users = origin == Origin::User;
+                        if let (Some(level), Some(task), true) = (ahead.map(|ahead| ahead.level), front, users) {
+                            self.agent.ahead.remove(&id);
+                            self.agent.offers.insert(id, Kept { level, task });
+                        }
                         Grant { level: Level::Off, task: front }
                     }
                     None => {
@@ -86,6 +95,12 @@ impl Model {
                 panes.insert(id, grant);
             }
         }
+        // A level picked ahead stands while its pane is in the workspace it was picked in, no task there.
+        let ahead = std::mem::take(&mut self.agent.ahead);
+        let stays = |pane: &PaneId, ahead: &Ahead| {
+            panes.get(pane).is_some_and(|grant| grant.task.is_none()) && self.tab_of(*pane) == Some(ahead.tab)
+        };
+        self.agent.ahead = ahead.into_iter().filter(|(pane, ahead)| stays(pane, ahead)).collect();
         // The menu is for the task it showed: its pane gone, or given to another task, it closes.
         let before = std::mem::replace(&mut self.agent.panes, panes);
         self.agent.chosen.retain(|pane| self.agent.panes.contains_key(pane));
@@ -222,14 +237,12 @@ impl Model {
                     return effects.push(Effect::Notice { text: agent_mode::FOCUS_APP.into() });
                 };
                 let open = self.agent.menu.take().is_some_and(|menu| menu.pane == pane);
-                let tasked = self.agent.panes.get(&pane).is_some_and(|grant| grant.task.is_some());
                 if !open {
-                    self.agent.menu = Some(Menu { pane, selected: (keys && tasked).then_some(0) });
+                    self.agent.menu = Some(Menu { pane, selected: keys.then_some(0) });
                 }
             }
             Action::AgentMenuMove { delta } => {
-                let tasked = |menu: &Menu| self.agent.panes.get(&menu.pane).is_some_and(|grant| grant.task.is_some());
-                if let Some(menu) = self.agent.menu.as_mut().filter(|menu| tasked(menu)) {
+                if let Some(menu) = self.agent.menu.as_mut() {
                     let count = Level::ALL.len() as i64;
                     let from = menu.selected.map_or(if delta > 0 { -1 } else { count }, |at| at as i64);
                     menu.selected = Some((from + i64::from(delta)).rem_euclid(count) as usize);
@@ -260,7 +273,8 @@ impl Model {
         self.mark_level(pane);
     }
 
-    /// The user's level for a pane. Where no task works it grants nothing: the status bar says so.
+    /// The user's level for a pane. Where no task works it grants nothing: it is kept for the next
+    /// task there (`Ahead`), and the status bar says so.
     fn agent_level(&mut self, pane: Option<PaneId>, level: Level, effects: &mut Vec<Effect>) {
         self.agent.menu = None;
         let Some(pane) = self.agent_pane(pane) else {
@@ -273,7 +287,19 @@ impl Model {
                 self.agent.offers.remove(&pane);
                 self.mark_level(pane);
             }
-            _ => effects.push(Effect::Notice { text: agent_mode::NO_TASK.into() }),
+            Some(_) => {
+                let Some(tab) = self.tab_of(pane) else { return };
+                match level {
+                    Level::Off => {
+                        self.agent.ahead.remove(&pane);
+                    }
+                    level => {
+                        self.agent.ahead.insert(pane, Ahead { level, tab });
+                        effects.push(Effect::Notice { text: agent_mode::AHEAD.into() });
+                    }
+                }
+            }
+            None => {}
         }
     }
 
