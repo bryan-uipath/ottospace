@@ -5865,7 +5865,10 @@ impl Model {
                 // terminal is in the tab on show if it is empty or its focused pane is, else in
                 // a tab of its own, which Home does not keep: a workspace's (`settle_home`).
                 if let Some(name) = self.repo_name(&path) {
-                    let empty = self.focused.and_then(|id| self.pane(id)).is_some_and(|p| p.kind == Kind::Empty);
+                    // A pane that offers its app's new window is not filled: as ⌘D, it is skipped.
+                    let empty = self.focused.is_some_and(|id| {
+                        self.pane(id).is_some_and(|p| p.kind == Kind::Empty) && !self.offer_waits(id)
+                    });
                     if self.layout.is_some() && !empty {
                         self.leave(effects);
                         self.leave_visual(effects);

@@ -387,6 +387,26 @@ mod tests {
         assert!(m.pane(1).is_none());
     }
 
+    /// A pane that waits with an offer, alone in its tab, is no lone empty pane: ⌘D splits beside
+    /// it and a Repos row's terminal goes to a tab of its own; the offer stays.
+    #[test]
+    fn a_waiting_panes_offer_is_kept_by_cmd_d_and_a_repos_click() {
+        let mut m = offered();
+        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+        m.update(Action::Focus { pane: 1 });
+        assert!(!m.lone_empty(1));
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        assert_eq!(m.layout.as_ref().map(Node::leaves), Some(vec![1, 2]));
+        m.update(Action::Focus { pane: 1 });
+        let path = "/code/app".to_string();
+        let repo = crate::repos::Repo { name: "app".into(), path: path.clone(), branch: None, worktrees: Vec::new() };
+        m.update(Action::SetRepos { repos: vec![repo] });
+        let tabs = m.tabs.len();
+        m.update(Action::OpenRepo { path, axis: Right });
+        assert_eq!((m.tabs.len(), m.pane(1).map(|p| p.kind.clone())), (tabs + 1, Some(Kind::Empty)));
+        assert!(m.offer_waits(1));
+    }
+
     /// No offer vanishes while its app has a pane: one whose pane closes moves to another of its app.
     #[test]
     fn an_offer_whose_pane_closes_moves_to_another_pane_of_its_app() {
