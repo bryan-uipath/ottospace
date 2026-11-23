@@ -5821,7 +5821,7 @@ fn features_lists_each_flag_on_two_lines_and_finds_it_by_id_or_name() {
     otto.user_key("f e a t u r e s enter");
     let reply = otto.call(json!({"cmd": "state"}));
     let rows = reply["palette_rows"].as_array().expect("rows").clone();
-    assert_eq!(rows.len(), 11, "{rows:?}");
+    assert_eq!(rows.len(), ottospace_core::features::ALL.len(), "{rows:?}");
     // The first row whole (a rect is the part that shows), taller than a command's. Each row
     // followed by another is whole: as much room above its name as below its description, whether
     // that is one line or two (the owner: rows were two lines tall, a one-line one bottom-heavy).
@@ -10641,7 +10641,8 @@ fn go_to_finds_a_worktree_then_a_file_in_it_and_a_gt_runs_a_command() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_command_palette_runs_a_command_by_name_for_the_user_alone() {
     let otto = Otto::launch("palette");
-    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    // A terminal: Terminal Below beside a lone empty pane would fill it, not split (#413).
+    otto.call(json!({"cmd": "split"}));
     let state = || otto.call(json!({"cmd": "state"}));
     // A client's ⌘⇧P or ⌘P opens nothing: the palette runs any command as the user's.
     for keys in ["cmd-shift-p", "cmd-p"] {
@@ -18121,7 +18122,10 @@ fn zoomed_out_the_tabs_are_tiles_on_a_grid_and_the_keys_go_in_and_back() {
         let state = otto.call(json!({"cmd": "select_tab", "index": 0}));
         let tabs: Vec<u64> = (0..4).map(|at| state["state"]["tabs"][at]["id"].as_u64().unwrap()).collect();
         let pane = state["state"]["focused"].as_u64().unwrap();
-        let area = rect(&otto.drawn()["bounds"][pane.to_string()]);
+        // The panes area: the one pane, its header included (`bounds` starts under it).
+        let drawn = otto.drawn();
+        let (body, header) = (rect(&drawn["bounds"][pane.to_string()]), rect(&drawn["headers"][pane.to_string()]));
+        let area = [body[0], header[1], body[2], body[1] + body[3] - header[1]];
         let shown = |s: &Value| s["state"]["tabs"][s["state"]["active"].as_u64().unwrap() as usize]["id"].clone();
         otto.call(json!({"cmd": "type", "pane": pane, "text": "sleep 30\r"}));
         // A client's ⌘⇧\ is refused: the overview covers the user's work.
