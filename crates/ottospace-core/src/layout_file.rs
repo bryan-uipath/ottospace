@@ -308,7 +308,12 @@ impl Model {
         // Home's own tab is not kept: it is always there.
         // Nor Decisions: it ends with the run.
         let ephemeral = |of: &Owner| closing(of) || *of == Owner::Decisions;
-        let tabs = self.tabs.iter().enumerate().filter(|(_, tab)| tab.id != HOME_TAB && !ephemeral(&tab.space));
+        // Nor an empty stand-in for a tab out (`idle_stand_in`): the tab takes its place.
+        let stand_in = |id: u32| self.idle_stand_in(id).is_some();
+        let tabs = (self.tabs.iter().enumerate())
+            .filter(|(_, tab)| tab.id != HOME_TAB && !ephemeral(&tab.space) && !stand_in(tab.id));
+        let shown = self.tabs[self.main_at()].id;
+        let shown = self.idle_stand_in(shown).unwrap_or(shown);
         for (index, tab) in tabs.take(MAX_TABS) {
             let Some(mut record) = self.tab_record(index, cwds, &histories) else { continue };
             let space = spaces.iter().position(|(of, ..)| *of == tab.space);
@@ -332,7 +337,7 @@ impl Model {
             record.focused = record.focused.and_then(new_id);
             record.panes.iter_mut().for_each(|pane| pane.id = new_id(pane.id).unwrap_or(0));
             // The main window's: a tab out folds in at the next start.
-            if index == self.main_at() {
+            if tab.id == shown {
                 selected = Some(records.len());
             }
             let book = self

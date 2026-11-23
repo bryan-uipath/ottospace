@@ -1613,7 +1613,9 @@ to its own window on another display: the next one after the main window's, left
 one it was on before, if free); with two displays a second fold swaps. The keyboard goes with
 it. The main window (the one ottospace started with: Home, the top row, the left sidebar) shows
 the tab's neighbour; the tab keeps its place in its workspace's row, marked out, with Fold back in
-where its × is. A click on it goes to its window.
+where its × is. A click on it goes to its window. The only tab of its workspace leaves an empty tab
+of that workspace in its place (its empty state); folding back in removes that one if it is still
+empty and not renamed, and the main window shows the tab again.
 
 - The window out has a "From" strip (its workspace, the tab, Fold back in) and its workspace's
   rail on its outer edge: its tasks (a click shows one in the main window, whose drawer holds the

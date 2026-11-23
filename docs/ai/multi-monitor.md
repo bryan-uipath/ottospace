@@ -16,7 +16,9 @@ the owner's later word: a display plugged in again **takes back** the tab an unp
 (unless the main window shows it then; the user's own fold in clears that); with two displays a
 second fold out swaps; a tab holding an app pane stays in the main window; the second window's
 drawer and the focus arrows across displays wait (slices 4 and 6), and so does `layout.json`
-(a tab out folds in at the next start). Slice 3 is in the shell (`out_window.rs`): ⌘⇧O, the window
+(a tab out folds in at the next start); a workspace's only tab folded out leaves an empty
+stand-in tab of its workspace in the main window, removed at the fold in if still empty and not
+renamed (owner's report: the main window had gone to Home, the tab seemingly removed). Slice 3 is in the shell (`out_window.rs`): ⌘⇧O, the window
 out with its "From" strip and its workspace's rail on its outer edge (tasks, +, the transcript; a
 task's click shows it in the main window, whose drawer is the only one), Fold back in on its tab in
 the main row; each window out is kicked to draw while a display change settles. Not yet: the

@@ -3864,6 +3864,13 @@ impl Run {
         let brief_before = m.brief;
         let (sidebar_was, collapsed_was) = (m.sidebar.is_some(), m.drawer_collapsed());
         let decisions_before = m.decisions.is_some();
+        let (spaced_before, shown_before, out_before) = (
+            m.tabs.iter().map(|tab| (tab.id, tab.space.clone())).collect::<Vec<_>>(),
+            m.shown_space().clone(),
+            m.tabs_out(),
+        );
+        let idle_before: Vec<u32> =
+            m.tabs.iter().map(|tab| tab.id).filter(|id| m.idle_stand_in(*id).is_some()).collect();
         let talk_before = m.talk.clone();
         // A reorder moves the Repos entries and repositories, never adds or drops one.
         let repo_set = |m: &Model| {
@@ -3898,6 +3905,17 @@ impl Run {
                 rail_shown != Some(*item) || !over_brief || kept,
                 "the user's click over the brief of {item:?} dropped it"
             );
+        }
+        // A fold out loses no tab of any space, and the main window keeps showing its space.
+        let folded = m.tabs_out().iter().any(|(tab, _)| !out_before.iter().any(|(was, _)| was == tab));
+        if matches!(action, Action::TabOut { .. }) && folded {
+            // But an empty stand-in, gone with the tab it stood for folding back in (a swap).
+            let kept = |(id, of): &(u32, Owner)| {
+                idle_before.contains(id) || m.tabs.iter().any(|tab| tab.id == *id && tab.space == *of)
+            };
+            let kept = spaced_before.iter().all(kept);
+            ensure!(kept, "a fold out lost a tab: {spaced_before:?}, then {:?}", m.tabs);
+            ensure!(*m.shown_space() == shown_before, "a fold out left {shown_before:?} for {:?}", m.shown_space());
         }
         // The same displays again move no tab: only a display plugged in takes one back.
         if let (Action::SetDisplays { .. }, None) = (&action, &refused) {

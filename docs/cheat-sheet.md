@@ -47,7 +47,7 @@ ottospace            # opens on the Repos list
 | New workspace | + on the top row, or in the Workspaces section's header |
 | Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
 | Close the tab and its panes | ⌘⇧W |
-| Tab out to its own window on another display, and back in (`multi_monitor` flag) | ⌘⇧O; or Fold back in on its tab or in its window's strip |
+| Tab out to its own window on another display, and back in (`multi_monitor` flag) | ⌘⇧O; or Fold back in on its tab or in its window's strip. A workspace's only tab leaves an empty one behind until it folds back in |
 | See a checkout as a 3D city, the file its agents are at lit (`code_city` flag) | An empty tab or pane of a task, a workspace with a default worktree, or a repository's tab |
 | Name a building or district of the city | Point at it |
 | Save the tab into its workspace, else as a new one | ⌘⇧S |
