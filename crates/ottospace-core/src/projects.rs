@@ -1,7 +1,9 @@
 //! The Projects section (`projects` flag, `docs/ai/projects.md`): each project in the folder the
 //! settings' `projects_dir` names, as the shell last read it. ottospace only reads that folder.
 
-use serde::Serialize;
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 
 /// The most projects listed, and the most entries looked at in a project's folder: a folder is
 /// input, not trusted to be small.
@@ -13,6 +15,12 @@ pub const MAX_NOTE_BYTES: u64 = 256 * 1024;
 const MAX_TITLE: usize = 120;
 /// While the section is open the folder is read again this often; on its opening at once.
 pub const READ_EVERY_MS: u64 = 10_000;
+/// The most open times kept in `projects.json`: the most recent.
+const MAX_USED: usize = 2 * MAX_PROJECTS;
+/// `projects.json`'s largest size read: room for every kept path at its longest.
+pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+/// Why a client's open is refused: the note's path would be in the state.
+pub const USERS_ALONE: &str = "only the user opens a project";
 
 /// One project: a folder of the projects folder, or a lone `.md` file in it.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,6 +44,18 @@ pub struct Projects {
     pub listed: Vec<Project>,
     /// Paths the user dragged into place, in their order.
     pub placed: Vec<String>,
+    /// When ottospace last opened each, ms since 1970, by path.
+    pub used: BTreeMap<String, u64>,
+}
+
+/// `projects.json` in ottospace's folder: the order and the open times. Never in the notes.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Kept {
+    pub version: u32,
+    #[serde(default)]
+    pub placed: Vec<String>,
+    #[serde(default)]
+    pub used: BTreeMap<String, u64>,
 }
 
 /// A row of the section as the state gives it: never a title or a path.
@@ -48,16 +68,73 @@ pub struct Row {
     /// It has a note.
     pub note: bool,
     pub modified: u64,
+    /// When ottospace last opened it, if it did.
+    pub used: Option<u64>,
 }
 
 impl Projects {
     /// The listed projects as the section shows them: those the user placed, in their order;
-    /// then the rest, the most recently changed first (title, then path, on a tie).
+    /// then the rest, the most recently used first (title, then path, on a tie).
     pub fn ordered(&self) -> Vec<&Project> {
         let placed = self.placed.iter().filter_map(|path| self.listed.iter().find(|p| &p.path == path));
         let mut rest: Vec<&Project> = self.listed.iter().filter(|p| !self.placed.contains(&p.path)).collect();
-        rest.sort_by(|a, b| b.modified.cmp(&a.modified).then_with(|| a.title.cmp(&b.title)).then(a.path.cmp(&b.path)));
+        let recent = |p: &Project| self.recent(p);
+        rest.sort_by(|a, b| recent(b).cmp(&recent(a)).then_with(|| a.title.cmp(&b.title)).then(a.path.cmp(&b.path)));
         placed.chain(rest).collect()
+    }
+
+    /// When it was last used: changed on disk, or opened in ottospace, whichever is later.
+    pub fn recent(&self, project: &Project) -> u64 {
+        project.modified.max(self.used.get(&project.path).copied().unwrap_or(0))
+    }
+
+    /// How many listed projects are placed: the line under them.
+    pub fn placed_count(&self) -> usize {
+        self.placed.iter().filter(|path| self.listed.iter().any(|p| &p.path == *path)).count()
+    }
+
+    /// The places a drag of `path` may take: among the placed, or just after them. None: not listed.
+    pub fn places(&self, path: &str) -> Option<(usize, usize)> {
+        let listed = self.listed.iter().any(|p| p.path == path);
+        let others = self.placed_count() - usize::from(self.placed.iter().any(|p| p == path) && listed);
+        listed.then_some((0, others))
+    }
+
+    /// `path` dropped at place `to` of the listed placed ones: it is placed there. e.g. placed
+    /// [a, b], c dropped at 1: [a, c, b]. A placed path that is not listed keeps its place.
+    pub fn place(&mut self, path: &str, to: usize) {
+        self.placed.retain(|p| p != path);
+        let listed = |p: &String| self.listed.iter().any(|l| &l.path == p);
+        let index = self.placed.iter().enumerate().filter(|(_, p)| listed(p)).nth(to).map(|(at, _)| at);
+        self.placed.insert(index.unwrap_or(self.placed.len()), path.to_string());
+        // At most `MAX_PROJECTS`, as a restore keeps: one not listed goes first.
+        while self.placed.len() > MAX_PROJECTS {
+            let gone = self.placed.iter().position(|p| !listed(p)).unwrap_or(self.placed.len() - 1);
+            self.placed.remove(gone);
+        }
+    }
+
+    /// Opened at `now`: the most recent `MAX_USED` are kept.
+    pub fn use_at(&mut self, path: &str, now: u64) {
+        self.used.insert(path.to_string(), now);
+        while self.used.len() > MAX_USED {
+            let oldest = self.used.iter().min_by_key(|(_, at)| **at).map(|(path, _)| path.clone());
+            oldest.map(|path| self.used.remove(&path));
+        }
+    }
+
+    /// What `projects.json` keeps.
+    pub fn kept(&self) -> Kept {
+        Kept { version: 1, placed: self.placed.clone(), used: self.used.clone() }
+    }
+
+    /// `projects.json` read at start: each placed path once, at most `MAX_PROJECTS`; the most
+    /// recent open times.
+    pub fn restore(&mut self, placed: Vec<String>, mut used: Vec<(String, u64)>) {
+        let mut seen = std::collections::BTreeSet::new();
+        self.placed = placed.into_iter().filter(|p| seen.insert(p.clone())).take(MAX_PROJECTS).collect();
+        used.sort_by_key(|(_, at)| std::cmp::Reverse(*at));
+        self.used = used.into_iter().take(MAX_USED).collect();
     }
 
     /// The rows the state gives, in the section's order.
@@ -67,6 +144,7 @@ impl Projects {
             file: p.note.as_deref() == Some(p.path.as_str()),
             note: p.note.is_some(),
             modified: p.modified,
+            used: self.used.get(&p.path).copied(),
         };
         self.ordered().into_iter().map(row).collect()
     }
@@ -171,7 +249,7 @@ mod tests {
     fn placed_projects_come_first_in_the_users_order_then_the_most_recent() {
         let listed =
             vec![project("/p/a", "A", 10), project("/p/b", "B", 30), project("/p/c", "C", 20), project("/p/d", "D", 5)];
-        let mut projects = Projects { on: true, listed, placed: Vec::new() };
+        let mut projects = Projects { on: true, listed, ..Projects::default() };
         assert_eq!(order(&projects), ["/p/b", "/p/c", "/p/a", "/p/d"]);
         // Placed, an old one leads; one placed that is gone is skipped.
         projects.placed = vec!["/p/d".into(), "/p/gone".into(), "/p/a".into()];
@@ -181,9 +259,40 @@ mod tests {
     }
 
     #[test]
+    fn opening_one_counts_as_use_and_a_drop_places_it() {
+        let listed = vec![project("/p/a", "A", 10), project("/p/b", "B", 30), project("/p/c", "C", 20)];
+        let mut projects = Projects { on: true, listed, ..Projects::default() };
+        projects.use_at("/p/a", 40);
+        assert_eq!(order(&projects), ["/p/a", "/p/b", "/p/c"]);
+        // Only among the placed, or just after them.
+        assert_eq!(projects.places("/p/c"), Some((0, 0)));
+        projects.place("/p/c", 0);
+        projects.place("/p/b", 5);
+        assert_eq!((order(&projects), projects.places("/p/b")), (vec!["/p/c", "/p/b", "/p/a"], Some((0, 1))));
+        projects.place("/p/b", 0);
+        assert_eq!(projects.placed, ["/p/b", "/p/c"]);
+        // One placed and gone keeps its place; the places count the listed ones.
+        projects.placed.insert(1, "/p/gone".into());
+        projects.place("/p/a", 1);
+        assert_eq!(projects.placed, ["/p/b", "/p/gone", "/p/a", "/p/c"]);
+        assert_eq!(projects.places("/p/none"), None);
+    }
+
+    #[test]
+    fn projects_json_reads_back_each_place_once_and_the_newest_times() {
+        let mut projects = Projects::default();
+        let used = (0..MAX_USED as u64 + 3).map(|at| (format!("/p/{at}"), at)).collect();
+        projects.restore(vec!["/p/a".into(), "/p/b".into(), "/p/a".into()], used);
+        assert_eq!(projects.placed, ["/p/a", "/p/b"]);
+        assert_eq!((projects.used.len(), projects.used.get("/p/2")), (MAX_USED, None));
+        let text = serde_json::to_string(&projects.kept()).unwrap();
+        assert_eq!(serde_json::from_str::<Kept>(&text).unwrap(), projects.kept());
+    }
+
+    #[test]
     fn a_tie_goes_by_title_then_path() {
         let listed = vec![project("/p/z", "Same", 1), project("/p/y", "Same", 1), project("/p/x", "Alpha", 1)];
-        assert_eq!(order(&Projects { on: true, listed, placed: Vec::new() }), ["/p/x", "/p/y", "/p/z"]);
+        assert_eq!(order(&Projects { on: true, listed, ..Projects::default() }), ["/p/x", "/p/y", "/p/z"]);
     }
 
     #[test]
@@ -251,6 +360,37 @@ mod tests {
         );
         m.update(open);
         assert!(!m.sections().contains(&Section::Projects) && m.sidebar.is_none());
+    }
+
+    #[test]
+    fn opening_shows_the_note_read_only_and_the_users_drop_places_a_row() {
+        use crate::list::ListRow;
+        use crate::model::reorder::ReorderItem;
+        use crate::model::{Action, Effect, Kind, Model, Origin, Section};
+        let mut m = Model::default();
+        let mut noted = project("/p/a", "A", 10);
+        noted.note = Some("/p/a/README.md".into());
+        let listed = vec![noted, project("/p/b", "B", 30)];
+        m.update(Action::SetProjects { on: true, listed }.sent_by(Origin::System));
+        m.update(Action::Tick { now: 50 }.sent_by(Origin::System));
+        // No note: nothing opens, nothing is written.
+        assert_eq!(m.update(Action::ProjectOpen { path: "/p/b".into(), axis: crate::Axis::Right }), []);
+        let effects = m.update(Action::ProjectOpen { path: "/p/a".into(), axis: crate::Axis::Right });
+        assert!(effects.contains(&Effect::SaveProjects { kept: m.projects.kept() }), "{effects:?}");
+        let file = Kind::File { path: "/p/a/README.md".into() };
+        assert!(m.panes.iter().any(|pane| pane.kind == file));
+        assert_eq!(m.projects.used.get("/p/a"), Some(&50));
+        m.update(Action::ToggleSection { section: Section::Projects });
+        assert_eq!(m.list_rows()[0], ListRow::ProjectEntry("/p/a".into()));
+        // A client's drag moves nothing; the user's places the row.
+        let over = Action::ReorderOver { item: ReorderItem::Project { path: "/p/b".into() }, to: 0 };
+        m.update(over.clone().sent_by(Origin::Socket));
+        assert!(m.reorder().is_none());
+        m.update(over);
+        let effects = m.update(Action::ReorderDrop);
+        assert_eq!(effects, [Effect::SaveProjects { kept: m.projects.kept() }]);
+        assert_eq!(m.projects.placed, ["/p/b"]);
+        assert_eq!(m.list_rows()[0], ListRow::ProjectEntry("/p/b".into()));
     }
 
     #[test]

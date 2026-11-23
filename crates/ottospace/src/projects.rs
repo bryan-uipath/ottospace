@@ -12,6 +12,9 @@ use ottospace_core::features::Feature;
 use ottospace_core::projects::{self, MAX_ENTRIES, MAX_NOTE_BYTES, MAX_PROJECTS, Project};
 use ottospace_core::{Action, Origin, Section, theme};
 
+use ottospace_core::model::reorder::ReorderItem;
+
+use crate::reorder::DraggedItem;
 use crate::{Mark, Workspace, config, cut_text, mark, now_ms, rect, row_meta, sidebar_row};
 
 /// What one read of the folder found.
@@ -77,23 +80,79 @@ impl Workspace {
         }
     }
 
-    /// The Projects section: each project's title and how long ago it changed.
-    pub(crate) fn render_projects_section(&self) -> impl IntoElement {
+    /// The Projects section: each project's title and how long ago it was last used; a line
+    /// under the placed ones. A click opens its note; a drag places it.
+    pub(crate) fn render_projects_section(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let now = now_ms();
         let ordered = self.model.projects.ordered();
+        let placed = self.model.projects.placed_count();
         let empty = ordered.is_empty().then(|| {
             let hint = "No projects yet: each folder or .md file in projects_dir is one.";
             div().px_2().text_xs().text_color(rgb(theme::MUTED)).child(hint)
         });
-        let rows = ordered.into_iter().enumerate().map(|(at, project)| {
-            sidebar_row(("project", at), self.model.list == Some(at))
-                .child(cut_text(project.title.clone()).flex_1())
-                .child(row_meta(ottospace_core::tasks::age(project.modified, now)))
-                .child(mark(&self.marks, Mark::Project(at)))
+        // The row carried is not drawn while the drag lasts; a bar shows where it lands.
+        let carried = self.model.reorder().filter(|_| cx.has_active_drag()).and_then(|reorder| match &reorder.item {
+            ReorderItem::Project { path } => Some((path.clone(), reorder.to)),
+            _ => None,
         });
+        let others: Vec<&str> = ordered
+            .iter()
+            .map(|p| p.path.as_str())
+            .filter(|path| carried.as_ref().is_none_or(|(c, _)| c != path))
+            .collect();
+        let before = carried.as_ref().map(|(_, to)| others.get(*to).map(|path| path.to_string()));
+        let mut children = Vec::new();
+        for (at, project) in ordered.iter().enumerate() {
+            if at == placed && placed > 0 {
+                children.push(div().mx_2().h(px(1.)).flex_none().bg(rgb(theme::BORDER)).into_any_element());
+            }
+            if carried.as_ref().is_some_and(|(c, _)| *c == project.path) {
+                continue;
+            }
+            let path = project.path.clone();
+            let line = (before.as_ref() == Some(&Some(path.clone())))
+                .then(|| crate::reorder::bar(&self.controls, false, false));
+            let dragged = DraggedItem { item: ReorderItem::Project { path: path.clone() }, place: 0 };
+            let meta = match project.note {
+                Some(_) => ottospace_core::tasks::age(self.model.projects.recent(project), now),
+                None => "no note".into(),
+            };
+            let row = sidebar_row(("project", at), self.model.list == Some(at))
+                .relative()
+                .children(line)
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(|this, e: &gpui::MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
+                )
+                .on_drag(dragged, |_, _, _, cx| cx.new(|_| gpui::EmptyView))
+                .child(cut_text(project.title.clone()).flex_1())
+                .child(row_meta(meta))
+                .child(self.controls.mark(format!("projects-row:{at}")))
+                .child(mark(&self.marks, Mark::Project(at)))
+                .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
+                    this.open_project(path.clone(), e.modifiers().shift, window, cx)
+                }));
+            children.push(row.into_any_element());
+        }
+        // After the last: the bar below it.
+        if before == Some(None) {
+            let end = div().relative().flex_none().h(px(4.)).child(crate::reorder::bar(&self.controls, false, false));
+            children.push(end.into_any_element());
+        }
         let list = div().id("projects").flex_1().flex().flex_col().gap_1().p_2().overflow_y_scroll();
-        let list = list.track_scroll(&self.list_scroll).children(empty).children(rows);
+        // Released over the list: the row carried lands; anything else is put back.
+        let list = list.on_drop(cx.listener(|this, dragged: &DraggedItem, window, cx| match dragged.item {
+            ReorderItem::Project { .. } => this.reorder_released(dragged, window, cx),
+            _ => this.reorder_cancel(window, cx),
+        }));
+        let list = list.track_scroll(&self.list_scroll).children(empty).children(children);
         self.bars.tracked("projects", list, &self.list_scroll, theme::RAISED).min_h(px(0.))
+    }
+
+    /// A click on a row (or ↵): its note opens beside the focused pane; ⇧ below.
+    pub(crate) fn open_project(&mut self, path: String, down: bool, window: &gpui::Window, cx: &mut Context<Self>) {
+        let axis = if down { ottospace_core::Axis::Down } else { ottospace_core::Axis::Right };
+        self.dispatch(Action::ProjectOpen { path, axis }, self.input, window, cx);
     }
 
     /// The section as the state gives it: no title or path, only what each row is and where it

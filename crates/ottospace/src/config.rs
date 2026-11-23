@@ -427,6 +427,21 @@ pub fn read_keys() -> Option<String> {
     String::from_utf8(crate::collect::read_plain(&file, most)?).ok()
 }
 
+/// `projects.json`: the Projects order and open times. Default: none kept, no file, or not a
+/// small plain file that reads.
+pub fn read_projects() -> ottospace_core::projects::Kept {
+    let file = get().home.as_ref().map(|home| home.join("projects.json"));
+    let bytes = file.and_then(|file| crate::collect::read_plain(&file, ottospace_core::projects::MAX_FILE_BYTES));
+    bytes.and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+/// Writes `projects.json`, as `save_task` writes a task. Nothing in a test run that named no folder.
+pub fn save_projects(kept: &ottospace_core::projects::Kept) -> io::Result<()> {
+    let Some(home) = get().home.as_ref() else { return Ok(()) };
+    let text = serde_json::to_string_pretty(kept).map_err(io::Error::other)? + "\n";
+    write_whole(home, "projects.json", &text)
+}
+
 /// Writes `keys.json`, as `save_task` writes a task. Nothing in a test run that named no folder.
 pub fn save_keys(text: &str) -> io::Result<()> {
     let Some(home) = get().home.as_ref() else { return Ok(()) };

@@ -70,6 +70,7 @@ impl Workspace {
                 }
                 self.repo_place(path, f32::from(at.y))
             }
+            ReorderItem::Project { path } => self.project_place(path, f32::from(at.y)),
         };
         if carried != Some(to) {
             self.dispatch(Action::ReorderOver { item: item.clone(), to }, self.input, window, cx);
@@ -106,6 +107,23 @@ impl Workspace {
         let middle =
             |(at, p): (usize, &String)| bounds(p).map(|b| f32::from(b.center().y) - if at > from { shift } else { 0. });
         let others: Vec<Option<f32>> = paths.iter().enumerate().filter(|(_, p)| *p != path).map(middle).collect();
+        // None of the others drawn (scrolled out): where it is, not the top.
+        match others.iter().all(Option::is_none) {
+            true => from,
+            false => place_among(&others, y),
+        }
+    }
+
+    /// The place among the Projects rows other than `path`'s for the pointer at `y`, as if it
+    /// were not drawn (`Mark::Project`). The core keeps it among the placed.
+    pub(crate) fn project_place(&self, path: &str, y: f32) -> usize {
+        let marks = self.marks.borrow();
+        let bounds = |at: usize| marks.get(&crate::Mark::Project(at)).copied();
+        let ordered = self.model.projects.ordered();
+        let from = ordered.iter().position(|p| p.path == path).unwrap_or(ordered.len());
+        let shift = closes_up(bounds(from), (from + 1..ordered.len()).find_map(bounds), |b| b.origin.y);
+        let middle = |at: usize| bounds(at).map(|b| f32::from(b.center().y) - if at > from { shift } else { 0. });
+        let others: Vec<Option<f32>> = (0..ordered.len()).filter(|at| *at != from).map(middle).collect();
         // None of the others drawn (scrolled out): where it is, not the top.
         match others.iter().all(Option::is_none) {
             true => from,
@@ -150,6 +168,10 @@ impl Workspace {
             }
             ReorderItem::Repo { path } => {
                 self.dispatch(Action::RepoFold { path: path.clone(), fold: None }, self.input, window, cx);
+            }
+            ReorderItem::Project { path } => {
+                let down = window.modifiers().shift;
+                self.open_project(path.clone(), down, window, cx);
             }
         }
     }

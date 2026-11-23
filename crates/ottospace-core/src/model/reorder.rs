@@ -23,6 +23,12 @@ pub enum ReorderItem {
     Space { of: Owner },
     /// A repository's name in the Repos section, by its path: one the settings name as itself.
     Repo { path: String },
+    /// A row of the Projects section, by its path: it goes among the placed ones (`Projects::place`).
+    /// The path is never in the state.
+    Project {
+        #[serde(skip)]
+        path: String,
+    },
 }
 
 /// A drag in flight: `item`, and the place it takes if dropped now, among the rows listed (the
@@ -81,6 +87,7 @@ impl Model {
                 let pinned = entries.iter().filter(|at| dirs[**at].pinned).count();
                 Some(if own < pinned { (0, pinned - 1) } else { (pinned, entries.len() - 1) })
             }
+            ReorderItem::Project { path } => self.projects.places(path),
         }
     }
 
@@ -137,6 +144,12 @@ impl Model {
                 self.repos = repos::arrange(std::mem::take(&mut self.repos), &self.repo_dirs);
                 self.list = selected.and_then(|row| self.list_rows().iter().position(|r| *r == row)).or(self.list);
                 effects.push(Effect::SaveRepos { dirs: self.repo_dirs.dirs.clone() });
+            }
+            ReorderItem::Project { path } => {
+                let selected = self.list.and_then(|at| self.list_rows().get(at).cloned());
+                self.projects.place(&path, to);
+                self.list = selected.and_then(|row| self.list_rows().iter().position(|r| *r == row)).or(self.list);
+                effects.push(Effect::SaveProjects { kept: self.projects.kept() });
             }
         }
     }

@@ -376,7 +376,9 @@ export type Owner =
   | { kind: "decisions" };
 
 /** What the user's reorder drag carries: a row of the Workspaces section, or a space of the top row (never Home's). */
-export type ReorderItem = { kind: "workbook"; id: number } | { kind: "space"; of: Owner } | { kind: "repo"; path: string };
+export type ReorderItem = { kind: "workbook"; id: number } | { kind: "space"; of: Owner } | { kind: "repo"; path: string }
+  /** A Projects row: never its path. */
+  | { kind: "project" };
 
 /** A space of the top row: its tabs as places in `state.tabs`. Exactly one is `selected`: the tab on show is its. */
 export interface SpaceRow {
@@ -720,6 +722,8 @@ export interface ProjectRow {
   note: boolean;
   /** Its last change, ms since 1970. */
   modified: number;
+  /** When ottospace last opened it, or null. */
+  used: number | null;
   /** Where it was drawn, while the section shows it. */
   row: Rect | null;
 }

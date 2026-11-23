@@ -237,17 +237,23 @@ impl Gen<'_> {
         self.rng.coin().then(|| self.rng.pick(&[0, 1, 2, 5, usize::MAX]))
     }
 
-    /// What a reorder drag carries: a workbook's row, a space or a repository, there or not.
+    /// What a reorder drag carries: a workbook's row, a space, a repository or a project, there or not.
     fn reorder_item(&mut self) -> ReorderItem {
-        match self.rng.below(3) {
+        match self.rng.below(4) {
             0 => ReorderItem::Workbook { id: self.workbook() },
             1 => ReorderItem::Repo { path: self.repo_path() },
+            2 => ReorderItem::Project { path: self.project_path() },
             _ => {
                 let shown: Vec<Owner> = self.m.shown_spaces().iter().map(|space| space.of.clone()).collect();
                 let of = if self.rng.one_in(4) { self.owner() } else { self.rng.pick(&shown) };
                 ReorderItem::Space { of }
             }
         }
+    }
+
+    /// A made-up project's path, as `SetProjects`' maker lists them.
+    fn project_path(&mut self) -> String {
+        format!("/projects/{}", self.rng.below(5))
     }
 
     /// A workbook as a file may hold it: sound or not, with keys this build does not know.
@@ -1823,6 +1829,12 @@ const MAKERS: &[Make] = &[
         Action::SetProjects { on: g.rng.coin(), listed: (0..g.rng.below(5)).map(|_| project(g)).collect() }
     },
     |g| {
+        let placed = (0..g.rng.below(4)).map(|_| g.project_path()).collect();
+        let used = (0..g.rng.below(3)).map(|_| (g.project_path(), g.time())).collect();
+        Action::RestoreProjects { placed, used }
+    },
+    |g| Action::ProjectOpen { path: g.project_path(), axis: g.axis() },
+    |g| {
         let colors = g.rng.coin().then(|| ColorRule { text: g.text().to_lowercase(), color: 1 });
         let (on, notify, links_only, hide_free) = (g.rng.coin(), g.rng.coin(), g.rng.coin(), g.rng.coin());
         Action::SetCalendar { on, notify, links_only, hide_free, colors: colors.into_iter().collect() }
@@ -2312,6 +2324,11 @@ fn check_reorder(m: &Model) -> Result<(), String> {
             let repo = m.repos.iter().any(|repo| repo.path == *path);
             ensure!(own && repo && !m.repo_dirs.fixed, "a drag carries repository {path:?}, not an entry");
             entries.len()
+        }
+        ReorderItem::Project { path } => {
+            let places = m.projects.places(path);
+            ensure!(places.is_some(), "a drag carries project {path:?}, not listed");
+            places.map_or(0, |(_, most)| most + 1)
         }
     };
     ensure!(*to < len, "a drag's place {to} of {len}");
@@ -5354,6 +5371,15 @@ impl Run {
                 }
                 Effect::CloneCancel { id } => {
                     ensure!(user && matches!(action, Action::CloneClose { cancel: true }), "{origin:?} cancelled {id}");
+                }
+                Effect::SaveProjects { kept } => {
+                    // What the model holds, after the user's drop or an open.
+                    let acts =
+                        matches!(action, Action::ReorderDrop | Action::ProjectOpen { .. } | Action::ListChoose { .. });
+                    ensure!(
+                        acts && *kept == m.projects.kept(),
+                        "{origin:?}'s {action:?} wrote projects.json: {kept:?}"
+                    );
                 }
                 Effect::SaveRepos { dirs } => {
                     // Only the user adds, removes, moves or pins, or the end of a clone the user's ↵

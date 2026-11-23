@@ -1,6 +1,6 @@
 # Projects
 
-Status: slice 1 in (behind `projects`). The owner's ask: a Projects entry on the left rail listing
+Status: slices 1 and 2 in (behind `projects`). The owner's ask: a Projects entry on the left rail listing
 all projects; a setting for where they live; repositories linked to projects and back; a project's
 progress and help with its next actions. Design: the canvas's board C ("Projects and the weekly
 note") and its "Decided" note.
@@ -23,9 +23,16 @@ note") and its "Decided" note.
 - **Its title.** The note's first ATX heading (`#` to `######`), past a front matter block and
   outside fenced code; else the name, without `.md`. Control characters dropped, 120 characters at
   most. No front matter key is read yet.
-- **Recently used.** Until ottospace opens projects (slice 2), "used" is the last change on disk:
-  the folder's own time (an entry added, removed or renamed; most editors save by renaming) or its
-  note's, whichever is later. Slice 2 adds the last time ottospace opened it.
+- **Recently used.** The latest of: the folder's own time (an entry added, removed or renamed;
+  most editors save by renaming), its note's, and the last time ottospace opened it.
+- **Opening** (slice 2): the note in a file viewer pane, read-only, beside the focused pane (⇧:
+  below), as ⌘-click on a path opens one. A project with no note opens nothing; its row says "no
+  note". Its viewer pane has the note's path in the state, as any viewer's does, so only the user
+  opens one (`projects::USERS_ALONE`); a drag's state never names its path.
+- **Placing** (slice 2): a drag lands among the placed rows or just after them (the line); a
+  placed row dragged below stays placed, last ("Back to recent" is open). Kept with the open
+  times in `~/.ottospace/projects.json` (`{version, placed, used}`, at most 1000 times), never
+  in the notes; a test run with no folder of its own keeps none.
 - **Limits.** At most 500 projects, of the first 2000 entries; 200 entries looked at in a folder;
   a note over 256 KB is titled by its name. Read with `O_NOFOLLOW | O_NONBLOCK` (no link, no pipe).
 - **When read.** Only while the section is open: on opening, then every 10 s, on a thread of its

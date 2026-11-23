@@ -2023,6 +2023,17 @@ pub enum Action {
         on: bool,
         listed: Vec<crate::projects::Project>,
     },
+    /// `projects.json` read at start: the user's order and open times. The shell's alone.
+    RestoreProjects {
+        placed: Vec<String>,
+        used: Vec<(String, u64)>,
+    },
+    /// Open the listed project at `path`: its note in a viewer, split along `axis`. One with no
+    /// note opens nothing.
+    ProjectOpen {
+        path: String,
+        axis: Axis,
+    },
     /// The settings name a calendar feed (`on`), and whether a meeting that starts alerts.
     SetCalendar {
         on: bool,
@@ -2412,6 +2423,7 @@ impl Action {
                 | Action::NewEmptyTab
                 | Action::EditSettings
                 | Action::OpenFile { .. }
+                | Action::ProjectOpen { .. }
                 | Action::ViewerEdit { .. }
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
@@ -2755,6 +2767,7 @@ impl Action {
             | Action::TabIn { .. }
             | Action::KeyWindow { .. }
             | Action::SetProjects { .. }
+            | Action::RestoreProjects { .. }
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
@@ -2828,6 +2841,7 @@ impl Action {
             | Action::OfferList { .. }
             | Action::OfferGone { .. }
             | Action::OpenFile { .. }
+            | Action::ProjectOpen { .. }
             | Action::ViewerKey { .. }
             | Action::ViewerScrolled { .. }
             | Action::ViewerRead { .. }
@@ -2864,7 +2878,7 @@ impl Action {
             | Action::MarkBind { .. }
             | Action::MarkPrefix
             | Action::MarkEdit { .. } => Some(Feature::Marks),
-            Action::ToggleSection { section: Section::Projects } => Some(Feature::Projects),
+            Action::ToggleSection { section: Section::Projects } | Action::ProjectOpen { .. } => Some(Feature::Projects),
             Action::ToggleSection { section: Section::Apps }
             | Action::AppPin { .. }
             | Action::AppHide { .. }
@@ -3197,6 +3211,7 @@ impl Action {
             | Action::SetDisplays { .. }
             | Action::TalkStart
             | Action::SetProjects { .. }
+            | Action::RestoreProjects { .. }
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
@@ -3393,6 +3408,10 @@ pub enum Effect {
     /// the settings file, as it is then.
     SaveApps {
         changes: Vec<crate::settings::ListChange>,
+    },
+    /// The Projects order or an open time changed: write `projects.json` (`projects::Kept`).
+    SaveProjects {
+        kept: crate::projects::Kept,
     },
     /// The Repos list's entries changed: write them, in this order, as `repos` in the settings
     /// file.
@@ -4683,6 +4702,12 @@ impl Model {
             }
             Action::CloneProgress { .. } | Action::CloneDone { .. } if origin == Origin::Socket => {
                 Some(crate::clone::SHELLS_ALONE)
+            }
+            // A project's note opens only by the user's hand: a client's open would put its path
+            // in the state, which never gives one.
+            Action::ProjectOpen { .. } => Some(crate::projects::USERS_ALONE),
+            Action::ListChoose { .. } if self.sidebar == Some(Section::Projects) && self.rail_focus.is_none() => {
+                Some(crate::projects::USERS_ALONE)
             }
             // ↵ on a meeting joins it, as its Join does.
             Action::ListChoose { .. } if self.sidebar == Some(Section::Calendar) && self.rail_focus.is_none() => {
@@ -6573,8 +6598,8 @@ impl Model {
                 Some(ListRow::AllApps) => self.apps_toggle(apps::Group::All),
                 // ↵ on a meeting is its Join: the user's alone (`refusal`).
                 Some(ListRow::Meeting(id)) => self.act(Action::CalendarJoin { id }, effects),
-                // Opening a project comes in a later slice: the list is read-only for now.
-                Some(ListRow::ProjectEntry(_)) | None => {}
+                Some(ListRow::ProjectEntry(path)) => self.act(Action::ProjectOpen { path, axis }, effects),
+                None => {}
             },
             Action::ListSnooze { until } => {
                 if let Some(id) = self.selected_task() {
@@ -7535,6 +7560,8 @@ impl Model {
                     self.section_gone(Section::Projects);
                 }
             }
+            Action::RestoreProjects { placed, used } => self.projects.restore(placed, used),
+            Action::ProjectOpen { path, axis } => self.project_open(&path, axis, effects),
             Action::SetCalendar { on, notify, links_only, hide_free, colors } => {
                 (self.calendar.on, self.calendar.notify, self.calendar.links_only) = (on, notify, links_only);
                 self.calendar.options(hide_free, colors);
@@ -8830,6 +8857,19 @@ impl Model {
             _ => true,
         };
         zones::SECTIONS.into_iter().filter(|s| set(s) && flagged(s)).collect()
+    }
+
+    /// A listed project's note, read-only in a viewer; opening it is a use (`Projects::recent`).
+    fn project_open(&mut self, path: &str, axis: Axis, effects: &mut Vec<Effect>) {
+        let note = self.projects.listed.iter().find(|p| p.path == path).and_then(|p| p.note.clone());
+        // One the viewer would refuse is no use either.
+        let Some(note) = note.filter(|note| crate::viewer::sound(note)) else { return };
+        // The row selected stays selected where its use moves it.
+        let selected = self.list.and_then(|at| self.list_rows().get(at).cloned());
+        self.projects.use_at(path, self.now);
+        self.list = selected.and_then(|row| self.list_rows().iter().position(|r| *r == row)).or(self.list);
+        effects.push(Effect::SaveProjects { kept: self.projects.kept() });
+        self.open_file(note, axis, None, false, None, effects);
     }
 
     /// A section no longer shown (its setting went): its list closes, and a rail focus on it
@@ -11057,6 +11097,8 @@ mod tests {
         Action::KeyWindow { .. },
         Action::TalkStart,
         Action::SetProjects { .. },
+        Action::RestoreProjects { .. },
+        Action::ProjectOpen { .. },
         Action::SetCalendar { .. },
         Action::CalendarRead { .. },
         Action::CallSeen { .. },
@@ -11460,6 +11502,8 @@ mod tests {
             Action::KeyWindow { tab: 1 },
             Action::TalkStart,
             Action::SetProjects { on: true, listed: Vec::new() },
+            Action::RestoreProjects { placed: Vec::new(), used: Vec::new() },
+            Action::ProjectOpen { path: "/p/a".into(), axis: Axis::Right },
             Action::SetCalendar { on: true, notify: true, links_only: false, hide_free: false, colors: Vec::new() },
             Action::CalendarRead { events: None, days: [0; calendar::DAYS], at: 0, held_from: 0 },
             Action::CallSeen { in_call: Some(false), at: 0 },
@@ -12026,6 +12070,7 @@ mod tests {
                         Some(rail::RAIL_USERS)
                     }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
+                    Action::ProjectOpen { .. } => Some(crate::projects::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     Action::CopyPath { .. } => Some(crate::status_bar::USERS_COPY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
@@ -19019,6 +19064,7 @@ mod tests {
                         Some(rail::RAIL_USERS)
                     }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
+                    Action::ProjectOpen { .. } => Some(crate::projects::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     Action::CopyPath { .. } => Some(crate::status_bar::USERS_COPY),
                     _ if talks(action) => Some(chat::USERS_ALONE),

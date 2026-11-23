@@ -608,7 +608,8 @@ function reorder(value: unknown, at: string): { item: ReorderItem; to: number } 
   if (item.kind === "workbook") carried = { kind: "workbook", id: num(item.id, `${at}.item.id`) };
   else if (item.kind === "space") carried = { kind: "space", of: owner(item.of, `${at}.item.of`) };
   else if (item.kind === "repo") carried = { kind: "repo", path: str(item.path, `${at}.item.path`) };
-  else throw wrong(`${at}.item.kind`, "workbook, space or repo", item.kind);
+  else if (item.kind === "project") carried = { kind: "project" };
+  else throw wrong(`${at}.item.kind`, "workbook, space, repo or project", item.kind);
   return { item: carried, to: num(o.to, `${at}.to`) };
 }
 
@@ -1390,6 +1391,7 @@ function projectRow(value: unknown, at: string): ProjectRow {
     file: bool(o.file, `${at}.file`),
     note: bool(o.note, `${at}.note`),
     modified: num(o.modified, `${at}.modified`),
+    used: orNull(num)(o.used, `${at}.used`),
     row: orNull(rect)(o.row, `${at}.row`),
   };
 }

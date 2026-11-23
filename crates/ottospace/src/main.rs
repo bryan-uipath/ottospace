@@ -1729,6 +1729,9 @@ impl Workspace {
         model.update(Action::SetCalendar { on, notify, links_only, hide_free, colors }.sent_by(Origin::System));
         let projects = Action::SetProjects { on: config::projects_dir().is_some(), listed: Vec::new() };
         model.update(projects.sent_by(Origin::System));
+        let kept = config::read_projects();
+        let restore = Action::RestoreProjects { placed: kept.placed, used: kept.used.into_iter().collect() };
+        model.update(restore.sent_by(Origin::System));
         // Before what a restore reads: a section behind a flag that is off is not put back.
         model.update(Action::SetFeatures { features: features::startup() }.sent_by(Origin::System));
         // A test run's fixture is a transcript's sound: a terminal pane may be heard.
@@ -2303,6 +2306,11 @@ impl Workspace {
                     self.cloner.start(*id, *provider, remote.clone(), staging.clone(), dest.clone(), *make_dir)
                 }
                 Effect::CloneCancel { id } => self.cloner.cancel(*id),
+                Effect::SaveProjects { kept } => {
+                    if let Err(err) = config::save_projects(kept) {
+                        self.error = Some(format!("projects.json: {err}"));
+                    }
+                }
                 Effect::SaveRepos { dirs } => {
                     let said = self.error.take();
                     self.save_list(|| config::save_repos(dirs));
@@ -4255,7 +4263,7 @@ impl Workspace {
             // (`header`), and its checkouts (`rows`: `path`, `branch`, `default`, `label`, `row`).
             "repos_bar": self.repos_bar(),
             // The Projects section (`projects`): `on` while `projects_dir` is set, and each row in
-            // its order: `placed`, `file`, `note`, `modified` and where it was drawn. Never a
+            // its order: `placed`, `file`, `note`, `modified`, `used` and where it was drawn. Never a
             // project's title or path: those are the user's. Off and empty with the flag off.
             "projects_bar": self.projects_bar(),
             // The home screen, or null while the tab on show has a pane: each task's node (its
@@ -6301,7 +6309,7 @@ impl Workspace {
             Section::Tasks => self.render_tasks(cx).into_any_element(),
             Section::Marks => self.render_marks(cx).into_any_element(),
             Section::Calendar => self.render_calendar(cx).into_any_element(),
-            Section::Projects => self.render_projects_section().into_any_element(),
+            Section::Projects => self.render_projects_section(cx).into_any_element(),
             Section::Workbook => self.render_workbooks(cx).into_any_element(),
         };
         div()
@@ -6948,7 +6956,9 @@ impl Workspace {
             // Released over the list: the repository carried lands; anything else is put back.
             .on_drop(cx.listener(|this, dragged: &reorder::DraggedItem, window, cx| match dragged.item {
                 ReorderItem::Repo { .. } => this.reorder_released(dragged, window, cx),
-                ReorderItem::Workbook { .. } | ReorderItem::Space { .. } => this.reorder_cancel(window, cx),
+                ReorderItem::Workbook { .. } | ReorderItem::Space { .. } | ReorderItem::Project { .. } => {
+                    this.reorder_cancel(window, cx)
+                }
             }));
         self.bars.tracked(
             "repos",
@@ -7928,7 +7938,9 @@ impl Workspace {
                     )
                     .on_drop(cx.listener(|this, dragged: &reorder::DraggedItem, window, cx| match dragged.item {
                         ReorderItem::Space { .. } => this.reorder_released(dragged, window, cx),
-                        ReorderItem::Workbook { .. } | ReorderItem::Repo { .. } => this.reorder_cancel(window, cx),
+                        ReorderItem::Workbook { .. } | ReorderItem::Repo { .. } | ReorderItem::Project { .. } => {
+                            this.reorder_cancel(window, cx)
+                        }
                     })),
             )
             .children(more)

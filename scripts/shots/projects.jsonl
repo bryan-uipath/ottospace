@@ -6,3 +6,11 @@
 {"until":"projects_bar.rows","len":5}
 {"settle":300}
 {"shot":"list"}
+# The last row dragged to the top: placed, above a thin line. Then a click opens its note read-only.
+{"drag":{"rect":"projects_bar.rows.4.row"},"at":[0.5,0.5],"by":[0,-140]}
+{"until":"projects_bar.rows.0.placed","is":true}
+{"settle":300}
+{"shot":"placed"}
+{"click":"projects-row:1"}
+{"settle":500}
+{"shot":"opened"}
