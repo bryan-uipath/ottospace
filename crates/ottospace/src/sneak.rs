@@ -410,6 +410,17 @@ impl Workspace {
                 }
                 None
             }
+            // A Projects row, by its place: its note opens.
+            ("projects-row", _) => {
+                let path = name
+                    .parse::<usize>()
+                    .ok()
+                    .and_then(|at| self.model.projects.ordered().get(at).map(|p| p.path.clone()));
+                if let Some(path) = path {
+                    self.open_project(path, false, window, cx);
+                }
+                None
+            }
             // `project:` with no name is the group of no project.
             ("project" | "project-done", _) => {
                 let project = Some(name.to_string()).filter(|name| !name.is_empty());

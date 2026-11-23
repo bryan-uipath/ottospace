@@ -127,7 +127,7 @@ impl Workspace {
                 .on_drag(dragged, |_, _, _, cx| cx.new(|_| gpui::EmptyView))
                 .child(cut_text(project.title.clone()).flex_1())
                 .child(row_meta(meta))
-                .child(self.controls.mark(format!("project:{at}")))
+                .child(self.controls.mark(format!("projects-row:{at}")))
                 .child(mark(&self.marks, Mark::Project(at)))
                 .on_click(cx.listener(move |this, e: &gpui::ClickEvent, window, cx| {
                     this.open_project(path.clone(), e.modifiers().shift, window, cx)
@@ -147,23 +147,6 @@ impl Workspace {
         }));
         let list = list.track_scroll(&self.list_scroll).children(empty).children(children);
         self.bars.tracked("projects", list, &self.list_scroll, theme::RAISED).min_h(px(0.))
-    }
-
-    /// The place among the rows other than `path`'s for the pointer at `y` (`Mark::Project`), as
-    /// if it were not drawn. The core keeps it among the placed.
-    pub(crate) fn project_place(&self, path: &str, y: f32) -> usize {
-        let marks = self.marks.borrow();
-        let ordered = self.model.projects.ordered();
-        let from = ordered.iter().position(|p| p.path == path).unwrap_or(ordered.len());
-        let bounds = |at: usize| marks.get(&Mark::Project(at)).copied();
-        let shift = bounds(from).zip(bounds(from + 1)).map_or(0., |(a, b)| f32::from(b.origin.y - a.origin.y));
-        let middle = |at: usize| bounds(at).map(|b| f32::from(b.center().y) - if at > from { shift } else { 0. });
-        let middles: Vec<Option<f32>> = (0..ordered.len()).filter(|at| *at != from).map(middle).collect();
-        let drawn = || middles.iter().enumerate().filter_map(|(at, m)| Some((at, (*m)?)));
-        match drawn().find(|(_, m)| y < *m) {
-            Some((at, _)) => at,
-            None => drawn().last().map_or(from, |(at, _)| at + 1),
-        }
     }
 
     /// A click on a row (or ↵): its note opens beside the focused pane; ⇧ below.

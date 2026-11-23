@@ -17,8 +17,10 @@ const MAX_TITLE: usize = 120;
 pub const READ_EVERY_MS: u64 = 10_000;
 /// The most open times kept in `projects.json`: the most recent.
 const MAX_USED: usize = 2 * MAX_PROJECTS;
-/// `projects.json`'s largest size read.
-pub const MAX_FILE_BYTES: u64 = 1024 * 1024;
+/// `projects.json`'s largest size read: room for every kept path at its longest.
+pub const MAX_FILE_BYTES: u64 = 4 * 1024 * 1024;
+/// Why a client's open is refused: the note's path would be in the state.
+pub const USERS_ALONE: &str = "only the user opens a project";
 
 /// One project: a folder of the projects folder, or a lone `.md` file in it.
 #[derive(Clone, Debug, PartialEq)]
@@ -105,6 +107,11 @@ impl Projects {
         let listed = |p: &String| self.listed.iter().any(|l| &l.path == p);
         let index = self.placed.iter().enumerate().filter(|(_, p)| listed(p)).nth(to).map(|(at, _)| at);
         self.placed.insert(index.unwrap_or(self.placed.len()), path.to_string());
+        // At most `MAX_PROJECTS`, as a restore keeps: one not listed goes first.
+        while self.placed.len() > MAX_PROJECTS {
+            let gone = self.placed.iter().position(|p| !listed(p)).unwrap_or(self.placed.len() - 1);
+            self.placed.remove(gone);
+        }
     }
 
     /// Opened at `now`: the most recent `MAX_USED` are kept.

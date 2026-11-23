@@ -2423,6 +2423,7 @@ impl Action {
                 | Action::NewEmptyTab
                 | Action::EditSettings
                 | Action::OpenFile { .. }
+                | Action::ProjectOpen { .. }
                 | Action::ViewerEdit { .. }
                 | Action::SelectTab { .. }
                 | Action::SelectVisibleTab { .. }
@@ -4701,6 +4702,12 @@ impl Model {
             }
             Action::CloneProgress { .. } | Action::CloneDone { .. } if origin == Origin::Socket => {
                 Some(crate::clone::SHELLS_ALONE)
+            }
+            // A project's note opens only by the user's hand: a client's open would put its path
+            // in the state, which never gives one.
+            Action::ProjectOpen { .. } => Some(crate::projects::USERS_ALONE),
+            Action::ListChoose { .. } if self.sidebar == Some(Section::Projects) && self.rail_focus.is_none() => {
+                Some(crate::projects::USERS_ALONE)
             }
             // ↵ on a meeting joins it, as its Join does.
             Action::ListChoose { .. } if self.sidebar == Some(Section::Calendar) && self.rail_focus.is_none() => {
@@ -8855,8 +8862,12 @@ impl Model {
     /// A listed project's note, read-only in a viewer; opening it is a use (`Projects::recent`).
     fn project_open(&mut self, path: &str, axis: Axis, effects: &mut Vec<Effect>) {
         let note = self.projects.listed.iter().find(|p| p.path == path).and_then(|p| p.note.clone());
-        let Some(note) = note else { return };
+        // One the viewer would refuse is no use either.
+        let Some(note) = note.filter(|note| crate::viewer::sound(note)) else { return };
+        // The row selected stays selected where its use moves it.
+        let selected = self.list.and_then(|at| self.list_rows().get(at).cloned());
         self.projects.use_at(path, self.now);
+        self.list = selected.and_then(|row| self.list_rows().iter().position(|r| *r == row)).or(self.list);
         effects.push(Effect::SaveProjects { kept: self.projects.kept() });
         self.open_file(note, axis, None, false, None, effects);
     }
@@ -12059,6 +12070,7 @@ mod tests {
                         Some(rail::RAIL_USERS)
                     }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
+                    Action::ProjectOpen { .. } => Some(crate::projects::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     Action::CopyPath { .. } => Some(crate::status_bar::USERS_COPY),
                     _ if talks(action) => Some(chat::USERS_ALONE),
@@ -19052,6 +19064,7 @@ mod tests {
                         Some(rail::RAIL_USERS)
                     }
                     Action::CalendarJoin { .. } | Action::CalendarDismiss { .. } => Some(calendar::USERS_ALONE),
+                    Action::ProjectOpen { .. } => Some(crate::projects::USERS_ALONE),
                     Action::CalendarRetry => Some(calendar::USERS_RETRY),
                     Action::CopyPath { .. } => Some(crate::status_bar::USERS_COPY),
                     _ if talks(action) => Some(chat::USERS_ALONE),

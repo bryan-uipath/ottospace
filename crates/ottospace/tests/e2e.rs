@@ -17629,13 +17629,13 @@ fn a_project_dragged_up_stays_placed_and_a_click_opens_its_note_read_only() {
     let home = user_folder("projects-open", &settings.to_string());
     let launch = |n: &str| Otto::launch_with(n, &[("OTTOSPACE_HOME", home.to_str().unwrap()), PROJECTS]);
     let rows = |o: &Otto| {
-        o.call(json!({"cmd": "section", "section": "projects"}));
         o.wait_for("three projects drawn", |o| {
             let rows = o.call(json!({"cmd": "state"}))["projects_bar"]["rows"].as_array()?.clone();
             (rows.len() == 3 && rows.iter().all(|row| !row["row"].is_null())).then_some(rows)
         })
     };
     let otto = launch("projects-open-1");
+    otto.call(json!({"cmd": "section", "section": "projects"}));
     let before = rows(&otto);
     let spike = before[2]["modified"].clone();
     // A client's drag places nothing; the user's drag of the oldest to the top places it.
@@ -17646,11 +17646,13 @@ fn a_project_dragged_up_stays_placed_and_a_click_opens_its_note_read_only() {
     assert_eq!((&after[0]["placed"], &after[0]["modified"]), (&json!(true), &spike));
     let kept: Value = serde_json::from_str(&std::fs::read_to_string(home.join("projects.json")).unwrap()).unwrap();
     assert_eq!(kept["placed"].as_array().map(Vec::len), Some(1));
-    // A click opens its note in a viewer; the folder with no note opens nothing.
+    // A client's click opens nothing (the note's path would be in the state); the user's opens
+    // its note in a viewer; the folder with no note opens nothing.
     let none = after.iter().position(|row| row["note"] == false).unwrap();
     let panes = |reply: &Value| reply["state"]["panes"].as_array().unwrap().len();
-    let reply = otto.user_click(at(rect(&after[none]["row"]), 0.5, 0.5));
-    let count = panes(&reply);
+    let count = panes(&otto.call(json!({"cmd": "state"})));
+    assert_eq!(panes(&otto.click(at(rect(&after[0]["row"]), 0.5, 0.5), 1)), count);
+    assert_eq!(panes(&otto.user_click(at(rect(&after[none]["row"]), 0.5, 0.5))), count);
     let reply = otto.user_click(at(rect(&after[0]["row"]), 0.5, 0.5));
     let path = dir.join("spike.md").to_string_lossy().into_owned();
     assert!(
@@ -17661,6 +17663,7 @@ fn a_project_dragged_up_stays_placed_and_a_click_opens_its_note_read_only() {
 
     // Kept across a restart.
     let otto = launch("projects-open-2");
+    otto.call(json!({"cmd": "section", "section": "projects"}));
     assert_eq!(rows(&otto)[0]["placed"], true);
     drop(otto);
     let _ = std::fs::remove_dir_all(&home);
