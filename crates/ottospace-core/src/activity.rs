@@ -237,6 +237,17 @@ impl Activity {
         files
     }
 
+    /// The one file its agent is at now, of `files`: its newest call's if a file's, else its
+    /// newest running call on a file. None with no file (a shell line, the turn over).
+    pub fn at(&self, is: &Is) -> Option<&str> {
+        let files = self.files(is);
+        let last = self.last.as_ref().filter(|last| last.station == Station::Files).map(|last| last.label.as_str());
+        let running = self.running.iter().rev().find(|call| call.station == Station::Files);
+        let at =
+            last.filter(|last| files.iter().any(|(file, _)| file == last)).or(running.map(|call| call.label.as_str()));
+        at.filter(|at| files.iter().any(|(file, _)| file == at))
+    }
+
     /// The centre's state, for a conversation in the state `is`. No clock in it.
     pub fn pulse(&self, is: &Is) -> Pulse {
         if self.error.is_some() {

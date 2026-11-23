@@ -3701,9 +3701,10 @@ impl Workspace {
     /// The reading itself is on the poller's thread.
     fn poll_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = now_ms();
-        // Read for the Repos section's dots too; listed only while Tasks is open.
+        // Read for the Repos section's dots and a code city's agents too; listed only while Tasks is open.
         let tasks = self.model.sidebar == Some(Section::Tasks);
-        let open = tasks || self.model.sidebar == Some(Section::Repos);
+        let city = self.model.empty_places().into_iter().any(|at| self.model.city_at(at).is_some());
+        let open = tasks || self.model.sidebar == Some(Section::Repos) || city;
         if tasks != self.sessions_tasks && open {
             // Tasks closed into Repos: its list goes at once. Either way, read again now.
             self.sessions_tasks = tasks;
@@ -4386,6 +4387,8 @@ impl Workspace {
                 "city_fade_frames": self.city_fade_frames(),
                 // Frames a city's first picture rising painted: none at rest or under Reduce Motion.
                 "city_rise_frames": self.city_rise_frames(),
+                // Frames an agent's icon in the code city asked for as it glided: none at rest or under Reduce Motion.
+                "city_agent_frames": self.city_agent_frames(),
                 // Frames the dial asked for because something in it moves: none at rest.
                 "dial_frames": self.dial_motion.borrow().frames,
                 // Frames a working line's sweep asked for: none at rest, none under Reduce Motion.

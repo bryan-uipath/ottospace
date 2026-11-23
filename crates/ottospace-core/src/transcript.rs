@@ -605,6 +605,11 @@ impl Transcript {
         self.activity.pulse(&self.is())
     }
 
+    /// The one file its agent is at now (`Activity::at`).
+    pub fn file_at(&self) -> Option<&str> {
+        self.activity.at(&self.is())
+    }
+
     /// The labels of the files its agent is at now (`Activity::files`).
     pub fn files(&self) -> Vec<(&str, bool)> {
         self.activity.files(&self.is())

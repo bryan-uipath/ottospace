@@ -87,6 +87,7 @@ import type {
   Glyph,
   HomeDrawn,
   CityDrawn,
+  CityAgent,
   CityHovered,
   CityOn,
   HomeNode,
@@ -2208,6 +2209,18 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     hovered: orNull(cityHovered)(o.hovered, `${at}.hovered`),
     first_ms: orNull(num)(o.first_ms, `${at}.first_ms`),
     read_us: orNull(num)(o.read_us, `${at}.read_us`),
+    agents: list(cityAgent)(o.agents, `${at}.agents`),
+  };
+}
+
+function cityAgent(value: unknown, at: string): CityAgent {
+  const o = fields(value, at);
+  return {
+    task: orNull(num)(o.task, `${at}.task`),
+    rect: rect(o.rect, `${at}.rect`),
+    cone: bool(o.cone, `${at}.cone`),
+    fan: pair(o.fan, `${at}.fan`),
+    hovered: bool(o.hovered, `${at}.hovered`),
   };
 }
 

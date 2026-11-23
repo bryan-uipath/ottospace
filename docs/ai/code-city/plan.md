@@ -258,6 +258,25 @@ that checkout (two tasks in one checkout: each in its colour; a file in the root
 clock is read: the lit set changes only with an event. Two files that share their last two
 parts are both lit: honest about what is known, and wrong for one of them (open question 3).
 
+Built (the owner's word, 2026-11-21: "visualize agents as icons floating above shining over what
+they are working on"): each agent working now in the city's checkout floats as its task's badge
+(its letters in a square bordered in its identity colour) over the file it is at
+(`Activity::at`: its newest call's file, else its newest running call on one), at that
+building's beam's end, a translucent cone of its colour from the icon down onto the building's
+top, its top washed in it. Several on one file fan out side by side; one at no file (a shell
+line, between calls) floats over the city's corner leftmost in the picture, with no cone
+(`Scene::marks`, tested). A session no task has, at work in the checkout (a `claude` the user
+runs in a terminal: the Repos dot's `SessionsAtWork`), floats too, as its runner's glyph in the
+colour of work going on, its file lit; its title on hover. Moving to another file, an icon
+glides there over 280 ms (at once under Reduce Motion; `counts.city_agent_frames`, none at rest).
+Icons and cones are drawn by GPUI over the picture at projected points, as the beam is: an agent
+that moves renders nothing again, and a glide needs no render. The user's pointer on an icon
+names its task (its title, drawn only) and wins over the building under it; the user's own
+click goes to the task, as its row does (`Model::city_agent_click`: a client's click, or a
+session's, does nothing: which pane a session runs in is not known until a terminal's agent is
+matched to its session). An icon is lowered along its beam until clear of the hints, else not
+drawn.
+
 Proposed next: a marker (the task's badge, its identity colour) on the node the agent touched
 last, with the last few as a fading trail (drawn at fixed strengths, no animation); two agents
 in one building split it. An agent running a command, or between calls for long, is shown at
