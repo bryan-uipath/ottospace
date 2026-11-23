@@ -18013,6 +18013,7 @@ fn zoomed_out_the_tabs_are_tiles_on_a_grid_and_the_keys_go_in_and_back() {
         let pane = state["state"]["focused"].as_u64().unwrap();
         let area = rect(&otto.drawn()["bounds"][pane.to_string()]);
         let shown = |s: &Value| s["state"]["tabs"][s["state"]["active"].as_u64().unwrap() as usize]["id"].clone();
+        otto.call(json!({"cmd": "type", "pane": pane, "text": "sleep 30\r"}));
         // A client's ⌘⇧\ is refused: the overview covers the user's work.
         let refused = otto.call(json!({"cmd": "key", "keys": "cmd-|"}));
         assert_eq!((&refused["state"]["zoom"], &refused["zoom_tiles"]), (&Value::Null, &Value::Null), "{size}");
@@ -18052,6 +18053,11 @@ fn zoomed_out_the_tabs_are_tiles_on_a_grid_and_the_keys_go_in_and_back() {
         assert_eq!(moved["state"]["zoom"]["selected"], tabs[3], "{size}");
         let typed = otto.user_key("x");
         assert_eq!(typed["state"]["zoom"]["selected"], tabs[3], "{size}: a letter types nowhere");
+        // Nor ⌃C: the program in the first tab runs on.
+        otto.user_key("ctrl-c");
+        std::thread::sleep(Duration::from_millis(300));
+        let text = otto.call(json!({"cmd": "capture", "pane": pane}))["text"].to_string();
+        assert!(!text.contains("^C"), "{size}: ⌃C reached the terminal: {text}");
         let entered = otto.user_key("enter");
         assert_eq!((&entered["state"]["zoom"], shown(&entered)), (&Value::Null, json!(tabs[3])), "{size}");
         assert_eq!(otto.drawn()["zoom_tiles"], Value::Null, "{size}");

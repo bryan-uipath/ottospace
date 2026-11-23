@@ -1734,7 +1734,8 @@ number and name; the tab you came from says "you were here", the selected tile h
 
 - Arrows or H J K L move the selection; ↵ or a click goes into that tab; Esc or ⌘⇧\\ again goes
   back to the tab you came from. ⌘; labels the tiles: a label's letters go in. No other key reaches a
-  terminal under it.
+  terminal under it (⌃C does nothing); ⌘ shortcuts run as ever. In an app pane the keys are the
+  app's: take the keyboard back first (F18), then ⌘⇧\\.
 - The zoom plays both ways: the tab shrinks into its tile as the others fade in, and the chosen tile
   grows back to fill the area. It never holds a key up: the view has changed before it plays, and on
   the way back in it takes no click. Under Reduce Motion it is a cut.

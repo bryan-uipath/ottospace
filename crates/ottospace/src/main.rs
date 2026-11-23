@@ -1172,6 +1172,8 @@ struct Workspace {
     zooming: zoom::Zooming,
     /// The key that ended sneak mode is still down: its repeats are typed nowhere.
     sneak_spent: bool,
+    /// The key that left the overview is still down: its repeats are typed nowhere.
+    zoom_spent: bool,
     /// Reads of the focused app pane's tree while sneak mode is on.
     sneak_reads: sneak_apps::Reads,
     /// Scrolls held for an app pane the wheel entered, and counts.
@@ -1893,6 +1895,7 @@ impl Workspace {
             slides: overlays::Slides::default(),
             zooming: zoom::Zooming::default(),
             sneak_spent: false,
+            zoom_spent: false,
             sneak_reads: sneak_apps::Reads::default(),
             wheel: app_wheel::Wheel::default(),
             input: Origin::User,
@@ -4109,8 +4112,13 @@ impl Workspace {
         let frame = window.bounds();
         let frame: [f32; 4] =
             [frame.origin.x.into(), frame.origin.y.into(), frame.size.width.into(), frame.size.height.into()];
-        // Only panes of the tabs on show are drawn; a background pane's last bounds are stale.
-        let drawn = self.model.shown_panes();
+        // Only panes of the tabs on show are drawn; a background pane's last bounds are stale, and
+        // so are the main window's while zoomed out (`zoom_out`).
+        let mut drawn = self.model.shown_panes();
+        if self.model.zoom.is_some() {
+            let main = self.model.main_panes();
+            drawn.retain(|id| !main.contains(id));
+        }
         let drawn_rects = |cells: &HashMap<PaneId, Rc<Cell<Bounds<Pixels>>>>| -> BTreeMap<PaneId, [f32; 4]> {
             cells
                 .iter()
@@ -5139,6 +5147,12 @@ impl Workspace {
             return;
         }
         self.sneak_spent = false;
+        // So for the ↵ or Esc that left the overview (`zoom_out`).
+        if self.zoom_spent && event.is_held {
+            cx.stop_propagation();
+            return;
+        }
+        self.zoom_spent = false;
         // So for the key that closed a row's menu.
         if self.row_menu_spent && event.is_held {
             cx.stop_propagation();
@@ -5239,7 +5253,8 @@ impl Workspace {
             return;
         }
         // Zoomed out: its keys, and nothing typed into the tab under it.
-        if self.model.zoom.is_some() && self.zoom_key(event, window, cx) {
+        if self.model.zoom.is_some() {
+            self.zoom_key(event, window, cx);
             cx.stop_propagation();
             return;
         }

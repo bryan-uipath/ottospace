@@ -3,19 +3,18 @@
 //! area. The model has moved before the zoom plays: on the way in it is drawn only, and takes no
 //! click. Design: `docs/ai/zoom-out.md`.
 
-use std::cell::{Cell, RefCell};
-use std::collections::BTreeMap;
-use std::rc::Rc;
-use std::time::Instant;
-
 use gpui::{
     AnyElement, Bounds, BoxShadow, Context, Div, KeyDownEvent, MouseButton, Pixels, Window, actions, black, canvas,
     div, prelude::*, px, rgb, surface,
 };
-use ottospace_core::model::zoom::{ZOOM_MS, between, cells, progress, travel};
+use ottospace_core::model::zoom::{ZOOM_MS, between, cells};
 use ottospace_core::{Action, Dir, Kind, Pane, Rect, theme};
+use std::cell::{Cell, RefCell};
+use std::collections::BTreeMap;
+use std::rc::Rc;
 
-use crate::{PANE_HEADER, Workspace, cut_text, overlays::Inert, terminal};
+use crate::overlays::{Inert, Slide};
+use crate::{PANE_HEADER, Workspace, cut_text, terminal};
 
 // ⌘⇧\: every tab at once, or back in.
 actions!(ottospace, [ZoomToggle]);
@@ -23,33 +22,14 @@ actions!(ottospace, [ZoomToggle]);
 /// The zoom's state between frames, and what it drew.
 #[derive(Default)]
 pub(crate) struct Zooming {
-    /// How far out (milliseconds in), since when, and whether it goes out.
-    from: f32,
-    since: Option<Instant>,
-    out: bool,
+    /// How far out it is: a side overlay's slide, `ZOOM_MS` long.
+    slide: Slide,
     /// The panes area as last drawn, in window points: the tiles are laid out in it.
     pub(crate) area: Rc<Cell<Bounds<Pixels>>>,
     /// Each tile as drawn this frame, by tab id: the state's `zoom_tiles`.
     pub(crate) tiles: Rc<RefCell<BTreeMap<u32, Bounds<Pixels>>>>,
     /// Frames the zoom asked for (`counts.zoom_frames`): none at rest, none under Reduce Motion.
     pub(crate) frames: u64,
-}
-
-impl Zooming {
-    /// This frame's way out (0 the tab, 1 the grid), and whether it still moves. A toggle mid-way
-    /// turns it from where it is; `calm` (Reduce Motion): a cut.
-    fn step(&mut self, shown: bool, calm: bool) -> (f32, bool) {
-        let now = Instant::now();
-        let at = |z: &Self| z.since.map_or(z.from, |since| travel(z.from, (now - since).as_secs_f32() * 1000., z.out));
-        if shown != self.out {
-            (self.from, self.since, self.out) = (at(self), Some(now), shown);
-        }
-        if calm {
-            (self.from, self.since) = (if shown { ZOOM_MS } else { 0. }, None);
-        }
-        let at = at(self);
-        (progress(at), if shown { at < ZOOM_MS } else { at > 0. })
-    }
 }
 
 /// The room around a tile's label, above it.
@@ -61,7 +41,8 @@ impl Workspace {
     pub(crate) fn render_zoom(&mut self, window: &mut Window, cx: &mut Context<Self>) -> (Option<AnyElement>, bool) {
         self.zooming.tiles.borrow_mut().clear();
         let shown = self.model.zoom.is_some();
-        let (t, moving) = self.zooming.step(shown, crate::dial::calm());
+        // How far out (0 the tab, 1 the grid); a toggle mid-way turns it, Reduce Motion cuts.
+        let (t, moving) = self.zooming.slide.step(shown, crate::dial::calm(), ZOOM_MS);
         if moving {
             self.zooming.frames += 1;
             window.request_animation_frame();
@@ -251,13 +232,14 @@ impl Workspace {
     }
 
     /// Zoomed out, the user's plain keys: arrows and H J K L select, ↵ goes in, Esc goes back. No
-    /// other key reaches the tab under it. A ⌘ shortcut goes on to its binding.
-    pub(crate) fn zoom_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+    /// other key reaches the tab under it (⌃C, ⌥B: nothing); a ⌘ shortcut runs its binding.
+    pub(crate) fn zoom_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
-        if key.modifiers.platform || key.modifiers.control || key.modifiers.alt {
-            return false;
-        }
+        let modified = key.modifiers.platform || key.modifiers.control || key.modifiers.alt;
         let action = match key.key.as_str() {
+            _ if modified => None,
+            // Held, it goes in or back once; an arrow held moves on.
+            "escape" | "enter" if event.is_held => None,
             "escape" => Some(Action::ZoomOut),
             "enter" => Some(Action::ZoomEnter { tab: None }),
             "left" | "h" => Some(Action::ZoomMove { dir: Dir::Left }),
@@ -268,7 +250,8 @@ impl Workspace {
         };
         if let Some(action) = action {
             self.dispatch(action, self.input, window, cx);
+            // A held ↵ or Esc: its repeats are not for the tab it went into.
+            self.zoom_spent = self.model.zoom.is_none();
         }
-        true
     }
 }

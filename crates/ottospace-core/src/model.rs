@@ -4923,7 +4923,7 @@ impl Model {
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose => Some(decisions::USERS_ALONE),
             // The overview covers the user's work: only they zoom, and nothing takes the keyboard under it.
-            Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. } => Some(zoom::USERS_ALONE),
+            _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
             action if self.zoom.is_some() && action.takes_keyboard() => Some(zoom::ZOOMED_OUT),
             // Nor closes its card or its workspace, or moves its card out (`touches_decisions`).
             action if origin == Origin::Socket && self.touches_decisions(action) => Some(decisions::USERS_ALONE),
@@ -5449,7 +5449,7 @@ impl Model {
             self.sneak = None;
         }
         // Zoomed out, any other move of the user's ends the overview, and does what it does.
-        let zooms = matches!(action, Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. });
+        let zooms = action.feature() == Some(Feature::ZoomOut);
         if user && !own && !zooms {
             self.zoom = None;
         }
@@ -7083,7 +7083,8 @@ impl Model {
             // The user's that enters became `Enter` (`app_wheel`).
             Action::AppWheel { .. } => {}
             Action::SneakApp { pane, read } => {
-                let shown = self.pane(pane).is_some() && self.live != Some(pane);
+                // Zoomed out the pane is a tile: its app's controls are not where its tree says.
+                let shown = self.pane(pane).is_some() && self.live != Some(pane) && self.zoom.is_none();
                 let focused = self.focused == Some(pane);
                 let Some(sneak) = &mut self.sneak else { return };
                 // The focused pane on the first read; after that the pane labelled.

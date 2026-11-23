@@ -15,7 +15,8 @@ pub const ZOOMED_OUT: &str = "the user is zoomed out";
 /// ⌘⇧\ on Home.
 pub const HOME_NONE: &str = "Home has no tabs to zoom out to";
 
-/// How long the zoom lasts, in milliseconds. The model has moved on before it starts.
+/// How long the zoom lasts, in milliseconds (`overlay::slide`'s curve). The model has moved on
+/// before it starts.
 pub const ZOOM_MS: f32 = 220.;
 /// Room between tiles, and around them, in points.
 pub const GAP: f32 = 28.;
@@ -32,20 +33,9 @@ pub struct Zoom {
     pub(crate) live: Option<PaneId>,
 }
 
-/// How far out the zoom is `at` milliseconds in: 0 in the tab, 1 on the grid. Eased out.
-pub fn progress(at: f32) -> f32 {
-    crate::seal::ease_out((at / ZOOM_MS).clamp(0., 1.))
-}
-
-/// Where the zoom is `elapsed` milliseconds after it was `from` in, going out (`out`) or back in.
-/// A toggle mid-way turns it from where it is: 60 out, back in, 20 later is 40.
-pub fn travel(from: f32, elapsed: f32, out: bool) -> f32 {
-    (if out { from + elapsed } else { from - elapsed }).clamp(0., ZOOM_MS)
-}
-
 /// Columns and rows for `n` tiles: the least square that holds them, the last row maybe short.
 /// e.g. 1 → 1×1, 4 → 2×2, 7 → 3 columns of 3, 3, 1.
-pub fn grid(n: usize) -> (usize, usize) {
+pub(crate) fn grid(n: usize) -> (usize, usize) {
     let cols = (1..=n).find(|c| c * c >= n).unwrap_or(0);
     (cols, if cols == 0 { 0 } else { n.div_ceil(cols) })
 }
@@ -114,8 +104,6 @@ impl Model {
         let live = self.live;
         // A live window would float over the tiles: parked, its picture is in its tile.
         self.leave(effects);
-        self.leave_visual(effects);
-        (self.keys, self.picker, self.palette) = (false, None, None);
         self.zoom = Some(Zoom { from, selected: from, live });
     }
 
@@ -165,6 +153,9 @@ impl Model {
     /// or once an app is live or the keyboard is in a tab out's window. A tile gone: the selection
     /// goes back to where it opened.
     pub(super) fn settle_zoom(&mut self) {
+        if self.zoom.is_none() {
+            return;
+        }
         let tabs = self.zoom_tabs();
         let on = self.features.on(Feature::ZoomOut);
         let Some(zoom) = self.zoom.as_mut() else { return };
@@ -232,10 +223,7 @@ mod tests {
     }
 
     #[test]
-    fn the_zoom_eases_out_and_turns_back_from_where_it_is() {
-        assert_eq!((progress(0.), progress(ZOOM_MS), progress(1e9), progress(-1.)), (0., 1., 1., 0.));
-        assert!(progress(ZOOM_MS / 4.) > 0.5);
-        assert_eq!((travel(60., 20., false), travel(0., 1e9, true), travel(30., 1e9, false)), (40., ZOOM_MS, 0.));
+    fn a_tile_moves_between_its_cell_and_the_whole_area() {
         let (a, b) = (Rect { x: 0., y: 0., w: 100., h: 50. }, Rect { x: 10., y: 20., w: 30., h: 10. });
         assert_eq!((between(a, b, 0.), between(a, b, 1.)), (a, b));
     }

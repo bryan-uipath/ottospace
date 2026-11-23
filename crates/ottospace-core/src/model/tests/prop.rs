@@ -4080,7 +4080,7 @@ impl Run {
         }
         // The overview is a view: its steps add, close and move no tab or pane. Only the user opens
         // it, and leaving it lands on a tab that exists: the one it opened on, or the one chosen.
-        let zooms = matches!(action, Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. });
+        let zooms = action.feature() == Some(Feature::ZoomOut);
         ensure!(!zooms || made(m) == made_before, "{action:?} changed the tabs or panes");
         ensure!(zoom_before.is_some() || m.zoom.is_none() || origin == Origin::User, "{origin:?} zoomed out");
         if let (Some(was), None, true, Origin::User) = (&zoom_before, &m.zoom, zooms, origin) {
