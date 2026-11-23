@@ -29,7 +29,14 @@ Rules:
 
 ## Principles
 
-Design rules for every feature. Each change answers to both.
+Goals, which the rules below serve:
+
+- **A command center for your agents.** You are the captain: ottospace makes it easy to see what
+  the agents are doing and to digest the decisions that are yours.
+- **Flow and joy.** The loop is now delegate, wait, decide, verify: ottospace gives quick wins,
+  shows progress, and makes the right things satisfying to do.
+
+Design rules for every feature. Each change answers to all three.
 
 ### Human attention
 
@@ -62,7 +69,19 @@ Design rules for every feature. Each change answers to both.
   plays over a model that has already moved on, #278); under Reduce Motion it is at once.
 - A test run or an agent never takes the person's keyboard or front window (see Tests).
 
-When the two conflict (wording proposed): ottospace offers and waits. It may show that something
+### Joy follows the user (wording proposed)
+
+> Delight attaches only to something you just did or asked to see. It never interrupts, never
+> delays the next key, and never decorates the fast path.
+
+- What ottospace presents is a pleasure to take in: never a wall of text with decisions buried
+  in it. Each decision is one clear thing to act on, and acting on it leaves the person feeling
+  in control, in command, and that things are getting done.
+- A reward marks an outcome (a decision made, a stack landed, main green), never activity.
+- It plays over a model that has already moved on; under Reduce Motion it is at once.
+- Nothing celebrates by itself: no animation, sound or badge arrives uninvited.
+
+When they conflict (wording proposed): ottospace offers and waits. It may show that something
 needs you; it never acts on your screen, focus or keyboard to make you look.
 
 Design note: `docs/ai/attention/plan.md`.
