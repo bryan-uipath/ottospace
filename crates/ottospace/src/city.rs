@@ -19,6 +19,7 @@ use gpui::{
 };
 use ottospace_core::Action;
 use ottospace_core::atlas::{self, Atlas};
+use ottospace_core::city_colours::{self, FolderColours};
 use ottospace_core::city_labels::{self, Candidate, Tier};
 use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::model::Origin;
@@ -258,6 +259,8 @@ struct Key {
     view: [u32; 5],
     /// How far below the picture's middle the fitted city's is, as bits (`scene::LOWER`).
     lower: u32,
+    /// `city_folder_colors`: folder name to colour name.
+    folders: Vec<(String, String)>,
 }
 
 impl Key {
@@ -454,7 +457,15 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Option<(Key, Scene)>
     let standing = key.standing();
     let scene = match last.take() {
         Some((was, scene)) if was == standing => scene,
-        _ => scene::scene_lowered(plan, &lit, w as f32 / h as f32, &key.view(), f32::from_bits(key.lower)),
+        _ => {
+            let mut scene =
+                scene::scene_lowered(plan, &lit, w as f32 / h as f32, &key.view(), f32::from_bits(key.lower));
+            // Each building in its folder's colour (`city_colours`).
+            let user = key.folders.iter().cloned().collect();
+            let rule = FolderColours::new(&user).unwrap_or_else(|_| FolderColours::built_in());
+            scene.tints = city_colours::tints(plan, &scene.blocks, &rule);
+            scene
+        }
     };
     *last = Some((standing, scene.clone()));
     let Picture { width, height, bgra } = gpu.render(&scene, w, h, f32::from(key.rise) / 1000., key.glass)?;
@@ -577,6 +588,7 @@ impl Drawn {
             "glass": made.map(|made| made.key.glass),
             "agents": agents,
             "lower": made.map(|made| f32::from_bits(made.key.lower)),
+            "folder_colors": made.map(|made| made.key.folders.len()),
         })
     }
 }
@@ -801,6 +813,7 @@ impl Workspace {
                     rise: 1000,
                     view,
                     lower: lower.to_bits(),
+                    folders: crate::config::live().city_folder_colors.clone().unwrap_or_default().into_iter().collect(),
                     glass: !crate::config::live().developer.city_opaque,
                 });
                 key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);

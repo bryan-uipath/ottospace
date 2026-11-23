@@ -270,16 +270,18 @@ impl Gpu {
         let uniform = buffer(device, &frame, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
         self.queue.write_buffer(&uniform, 0, &bytes(&frame));
         // The solid boxes first; then the glass ones, the farthest first, each over what is behind it.
+        // Each box with its rise's delay and its folder's colour (`Scene::tints`; none: plain).
         let delays = scene.rise_delays();
+        let tint = |i: usize| scene.tints.get(i).copied().flatten();
+        let all = scene.blocks.iter().zip(delays.iter().copied()).enumerate().map(|(i, (b, d))| (b, d, tint(i)));
         let see_through = |b: &Block| glass && b.kind == Kind::Building;
-        let mut clear: Vec<(&Block, f32)> =
-            scene.blocks.iter().zip(delays.iter().copied()).filter(|(b, _)| see_through(b)).collect();
+        let mut clear: Vec<_> = all.clone().filter(|(b, ..)| see_through(b)).collect();
         let far = |b: &Block| -(0..3).map(|i| (b.top()[i] - camera.eye[i]).powi(2)).sum::<f32>();
         clear.sort_by(|a, b| far(a.0).total_cmp(&far(b.0)));
-        let solid = scene.blocks.iter().zip(delays.iter().copied()).filter(|(b, _)| !see_through(b));
+        let solid = all.filter(|(b, ..)| !see_through(b));
         let solid_count = solid.clone().count() as u32;
-        let boxes: Vec<f32> = (solid.map(|(b, d)| instance(b, d, 1.)))
-            .chain(clear.iter().map(|(b, d)| instance(b, *d, GLASS)))
+        let boxes: Vec<f32> = (solid.map(|(b, d, t)| instance(b, d, t, 1.)))
+            .chain(clear.iter().map(|(b, d, t)| instance(b, *d, *t, GLASS)))
             .flatten()
             .collect();
         let instances = buffer(device, &boxes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST);
@@ -354,8 +356,8 @@ impl Gpu {
     }
 }
 
-fn instance(block: &Block, delay: f32, alpha: f32) -> [f32; 16] {
-    let ([r, g, b], edge) = colour(block.kind);
+fn instance(block: &Block, delay: f32, tint: Option<(u32, u32)>, alpha: f32) -> [f32; 16] {
+    let ([r, g, b], edge) = tint.map_or_else(|| colour(block.kind), |(top, edge)| (rgb(top), rgb(edge)));
     let (lo, hi) = (block.min, block.max);
     let glows = if matches!(block.kind, Kind::Lit(_)) { 1. } else { 0. };
     let sides = if matches!(block.kind, Kind::Plate(_)) { 0.25 } else { 1. };

@@ -2212,6 +2212,7 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     render_us: orNull(num)(o.render_us, `${at}.render_us`),
     glass: orNull(bool)(o.glass, `${at}.glass`),
     lower: orNull(num)(o.lower, `${at}.lower`),
+    folder_colors: orNull(num)(o.folder_colors, `${at}.folder_colors`),
     hovered: orNull(cityHovered)(o.hovered, `${at}.hovered`),
     first_ms: orNull(num)(o.first_ms, `${at}.first_ms`),
     read_us: orNull(num)(o.read_us, `${at}.read_us`),

@@ -1424,7 +1424,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in a toast (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `clone_dir`, `transcripts_dir`, `projects_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `agent_commands`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in a toast (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `clone_dir`, `transcripts_dir`, `projects_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `agent_commands`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `city_folder_colors` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -1497,6 +1497,7 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
 | `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown. A feed with no attendees (Outlook's published calendars) cannot say who declined: use `calendar_hide_free` | none: nothing is left out |
 | `calendar_hide_free` | Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`): the band, the section, the alerts and the `calendar` request | `false` |
 | `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64. A rule wins over a focus block's green | none: colours by kind |
+| `city_folder_colors` | The code city's colours by folder name, over the built-in ones: `{"notes": "teal", "docs": "red"}`. A name is one folder's (case ignored), a colour `red`, `orange`, `yellow`, `green`, `teal`, `cyan`, `blue`, `indigo`, `violet`, `pink`, `brown` or `slate`. At most 64 | `docs`/`doc` green, `tests`/`test`/`__tests__`/`spec` violet, `e2e` pink, `src`/`lib` blue, `crates`/`packages`/`pkg` teal, `apps` cyan, `scripts`/`tools` slate, `assets` brown, `examples` yellow |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 | `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in a toast with the flags there are; the others still apply | each flag's default |
 | `paste_confirm` | Retired: ⌘V never asks. Still read, so a file that has it applies; a toast asks to remove it | |
@@ -1643,11 +1644,16 @@ in Repos; Home has none and keeps its lattice, and so does a pane under 320 × 2
 of one folder and size share one picture, and a folder's files are read once for all of them.
 In the city a folder is a district, a plinth standing on its parent's, its top edge lit,
 a street apart from its neighbours and a shade lighter per tier (a folder with one
-child is none of its own: `src/main/java` is one district), a file a building on it, of glass (its faces see-through, its edges whole), its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
+child is none of its own: `src/main/java` is one district), a file a building on it, of glass (its faces see-through, its edges whole), in its folder's
+colour, its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
 height by its length. A file is where it was the last time: the same files give
 the same plan, an edit that keeps a file's size class moves nothing, and a new file most times
 moves only its own folder
-(design and numbers: [code-city/plan.md](ai/code-city/plan.md)).
+(design and numbers: [code-city/plan.md](ai/code-city/plan.md)). A building's colour is its
+nearest folder's with a named colour (`city_folder_colors`, over built-in ones: `docs` green,
+`tests` violet, `src` blue, `crates` teal and more), else its top-level folder's own, from its
+name alone; a file in the root is grey. So `crates/a/tests/x.rs` is a test's colour, and adding
+a file or a folder changes no other building's colour. A lit building keeps its task's colour.
 
 - The file an agent reads or edits now is tinted in its task's colour (in a task's space, that
   task's agent; elsewhere every task working in that checkout, as the Repos dots count them): while

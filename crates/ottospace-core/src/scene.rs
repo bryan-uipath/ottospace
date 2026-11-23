@@ -112,6 +112,8 @@ pub struct Scene {
     pub camera: Option<Camera>,
     /// The fitted view's distance and target, for the camera of any other view (`Fit::camera`).
     pub fit: Option<Fit>,
+    /// Each block's top and edge colours by its folder (`city_colours::tints`); none: its kind's.
+    pub tints: Vec<Option<(u32, u32)>>,
 }
 
 /// Where the user has turned, moved and zoomed the camera, from the fitted view: degrees round
@@ -472,12 +474,14 @@ pub fn scene_lowered(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, view: &Vie
         block.max[1] = block.max[1].max(highest + LIT_ABOVE);
     }
     blocks.extend(buildings);
-    let Some(fit) = frame(&blocks, aspect, lower) else { return Scene { blocks, camera: None, fit: None } };
+    let Some(fit) = frame(&blocks, aspect, lower) else {
+        return Scene { blocks, camera: None, fit: None, tints: Vec::new() };
+    };
     let camera = fit.camera(view, aspect);
     if *view == View::default() {
         clear_sight(&mut blocks, camera.eye, highest + LIT_ABOVE);
     }
-    Scene { blocks, camera: Some(camera), fit: Some(fit) }
+    Scene { blocks, camera: Some(camera), fit: Some(fit), tints: Vec::new() }
 }
 
 impl Camera {

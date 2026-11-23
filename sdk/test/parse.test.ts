@@ -145,7 +145,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     home_drawn: { area: [0, 30, 1400, 846], panel: [80, 300, 520, 120], nodes: {}, heading: "Home", lattice_builds: 1, lattice_paints: 2 },
     city: {
       on: { pane: 3 }, pictures: 1, small: ["tab"], places: 10, groups: 3, picture: [1700, 1300], bounds: [340, 42, 850, 650], scale: 2, lit: [[620, 42, 17, 53]],
-      lit_tops: [[628, 45]], lit_beams: [[628, 45, 629, 9]], labels: 1, names: [{ tier: "wall", rect: [400, 300, 60, 16] }], spots: { folder: [500, 400], file: null }, failed: null, reads: 2, renders: 1, paints: 9, render_us: 9100, glass: true, lower: 0.1,
+      lit_tops: [[628, 45]], lit_beams: [[628, 45, 629, 9]], labels: 1, names: [{ tier: "wall", rect: [400, 300, 60, 16] }], spots: { folder: [500, 400], file: null }, failed: null, reads: 2, renders: 1, paints: 9, render_us: 9100, glass: true, lower: 0.1, folder_colors: 0,
       hovered: { file: true, lit: true, beam: [628, 45, 629, 9], outline: null, beacon: [637, 0, 80, 18] },
       first_ms: 140, read_us: 6200, view: { yaw: 34, pitch: 52, zoom: 1, pan: [0, 0] }, grabbed: false,
       agents: [{ task: 1, rect: [618, 0, 22, 22], cone: true, fan: [0, 1], hovered: false }],

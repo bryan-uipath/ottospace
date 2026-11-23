@@ -209,6 +209,10 @@ pub struct Settings {
     /// Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`.
     #[serde(default)]
     pub calendar_colors: Option<Vec<ColorSetting>>,
+    /// The code city's colours by folder name, over the built-in ones: `{"notes": "teal"}`
+    /// (`city_colours`).
+    #[serde(default)]
+    pub city_folder_colors: Option<std::collections::BTreeMap<String, String>>,
     /// Feature flags by name, e.g. `{ "marks": true }`: see `features`. One not named keeps its default.
     #[serde(default)]
     pub features: std::collections::BTreeMap<String, bool>,
@@ -411,6 +415,9 @@ impl Settings {
                 return Err(format!("at most {} rules", crate::calendar::MAX_RULES));
             }
             rules.iter().try_for_each(|r| crate::calendar::ColorRule::new(&r.text, &r.color).map(drop))?;
+        }
+        if let Some(colours) = settings.city_folder_colors.as_ref() {
+            crate::city_colours::FolderColours::new(colours)?;
         }
         // A flag no feature has is a mistake; one retired is ignored (`read` warns of it).
         let retired = |name: &String| crate::features::RETIRED.contains(&name.as_str());
@@ -673,6 +680,8 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         // Told to the core again on each good read.
         calendar_hide_free: _,
         calendar_colors: _,
+        // The code city reads it for each picture.
+        city_folder_colors: _,
         // Told to the core again on each good read, as Features… writes them.
         features: _,
         paste_confirm: _,
@@ -1167,6 +1176,21 @@ mod tests {
             assert!(settings.calendar_email.is_none() && wrong.len() == 1, "{bad:?}");
             assert!(wrong[0].starts_with("calendar_email: ") && !wrong[0].contains("s3"), "{wrong:?}");
         }
+    }
+
+    /// `city_folder_colors` names a folder and a palette colour; one wrong is left out, said.
+    #[test]
+    fn city_folder_colors_name_a_folder_and_a_colour() {
+        let (ok, wrong) = Settings::read(r#"{"city_folder_colors": {"notes": "teal", "docs": "Red"}}"#);
+        assert_eq!((ok.city_folder_colors.map(|c| c.len()), wrong.len()), (Some(2), 0));
+        let (bad, wrong) = Settings::read(r#"{"city_folder_colors": {"notes": "mauve"}}"#);
+        assert!(bad.city_folder_colors.is_none(), "{wrong:?}");
+        assert!(
+            wrong.len() == 1 && wrong[0].starts_with("city_folder_colors: a city folder color is one of"),
+            "{wrong:?}"
+        );
+        let (_, wrong) = Settings::read(r#"{"city_folder_colors": {"a/b": "red"}}"#);
+        assert!(wrong.len() == 1 && wrong[0].contains("one folder's name"), "{wrong:?}");
     }
 
     #[test]
