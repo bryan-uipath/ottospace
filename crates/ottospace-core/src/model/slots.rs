@@ -134,10 +134,12 @@ impl Dialog {
         let kept = self.kept.clone().unwrap_or_default();
         let identifier = kept.identifier.or_else(|| seen.and_then(|s| s.identifier.clone()));
         let title = kept.title.or_else(|| seen.map(|s| s.title.clone()));
+        // A dialog's slot names its kind, or no dialog would be its candidate (`rules::slot_holds`).
+        let subrole = kept.subrole.or_else(|| seen.and_then(|seen| crate::rules::slot_kind(&seen.subrole)));
         let select = crate::rules::Selector {
             identifier: identifier.filter(|_| self.by_id),
             title: title.filter(|_| self.by_title),
-            subrole: kept.subrole,
+            subrole,
             app: None,
         };
         Slot { select, pick: self.pick, matching: self.matching, ..Default::default() }
@@ -360,28 +362,30 @@ impl Model {
 
     /// The slot a user's app pane becomes when its window goes: its app, and the window's own id
     /// (Zoom's `zm.meeting.window.main`: the next meeting's has it too), or none (`""`: a window
-    /// with no id), else any window of the app; the largest. Never its title: a meeting's changes.
-    /// None: not the user's, or not a standard window.
+    /// with no id), and its kind if a dialog or panel; else any window of the app; the largest. Never
+    /// its title: a meeting's changes. None: not the user's, or a window no slot holds (one ignored).
     fn kept_place(&self, pane: PaneId, was: Option<Seen>) -> Option<(i32, Slot)> {
         let placed = self.features.on(Feature::Slots) && !self.not_placed.contains(&pane);
         let Some(Kind::App { window, .. }) = self.pane(pane).map(|p| &p.kind).filter(|_| placed) else { return None };
         // The shell's facts, else what a look listed.
         let listed = self.slot_looks.iter().flat_map(|look| &look.windows).find(|seen| seen.window == *window);
         let was = was.or_else(|| listed.cloned());
-        // A window the rules do not manage (a dialog, one ignored) is no slot's candidate (rule 4):
-        // a place for one would wait for good.
+        // A window no slot holds (one a rule ignores or floats) is no candidate (rule 4): a place
+        // for one would wait for good.
         let Some(Kind::App { bundle, name, .. }) = self.pane(pane).map(|p| &p.kind) else { return None };
         let known = was.as_ref().filter(|seen| !seen.subrole.is_empty());
         let unmanaged = known.is_some_and(|seen| {
             let (title, subrole, identifier) = (&seen.title, &seen.subrole, seen.identifier.as_deref());
             let facts = crate::rules::Facts { app: name, bundle: bundle.as_deref(), title, subrole, identifier };
-            !crate::rules::manages(&self.window_rules, &facts)
+            let names_kind = crate::rules::slot_kind(&seen.subrole).is_some();
+            !crate::rules::slot_holds(&self.window_rules, &facts, names_kind)
         });
         if unmanaged {
             return None;
         }
+        let subrole = was.as_ref().and_then(|seen| crate::rules::slot_kind(&seen.subrole));
         let (pid, identifier) = was.map_or((0, None), |seen| (seen.pid, Some(seen.identifier.unwrap_or_default())));
-        let select = crate::rules::Selector { identifier, ..Default::default() };
+        let select = crate::rules::Selector { identifier, subrole, ..Default::default() };
         // Of several that match, the largest: a meeting's main window over its pop-outs.
         Some((pid, Slot { select, pick: crate::slot::Pick::Largest, ..Default::default() }))
     }
@@ -1043,8 +1047,39 @@ mod tests {
         assert!(matches!(m.pane(split).map(|p| &p.kind), Some(Kind::Slot { .. })), "the user's split");
     }
 
-    /// Not the user's place: a pane a client opened, or a window the app opened itself, or a
-    /// dialog, closes with its window; so does every app pane with `slots` off.
+    /// The owner's case: Zoom's meeting chat is an `AXSystemDialog`. A slot kept from it (the
+    /// dialog's Keep, its title ticked) names that kind, and the next meeting's chat, a new window
+    /// of that kind and title, is offered in it; a slot of standard windows still passes it over.
+    #[test]
+    fn a_slot_kept_from_a_dialog_matches_the_next_one_of_its_kind() {
+        let chat = |window| Seen { subrole: "AXSystemDialog".into(), ..seen(7, window, "Meeting chat") };
+        let mut m = Model::default();
+        m.update(Action::Open { kind: meetings(1, "Meeting"), axis: Right, beside: None });
+        m.update(Action::Open { kind: meetings(2, "Meeting chat"), axis: Right, beside: None });
+        let windows = vec![seen(7, 1, "Meeting"), chat(2)];
+        let found =
+            Look { bundle: Some(BUNDLE.into()), name: "Meetings".into(), running: true, windows, ..Look::default() };
+        m.update(Action::SlotDialogOpen { pane: 2, look: found });
+        assert_eq!(m.slot_dialog.as_ref().map(|d| (d.by_id, d.by_title)), Some((false, true)));
+        m.update(Action::SlotDialogKeep);
+        let words = m.slots.get(&2).map(|run| run.slot.words("Meetings"));
+        assert_eq!(words.as_deref(), Some("Meetings · title “Meeting chat” · subrole AXSystemDialog"));
+        m.update(system(Action::WindowGone { pane: 2, app_running: true, at: 0, was: Some(chat(2)) }));
+        m.update(system(Action::SlotTick { at: slot::AWAY_MS }));
+        // The next meeting's chat, popped out again: a new window, offered in the slot, not in a chip.
+        let effects = m.update(system(Action::WindowOffered { pane: 1, seen: chat(5), why: "dialog".into() }));
+        assert!(m.slot_offer(2).is_some_and(|s| s.window == 5), "{effects:?}");
+        // A slot of standard windows is not offered a dialog.
+        let mut plain = kept(Matching::Manual);
+        plain.update(system(Action::WindowGone { pane: 2, app_running: true, at: 0, was: None }));
+        plain.update(system(Action::SlotTick { at: slot::AWAY_MS }));
+        let incident = Seen { subrole: "AXSystemDialog".into(), ..seen(7, 6, "Incident") };
+        plain.update(system(look(vec![incident])));
+        assert_eq!(status(&plain, 2), Some(Status::Empty));
+    }
+
+    /// Not the user's place: a pane a client opened, or a window the app opened itself, closes with
+    /// its window; so does every app pane with `slots` off.
     #[test]
     fn a_window_a_client_or_the_app_put_in_a_pane_closing_closes_it() {
         let gone = |pane, was| system(Action::WindowGone { pane, app_running: true, at: 0, was });
@@ -1057,10 +1092,7 @@ mod tests {
         assert!(matches!(m.pane(adopted).map(|p| &p.kind), Some(Kind::App { .. })));
         m.update(gone(adopted, None));
         assert!(m.panes.is_empty(), "the app's own");
-        m.update(Action::Open { kind: meetings(3, "c"), axis: Right, beside: None });
-        let dialog = Seen { subrole: "AXDialog".into(), ..seen(7, 3, "c") };
-        m.update(gone(m.focused.unwrap_or_default(), Some(dialog)));
-        assert!(m.panes.is_empty(), "a dialog");
+
         let mut m = Model::default();
         m.update(system(Action::SetFeatures { features: crate::features::Features::default() }));
         m.update(Action::Open { kind: meetings(1, "a"), axis: Right, beside: None });

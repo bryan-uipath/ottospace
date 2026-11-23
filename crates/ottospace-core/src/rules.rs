@@ -109,6 +109,20 @@ pub fn manages(user: &[Rule], window: &Facts) -> bool {
     }
 }
 
+/// Whether a slot may hold the window: what `manages` takes, or, for a slot that names a kind
+/// (`subrole`), a dialog or panel of it that no rule ignores or floats: Zoom's meeting chat is an
+/// `AXSystemDialog`, which the user may put in a pane and keep a slot for.
+pub fn slot_holds(user: &[Rule], window: &Facts, names_kind: bool) -> bool {
+    let left = matches!(first(user, window), Some(Action::Ignore | Action::Float));
+    manages(user, window) || (names_kind && judged(window.subrole) && !left)
+}
+
+/// The kind a slot names for a window of `subrole`: none for a standard window (`manages` takes
+/// it), else that subrole, so a slot made from a dialog matches the next one of its kind.
+pub fn slot_kind(subrole: &str) -> Option<String> {
+    (!subrole.is_empty() && subrole != STANDARD).then(|| subrole.to_string())
+}
+
 const STANDARD: &str = "AXStandardWindow";
 
 /// True for the kinds of window `place` decides on: standard windows, dialogs and panels. Any

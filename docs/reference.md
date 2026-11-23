@@ -1297,7 +1297,8 @@ shown when it has one, ticked then), `Title is “Weekly sync”`, which window 
 (the largest, the smallest, on display N, any), and Matching: Manual (the default: it offers) or
 Automatic (it takes a window that opens while it waits, on the tab on show, never the one you are
 in). Its foot says what the slot will wait for, `Waits for: Zoom · window id zm.meeting.window.main`,
-and Keep (↵) makes it. A title pattern (`*Incident*`) is written by hand in `layout.json`, under the
+and Keep (↵) makes it. A slot made from a dialog or panel (Zoom's popped-out meeting chat) waits for
+that kind (`subrole AXSystemDialog`); any other slot takes standard windows only. A title pattern (`*Incident*`) is written by hand in `layout.json`, under the
 pane's `slot.select.title`. ⋯ on a slot edits it, with Look Again (forget the windows passed over),
 Give Back the Window and Clear Slot at its foot.
 

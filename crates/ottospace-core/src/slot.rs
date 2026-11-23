@@ -164,7 +164,8 @@ impl Look {
     pub fn candidates<'a>(&'a self, slot: &Slot, rules: &[Rule], passed: impl Fn(u32) -> bool) -> Vec<&'a Seen> {
         let fits = |seen: &&Seen| {
             let facts = self.facts(seen);
-            rules::manages(rules, &facts) && !passed(seen.window) && slot.select.selects(&facts)
+            let names_kind = slot.select.subrole.is_some();
+            rules::slot_holds(rules, &facts, names_kind) && !passed(seen.window) && slot.select.selects(&facts)
         };
         let mut found: Vec<&Seen> = self.windows.iter().filter(fits).collect();
         let area = |seen: &&Seen| (seen.frame.w * seen.frame.h) as i64;

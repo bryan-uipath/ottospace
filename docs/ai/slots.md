@@ -30,8 +30,11 @@ is a made-up "Meetings" app; so are the examples here.
    takes only on the tab on show, only a window that opened while the slot waited, and never the
    window the user is using outside ottospace: those are offered (§3).
 3. **A window is in one pane at most**, slot or not. A window in a pane is never a candidate.
-4. **Window rules come first.** A window the rules ignore (or any non-standard window) is never a
-   candidate: a slot cannot host what hosting refuses.
+4. **Window rules come first.** A window the rules ignore or float is never a candidate: a slot
+   cannot host what hosting refuses. A dialog or panel is one only for a slot that names its kind
+   (`subrole`), which Keep writes when the slot is made from one (`rules::slot_holds`; the owner,
+   2026-11-23: Zoom's popped-out meeting chat is an `AXSystemDialog`, and a slot made from it waited
+   for good).
 5. **No new text in the state.** A slot's selector, its candidates' titles and identifiers are drawn
    in the pane and never sent on the socket: the core holds them in fields the state skips
    (`#[serde(skip)]`), and a property check holds it. A filled slot is an app pane and carries what

@@ -3875,7 +3875,8 @@ impl Run {
                     subrole: &seen.subrole,
                     identifier: seen.identifier.as_deref(),
                 };
-                crate::rules::manages(&m.window_rules, &facts)
+                let names_kind = crate::rules::slot_kind(&seen.subrole).is_some();
+                crate::rules::slot_holds(&m.window_rules, &facts, names_kind)
             })
         };
         let look_seen =
