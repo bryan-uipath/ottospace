@@ -20,11 +20,13 @@ use gpui::{
 use ottospace_core::Action;
 use ottospace_core::atlas::{self, Atlas};
 use ottospace_core::city_colours::{self, FolderColours};
+use ottospace_core::city_filter;
 use ottospace_core::city_labels::{self, Candidate, Tier};
 use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::model::Origin;
 use ottospace_core::model::city::{At, CameraStep, Who};
 use ottospace_core::scene::{self, Camera, Kind, Scene, View};
+use ottospace_core::settings::expand_home;
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{status_bar, theme};
 
@@ -88,9 +90,13 @@ const CLEAR: f32 = 12.;
 const FEATHER: f32 = 40.;
 const LAYERS: usize = 8;
 
-/// What a folder's read was asked with: the folders git may run in, and the files lit then,
-/// each with whether its call ran (a file an agent wrote may be new, once the call ends).
-type Asked = (Vec<String>, Vec<(String, bool)>);
+/// What a folder's read was asked with: the folders git may run in, `city_exclude` as written
+/// (its keys resolved on the read's thread), and the files lit then, each with whether its call
+/// ran (a file an agent wrote may be new, once the call ends).
+type Asked = (Vec<String>, Exclude, Vec<(String, bool)>);
+
+/// `city_exclude`: by checkout key (`*`, or a path), its entries.
+type Exclude = Vec<(String, Vec<String>)>;
 
 /// A thread of its own that answers each job with `work`, in order: of the jobs waiting, only
 /// the last of each `key` (a newer ask for the same thing replaces the older), the others answered
@@ -123,8 +129,8 @@ where
     (jobs, answers)
 }
 
-/// A folder's read: the folder, and the folders git may run in.
-type ReadJob = (String, Vec<String>);
+/// A folder's read: the folder, the folders git may run in, and `city_exclude`.
+type ReadJob = (String, Vec<String>, Exclude);
 
 /// Reads checkouts' files on a thread of its own: a folder when it comes on show, or the files
 /// its agents are at change, once each (`latest_each`). No timer of its own.
@@ -142,9 +148,9 @@ impl Reader {
     pub fn new() -> Self {
         let (jobs, reads) = latest_each(
             |job: &ReadJob| job.0.clone(),
-            |(dir, roots): &ReadJob| {
+            |(dir, roots, exclude): &ReadJob| {
                 let started = Instant::now();
-                (read(Path::new(dir), roots), started.elapsed().as_micros() as u64)
+                (read(Path::new(dir), roots, exclude), started.elapsed().as_micros() as u64)
             },
         );
         Self { jobs, reads, asked: HashMap::new(), held: HashMap::new(), came: 0, read_us: None }
@@ -156,7 +162,7 @@ impl Reader {
     fn ask(&mut self, on_show: HashMap<String, Asked>) {
         for (dir, asked) in &on_show {
             if self.asked.get(dir) != Some(asked) {
-                let _ = self.jobs.send((dir.clone(), asked.0.clone()));
+                let _ = self.jobs.send((dir.clone(), asked.0.clone(), asked.1.clone()));
             }
         }
         self.asked = on_show;
@@ -165,7 +171,7 @@ impl Reader {
     /// Takes the reads that came. True if one did.
     fn take(&mut self) -> bool {
         let came: Vec<(String, (Option<Atlas>, u64))> =
-            self.reads.try_iter().filter_map(|((dir, _), read)| Some((dir, read?))).collect();
+            self.reads.try_iter().filter_map(|((dir, ..), read)| Some((dir, read?))).collect();
         let any = !came.is_empty();
         for (dir, (read, us)) in came {
             (self.came, self.read_us) = (self.came + 1, Some(us));
@@ -184,9 +190,24 @@ impl Reader {
     }
 }
 
-/// The plan of the checkout at `dir` (`checkout_files`). `None`: no city.
-fn read(dir: &Path, roots: &[String]) -> Option<Atlas> {
-    let (files, _) = checkout_files(dir, roots, MOST_FILES, MOST_BYTES, true)?;
+/// `city_exclude`'s entries for the checkout at `dir`: every checkout's and its own (a key is its
+/// path as written, `~` for the home folder, matched resolved). On the read's thread: a key on a
+/// slow disk never holds up a frame.
+fn exclude_for(dir: &Path, setting: &[(String, Vec<String>)]) -> Vec<String> {
+    let setting: std::collections::BTreeMap<String, Vec<String>> = setting.iter().cloned().collect();
+    let home = crate::config::user_home();
+    let resolved = |path: &str| std::fs::canonicalize(expand_home(path, &home)).ok();
+    let here = std::fs::canonicalize(dir).ok();
+    city_filter::entries_for(&setting, |key| here.is_some() && resolved(key) == here)
+}
+
+/// The plan of the checkout at `dir` (`checkout_files`), less the folders `exclude` leaves out
+/// for it (`city_filter`): dropped before the count and the layout, an untracked one never
+/// listed by git. `None`: no city.
+fn read(dir: &Path, roots: &[String], exclude: &[(String, Vec<String>)]) -> Option<Atlas> {
+    let rule = city_filter::Exclude::new(&exclude_for(dir, exclude));
+    let keep = |name: &str| !rule.excludes(name);
+    let (files, _) = checkout_files(dir, roots, MOST_FILES, MOST_BYTES, true, &rule.git_patterns(), &keep)?;
     (!files.is_empty()).then(|| atlas::atlas(&atlas::repo(&files)))
 }
 
@@ -195,19 +216,23 @@ fn read(dir: &Path, roots: &[String]) -> Option<Atlas> {
 /// names); `whole`: a list that was cut is none. Hardened as the status bar's read
 /// (`child::git_read`), and only in a folder that, resolved, is one of `roots`
 /// (`status_bar::reads_changes`). A link is no file, and nothing under a folder that is a link is
-/// one: nothing outside the checkout is looked at. `None`: not such a checkout, or git failed or
-/// took too long.
+/// one: nothing outside the checkout is looked at. Git lists no untracked file under `skip`
+/// (its `--exclude` patterns), and only names `keep` keeps are counted or looked at. `None`: not
+/// such a checkout, or git failed or took too long.
 pub(crate) fn checkout_files(
     dir: &Path,
     roots: &[String],
     most: usize,
     most_bytes: u64,
     whole: bool,
+    skip: &[String],
+    keep: &dyn Fn(&str) -> bool,
 ) -> Option<(Vec<(String, u64)>, bool)> {
     let top =
         dir.canonicalize().ok().filter(|top| top.to_str().is_some_and(|top| status_bar::reads_changes(top, roots)))?;
     let mut list = crate::child::git_read(&top);
     list.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+    list.args(skip.iter().map(|pattern| format!("--exclude={pattern}")));
     let late = Instant::now() + TIMEOUT;
     let said = crate::child::run(list, TIMEOUT, most_bytes).ok()?;
     // Cut at `most_bytes`: git stops on the closed pipe, and the last name may be half of one.
@@ -219,6 +244,7 @@ pub(crate) fn checkout_files(
     if full {
         names.pop();
     }
+    names.retain(|name| keep(name));
     let cut = full || names.len() > most;
     if cut && whole {
         return None;
@@ -613,7 +639,8 @@ impl Workspace {
             return;
         }
         let mut roots = None;
-        let mut on_show: HashMap<String, (Vec<String>, Vec<(String, bool)>)> = HashMap::new();
+        let exclude: Exclude = crate::config::live().city_exclude.clone().unwrap_or_default().into_iter().collect();
+        let mut on_show: HashMap<String, Asked> = HashMap::new();
         let mut floors = HashSet::new();
         for at in self.model.empty_places() {
             let Some(city) = self.model.city_at(at) else { continue };
@@ -629,7 +656,8 @@ impl Workspace {
             }
             drop(drawn);
             let roots = roots.get_or_insert_with(|| self.model.checkout_roots()).clone();
-            let lit = &mut on_show.entry(city.dir.to_string()).or_insert_with(|| (roots, Vec::new())).1;
+            let exclude = exclude.clone();
+            let lit = &mut on_show.entry(city.dir.to_string()).or_insert_with(|| (roots, exclude, Vec::new())).2;
             for one in &city.lit {
                 let one = (one.label.to_string(), one.running);
                 if !lit.contains(&one) {
@@ -1657,6 +1685,39 @@ fn beacon(
 mod tests {
     use super::*;
 
+    /// A checkout's folders left out (built in, and the setting's) are not in its plan, nor
+    /// counted: the plan is as if they were never there.
+    #[test]
+    fn folders_left_out_are_not_in_the_plan() {
+        let scratch = crate::scratch::Scratch::dir(&format!("ottospace-city-exclude-{}", std::process::id()));
+        let top = scratch.as_ref().join("repo");
+        for (file, text) in [("src/a.rs", "x"), ("notes/archive/old.md", "y"), ("node_modules/m/i.js", "z")] {
+            std::fs::create_dir_all(top.join(file).parent().unwrap()).unwrap();
+            std::fs::write(top.join(file), text).unwrap();
+        }
+        // Tracked: a global ignore file of the user's leaves none out.
+        for args in [&["init", "-q"][..], &["add", "-f", "."]] {
+            let git = std::process::Command::new("git").arg("-C").arg(&top).args(args).status().unwrap();
+            assert!(git.success());
+        }
+        let top = top.canonicalize().unwrap();
+        let roots = [top.to_string_lossy().into_owned()];
+        let ids = |exclude: &[&str]| {
+            let exclude: Exclude = vec![("*".into(), exclude.iter().map(|e| e.to_string()).collect())];
+            read(&top, &roots, &exclude).map(|atlas| atlas.places.into_iter().map(|p| p.id).collect::<Vec<_>>())
+        };
+        assert_eq!(ids(&["notes/archive"]), Some(vec!["src".into(), "src/a.rs".into()]));
+        // A key that is this checkout's path: its own entries too.
+        let own: Exclude = vec![(top.to_string_lossy().into_owned(), vec!["src".into()])];
+        let left = read(&top, &roots, &own).map(|a| a.places.into_iter().map(|p| p.id).collect::<Vec<_>>());
+        assert!(left.is_some_and(|ids| !ids.iter().any(|id| id.starts_with("src"))));
+        let all = ids(&["!node_modules"]).unwrap();
+        assert!(
+            all.contains(&"node_modules/m/i.js".to_string()) && all.contains(&"notes/archive/old.md".into()),
+            "{all:?}"
+        );
+    }
+
     /// How long a checkout's read takes, for the design note's costs. `CITY_BENCH`: folders,
     /// `:` between them. `cargo test -p ottospace --release -- --ignored a_read_is_timed --nocapture`.
     #[test]
@@ -1666,7 +1727,7 @@ mod tests {
             let top = Path::new(dir).canonicalize().unwrap();
             let roots = [top.to_string_lossy().into_owned()];
             let started = Instant::now();
-            let places = read(&top, &roots).map(|atlas| atlas.places.len());
+            let places = read(&top, &roots, &[]).map(|atlas| atlas.places.len());
             println!("{dir}: {places:?} places in {:.1} ms", started.elapsed().as_secs_f64() * 1000.);
         }
     }

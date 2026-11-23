@@ -17,6 +17,7 @@ pub mod capture;
 pub mod capture_model;
 pub mod cell_art;
 pub mod city_colours;
+pub mod city_filter;
 pub mod city_labels;
 pub mod clip;
 pub mod clone;

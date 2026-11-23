@@ -28,7 +28,15 @@ impl Reader {
         let (done, reads) = channel();
         std::thread::spawn(move || {
             for (folder, roots) in inbox {
-                let read = crate::city::checkout_files(Path::new(&folder), &roots, MOST_FILES, MOST_BYTES, false);
+                let read = crate::city::checkout_files(
+                    Path::new(&folder),
+                    &roots,
+                    MOST_FILES,
+                    MOST_BYTES,
+                    false,
+                    &[],
+                    &|_| true,
+                );
                 let cut = read.as_ref().is_some_and(|(_, cut)| *cut);
                 let paths = read.map(|(files, _)| files.into_iter().map(|(path, _)| path).collect());
                 if done.send((folder, paths, cut)).is_err() {

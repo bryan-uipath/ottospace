@@ -213,6 +213,10 @@ pub struct Settings {
     /// (`city_colours`).
     #[serde(default)]
     pub city_folder_colors: Option<std::collections::BTreeMap<String, String>>,
+    /// Folders the code city leaves out, by checkout: `{"*": ["archive"], "~/notes": ["old"]}`
+    /// (`city_filter`).
+    #[serde(default)]
+    pub city_exclude: Option<std::collections::BTreeMap<String, Vec<String>>>,
     /// Feature flags by name, e.g. `{ "marks": true }`: see `features`. One not named keeps its default.
     #[serde(default)]
     pub features: std::collections::BTreeMap<String, bool>,
@@ -415,6 +419,9 @@ impl Settings {
                 return Err(format!("at most {} rules", crate::calendar::MAX_RULES));
             }
             rules.iter().try_for_each(|r| crate::calendar::ColorRule::new(&r.text, &r.color).map(drop))?;
+        }
+        if let Some(exclude) = settings.city_exclude.as_ref() {
+            crate::city_filter::check_setting(exclude)?;
         }
         if let Some(colours) = settings.city_folder_colors.as_ref() {
             crate::city_colours::FolderColours::new(colours)?;
@@ -682,6 +689,8 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         calendar_colors: _,
         // The code city reads it for each picture.
         city_folder_colors: _,
+        // The code city reads it for each read of a checkout.
+        city_exclude: _,
         // Told to the core again on each good read, as Features… writes them.
         features: _,
         paste_confirm: _,
@@ -1176,6 +1185,16 @@ mod tests {
             assert!(settings.calendar_email.is_none() && wrong.len() == 1, "{bad:?}");
             assert!(wrong[0].starts_with("calendar_email: ") && !wrong[0].contains("s3"), "{wrong:?}");
         }
+    }
+
+    /// `city_exclude` names folders by checkout; one outside the checkout is refused, said.
+    #[test]
+    fn city_exclude_names_folders_inside_the_checkout() {
+        let (ok, wrong) = Settings::read(r#"{"city_exclude": {"*": ["archive"], "~/notes": ["old", "!target"]}}"#);
+        assert_eq!((ok.city_exclude.map(|c| c.len()), wrong.len()), (Some(2), 0));
+        let (bad, wrong) = Settings::read(r#"{"city_exclude": {"*": ["/etc"]}}"#);
+        assert!(bad.city_exclude.is_none(), "{wrong:?}");
+        assert!(wrong.len() == 1 && wrong[0].starts_with("city_exclude: \"/etc\" is outside"), "{wrong:?}");
     }
 
     /// `city_folder_colors` names a folder and a palette colour; one wrong is left out, said.

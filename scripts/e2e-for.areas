@@ -72,7 +72,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?zoom(\.rs|/)                                                      zoom
 # No e2e test of its own yet: give it a row of its tests when it has some.
 /src/(.*/)?bug(\.rs|/)                                                       ^bug_
-/src/(.*/)?(atlas|city|city_colours|city_gpu|city_labels|scene)(\.rs|/)                    city|home|status_bar
+/src/(.*/)?(atlas|city|city_colours|city_filter|city_gpu|city_labels|scene)(\.rs|/)                    city|home|status_bar
 /src/(.*/)?(notice|notices|toast|float_panel|give_back)(\.rs|/)              notice|undo|toast
 /src/(.*/)?(confirm|quit)(\.rs|/)                                            quit|cmd_q|asks_first|closing
 /src/(.*/)?(sneak|sneak_place|sneak_apps)(\.rs|/)                            sneak
