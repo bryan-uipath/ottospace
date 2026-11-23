@@ -117,11 +117,8 @@ cannot give it to another task there.
 - **Kept in step.** Every `ottospace ctl '…'` in the preamble must parse and be shown in
   `guide.md` (a unit test beside `every_request_in_the_agent_guide_parses`); the preamble is a
   constant, so its size is asserted (under 800 bytes).
-- **MCP or CLI + skill.** The costs are agent-mode.md's ("The MCP route: not now"). New here: an
-  MCP server's tools are listed to the agent with no prompt (what was missing in the report), and
-  each answer lands in the context (a `state` is large). The preamble fixes the report's failure at a fraction
-  of that. **Recommend: CLI + preamble + skill now; MCP when a sandboxed runner is the default, or
-  when See and act (stage (c)) needs typed tools.** Not built.
+- **MCP:** section 5. The preamble comes first because it is a constant and a test; the MCP shim
+  follows, and then the preamble shrinks to what the server's instructions do not carry.
 
 ### 2. "What am I looking at" goes through ottospace
 
@@ -165,6 +162,151 @@ cannot give it to another task there.
   allow".
 - The owner may delete `/tmp/shot`.
 
+### 5. An MCP server: `ottospace mcp`, a shim over the socket
+
+The owner: "why not an MCP server? We could serve skills through that and it seems natural to
+control, vs the socket." **Recommend: yes, as the next step after the preamble, and only as a
+shim.** Not built. The owner's lean, taken here: MCP becomes what agents are taught; `ottospace ctl`
+stays for scripts and debugging (and the guide for it); the socket stays underneath both.
+
+**What it is.** `ottospace mcp`: a subcommand of the same binary, a stdio MCP server the runner
+starts. Each tool call becomes one socket request line, sent as `ottospace ctl` sends it (the pass
+attached), and the reply becomes the tool result. One implementation: the socket's `Request` set,
+`Origin::Socket` on every call, `control::test_refusal`, agent mode's `app_access`. Nothing the
+socket refuses becomes possible; the shim decides nothing (it holds no model state, so no second
+copy of it). It runs outside the runner's tool sandbox (which wraps the tool shell; to confirm in
+the probe), so it reaches the socket where a sandboxed
+Bash cannot (agent-mode.md, Probes): the one thing it adds that the CLI cannot.
+
+**Attached by ottospace, per runner, by capability.** A `RunnerSpec` field, never a `match` on the
+name: `mcp: Option<McpAttach>`, with `McpAttach::Flag` (a JSON string in argv) or
+`McpAttach::ConfigOverride` (`-c key=value` pairs), and `instructions: bool` (it reads the server's
+`instructions`). Both views of a task's agent (structured and terminal) add the same attach
+arguments; nothing touches the user's config files. Docs read 2026-11-23: code.claude.com/docs/en/cli-reference and
+/mcp; learn.chatgpt.com/docs/extend/mcp, /codex/config-file/config-basic and /codex/app-server.
+
+| Runner | Attach, per invocation | Documented | Probe |
+|---|---|---|---|
+| Claude Code 2.1.331 | `--mcp-config '{"mcpServers":{"ottospace":{"command":"<this binary>","args":["mcp"],"env":{"OTTOSPACE_TASK_PASS_FILE":"${OTTOSPACE_TASK_PASS_FILE}"}}}}'`. Not `--strict-mcp-config`: that would drop the user's own servers | "Load MCP servers from JSON files or strings"; with `-p` it waits for servers to connect before the first turn; `${VAR}` expands in `env`. Whether a stdio server inherits the whole environment is not stated, hence the explicit `env` | one `-p` run with the stand-in removed (owner's approval) |
+| Codex 0.171.0 | `codex app-server` (structured) or `codex` (terminal) with `-c mcp_servers.ottospace.command="<this binary>" -c 'mcp_servers.ottospace.args=["mcp"]' -c 'mcp_servers.ottospace.env_vars=["OTTOSPACE_TASK_PASS_FILE"]'` | `-c` overrides any `config.toml` key and wins over the file (config-basic); `env_vars` "allow and forward" variables. Not documented: `-c` on `mcp_servers.*`, nor on `app-server` (its `--help` shows `-c`) | both, before Codex gets the field |
+
+`<this binary>` is ottospace's own executable (`std::env::current_exe`), never a name looked up on
+`PATH`: the program on `PATH` was one of A's three prerequisites, and this removes it. No file is
+written into the user's `~/.claude` or `~/.codex`.
+
+**Scope: only agents ottospace starts as tasks** (the owner, 2026-11-23: "it's ok that only sessions
+started in ottospace get the MCP"), in both views. A session started elsewhere gets nothing, and no
+setup is offered for it. A `claude` or `codex` the person types by hand in an ottospace terminal
+pane is the edge case; what could reach it without editing their config:
+- nothing (recommended): it is the person's own program and argv; they can start the task from
+  ottospace instead, or ask the agent to use `ottospace ctl` (on `PATH`, no pass: `state` yes, app
+  panes no);
+- `agent_commands` does not reach it: that prefix (`settings.rs:56`, `{"claude": "ja claude"}`) is
+  how ottospace starts its own agents, not a wrapper on what is typed;
+- a project `.mcp.json`: written into the person's repository, and Claude asks to approve it;
+  rejected.
+Listed as question 7; nothing is built toward it.
+
+**Identity.** The pass, unchanged: the server gets `OTTOSPACE_TASK_PASS_FILE` from the agent
+ottospace started (its child; Claude through the `env` above, Codex through `env_vars`) and attaches the pass as `ottospace ctl` does. Not `OTTOSPACE_TASK`
+alone: a task id is small, sequential and in every reply's `spaces`, so any same-user process could
+claim it; the pass is 16 random bytes, live only while that agent runs. Same-user is still the
+boundary (agent-mode.md section 2).
+
+**Tools, first set** (small, scoped to the caller's task; each schema a few lines):
+
+| Tool | Request | Why |
+|---|---|---|
+| `workspace` | new, `workspace` (no args): the caller's task's space, its tabs and panes (kind, app name, window title, `cwd`) and each pane's grant; the flag's state | "where am I, what is here", without a whole `state` (tens of kB) in the context. A core function, so `ottospace ctl` and the SDK get it too |
+| `app_read`, `app_look` | as today | `app_look` returns the PNG as MCP image content: no file for the agent to open, nothing left in `/tmp` |
+| `capture`, `wait` | as today | a terminal the agent opened; the description says the user's terminals are theirs |
+| `task_brief` | as today | the task's captures |
+| `guide` | none: `topic` (`rules`, `state`, `apps`, `tasks`…) | a section of `guide.md`, embedded, on demand |
+
+Later, as the requests land: `decision_file`, `present`, `task_set_state`. **Not exposed:** `type`,
+`key`, `mouse`, `drag`, `close`, `close_tab`, `quit`, `open_app`, `enter`. `type` is keyboard input
+to the user's shells, as strong as a shell, and the agent has its own; a tool in a list reads as
+sanctioned, and a pre-allowed MCP tool would type into the user's terminals with no card. An agent
+that needs them still has `ottospace ctl` and the full guide. Not the whole `Request` set: over a
+hundred tools, a schema each, every turn.
+
+**Kept in step with `Request`.** The tool table maps each tool to the JSON line it sends. Tests, as
+for the guide and `sdk/test/requests.jsonl`: every tool's example arguments build a line that
+parses as `Request`; every property of a tool's schema is a field of its variant (a line with all of
+them set parses); every listed tool is a request the guide shows. Generated schemas
+(`schemars` on `Request`, already in the lock file through a dependency) would be a new direct
+dependency and expose every field; hand-written for six tools, tested, is smaller.
+
+**What MCP offers beyond tools.**
+- **Server instructions** (`initialize`'s `instructions`): the preamble's rules, about 120 tokens.
+  Claude Code loads them at start, "similar to how skills work", up to 4,096 characters; Codex
+  "uses it as server-wide guidance" and asks for a self-contained first 512 characters. Both take
+  them, so the first message's preamble is dropped where `instructions` is true.
+- **Resources:** `ottospace://workspace` (the `workspace` reply). Claude Code lets the user
+  @-mention one; the model does not read it unasked, so the tool is the path that matters.
+- **Prompts:** e.g. "look at my workspace". Claude Code shows them as slash commands the user
+  types; not a way for the model to learn.
+- **"Serving skills through it", honestly:** neither runner loads an MCP server as a skill. What
+  works on both: the instructions (always in), the `guide` tool (on demand, by topic), and tool
+  descriptions. That is what a skill does for ottospace, by another door; a Claude Code skill proper
+  stays a `SKILL.md` on disk or `--plugin-dir`.
+
+**Grants surface as answers, not silence.** A refused read is a tool result with `isError` and the
+core's words, naming the fix: "Pane 4 (Slack) is Off for task 7. Ask the user to choose See in the
+pane's header (the robot, or ⌘⌃V)." The same string `ottospace ctl` prints: the refusal is the
+core's, the shim passes it on.
+
+**Permission prompts.** Claude asks through ottospace's own `--permission-prompt-tool stdio`, so an
+MCP call is a card in the drawer unless allowed; rules name `mcp__ottospace__<tool>`
+(code.claude.com/docs/en/permissions). Recommend: the read-only tools pre-allowed in the start
+(`--allowedTools mcp__ottospace__workspace …`), every later tool that acts left to a card. Codex:
+`-c mcp_servers.ottospace.default_tools_approval_mode="writes"` prompts only for tools not marked
+read-only; the shim marks the first set `readOnlyHint`.
+
+**Tokens.** Claude Code defers MCP tool definitions by default: "only tool names and server
+instructions load at session start", schemas when used. So about 120 tokens of instructions plus six
+names a turn, cached. Codex: not documented; at worst six schemas, about 1k tokens. A fixture of
+`tools/list` asserts the total size.
+
+**Tests.** Never the real `claude` or `codex` in a test.
+- **Unit (shell crate), the shim over stdio:** the shim's loop takes any reader and writer; a test
+  feeds it JSON-RPC lines (`initialize`, `tools/list`, `tools/call`) and points it at a socket the
+  test serves itself (a thread in the test's temp folder answering fixed replies), and checks the
+  lines it sends: the pass attached, the request each tool builds, a refusal returned as
+  `isError` with the core's words, and no tool outside the table.
+- **Fixtures from `Request`:** as `sdk/test/requests.jsonl`: `UPDATE_FIXTURE=1` writes each tool's
+  example request line to `crates/ottospace/tests/mcp-requests.jsonl` and `tools/list` to
+  `mcp-tools.json`; a test parses every line as `Request` and fails on a tool with no line or a
+  line the app refuses, so the tools cannot drift from the socket; the tools fixture shows schema
+  changes in review and caps their size.
+- **e2e (`cargo e2e`):** start `ottospace mcp` with the test instance's `OTTOSPACE_SOCKET` and a
+  stand-in client script speaking its stdio. Cases: `workspace` for a task's pass; no pass
+  (`workspace` refused, `state`-level reads only); a made-up and a dead pass; `app_read`/`app_look`
+  at Off (the refusal names pane and key), at See with the user's level set by `"as":"user"`
+  (`app_fixture`), and for another task's pane; the flag off. The stand-in `claude`
+  (`ottospace-agents/tests/fakes`) records its argv: a test sees `--mcp-config` naming this binary
+  for a task's agent in both views, and none for a session not a task's.
+- **The owner's smoke check, real CLIs:** start a task with Claude Code from ottospace; in the
+  terminal view type `/mcp` (Codex: the same in its TUI): `ottospace` is listed and connected.
+  (`claude mcp list` and `codex mcp list` list configured servers only, so not this per-run one.)
+  Then ask "What is in this workspace, and can you see the Slack pane?". Expected: a
+  `mcp__ottospace__workspace` call, then `app_look` or, at Off, "ask the user to choose See", and no
+  `screencapture`.
+
+**Trade-off.**
+
+| | Preamble + CLI + skill | MCP shim |
+|---|---|---|
+| The agent learns ottospace exists | if it reads the first message | always: tools and instructions are listed |
+| Results | JSON text from Bash, parsed by the model | structured; pictures as images |
+| Sandboxed tool shell | refused | works |
+| Cost | ~120 tokens once; a guide read when needed | Claude: instructions and names a turn (schemas deferred); Codex: up to ~1k; a process per agent |
+| Surface | one (the socket) | two, kept one by the shim rule and the tests |
+| Permission cards | one per Bash line, per the user's mode | per tool, read-only ones pre-allowed |
+
+**Recommendation: both, in order.** The preamble now: a constant, it fixes the report, and it is
+the fallback for a runner with no MCP attach. Then the shim, which becomes what agents are taught.
+
 ## Slices
 
 1. (This change) The guide: `state.agent_mode`, a task's agent has `OTTOSPACE_TASK`, the workspace
@@ -173,7 +315,11 @@ cannot give it to another task there.
    receives it).
 3. The probe of D, then disclaim at spawn, and See's wording.
 4. See before a task (3).
-5. Per-runner system-prompt placement; the skill offer; MCP only per 1.
+5. The `workspace` request (core, socket, guide, SDK).
+6. `ottospace mcp` with `workspace`, `app_read`, `app_look`, `guide`; attached for Claude Code;
+   e2e over stdio.
+7. Codex attach, after a probe; server instructions replace the preamble where a runner takes them.
+8. The skill offer, if still wanted.
 
 ## Questions for the owner
 
@@ -183,6 +329,10 @@ cannot give it to another task there.
    next task with no click?
 3. Disclaim responsibility for agents, which also takes ottospace's screen and AX permissions from
    the user's own scripts run in its terminals once applied there: agents only, or every pane?
-4. May ottospace offer to install the skill into `~/.claude/skills`?
+4. May ottospace offer to install the skill into `~/.claude/skills`, or is the MCP shim's `guide`
+   tool enough?
 5. A workspace of several tasks: should the robot's menu name which task it gives the pane to, and
    let the user choose?
+6. MCP: pre-allow the read-only tools (no card), or a card for each first use?
+7. A `claude`/`codex` typed by hand in an ottospace pane: leave it without the server (lean), or an
+   opt-in later?

@@ -1917,7 +1917,7 @@ first brainstorm:
 
 [agent-mode.md](ai/agent-mode.md): a per-pane switch that lets a task See, or See and act on, a hosted app's window; who is asking, what each level grants, what Off closes. Not built.
 
-[agent-awareness.md](ai/agent-awareness.md): how a task's agent learns ottospace is there (it does not, today), sees the workspace through it instead of screenshots, See before a task exists, and what agent mode cannot stop. Proposed.
+[agent-awareness.md](ai/agent-awareness.md): how a task's agent learns ottospace is there (it does not, today), sees the workspace through it instead of screenshots, See before a task exists, what agent mode cannot stop, and `ottospace mcp`, a shim over the socket for the agents ottospace starts. Proposed.
 
 [meeting-timeline.md](ai/meeting-timeline.md): the meeting timeline as built, how a call is detected, the network decision, and what the calendar reader does not follow.
 
