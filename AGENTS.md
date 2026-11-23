@@ -73,6 +73,9 @@ Design rules for every feature. Each change answers to all three.
 > Delight attaches only to something you just did or asked to see. It never interrupts, never
 > delays the next key, and never decorates the fast path.
 
+- What ottospace presents is a pleasure to take in: never a wall of text with decisions buried
+  in it. Each decision is one clear thing to act on, and acting on it leaves the person feeling
+  in control, in command, and that things are getting done.
 - A reward marks an outcome (a decision made, a stack landed, main green), never activity.
 - It plays over a model that has already moved on; under Reduce Motion it is at once.
 - Nothing celebrates by itself: no animation, sound or badge arrives uninvited.
