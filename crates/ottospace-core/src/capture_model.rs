@@ -1049,6 +1049,10 @@ mod tests {
         assert!(m.compose_centred());
         pen(&mut m);
         assert_eq!((m.mode(), m.pen_marking(), m.compose_centred()), (Mode::Annotate, true, false));
+        // The picker waits: the box is only tucked away (seed 42928).
+        let pick = Action::OpenPicker { axis: Right, new_tab: false, items: vec![PickItem::Terminal] };
+        m.update(pick);
+        assert!(m.picker.is_none() && m.pen_marking());
         // A press on the panes is a mark: the box is not dismissed by it.
         m.update(Action::OverlayDismiss);
         assert!(m.pen_marking() && m.compose.is_some());
