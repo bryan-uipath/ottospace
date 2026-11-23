@@ -1,0 +1,16 @@
+# Agent mode before a task: Slack placed and set to See in a workspace no task works in. The pick
+# waits (dimmed, "for the next task here"); the task the user starts there is offered it in the
+# pane's header, and only the user's click gives it.
+{"env":{"OTTOSPACE_FEATURES":"agent_mode"}}
+{"cmd":"app_fixture","name":"Slack","user":true}
+{"click":"agent:1"}
+{"shot":"menu-no-task"}
+{"click":"agent-item:1"}
+{"shot":"picked-ahead"}
+{"cmd":"key","keys":"cmd-n","as":"user"}
+{"cmd":"key","keys":"p l a n space t h e space w e e k","as":"user"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"settle":500}
+{"shot":"offered"}
+{"click":"agent-offer:1"}
+{"shot":"given"}

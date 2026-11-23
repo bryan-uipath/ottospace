@@ -58,7 +58,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       features: [],
       listen: null,
       transcripts: { today: [{ name: "2026-11-17-0900-zoom.md", started_ms: 1794819600000, length_ms: 2520000 }], open: null },
-      agent_mode: { panes: { "3": { level: "see", task: 2 } }, default: "act", menu: null },
+      agent_mode: { panes: { "3": { level: "see", task: 2 } }, default: "act", menu: null, ahead: { "4": { level: "see" } } },
       slots: {},
       offers: [],
       offer_list: null,

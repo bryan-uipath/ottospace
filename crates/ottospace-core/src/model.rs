@@ -13220,19 +13220,22 @@ mod tests {
     /// at See or more, once a second.
     #[test]
     fn agent_mode_grants_a_pane_to_its_workspaces_task_and_only_the_user_sets_it() {
-        use crate::agent_mode::{AppUse, Grant, Level, NO_PASS, NO_TASK, SHELLS_ALONE, USERS_ALONE};
+        use crate::agent_mode::{AHEAD, AppUse, Grant, Level, NO_PASS, SHELLS_ALONE, USERS_ALONE};
         let mut m = Model::default();
         let grant = |m: &Model, pane| m.agent.panes.get(&pane).map(|grant| (grant.level, grant.task));
-        // In the workspace made for it, no task: Off, and the menu offers nothing.
+        // In the workspace made for it, no task: Off; a level picked there grants nothing (it waits
+        // for the next task, `a_level_picked_before_any_task_is_only_offered_to_the_first`).
         m.update(Action::Open { kind: app(1), axis: Right, beside: None });
         assert_eq!(grant(&m, 1), Some((Level::Off, None)));
         assert_eq!(
             m.update(Action::AgentLevel { pane: Some(1), level: Level::See }),
-            [Effect::Notice { text: NO_TASK.into() }]
+            [Effect::Notice { text: AHEAD.into() }]
         );
         assert_eq!(grant(&m, 1), Some((Level::Off, None)));
+        m.update(Action::AgentLevel { pane: Some(1), level: Level::Off });
+        assert!(m.agent.ahead.is_empty(), "Off takes the pick back");
         m.update(Action::AgentMenu { pane: Some(1), keys: true });
-        assert_eq!(m.agent.menu.map(|menu| menu.selected), Some(None), "no item to be on");
+        assert_eq!(m.agent.menu.map(|menu| menu.selected), Some(Some(0)));
         m.update(Action::AgentMenuClose);
         // A task's workspace: its new app pane is at the default, for the task.
         let task = add_task(&mut m, "plan the week", State::Running);
@@ -13326,6 +13329,50 @@ mod tests {
         // Off and on again (a settings write): every grant as it was, none raised.
         m.update(Action::SetFeatures { features: crate::features::Features::all() }.sent_by(Origin::System));
         assert_eq!(m.agent.panes, kept);
+    }
+
+    /// The owner's order: Slack placed and set to See, then a task started there. The pick waits
+    /// for that task and is only offered to it: the user's click gives it, a client's does not.
+    /// Moved to another workspace first, the pane forgets it.
+    #[test]
+    fn a_level_picked_before_any_task_is_only_offered_to_the_first() {
+        use crate::agent_mode::{AppUse, Kept, Level, USERS_ALONE};
+        let mut m = Model::default();
+        let grant = |m: &Model, pane| m.agent.panes.get(&pane).map(|grant| (grant.level, grant.task));
+        let ahead = |m: &Model, pane| m.agent.ahead.get(&pane).map(|ahead| ahead.level);
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        let pane = m.focused.unwrap_or_default();
+        m.update(Action::AgentLevel { pane: Some(pane), level: Level::See });
+        assert_eq!((grant(&m, pane), ahead(&m, pane)), (Some((Level::Off, None)), Some(Level::See)));
+        // A client picks nothing ahead.
+        let theirs = Action::AgentLevel { pane: Some(pane), level: Level::Act };
+        assert_eq!(m.refusal(&theirs, Origin::Socket), Some(USERS_ALONE));
+        m.update(theirs.sent_by(Origin::Socket));
+        assert_eq!(ahead(&m, pane), Some(Level::See));
+        // The user's task here: Off for it, the pick offered, nothing read yet.
+        m.update(Action::OpenCompose { text: "plan the week".into() });
+        m.update(Action::ComposeEnter);
+        let task = m.tasks.list[0].id;
+        assert_eq!(grant(&m, pane), Some((Level::Off, Some(task))));
+        assert_eq!((m.agent.offers.get(&pane), ahead(&m, pane)), (Some(&Kept { level: Level::See, task }), None));
+        assert!(m.app_access(pane, Caller::Task(task), AppUse::Read, 0).is_err());
+        // A client's click on the offer gives nothing; the user's gives See, to that task.
+        m.update(Action::AgentOfferAccept { pane }.sent_by(Origin::Socket));
+        assert_eq!(grant(&m, pane), Some((Level::Off, Some(task))));
+        m.update(Action::AgentOfferAccept { pane });
+        assert_eq!(grant(&m, pane), Some((Level::See, Some(task))));
+        assert_eq!(m.app_access(pane, Caller::Task(task), AppUse::Read, 0), Ok(task));
+        // Picked in one workspace, moved to a task's: forgotten, nothing offered there.
+        m.update(Action::WorkbookNew { uid: "00000000000000ee".into() });
+        m.update(Action::Open { kind: app(2), axis: Right, beside: None });
+        let other = m.focused.unwrap_or_default();
+        assert_eq!(grant(&m, other), Some((Level::Off, None)));
+        m.update(Action::AgentLevel { pane: Some(other), level: Level::Act });
+        assert_eq!(ahead(&m, other), Some(Level::Act));
+        let to = m.tabs.iter().position(|tab| Some(tab.id) == m.tab_of(pane)).unwrap_or_default();
+        m.update(Action::MovePane { pane: Some(other), tab: to });
+        assert_eq!((grant(&m, other), ahead(&m, other)), (Some((Level::Off, Some(task))), None));
+        assert_eq!(m.agent.offers.get(&other), None);
     }
 
     #[test]

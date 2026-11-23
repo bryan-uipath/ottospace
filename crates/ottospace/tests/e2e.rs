@@ -14182,6 +14182,45 @@ fn agent_mode_lets_only_the_workspaces_task_read_an_app_pane_and_only_the_user_s
     assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["agent_mode"]["panes"], json!({}));
 }
 
+/// The owner's order: an app pane placed and set to See before any task works in its workspace.
+/// The pick grants nothing and waits; the task the user then starts there is only offered it; a
+/// client's click on the offer gives nothing, the user's gives See to that task.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn agent_mode_a_level_picked_before_a_task_is_offered_to_it() {
+    let (root, _, env) = native_setup("agent-ahead", &[], &[("OTTOSPACE_FEATURES", "agent_mode")]);
+    let otto = launch_env("agent-ahead", &env);
+    let mode = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["agent_mode"].clone();
+    otto.call(json!({"cmd": "app_fixture", "name": "Slack", "user": true}));
+    let pane: u64 = mode(&otto)["panes"].as_object().unwrap().keys().next().unwrap().parse().unwrap();
+    let key = pane.to_string();
+    // No task here: the user's See (⌘⌃V, ↓, ↵) waits for the next task, and grants nothing.
+    otto.user_key("cmd-ctrl-v");
+    otto.user_key("down");
+    otto.user_key("enter");
+    let now = mode(&otto);
+    assert_eq!(
+        (&now["panes"][&key], &now["ahead"][&key]),
+        (&json!({"level": "off", "task": null}), &json!({"level": "see"}))
+    );
+    // The user's task in this workspace: Off for it, the pick only offered.
+    otto.user_key("cmd-n");
+    otto.user_key("p l a n space t h e space w e e k");
+    otto.user_key("enter");
+    let now = otto.wait_for("the task there", |o| Some(mode(o)).filter(|m| m["panes"][&key]["task"] == 1));
+    // Room for the pane's header: the drawer folded (the user's key).
+    otto.user_key("cmd-shift-r");
+    assert_eq!((&now["panes"][&key]["level"], &now["ahead"]), (&json!("off"), &json!({})));
+    let offer = otto.wait_for("the offer drawn", |o| o.control_opt(&format!("agent-offer:{pane}")));
+    otto.click(at(offer, 0.5, 0.5), 1);
+    assert_eq!(mode(&otto)["panes"][&key]["level"], "off", "a client's click on the offer");
+    otto.user_click(at(offer, 0.5, 0.5));
+    assert_eq!(mode(&otto)["panes"][&key], json!({"level": "see", "task": 1}));
+    assert_eq!(otto.control_opt(&format!("agent-offer:{pane}")), None);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Agent mode over a restart: only a level the user picked is kept in `layout.json`, and read back
 /// it is an offer, never a grant (an agent of the same user can write the file). A level planted
 /// there for a pane the user never picked is offered the same way, and gives nothing by itself; a

@@ -1981,7 +1981,12 @@ function agentMode(value: unknown, at: string): AgentMode {
     const m = fields(value, at);
     return { pane: num(m.pane, `${at}.pane`), selected: orNull(num)(m.selected, `${at}.selected`) };
   };
-  return { panes, default: agentLevel(o.default, `${at}.default`), menu: orNull(menu)(o.menu, `${at}.menu`) };
+  const ahead: AgentMode["ahead"] = {};
+  for (const [id, picked] of Object.entries(fields(o.ahead, `${at}.ahead`))) {
+    ahead[id] = { level: agentLevel(fields(picked, `${at}.ahead.${id}`).level, `${at}.ahead.${id}.level`) };
+  }
+  const open = orNull(menu)(o.menu, `${at}.menu`);
+  return { panes, default: agentLevel(o.default, `${at}.default`), menu: open, ahead };
 }
 
 function transcripts(value: unknown, at: string): Snapshot["state"]["transcripts"] {

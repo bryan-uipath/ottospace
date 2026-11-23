@@ -1453,6 +1453,8 @@ export interface AgentMode {
   default: AgentLevel;
   /** The robot's open menu: its pane, the item the keys are on. */
   menu: { pane: PaneId; selected: number | null } | null;
+  /** By pane id: a level the user picked where no task works yet, offered to the next task there. */
+  ahead: Record<string, { level: AgentLevel }>;
 }
 
 /** A transcript of an app pane's sound: its status, source and times. */
