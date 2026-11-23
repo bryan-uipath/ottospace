@@ -13231,9 +13231,19 @@ fn the_user_selects_and_copies_transcript_text_and_a_client_cannot() {
     assert!(input[3] > 22. * closed[3] * 0.8, "wrapped: {input:?}, a line {closed:?}");
     let open = otto.control(&row_id);
     assert!(input[0] + input[2] <= open[0] + open[2] + 1., "inside the drawer: {input:?} in {open:?}");
-    // Copy sits at the input's top, out of view in a short window (CI's): scrolled back to it.
-    otto.wheel([input[0] + 10., input[1] + input[3] - 10.], 40., false);
-    let input = texts(&otto).into_iter().find(|(key, _)| key.starts_with("in:")).map(|(_, r)| r).expect("its input");
+    // Copy sits at the input's top, out of view in a short window (CI's): scrolled back, over the
+    // drawer's body, until that top shows (how far depends on what is above, the first message).
+    let body = rect(&otto.drawn()["drawer"]["body"]);
+    let input_now = |o: &Otto| texts(o).into_iter().find(|(key, _)| key.starts_with("in:")).map(|(_, r)| r);
+    let mut input = input;
+    for _ in 0..40 {
+        if input[1] >= body[1] + 4. {
+            break;
+        }
+        otto.wheel([input[0] + 10., body[1] + body[3] / 2.], 5., false);
+        input = input_now(&otto).expect("its input");
+    }
+    assert!(input[1] >= body[1] + 4., "the input's top in view: {input:?} in {body:?}");
     // Copy over it: a client's puts nothing there, the user's the whole input.
     let id = row_id.rsplit(':').next().unwrap().to_string();
     let copy_id = format!("chat-io-copy:1:{id}:in");
