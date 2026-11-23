@@ -40,11 +40,14 @@ const LOT_STREET: f32 = 0.12;
 const LIT_ABOVE: f32 = 0.02;
 /// The camera looks down this much (degrees) and from this side of the plan (degrees from its
 /// front, toward its left), with this vertical field of view.
-const PITCH: f32 = 52.;
+const PITCH: f32 = 38.;
 const YAW: f32 = 34.;
 const FOV: f32 = 30.;
 /// Room kept round the city in the picture, a share of each side.
 const MARGIN: f32 = 0.04;
+/// The fitted city's middle sits this far below the picture's (a share of its height: 0.6 of the
+/// way down), so the room over it holds the sky, beams, names and agents' icons.
+pub const LOWER: f32 = 0.1;
 /// A beam rises above a box's top as high as the city's highest top stands, and at least this
 /// (plan units: the plan is 1 deep): in a city of few files towers are tall, and so are beams.
 const BEAM: f32 = 0.2;
@@ -83,6 +86,9 @@ pub struct Camera {
     pub aspect: f32,
     pub near: f32,
     pub far: f32,
+    /// How far below the picture's middle the target is drawn, a share of its height (a lens
+    /// shift: the view's perspective is kept).
+    pub shift: f32,
 }
 
 /// Where an agent's icon floats: over box `over` (its cone falls on that box's top) or, with
@@ -102,6 +108,94 @@ const EDGE_RISE: f32 = 0.05;
 pub struct Scene {
     pub blocks: Vec<Block>,
     pub camera: Option<Camera>,
+    /// The fitted view's distance and target, for the camera of any other view (`Fit::camera`).
+    pub fit: Option<Fit>,
+}
+
+/// Where the user has turned, moved and zoomed the camera, from the fitted view: degrees round
+/// the plan from its front (yaw) and down from level (pitch), the distance as a share of the
+/// fitted one, and the point looked at, moved over the plan from the city's middle (plan units).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct View {
+    pub yaw: f32,
+    pub pitch: f32,
+    pub zoom: f32,
+    pub pan: [f32; 2],
+}
+
+/// Pitch is kept between these (degrees): never under the ground, never straight down.
+pub const PITCH_RANGE: (f32, f32) = (12., 80.);
+/// Zoom is kept between these: near enough that a building of a small city fills the tab, and
+/// the fitted view (the whole city with its margin).
+pub const ZOOM_RANGE: (f32, f32) = (0.05, 1.);
+
+impl Default for View {
+    fn default() -> Self {
+        View { yaw: YAW, pitch: PITCH, zoom: 1., pan: [0., 0.] }
+    }
+}
+
+impl View {
+    /// Inside its clamps: yaw from 0 to 360, pitch and zoom in their ranges, the point looked
+    /// at over the plan. Not finite: the fitted view's.
+    pub fn clamped(self) -> View {
+        let fitted = View::default();
+        let or = |v: f32, d: f32| if v.is_finite() { v } else { d };
+        View {
+            yaw: or(self.yaw, fitted.yaw).rem_euclid(360.),
+            pitch: or(self.pitch, fitted.pitch).clamp(PITCH_RANGE.0, PITCH_RANGE.1),
+            zoom: or(self.zoom, 1.).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1),
+            pan: [or(self.pan[0], 0.).clamp(-WIDE / 2., WIDE / 2.), or(self.pan[1], 0.).clamp(-0.5, 0.5)],
+        }
+    }
+
+    /// Turned round the point looked at by `yaw` and tilted by `pitch` degrees.
+    pub fn orbited(self, yaw: f32, pitch: f32) -> View {
+        View { yaw: self.yaw + yaw, pitch: self.pitch + pitch, ..self }.clamped()
+    }
+
+    /// The point looked at moved by `dx`, `dz` over the plan.
+    pub fn panned(self, dx: f32, dz: f32) -> View {
+        View { pan: [self.pan[0] + dx, self.pan[1] + dz], ..self }.clamped()
+    }
+
+    /// Nearer by `factor` (under 1: in), keeping `about` (a point of the plan, from the city's
+    /// middle) where it is in the picture: the point looked at moves toward it as much.
+    pub fn zoomed(self, factor: f32, about: [f32; 2]) -> View {
+        let zoom = (self.zoom * factor).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1);
+        let f = zoom / self.zoom;
+        let pan = [about[0] + (self.pan[0] - about[0]) * f, about[1] + (self.pan[1] - about[1]) * f];
+        View { zoom, pan, ..self }.clamped()
+    }
+
+    /// Inside its clamps and finite: for the model's check.
+    pub fn sound(&self) -> bool {
+        let all = [self.yaw, self.pitch, self.zoom, self.pan[0], self.pan[1]];
+        all.iter().all(|v| v.is_finite()) && *self == self.clamped()
+    }
+}
+
+/// The fitted view of a scene: its distance, the point it looks at (the city's middle) and how
+/// far below the picture's middle that point is drawn (`LOWER`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Fit {
+    pub distance: f32,
+    pub target: [f32; 3],
+    pub lower: f32,
+}
+
+impl Fit {
+    /// The camera of `view` for a picture `aspect` wide to 1 tall.
+    pub fn camera(&self, view: &View, aspect: f32) -> Camera {
+        let (pitch, yaw) = (view.pitch.to_radians(), view.yaw.to_radians());
+        // From the camera to the target: down by the pitch, into the plan turned by the yaw.
+        let back = [-yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos()];
+        let target = [self.target[0] + view.pan[0], self.target[1], self.target[2] + view.pan[1]];
+        let distance = self.distance * view.zoom;
+        let eye = std::array::from_fn(|i| target[i] + back[i] * distance);
+        let (near, far, shift) = (distance / 50., distance + 4., self.lower);
+        Camera { eye, target, fov: FOV.to_radians(), aspect, near, far, shift }
+    }
 }
 
 /// A building's height, 0 to 1, from a file's size: the owner's city's `buildingHeight`
@@ -182,9 +276,11 @@ impl Camera {
         let (a, b) = (self.far / (self.far - self.near), -self.near * self.far / (self.far - self.near));
         // Rows of projection × view, written out.
         let row = |s: f32, axis: [f32; 3]| [s * axis[0], s * axis[1], s * axis[2], -s * dot(axis, e)];
-        let (x, y) = (row(sx, r), row(sy, u));
+        let x = row(sx, r);
         let z = [a * f[0], a * f[1], a * f[2], -a * dot(f, e) + b];
         let w = [f[0], f[1], f[2], -dot(f, e)];
+        // The lens shifted: the target `shift` of the height below the middle.
+        let y: [f32; 4] = std::array::from_fn(|i| row(sy, u)[i] - 2. * self.shift * w[i]);
         let rows = [x, y, z, w];
         std::array::from_fn(|col| std::array::from_fn(|row| rows[row][col]))
     }
@@ -208,9 +304,9 @@ impl Camera {
     }
 }
 
-/// The camera that frames `blocks` in a picture `aspect` wide to 1 tall: looking down `PITCH`
-/// from `YAW` off the plan's front, as near as leaves `MARGIN` round every box.
-fn frame(blocks: &[Block], aspect: f32) -> Option<Camera> {
+/// The fitted view of `blocks` in a picture `aspect` wide to 1 tall: looking down `PITCH` from
+/// `YAW` off the plan's front, as near as leaves `MARGIN` round every box.
+fn frame(blocks: &[Block], aspect: f32, lower: f32) -> Option<Fit> {
     let lo = blocks.iter().fold([f32::MAX; 3], |lo, b| std::array::from_fn(|i| lo[i].min(b.min[i])));
     let hi = blocks.iter().fold([f32::MIN; 3], |hi, b| std::array::from_fn(|i| hi[i].max(b.max[i])));
     if blocks.is_empty() || aspect.is_nan() || aspect <= 0. {
@@ -218,14 +314,7 @@ fn frame(blocks: &[Block], aspect: f32) -> Option<Camera> {
     }
     let all = Block { min: lo, max: hi, kind: Kind::Ground, place: None, district: None };
     let target = [(lo[0] + hi[0]) / 2., 0., (lo[2] + hi[2]) / 2.];
-    let (pitch, yaw) = (PITCH.to_radians(), YAW.to_radians());
-    // From the camera to the target: down by the pitch, into the plan turned by the yaw.
-    let back = [-yaw.sin() * pitch.cos(), pitch.sin(), -yaw.cos() * pitch.cos()];
-    let at = |distance: f32| {
-        let eye = std::array::from_fn(|i| target[i] + back[i] * distance);
-        let span = distance + 4.;
-        Camera { eye, target, fov: FOV.to_radians(), aspect, near: distance / 50., far: span }
-    };
+    let at = |distance: f32| Fit { distance, target, lower }.camera(&View::default(), aspect);
     let fits = |camera: &Camera| {
         all.corners().all(|p| {
             camera
@@ -246,7 +335,7 @@ fn frame(blocks: &[Block], aspect: f32) -> Option<Camera> {
         let mid = (near + far) / 2.;
         if fits(&at(mid)) { far = mid } else { near = mid }
     }
-    Some(at(far))
+    Some(Fit { distance: far, target, lower })
 }
 
 /// An area of the ground: x from `x0` to `x1`, z from `z0` to `z1`.
@@ -286,16 +375,22 @@ struct Room {
     district: Option<usize>,
 }
 
-/// The city of `atlas` for a picture `aspect` wide to 1 tall. `lit`: places (by id) an agent is
-/// at, each with its task's colour.
+/// The city of `atlas` for a picture `aspect` wide to 1 tall, seen from `view`. `lit`: places
+/// (by id) an agent is at, each with its task's colour.
 ///
 /// Districts: a folder of more than one child is a plate on its parent's, a tier higher, a
 /// street in from its lot (siblings never touch). What stands in it is drawn a kerb in from its
 /// edge, the plan's shares kept (scaled, never cut). A
 /// building stands on its district, set back in its lot. A lit building stands above every
-/// terrace, and any building between the camera and a lit one's top is cut down to below the
-/// sight line: a lit building is never hidden.
-pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
+/// terrace, and from the fitted view any building between the camera and a lit one's top is cut
+/// down to below the sight line: a lit building is never hidden. A view the user moved cuts
+/// nothing: they look where they choose, and nothing changes height as they turn.
+pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, view: &View) -> Scene {
+    scene_lowered(atlas, lit, aspect, view, LOWER)
+}
+
+/// `scene`, its fitted middle `lower` of the picture's height below the picture's middle.
+pub fn scene_lowered(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, view: &View, lower: f32) -> Scene {
     let ground = Block { min: [0., -0.01, 0.], max: [WIDE, 0., 1.], kind: Kind::Ground, place: None, district: None };
     let mut blocks = vec![ground];
     // A typical lot's side: e.g. 0.24 for 28 files, 0.018 for 5,000 (where the constants rule).
@@ -370,9 +465,31 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
         block.max[1] = block.max[1].max(highest + LIT_ABOVE);
     }
     blocks.extend(buildings);
-    let Some(camera) = frame(&blocks, aspect) else { return Scene { blocks, camera: None } };
-    clear_sight(&mut blocks, camera.eye, highest + LIT_ABOVE);
-    Scene { blocks, camera: Some(camera) }
+    let Some(fit) = frame(&blocks, aspect, lower) else { return Scene { blocks, camera: None, fit: None } };
+    let camera = fit.camera(view, aspect);
+    if *view == View::default() {
+        clear_sight(&mut blocks, camera.eye, highest + LIT_ABOVE);
+    }
+    Scene { blocks, camera: Some(camera), fit: Some(fit) }
+}
+
+impl Camera {
+    /// The ray from the eye through a point of the picture (shares of it, 0,0 top left): its
+    /// direction, not of unit length.
+    fn ray(&self, x: f32, y: f32) -> [f32; 3] {
+        let (r, u, f) = self.axes();
+        let tan = (self.fov / 2.).tan();
+        let (dx, dy) = ((2. * x - 1.) * tan * self.aspect, (1. - 2. * y + 2. * self.shift) * tan);
+        std::array::from_fn(|i| f[i] + r[i] * dx + u[i] * dy)
+    }
+
+    /// The point of the ground (y = 0) under a point of the picture, as plan x and z; none above
+    /// the horizon.
+    pub fn ground(&self, x: f32, y: f32) -> Option<[f32; 2]> {
+        let d = self.ray(x, y);
+        let t = -self.eye[1] / d[1];
+        (d[1] < 0. && t.is_finite()).then(|| [self.eye[0] + d[0] * t, self.eye[2] + d[2] * t])
+    }
 }
 
 impl Scene {
@@ -380,10 +497,8 @@ impl Scene {
     /// nearest building or district the camera's ray through it meets. Never the ground.
     pub fn hit(&self, x: f32, y: f32) -> Option<usize> {
         let camera = self.camera?;
-        let (r, u, f) = camera.axes();
-        let tan = (camera.fov / 2.).tan();
-        let (dx, dy) = ((2. * x - 1.) * tan * camera.aspect, (1. - 2. * y) * tan);
-        let to: [f32; 3] = std::array::from_fn(|i| camera.eye[i] + (f[i] + r[i] * dx + u[i] * dy) * camera.far);
+        let d = camera.ray(x, y);
+        let to: [f32; 3] = std::array::from_fn(|i| camera.eye[i] + d[i] * camera.far);
         let hits = self.blocks.iter().enumerate().filter(|(_, b)| b.kind != Kind::Ground);
         let near = hits.filter_map(|(i, b)| Some((b.crossed(camera.eye, to)?.0, i)));
         near.min_by(|a, b| a.0.total_cmp(&b.0)).map(|(_, i)| i)
@@ -537,7 +652,7 @@ mod tests {
     #[test]
     fn a_city_of_few_files_stands_as_towers_on_streets() {
         let files: Vec<(String, u64)> = (0..12).map(|i| (format!("d{}/f{i}.rs", i % 3), 9_000)).collect();
-        let s = scene(&atlas(&repo(&files)), &[], 1.6);
+        let s = scene(&atlas(&repo(&files)), &[], 1.6, &View::default());
         let lot = (WIDE / 12.).sqrt();
         let buildings: Vec<&Block> = s.blocks.iter().filter(|b| b.kind == Kind::Building).collect();
         let tallest = buildings.iter().map(|b| b.max[1] - b.min[1]).fold(0., f32::max);
@@ -550,14 +665,19 @@ mod tests {
             }
         }
         let big: Vec<(String, u64)> = (0..5_000).map(|i| (format!("d{}/f{i}.rs", i % 7), u64::MAX)).collect();
-        let s = scene(&atlas(&repo(&big)), &[], 1.6);
+        let s = scene(&atlas(&repo(&big)), &[], 1.6, &View::default());
         let tallest = s.blocks.iter().filter(|b| b.kind == Kind::Building).map(|b| b.max[1] - b.min[1]);
         assert!((tallest.fold(0., f32::max) - TALLEST).abs() < 1e-6);
     }
 
     #[test]
     fn districts_step_up_and_buildings_stand_on_their_district() {
-        let s = scene(&city(&[("src/ui/a.rs", 900), ("src/ui/d.rs", 900), ("src/b.rs", 900), ("c.rs", 900)]), &[], 1.6);
+        let s = scene(
+            &city(&[("src/ui/a.rs", 900), ("src/ui/d.rs", 900), ("src/b.rs", 900), ("c.rs", 900)]),
+            &[],
+            1.6,
+            &View::default(),
+        );
         let plate = |depth| s.blocks.iter().find(|b| b.kind == Kind::Plate(depth)).unwrap();
         assert_eq!(plate(1).min[1], 0.);
         assert_eq!(plate(2).min[1], plate(1).max[1]);
@@ -588,7 +708,7 @@ mod tests {
             trees.push(atlas(&repo(&files)));
         }
         for atlas in &trees {
-            let s = scene(atlas, &[], 1.6);
+            let s = scene(atlas, &[], 1.6, &View::default());
             // The district each place stands in: its nearest group ancestor with a plate.
             let parent_plate = |i: usize| {
                 let depth = atlas.places[i].depth;
@@ -644,7 +764,7 @@ mod tests {
             })
             .collect();
         let atlas = atlas(&repo(&files));
-        let s = scene(&atlas, &[], 1.6);
+        let s = scene(&atlas, &[], 1.6, &View::default());
         assert!(s.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).count() > 3);
         for b in &s.blocks {
             assert!(b.max[0] > b.min[0] && b.max[2] > b.min[2], "{b:?}");
@@ -656,7 +776,7 @@ mod tests {
     #[test]
     fn a_folder_of_one_child_is_no_district() {
         let atlas = city(&[("a/b/c/x.rs", 900), ("a/b/c/y.rs", 900), ("a/b/c/z/w.rs", 900), ("a/b/c/z/v.rs", 900)]);
-        let s = scene(&atlas, &[], 1.6);
+        let s = scene(&atlas, &[], 1.6, &View::default());
         assert!(plate(&s, &atlas, "a").is_none() && plate(&s, &atlas, "a/b").is_none());
         let (c, z) = (plate(&s, &atlas, "a/b/c").unwrap(), plate(&s, &atlas, "a/b/c/z").unwrap());
         assert_eq!((c.kind, z.kind), (Kind::Plate(1), Kind::Plate(2)));
@@ -673,7 +793,7 @@ mod tests {
     fn a_point_of_the_picture_hits_what_is_drawn_there() {
         let atlas = many();
         for aspect in [0.7, 1.6, 3.] {
-            let s = scene(&atlas, &[], aspect);
+            let s = scene(&atlas, &[], aspect, &View::default());
             let camera = s.camera.unwrap();
             let mut hit = 0;
             for b in s.blocks.iter().filter(|b| b.kind == Kind::Building) {
@@ -692,7 +812,7 @@ mod tests {
         }
         // A district's front kerb, where nothing stands.
         let atlas = city(&[("a/x.rs", 900), ("a/y.rs", 900), ("b.rs", 900)]);
-        let s = scene(&atlas, &[], 1.6);
+        let s = scene(&atlas, &[], 1.6, &View::default());
         let a = plate(&s, &atlas, "a").unwrap();
         let kerb = [(a.min[0] + a.max[0]) / 2., a.max[1], a.min[2] + 1e-4];
         let (x, y) = s.camera.unwrap().project(kerb).unwrap();
@@ -706,7 +826,7 @@ mod tests {
     fn a_beam_rises_straight_up_and_stays_in_the_picture() {
         let atlas = many();
         for aspect in [0.5, 1.6, 4.] {
-            let s = scene(&atlas, &[], aspect);
+            let s = scene(&atlas, &[], aspect, &View::default());
             let camera = s.camera.unwrap();
             let tall = s.blocks.iter().map(|b| b.max[1]).fold(BEAM, f32::max);
             let mut full = 0;
@@ -723,12 +843,12 @@ mod tests {
             assert!(full > 0, "{aspect}: some beam has its whole height");
         }
         let few = city(&[("a.rs", 90_000), ("b.rs", 90_000), ("c/d.rs", 9_000), ("c/e.rs", 9_000)]);
-        let s = scene(&few, &[], 1.6);
+        let s = scene(&few, &[], 1.6, &View::default());
         let top = s.blocks.iter().map(|b| b.max[1]).fold(0., f32::max);
         assert!(top > BEAM, "towers taller than the least beam: {top}");
         let (foot, end) = s.beam(s.blocks.len() - 1).unwrap();
         assert!(end[1] - foot[1] > BEAM, "{foot:?} {end:?}");
-        assert_eq!(scene(&atlas, &[], 1.6).beam(0), None, "the ground has none");
+        assert_eq!(scene(&atlas, &[], 1.6, &View::default()).beam(0), None, "the ground has none");
     }
 
     /// A city rises district by district, the one with most buildings first and the one with
@@ -740,7 +860,7 @@ mod tests {
         files.extend((0..4).map(|i| (format!("mid/f{i}.rs"), 900)));
         files.extend([("small/a.rs".to_string(), 900), ("small/b.rs".to_string(), 900), ("root.rs".to_string(), 9)]);
         let atlas = atlas(&repo(&files));
-        let s = scene(&atlas, &[], 1.6);
+        let s = scene(&atlas, &[], 1.6, &View::default());
         let delays = s.rise_delays();
         let of = |dir: &str| {
             let at = |b: &Block| b.place.is_some_and(|p| atlas.places[p].id.starts_with(dir) && !atlas.places[p].group);
@@ -761,7 +881,7 @@ mod tests {
     /// none floats over the ground's leftmost corner in the picture, inside it.
     #[test]
     fn an_agent_floats_at_its_boxes_beam_and_one_at_none_at_the_edge() {
-        let s = scene(&many(), &[], 1.6);
+        let s = scene(&many(), &[], 1.6, &View::default());
         let (a, b) = (s.blocks.len() - 1, s.blocks.len() - 5);
         let marks = s.marks(&[Some(a), None, Some(b), Some(a), None, Some(0)]);
         let end = |i: usize| s.beam(i).unwrap().1;
@@ -784,7 +904,7 @@ mod tests {
     fn every_box_is_in_the_picture_at_any_shape() {
         let atlas = many();
         for aspect in [0.02, 0.5, 1., 1.6, 3., 40.] {
-            let s = scene(&atlas, &[], aspect);
+            let s = scene(&atlas, &[], aspect, &View::default());
             let camera = s.camera.unwrap();
             for block in &s.blocks {
                 let [x, y, w, h] = camera.bounds(block).unwrap();
@@ -795,22 +915,46 @@ mod tests {
 
     #[test]
     fn the_projection_agrees_with_the_camera() {
-        let s = scene(&many(), &[], 1.6);
+        let s = scene(&many(), &[], 1.6, &View::default());
         let camera = s.camera.unwrap();
-        // The target is the picture's centre; a point nearer the camera is lower in it.
+        // The target is `LOWER` below the picture's centre; a point nearer the camera is lower in it.
         let (x, y) = camera.project(camera.target).unwrap();
-        assert!((x - 0.5).abs() < 1e-4 && (y - 0.5).abs() < 1e-4, "{x} {y}");
+        assert!((x - 0.5).abs() < 1e-4 && (y - 0.5 - LOWER).abs() < 1e-4, "{x} {y}");
         let near: [f32; 3] = std::array::from_fn(|i| camera.target[i] + (camera.eye[i] - camera.target[i]) * 0.1);
         let near = [near[0], 0., near[2]];
         assert!(camera.project(near).unwrap().1 > 0.5);
         assert!(camera.project(sub(camera.eye, sub(camera.target, camera.eye))).is_none(), "behind it");
     }
 
+    /// The fitted city sits below the picture's middle and whole, at CI's window and a larger
+    /// one, small and large; centred with no shift. The user's view keeps the shift.
+    #[test]
+    fn the_fitted_city_sits_below_the_middle_and_whole() {
+        let small = city(&[("a/x.rs", 900), ("a/y.rs", 4000), ("b/z.rs", 300), ("r.md", 2000)]);
+        // CI's 1024×674 window and 1400×900, less the sidebar and bars: about 1.1 and 1.4 wide.
+        for (atlas, aspect) in [&small, &many()].into_iter().flat_map(|a| [(a, 1.1), (a, 1.4), (a, 1.6)]) {
+            for lower in [0., LOWER, 0.16] {
+                let s = scene_lowered(atlas, &[], aspect, &View::default(), lower);
+                let camera = s.camera.unwrap();
+                let (_, y) = camera.project(camera.target).unwrap();
+                assert!((y - 0.5 - lower).abs() < 1e-4, "{aspect} {lower}: {y}");
+                for b in &s.blocks {
+                    let [x, y, w, h] = camera.bounds(b).unwrap();
+                    let inside = |v: f32| (MARGIN - 1e-3..=1. - MARGIN + 1e-3).contains(&v);
+                    assert!(inside(x) && inside(y) && inside(x + w) && inside(y + h), "{aspect} {lower}: {b:?}");
+                }
+            }
+        }
+        let turned = View::default().orbited(40., -10.);
+        let camera = scene(&small, &[], 1.4, &turned).camera.unwrap();
+        assert!((camera.project(camera.target).unwrap().1 - 0.5 - LOWER).abs() < 1e-4);
+    }
+
     #[test]
     fn a_lit_building_is_coloured_and_stands_above_every_terrace() {
         let atlas = many();
         let id = atlas.places.iter().find(|p| !p.group && p.depth == 3).unwrap().id.clone();
-        let s = scene(&atlas, &[(&id, 0xff6467)], 1.6);
+        let s = scene(&atlas, &[(&id, 0xff6467)], 1.6, &View::default());
         let lit: Vec<&Block> = s.blocks.iter().filter(|b| b.kind == Kind::Lit(0xff6467)).collect();
         assert_eq!(lit.len(), 1);
         let highest = s.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).map(|b| b.max[1]).fold(0., f32::max);
@@ -829,8 +973,8 @@ mod tests {
                 // One lit, then two: far apart, and neighbours (one may stand in front of the other).
                 let (far, next) = (leaves[(i + 40) % leaves.len()], leaves[(i + 1) % leaves.len()]);
                 for lit in [vec![(*id, 1)], vec![(*id, 1), (far, 2)], vec![(*id, 1), (next, 2)]] {
-                    let plain = scene(&atlas, &[], aspect);
-                    let s = scene(&atlas, &lit, aspect);
+                    let plain = scene(&atlas, &[], aspect, &View::default());
+                    let s = scene(&atlas, &lit, aspect, &View::default());
                     let eye = s.camera.unwrap().eye;
                     for to in s.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))).map(Block::top) {
                         let over: Vec<&Block> =
@@ -847,7 +991,66 @@ mod tests {
 
     #[test]
     fn no_camera_for_a_picture_of_no_width() {
-        assert!(scene(&Atlas::default(), &[], 1.6).camera.is_some(), "the ground alone");
-        assert!(scene(&many(), &[], 0.).camera.is_none());
+        assert!(scene(&Atlas::default(), &[], 1.6, &View::default()).camera.is_some(), "the ground alone");
+        assert!(scene(&many(), &[], 0., &View::default()).camera.is_none());
+    }
+
+    /// A view stays in its clamps however far it is turned, moved or zoomed, and a view of no
+    /// number is the fitted one's.
+    #[test]
+    fn a_view_stays_in_its_clamps() {
+        let v = View::default().orbited(1000., 500.);
+        assert_eq!((v.pitch, (v.yaw - (YAW + 1000.).rem_euclid(360.)).abs() < 1e-3), (PITCH_RANGE.1, true));
+        assert_eq!(View::default().orbited(0., -500.).pitch, PITCH_RANGE.0);
+        assert_eq!(View::default().zoomed(1e-6, [0., 0.]).zoom, ZOOM_RANGE.0);
+        assert_eq!(View::default().zoomed(1e6, [0., 0.]).zoom, ZOOM_RANGE.1);
+        assert_eq!(View::default().panned(9., -9.).pan, [WIDE / 2., -0.5]);
+        let nan = View { yaw: f32::NAN, pitch: f32::INFINITY, zoom: f32::NAN, pan: [f32::NAN, 1.] };
+        assert_eq!(nan.clamped(), View { pan: [0., 0.5], ..View::default() });
+        for v in [View::default(), v, nan.clamped(), View::default().zoomed(0.3, [0.2, 0.1])] {
+            assert!(v.sound(), "{v:?}");
+        }
+    }
+
+    /// Zooming about a point keeps it where it was in the picture; panning by the ground's
+    /// difference under two points moves the city as far.
+    #[test]
+    fn a_zoom_keeps_its_point_and_a_pan_follows_the_ground() {
+        let s = scene(&many(), &[], 1.6, &View::default());
+        let fit = s.fit.unwrap();
+        let before = fit.camera(&View::default(), 1.6);
+        let at = before.ground(0.3, 0.6).unwrap();
+        let about = [at[0] - fit.target[0], at[1] - fit.target[2]];
+        let near = View::default().zoomed(0.5, about);
+        let after = fit.camera(&near, 1.6);
+        let (x, y) = after.project([at[0], 0., at[1]]).unwrap();
+        assert!((x - 0.3).abs() < 1e-3 && (y - 0.6).abs() < 1e-3, "{x} {y}");
+        // The ground under 0.3 moved to 0.5: the city follows the pointer.
+        let to = before.ground(0.5, 0.6).unwrap();
+        let moved = View::default().panned(at[0] - to[0], at[1] - to[1]);
+        let (x, y) = fit.camera(&moved, 1.6).project([at[0], 0., at[1]]).unwrap();
+        assert!((x - 0.5).abs() < 1e-3 && (y - 0.6).abs() < 1e-3, "{x} {y}");
+    }
+
+    /// The hit test holds from any view; a view the user moved cuts no building down.
+    #[test]
+    fn a_turned_view_hits_what_it_draws_and_cuts_nothing() {
+        let atlas = many();
+        let id = atlas.places.iter().find(|p| !p.group && p.depth == 3).unwrap().id.clone();
+        let turned = View::default().orbited(120., 15.).zoomed(0.4, [0.1, 0.]);
+        let s = scene(&atlas, &[(&id, 1)], 1.6, &turned);
+        let camera = s.camera.unwrap();
+        let mut hit = 0;
+        for b in s.blocks.iter().filter(|b| b.kind == Kind::Building) {
+            let Some((x, y)) = camera.project(b.top()).filter(|(x, y)| (0.0..1.).contains(x) && (0.0..1.).contains(y))
+            else {
+                continue;
+            };
+            hit += usize::from(s.hit(x, y).map(|i| &s.blocks[i]) == Some(b));
+        }
+        assert!(hit > 10, "{hit}");
+        let plain = scene(&atlas, &[], 1.6, &turned);
+        let cut = plain.blocks.iter().zip(&s.blocks).filter(|(a, b)| b.kind == Kind::Building && a.max[1] > b.max[1]);
+        assert_eq!(cut.count(), 0);
     }
 }

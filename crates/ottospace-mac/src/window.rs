@@ -3,7 +3,7 @@
 use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
 
-use objc2::ffi::class_addMethod;
+use objc2::ffi::{class_addMethod, class_getInstanceMethod, method_getImplementation};
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
 use objc2::{AnyThread, MainThreadMarker, msg_send, sel};
@@ -40,6 +40,10 @@ pub enum MouseKind {
     /// The right button: a press, a release.
     RightDown,
     RightUp,
+    /// The middle button (a mouse's wheel, pressed): a press, a move held, a release.
+    MiddleDown,
+    MiddleDrag,
+    MiddleUp,
     /// The scroll wheel, by `dx`, `dy`: points if `precise` (a trackpad), else lines (a mouse
     /// wheel); both in whole numbers, rounded. Positive `dy` scrolls back, as AppKit counts.
     Wheel { dx: f64, dy: f64, precise: bool },
@@ -136,6 +140,16 @@ pub unsafe fn send_mouse(ns_view: *mut c_void, mouse: Mouse) -> bool {
             }
             return event.is_some();
         }
+        MouseKind::MiddleDown | MouseKind::MiddleDrag | MouseKind::MiddleUp => {
+            let event = middle(at, mouse.kind, flags);
+            match (&event, mouse.kind) {
+                (Some(event), MouseKind::MiddleDown) => view.otherMouseDown(event),
+                (Some(event), MouseKind::MiddleUp) => view.otherMouseUp(event),
+                (Some(event), _) => view.otherMouseDragged(event),
+                (None, _) => {}
+            }
+            return event.is_some();
+        }
         MouseKind::Wheel { dx, dy, precise } => {
             let event = wheel(at, dx, dy, precise, flags);
             if let Some(event) = &event {
@@ -193,6 +207,39 @@ fn right(at: NSPoint, down: bool, flags: NSEventModifierFlags) -> Option<Retaine
     CGEvent::set_integer_value_field(Some(&event), CGEventField::MouseEventClickState, 1);
     CGEvent::set_flags(Some(&event), CGEventFlags(flags.0 as u64));
     NSEvent::eventWithCGEvent(&event)
+}
+
+/// A middle-button press, move or release whose `locationInWindow` is `at`, its button number 2:
+/// made by Quartz as `right`'s is.
+fn middle(at: NSPoint, kind: MouseKind, flags: NSEventModifierFlags) -> Option<Retained<NSEvent>> {
+    let kind = match kind {
+        MouseKind::MiddleDown => CGEventType::OtherMouseDown,
+        MouseKind::MiddleUp => CGEventType::OtherMouseUp,
+        _ => CGEventType::OtherMouseDragged,
+    };
+    let screen = NSScreen::screens(MainThreadMarker::new()?).firstObject()?.frame().size.height;
+    let event = CGEvent::new_mouse_event(None, kind, CGPoint::new(at.x, screen - at.y), CGMouseButton::Center)?;
+    CGEvent::set_integer_value_field(Some(&event), CGEventField::MouseEventClickState, 1);
+    CGEvent::set_flags(Some(&event), CGEventFlags(flags.0 as u64));
+    NSEvent::eventWithCGEvent(&event)
+}
+
+/// Makes a middle-button drag reach the view's `mouseDragged:`: GPUI 0.2's view takes
+/// `otherMouseDown:` and `otherMouseUp:` but not `otherMouseDragged:`, which AppKit then passes up
+/// the responder chain, so a held wheel's moves never came. Its `mouseDragged:` already reads a
+/// drag of any button. False: the class has its own, left alone.
+///
+/// # Safety
+/// `ns_view` must point to a live `NSView`, and this must run on the main thread.
+pub unsafe fn other_drags(ns_view: *mut c_void) -> bool {
+    let view = unsafe { &*(ns_view as *const NSView) };
+    let class = AnyObject::class(view) as *const AnyClass as *mut AnyClass;
+    let dragged = unsafe { class_getInstanceMethod(class, sel!(mouseDragged:)) };
+    let Some(imp) = (!dragged.is_null()).then(|| unsafe { method_getImplementation(dragged) }).flatten() else {
+        return false;
+    };
+    // Adds only: NO if the class defines `otherMouseDragged:` itself.
+    unsafe { class_addMethod(class, sel!(otherMouseDragged:), imp, c"v@:@".as_ptr()) }.as_bool()
 }
 
 /// Set while a test's held key is handled: `key_repeating` reads the app's current event,

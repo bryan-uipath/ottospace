@@ -196,7 +196,28 @@ in over 250 ms instead. Reduce Motion: at once. No frames at rest (`counts.city_
 `counts.city_fade_frames`). The newest two pictures no place shows are kept, so a tab shown
 again paints its city at once, with no rise. `scripts/bench`: `city_2000_ms`, `city_20000_ms`.
 
-## The camera (proposed; the first slice has none: the whole repository, fixed)
+## The camera (built by the user's pointer, slice 7; following navigation proposed)
+
+Built (the owner, 2026-11-20: "rotate, zoom in / out, and move (i.e. hold the scroll wheel and
+drag)"): the view is the core's (`scene::View`: yaw, pitch, zoom as a share of the fitted
+distance, the point looked at moved over the plan), one per checkout (`Model::city_view`), kept
+in the layout file (`layout.json`'s `cameras`, a moved one only) so a restart shows it as left,
+moved by `Action::CityCamera` from the user only (a client's is refused), clamped (pitch 12° to
+80°, zoom 0.05 to 1, the point looked at over the plan; checked by the property test). The shell
+translates: a middle drag pans by the ground under the pointer (`Camera::ground`), the wheel's
+lines zoom about it, a left drag past 4 points turns (0.4° a point), a trackpad's scroll pans,
+⌥ turns, ⌘ zooms (GPUI 0.2.2 delivers no pinch or rotate). Esc during a drag cancels it to where
+it began (`Grab`, `Cancel`); a moved camera shows a quiet "Reset view" button at the place's
+corner, which brings back the fitted view, eased over 200 ms (at once under Reduce Motion;
+`counts.city_frames` counts the frames). A double click is kept for going into a file. The fitted
+view oversees the city (the owner, 2026-11-21: "'overseeing' vs 'looking straight down'"): 38°
+down from 34° off its front, was 52°; 30° and 24° hid the back districts behind near towers. A move renders the picture again
+at most once a frame, the newest only (the picture's thread takes the newest job; a place's old
+key leaves the queue); input never waits for it.
+The lit buildings: from a moved view nothing is cut down (they stay raised and coloured): the
+user looks where they choose, and nothing changes height while they turn.
+
+Proposed, as before:
 
 The map has a view, a centre and a zoom, apart from the layout, which never changes. A stable
 layout with a moving camera is how recall survives zoom: the district is where it was, the
@@ -385,7 +406,7 @@ issue waiting on them; for code, the task working in that folder asks a question
 | 4 | Agent markers and trails; the task's "needs you" as a beacon on its district | |
 | 5 | Coupling for the hovered building (one `git log`); hover itself is 2b | |
 | 6 | Height from churn | |
-| 7 | The camera in the core (a view from an `Action`), eased in the shell, Reduce Motion | |
+| 7 | The camera in the core (a view from an `Action`), eased in the shell, Reduce Motion | built: the user's pointer (2026-11-20); following navigation proposed |
 | 8 | The explorer pane (file-viewer.md, D), then the map beside it and the camera following it | needs D |
 | 9 | Inside a file: markdown headings first | |
 | 10 | Kept anchors, if drift is felt | |

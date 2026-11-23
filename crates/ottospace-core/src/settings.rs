@@ -232,6 +232,10 @@ pub struct Developer {
     /// The code city's buildings solid, not glass: for comparing. Not documented for users.
     #[serde(default)]
     pub city_opaque: bool,
+    /// Where the code city's fitted middle sits, a share of the picture's height from its top
+    /// (0.3 to 0.8; none: 0.6, `scene::LOWER`): for picking. Not documented for users.
+    #[serde(default)]
+    pub city_frame: Option<f32>,
 }
 
 /// One of `calendar_colors`: a title that holds `match` (case ignored) takes `color`.

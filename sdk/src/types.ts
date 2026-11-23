@@ -1698,12 +1698,18 @@ export interface CityDrawn {
   render_us: number | null;
   /** Its buildings of glass (`developer.city_opaque` off): null with none. */
   glass: boolean | null;
+  /** How far below the picture's middle the fitted city's is, a share of its height: null with none. */
+  lower: number | null;
   /** The beam of the box under the user's pointer: a file's or a district's, lit, its label. */
   hovered: CityHovered | null;
   /** From the place laid out to its first picture painted (ms): null before. */
   first_ms: number | null;
   /** How long the last file list took to read (µs): null before one. */
   read_us: number | null;
+  /** Its camera as the user left it (degrees, a share of the fitted distance, plan units). */
+  view: CityView;
+  /** A drag of a city's camera is in flight. */
+  grabbed: boolean;
   /** Each agent's icon drawn over the city: its task (null: a session no task has), its box,
    * whether its cone shines on a building, its place in a fan `[k, n]`, under the user's pointer. */
   agents: CityAgent[];
@@ -1715,6 +1721,13 @@ export interface CityAgent {
   cone: boolean;
   fan: [number, number];
   hovered: boolean;
+}
+
+export interface CityView {
+  yaw: number;
+  pitch: number;
+  zoom: number;
+  pan: [number, number];
 }
 
 export interface CityHovered {
@@ -2418,8 +2431,8 @@ export interface KeyArgs {
 export interface MouseArgs {
   /** `wheel` turns the scroll wheel; `exit` and `enter`: the pointer leaves the window, and comes back. */
   action: "down" | "move" | "up" | "wheel" | "exit" | "enter";
-  /** `right`: a `down` or `up` of the right button, never a drag. */
-  button?: "left" | "right";
+  /** `right`: a `down` or `up` of the right button, never a drag. `middle`: a `down` or `up` of the middle button, every `move` between them its drag. */
+  button?: "left" | "right" | "middle";
   /** In points from the top-left of ottospace's window, as the state's rects are. */
   x: number;
   y: number;

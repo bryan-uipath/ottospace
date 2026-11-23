@@ -20,6 +20,7 @@ below; a folder scripts/shots/<name>/ beside it is copied into the instance's ow
                               (a point the state gives, [x, y], is taken as it is: {"rect":"city.lit_tops.0"})
                               "modifiers":["cmd"]: with those keys held
   {"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[150,0]}   the user's drag from a control or rect, by points
+  {"wheel":{"rect":"city.bounds"},"at":[0.5,0.8],"dy":5}   the user's mouse wheel there, by lines
   {"hold":"workbook:3","by":[0,-40]}   the same, the button still down (mid-drag); {"cmd":"key","keys":"escape","as":"user"} or a click ends it
   {"until":"drawer.native.chats.1.transcript.cards","len":1}   wait on the state ("is", "exists")
   {"sleep_ms":700}            wait (motion while recording)
@@ -464,6 +465,9 @@ def run_scenario(binary, scenario, out, record=False):
             elif "hover" in step:
                 x, y = inst.control(step["hover"], step.get("at", [0.5, 0.5]))
                 inst.ok({"cmd": "mouse", "action": "move", "x": x, "y": y, "modifiers": step.get("modifiers", []), "as": "user"})
+            elif "wheel" in step:
+                x, y = inst.control(step["wheel"], step.get("at", [0.5, 0.5]))
+                inst.ok({"cmd": "mouse", "action": "wheel", "x": x, "y": y, "dx": step.get("dx", 0), "dy": step.get("dy", 0), "as": "user"})
             elif "hold" in step:
                 x, y = inst.control(step["hold"], step.get("at", [0.5, 0.5]))
                 dx, dy = step.get("by", [0, 0])

@@ -18,6 +18,7 @@ use crate::ics::Show;
 use crate::layout_file;
 use crate::listen::Heard;
 use crate::marks::{Mark, PaneRecord, RecordKind, TabRecord};
+use crate::model::city::CameraStep;
 use crate::model::displays::Display;
 use crate::model::rail::RailItem;
 use crate::model::reorder::{Reorder, ReorderItem};
@@ -1578,6 +1579,22 @@ const MAKERS: &[Make] = &[
         panes: g.m.panes.iter().map(|p| (p.id, [p.id as f64 * 100.0, 40.0, 100.0, 800.0])).collect(),
         picture: g.rng.coin(),
     },
+    |g| {
+        // An empty place on show, mostly; a step of any kind, its numbers sometimes none.
+        let places = g.m.empty_places();
+        let at = g.one_of(&places, |g| crate::model::city::At::Pane(g.pane()));
+        let [x, y] = g.point().map(|v| v as f32 * 90.);
+        let step = match g.rng.below(7) {
+            0 => CameraStep::Orbit { yaw: x, pitch: y },
+            1 => CameraStep::Pan { dx: x / 90., dz: y / 90. },
+            2 => CameraStep::Zoom { factor: (x / 90.).abs(), about: [y / 90., x / 90.] },
+            3 => CameraStep::Grab,
+            4 => CameraStep::Let,
+            5 => CameraStep::Cancel,
+            _ => CameraStep::Reset,
+        };
+        Action::CityCamera { at, step }
+    },
     |g| Action::BugPress { at: g.point() },
     |g| Action::BugDrag { to: g.point() },
     |g| Action::BugRelease { at: g.point() },
@@ -2472,6 +2489,8 @@ fn check(m: &Model) -> Result<(), String> {
     // Agent mode: every app pane has a grant, and only it, the flag on or off. One above Off is to
     // a task that works in the pane's workspace; a pane in no task's is Off. Off, no menu is open.
     ensure!(m.features.on(Feature::AgentMode) || m.agent.menu.is_none(), "the agent menu open with its flag off");
+    // Every city's camera inside its clamps and of numbers.
+    m.cameras_sound()?;
     // A city only with its flag, only on an empty place, only of a listed checkout; never Home's.
     for at in m.empty_places() {
         let Some(city) = m.city_at(at) else { continue };
