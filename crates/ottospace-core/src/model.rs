@@ -975,6 +975,10 @@ pub enum Action {
     PrOpen {
         path: String,
     },
+    /// The user's ⌘-click on a terminal's link (`term_links::link_at`): it opens in the browser.
+    LinkOpen {
+        url: String,
+    },
     /// The checkouts' `HEAD` logs, by path, as the shell read them `at` (ms since 1970): their
     /// length in bytes. `calm`: Reduce Motion is on: no pulse.
     SetHeads {
@@ -2568,6 +2572,7 @@ impl Action {
             | Action::SetPrs { .. }
             | Action::SetHeads { .. }
             | Action::PrOpen { .. }
+            | Action::LinkOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
             | Action::SetKnown { .. }
@@ -3027,6 +3032,7 @@ impl Action {
             | Action::SetPrs { .. }
             | Action::SetHeads { .. }
             | Action::PrOpen { .. }
+            | Action::LinkOpen { .. }
             | Action::RestoreTasks { .. }
             | Action::TaskAdd { .. }
             | Action::SetKnown { .. }
@@ -3405,6 +3411,10 @@ pub enum Effect {
     },
     /// Open a pull request's link (`prs::openable`) in the browser.
     OpenPr {
+        url: String,
+    },
+    /// Open a terminal's link (`links::target`: `http`, `https`) in the browser.
+    OpenWeb {
         url: String,
     },
     /// The user asked for a worktree of the repository at `repo` on `branch` (checked) at `path`,
@@ -4736,6 +4746,7 @@ impl Model {
             }
             // A link opens in the user's browser; only ottospace tells what gh said.
             Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
+            Action::LinkOpen { .. } => Some(crate::term_links::USERS_ALONE),
             Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
             Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
             Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
@@ -5721,6 +5732,11 @@ impl Model {
             Action::PrOpen { path } => {
                 if let Some(url) = self.checkout_pr(&path).and_then(crate::prs::Pr::link) {
                     effects.push(Effect::OpenPr { url: url.to_string() });
+                }
+            }
+            Action::LinkOpen { url } => {
+                if let Some(crate::links::Target::Web(url)) = crate::links::target(&url, None) {
+                    effects.push(Effect::OpenWeb { url });
                 }
             }
             Action::WorktreeAdded { repo, path, asked, fresh, repos } => {
@@ -10772,6 +10788,7 @@ mod tests {
         Action::SetPrs { .. },
         Action::SetHeads { .. },
         Action::PrOpen { .. },
+        Action::LinkOpen { .. },
         Action::RestoreTasks { .. },
         Action::TaskAdd { .. },
         Action::SetKnown { .. },
@@ -11158,6 +11175,7 @@ mod tests {
             Action::SetPrs { repo: text(), prs: Vec::new(), branches: Vec::new() },
             Action::SetHeads { heads: Vec::new(), at: 0, calm: false },
             Action::PrOpen { path: text() },
+            Action::LinkOpen { url: text() },
             Action::RestoreTasks { tasks: Vec::new(), floor: 0 },
             Action::TaskAdd { title: text(), priority: 3, state: State::Running, tab: None, assign: Assign::default() },
             Action::SetKnown { line: text(), typing: None, names: None, paths: Vec::new(), entries: Vec::new() },
@@ -11992,6 +12010,7 @@ mod tests {
                         Some(crate::repos::USERS_ALONE)
                     }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
+                    Action::LinkOpen { .. } => Some(crate::term_links::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
@@ -17869,6 +17888,21 @@ mod tests {
     }
 
     #[test]
+    fn only_the_users_click_opens_a_terminals_link_and_only_a_web_page() {
+        let mut m = Model::default();
+        let open = |url: &str| Action::LinkOpen { url: url.into() };
+        let web = || [Effect::OpenWeb { url: "https://example.com/a".into() }];
+        assert_eq!(m.update(open("https://example.com/a")), web());
+        for origin in [Origin::Socket, Origin::System] {
+            assert_eq!(m.refusal(&open("https://example.com/a"), origin), Some(crate::term_links::USERS_ALONE));
+            assert_eq!(m.update(open("https://example.com/a").sent_by(origin)), []);
+        }
+        for url in ["file:///etc/passwd", "mailto:a@example.com", "myapp://x", "javascript:alert(1)"] {
+            assert_eq!(m.update(open(url)), [], "{url}");
+        }
+    }
+
+    #[test]
     fn the_branch_field_closes_when_its_repository_is_no_longer_listed() {
         let mut m = Model::default();
         m.update(Action::SetRepoDirs { dirs: repos::RepoDirs { worktrees: Some("/w".into()), ..Default::default() } });
@@ -18964,6 +18998,7 @@ mod tests {
                         Some(crate::repos::USERS_ALONE)
                     }
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
+                    Action::LinkOpen { .. } => Some(crate::term_links::USERS_ALONE),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),

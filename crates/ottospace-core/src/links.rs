@@ -14,7 +14,7 @@ pub enum Target {
 }
 
 /// The longest link target judged.
-const MAX_LINK: usize = 2048;
+pub const MAX_LINK: usize = 2048;
 
 /// `raw` (a link's destination as the model wrote it) as something to open, or `None`: shown as
 /// text. `repo`: the task's repository, the one folder whose files may be revealed.

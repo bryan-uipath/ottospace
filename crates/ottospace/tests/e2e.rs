@@ -16801,6 +16801,37 @@ fn a_cmd_click_on_a_path_in_a_terminal_opens_the_viewer_beside_and_reuses_it() {
     assert_eq!((pane_ids(&reply), view(&reply, 2)["shows"].as_str()), (vec![1, 2], Some("text")));
 }
 
+/// A URL a terminal printed opens on the user's ⌘-click alone: a plain click selects, and a
+/// client's ⌘-click opens nothing. A test run opens no browser; it counts.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_cmd_click_on_a_terminal_link_opens_it_for_the_user_alone() {
+    let otto = Otto::launch("term-links");
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "type", "pane": 1, "text": "printf 'see https://example.com/docs now\\n'\r"}));
+    otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^see https://example.com/docs now$"}));
+    let state = otto.drawn();
+    let lines = state["terminals"]["1"]["lines"].as_array().unwrap();
+    let row = lines.iter().position(|l| l.as_str().is_some_and(|l| l.starts_with("see "))).unwrap();
+    let bounds = rect(&state["bounds"]["1"]);
+    let cell = (state["cell"][0].as_f64().unwrap(), state["cell"][1].as_f64().unwrap());
+    let on = [bounds[0] + cell.0 * 10.5, bounds[1] + cell.1 * (row as f64 + 0.5)];
+    let click = |modifiers: &[&str], user: bool| {
+        let event = |action: &str| {
+            let mut event = json!({"cmd": "mouse", "action": action, "x": on[0], "y": on[1], "modifiers": modifiers});
+            if user {
+                event["as"] = json!("user");
+            }
+            event
+        };
+        otto.call(event("down"));
+        otto.call(event("up"))["counts"]["link_opens"].as_u64()
+    };
+    assert_eq!(click(&[], true), Some(0), "a plain click");
+    assert_eq!(click(&["cmd"], false), Some(0), "a client's ⌘-click");
+    assert_eq!(click(&["cmd"], true), Some(1), "the user's ⌘-click");
+}
+
 /// A new window of a hosted app never splits its pane by itself: it floats, and the app pane's
 /// header offers it, saying why it is in no pane. Only the user's click puts it in a pane; a
 /// client's is refused. Dismissed, or closed, the offer goes. A dialog is offered too. Each

@@ -21,10 +21,10 @@ use core_foundation::base::TCFType;
 use core_video::pixel_buffer::{CVPixelBuffer, CVPixelBufferRef};
 use gpui::{
     AnyElement, AnyView, App, Application, AssetSource, BorderStyle, Bounds, BoxShadow, ClickEvent, ContentMask,
-    Context, Div, ElementId, FocusHandle, FontWeight, KeyBinding, KeyDownEvent, Keystroke, Modifiers, MouseButton,
-    MouseDownEvent, MouseMoveEvent, Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString, Size, Stateful,
-    Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div, img, point,
-    prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
+    Context, CursorStyle, Div, ElementId, FocusHandle, FontWeight, KeyBinding, KeyDownEvent, Keystroke, Modifiers,
+    MouseButton, MouseDownEvent, MouseMoveEvent, Pixels, ScrollDelta, ScrollHandle, ScrollWheelEvent, SharedString,
+    Size, Stateful, Subscription, TitlebarOptions, Window, WindowBounds, WindowOptions, actions, black, canvas, div,
+    img, point, prelude::*, px, quad, relative, rgb, size, surface, svg, transparent_black,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 use ottospace_core::agent_mode::AppUse;
@@ -992,6 +992,9 @@ struct Workspace {
     reporting: Option<(PaneId, Button, CellPoint)>,
     /// The terminal cell the pointer was last over: a move without a button is reported once a cell.
     hovered: Option<(PaneId, usize, usize)>,
+    /// While ⌘ is held, the terminal cell under the pointer: a link on it is underlined (one
+    /// printed there later too: the grid is read as drawn).
+    link_hover: Option<(PaneId, CellPoint)>,
     /// The terminal whose program was last told it has the focus (`Model::focus_terminal`).
     focus_told: Option<PaneId>,
     /// During a pane drag: the pane under the pointer and the zone of it a drop would land on.
@@ -1225,6 +1228,8 @@ struct Workspace {
     status_fit: Cell<ottospace_core::status_bar::Fit>,
     status_said: Option<(u64, Option<u64>, bool)>,
     pr_opens: u32,
+    /// Terminal links the user's ⌘-click opened (a test run opens none).
+    link_opens: u32,
     /// The clones on their way (`clone.rs`), and the folder pickers Local folder… asked for (a test run shows none).
     cloner: clone::Cloner,
     folder_picks: u32,
@@ -1735,6 +1740,7 @@ impl Workspace {
             dragging: None,
             reporting: None,
             hovered: None,
+            link_hover: None,
             focus_told: None,
             drop_at: None,
             divider: None,
@@ -1842,6 +1848,7 @@ impl Workspace {
             status_fit: Cell::default(),
             status_said: None,
             pr_opens: 0,
+            link_opens: 0,
             cloner: clone::Cloner::new(),
             folder_picks: 0,
             filing: Vec::new(),
@@ -2284,6 +2291,10 @@ impl Workspace {
                     None => drop(ottospace_mac::meeting::open_url(url)),
                 },
                 Effect::OpenPr { .. } => {}
+                Effect::OpenWeb { url } => match std::env::var_os("OTTOSPACE_E2E") {
+                    Some(_) => self.link_opens += 1,
+                    None => drop(ottospace_mac::meeting::open_url(url)),
+                },
                 Effect::AddWorktree { repo, branch, path, root, fresh } => {
                     let done = self.worktrees.0.clone();
                     // Only in the folder the settings name now, whatever the core was told.
@@ -4234,6 +4245,8 @@ impl Workspace {
                 "live": self.went_live,
                 // Pull requests the user's click opened (a test run opens none).
                 "pr_opens": self.pr_opens,
+                // Terminal links the user's ⌘-click opened (a test run opens none).
+                "link_opens": self.link_opens,
                 // "File…" choices: the open panel a test run does not show.
                 "file_prompts": self.file_prompts,
                 // Local folder… choices: the folder picker a test run does not show.
@@ -5160,6 +5173,13 @@ impl Workspace {
             return;
         }
         let Some(at) = self.cell_under(id, event.position) else { return };
+        // ⌘-click on a link: the browser, if the core says so (the user's click, a web page).
+        if event.modifiers.platform
+            && let Some(link) = self.terminals.get(&id).and_then(|terminal| terminal.link_at(at))
+        {
+            self.dispatch(Action::LinkOpen { url: link.url }, self.input, window, cx);
+            return;
+        }
         // ⌘-click on a text file's path: the viewer beside, reused for the next one.
         if event.modifiers.platform && self.terminal_path_click(id, at, window, cx) {
             return;
@@ -5239,9 +5259,22 @@ impl Workspace {
         }
     }
 
+    /// With ⌘ held (`cmd`), the shown terminal cell at `position` if a link is on it: drawn underlined.
+    fn link_hover_at(&mut self, position: gpui::Point<Pixels>, cmd: bool, cx: &mut Context<Self>) {
+        let on = cmd.then(|| self.model.layout.as_ref().map(Node::leaves).unwrap_or_default()).and_then(|shown| {
+            let under = |id: &&PaneId| self.cells.get(id).is_some_and(|c| c.get().contains(&position));
+            shown.iter().find(under).and_then(|id| Some((*id, self.cell_under(*id, position)?)))
+        });
+        if self.link_hover != on {
+            self.link_hover = on;
+            cx.notify();
+        }
+    }
+
     /// A drag extends the selection, even past the pane's edge. Released anywhere, it ends.
     fn mouse_move(&mut self, event: &MouseMoveEvent, cx: &mut Context<Self>) {
         self.terminal_pointer_move(event);
+        self.link_hover_at(event.position, event.modifiers.platform && event.pressed_button.is_none(), cx);
         let Some(id) = self.dragging else { return };
         if event.pressed_button != Some(MouseButton::Left) {
             self.dragging = None;
@@ -7239,9 +7272,29 @@ impl Workspace {
             let mode = self.model.mode();
             let has_keys =
                 self.model.focused == Some(id) && matches!(mode, Mode::Normal | Mode::Visual) && !self.model.keys;
+            // ⌘ held over a link: underlined, the pointing hand, and an OSC 8 link's real target
+            // under it when its text says something else.
+            let link = self.link_hover.filter(|(pane, _)| *pane == id).and_then(|(_, at)| terminal.link_at(at));
+            let underline = link.as_ref().map(|link| link.cells.clone()).unwrap_or_default();
+            let area = self.cells.get(&id).map(|c| c.get().size).unwrap_or_default();
+            let target = link.as_ref().filter(|link| link.differs).and_then(|link| {
+                let (row, col, _) = *link.cells.first()?;
+                let below = link.cells.last().map_or(row, |cells| cells.0) + 1;
+                const WIDE: f32 = 420.;
+                let tip = ui::tooltip(link.url.clone().into(), ui::Tip::Hint).max_w(px(WIDE)).absolute();
+                // Under the link, or over it near the pane's bottom; kept inside its right edge.
+                let tip = match cell.height * (below + 3) as f32 <= area.height {
+                    true => tip.top(cell.height * below as f32 + px(2.)),
+                    false => tip.bottom(area.height - cell.height * row as f32 + px(2.)),
+                };
+                Some(match cell.width * col as f32 + px(WIDE) <= area.width {
+                    true => tip.left(cell.width * col as f32),
+                    false => tip.right(px(0.)),
+                })
+            });
             let grid = canvas(
                 |_, _, _| {},
-                move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, window, cx),
+                move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, &underline, window, cx),
             )
             .size_full();
             // The scrollback as a scroll area: the screen is its last page.
@@ -7290,7 +7343,9 @@ impl Workspace {
                     MouseButton::Middle,
                     cx.listener(move |this, e: &MouseDownEvent, _, cx| this.terminal_button(id, e, Button::Middle, cx)),
                 )
+                .when(link.is_some(), |d| d.cursor(CursorStyle::PointingHand))
                 .child(grid)
+                .children(target)
                 .child(scrollbar)
                 .into_any_element()
         } else {
@@ -8611,7 +8666,10 @@ impl Workspace {
                 }
             }))
             // A held modifier lights its caps in an empty tab's list.
-            .on_modifiers_changed(cx.listener(|this, _, window, cx| this.modifiers_changed(window, cx)))
+            .on_modifiers_changed(cx.listener(|this, _, window, cx| {
+                this.modifiers_changed(window, cx);
+                this.link_hover_at(window.mouse_position(), window.modifiers().platform, cx);
+            }))
             .map(|root| self.command_actions(root, cx))
             // On the root, so a selection drag keeps going over other panes.
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| {

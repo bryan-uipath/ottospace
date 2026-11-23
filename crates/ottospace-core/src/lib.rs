@@ -70,6 +70,7 @@ pub mod sneak_place;
 pub mod status_bar;
 pub mod talk;
 pub mod tasks;
+pub mod term_links;
 pub mod terminal;
 pub mod theme;
 pub mod titlebar;

@@ -128,7 +128,8 @@ Design note: `docs/ai/attention/plan.md`.
   lists, read only under `OTTOSPACE_E2E`; a test run that names none lists none, never the user's.
 - `OTTOSPACE_GH` (a program) stands for `gh` in a test run: a stand-in script with fixture JSON. A test run
   that names none runs no gh, and never the user's. The state's `counts.pr_opens` (test runs only) counts
-  the pull requests the user's click opened; a test run opens none.
+  the pull requests the user's click opened; a test run opens none. `counts.link_opens` (test runs only) counts the
+  terminal links the user's ⌘-click opened (`Effect::OpenWeb`); a test run opens none, and no URL is in the state.
 - Feature flags (`ottospace-core/src/features.rs`) are off in an E2E run, as for a new user. A test
   of a feature behind one names it: `OTTOSPACE_FEATURES=marks,apps_section` (read only under
   `OTTOSPACE_E2E`; it wins over `settings.json`), `MARKS`, `APPS_SECTION` or `BOTH` in `e2e.rs`. In

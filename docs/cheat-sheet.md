@@ -28,6 +28,7 @@ ottospace            # opens on the Repos list
 | Swap the pane with its neighbour | ⌘⌃ arrows or ⌘⌃ H J K L |
 | Move the pane to another tab | ⌘⇧⌥1 … ⌘⇧⌥9. US keyboard layout only (US, ABC): on others the keys do nothing |
 | Read a file | ⌘E, File…; ⌘-click a path in a terminal (`a.rs:12-14`: those lines marked; Esc unmarks) or a file link in the chat; `open_file`. `j`/`k`, `10j`, `gg`/`G`, `3G`, ⌃D/⌃U · ⌃G or Edit: your editor beside it. It reloads when the file changes |
+| Open a link in a terminal | Hold ⌘ over it: underlined (an OSC 8 link shows its address); ⌘-click opens it in the browser. `http`/`https` only |
 | Read a pane's header | A terminal's directory, and its program while one runs (`app-api · cargo test`); an app's icon and window title |
 | Rearrange with the mouse | Drag a pane by its header: onto another pane's edge to split there, its centre to swap, a tab to move there. Esc cancels. Dragging an app you are in parks it: click it to go back in |
 | Close the pane | ⌘W (in the drawer's conversation: Later) |

@@ -215,8 +215,11 @@ impl Workspace {
         let composer = chat.as_ref().map(|(subject, chat)| self.chat_composer(subject, chat, cx));
         let grid = self.drawer.editor.as_ref().map(|editor| {
             let (screen, cell) = (editor.terminal.screen(), self.cell);
-            canvas(|_, _, _| {}, move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, keys, window, cx))
-                .size_full()
+            canvas(
+                |_, _, _| {},
+                move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, keys, &[], window, cx),
+            )
+            .size_full()
         });
         let opening = grid.is_none().then(|| div().p_3().text_sm().text_color(rgb(theme::MUTED)).child("Opening…"));
         div()
