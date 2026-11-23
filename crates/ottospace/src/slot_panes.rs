@@ -4,12 +4,13 @@
 
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, px, rgb,
+    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, rgb,
 };
 use ottospace_core::features::Feature;
 use ottospace_core::marks::same_app;
 use ottospace_core::model::slots::Choice;
 use ottospace_core::model::{Action, Kind, Origin, PaneId};
+use ottospace_core::row_menu::MenuOf;
 use ottospace_core::slot::{Look, Matching, Pick, Seen, Status};
 use ottospace_core::theme;
 use ottospace_mac::{ax, display, recovery};
@@ -40,24 +41,29 @@ fn tick(on: bool) -> &'static str {
 }
 
 impl Workspace {
-    /// ⋯ in an app pane's or a slot's header: the slot dialog. None with the flag off.
+    /// ⋯ in an app pane's or a slot's header: its menu (`MenuOf::Pane`). None with the flag off.
     pub(crate) fn slot_dots(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
         let kind = self.model.pane(pane).map(|p| &p.kind).filter(|_| self.on(Feature::Slots))?;
         if !matches!(kind, Kind::App { .. } | Kind::Slot { .. }) {
             return None;
         }
         let id = format!("slot-dots:{pane}");
+        let open = self.model.row_menu().is_some_and(|(menu, _)| menu.row == MenuOf::Pane(pane));
         let dots = div()
             .id(SharedString::from(id.clone()))
             .flex_none()
             .px_1()
+            .rounded_sm()
             .cursor_pointer()
             .text_color(rgb(theme::MUTED))
+            .when(open, |d| d.bg(rgb(theme::BORDER_STRONG)).text_color(rgb(theme::TEXT)))
             .hover(|s| s.text_color(rgb(theme::TEXT)))
             .child("⋯")
             .child(self.controls.mark(id))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _, window, cx| this.slot_dialog_open(pane, window, cx)));
+            .on_click(
+                cx.listener(move |this, _, window, cx| this.open_row_menu(MenuOf::Pane(pane), false, window, cx)),
+            );
         Some(dots.into_any_element())
     }
 
@@ -68,8 +74,8 @@ impl Workspace {
         (filled && self.on(Feature::Slots)).then(|| mark.into_any_element())
     }
 
-    /// The user's ⋯: a look at the pane's app now, for the dialog to be made from.
-    fn slot_dialog_open(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
+    /// The user's Keep or Edit in ⋯'s menu: a look at the pane's app now, for the dialog to be made from.
+    pub(crate) fn slot_dialog_open(&mut self, pane: PaneId, window: &Window, cx: &mut Context<Self>) {
         let app = match self.model.pane(pane).map(|p| &p.kind) {
             Some(Kind::App { bundle, name, .. } | Kind::Slot { bundle, name }) => (bundle.clone(), name.clone()),
             _ => return,
@@ -191,7 +197,7 @@ impl Workspace {
         let pane = name.parse::<PaneId>().ok();
         let action = match (kind, name, pane) {
             ("slot-dots", _, Some(pane)) => {
-                self.slot_dialog_open(pane, window, cx);
+                self.open_row_menu(MenuOf::Pane(pane), true, window, cx);
                 return true;
             }
             ("slot-close", _, Some(pane)) => {

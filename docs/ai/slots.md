@@ -207,6 +207,15 @@ so the next meeting's windows fill them. So, with `slots` on:
 This changes §3's Rejected "Close the pane when the window closes, as app panes do" from slots only
 to every pane the user filled. Pending the owner's look.
 
+### ⋯ is a menu (the owner, 2026-11-23)
+
+The owner found Keep only when told: ⋯ opened the dialog straight away, its name said nothing. ⋯
+now opens the pane's menu (the row menu, `MenuOf::Pane`, the user's alone: ↓ ↑ ↵, Esc), in the
+owner's words: on an app pane `Create slot…` (the dialog); on a slot `Edit slot…` (the dialog, Look
+Again and Give Back at its foot) and `Clear slot`. No other pane act is there: ×, `fit` and the robot
+sit beside it. Pin is left out: the Apps section pins an installed app by its path, which a pane
+does not know.
+
 ## 3. Lifecycle
 
 | State | Pane shows (mock) | Leaves it |

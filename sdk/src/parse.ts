@@ -1779,7 +1779,10 @@ function rowMenu(value: unknown, at: string): RowMenu {
   const item = (value: unknown, at: string): RowMenu["items"][number] => {
     const i = fields(value, at);
     const kind = i.item;
-    const kinds = ["rename", "delete", "remove", "keep", "pause", "resume", "delete_worktree", "local_folder", "from_github"] as const;
+    const kinds = [
+      "rename", "delete", "remove", "keep", "pause", "resume", "delete_worktree", "local_folder", "from_github",
+      "slot_keep", "slot_edit", "slot_clear",
+    ] as const;
     const known = kinds.find((k) => k === kind);
     if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
     return {
@@ -1795,6 +1798,7 @@ function rowMenu(value: unknown, at: string): RowMenu {
     space: bool(o.space, `${at}.space`),
     transcript: bool(o.transcript, `${at}.transcript`),
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
+    pane: orNull(num)(o.pane, `${at}.pane`),
     selected: orNull(num)(o.selected, `${at}.selected`),
     items: list(item)(o.items, `${at}.items`),
   };

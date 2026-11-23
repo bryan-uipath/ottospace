@@ -5,13 +5,15 @@
 //! Today a workspace's row and its tabs' rows have one, a temporary workspace's item on the top
 //! row (Keep), the drawer's transcript header (its ⋯: Pause or Resume), and a linked worktree's
 //! row of the Repos section (a right click: Delete worktree…), and the Repos section's + (Local
-//! folder…, From GitHub…); another row gets one by naming its items in `row_items`.
+//! folder…, From GitHub…), and an app pane's or a slot's ⋯ (`slots` on: Create slot…, or Edit
+//! slot… and Clear slot); another row gets one by naming its items in `row_items`.
 
 use serde::Serialize;
 
+use crate::features::Feature;
 use crate::layout::Rect;
 use crate::list::ListRow;
-use crate::model::{Action, Model, Owner};
+use crate::model::{Action, Kind, Model, Owner};
 use crate::workbook::WorkbookId;
 
 /// Why a client's request that takes the keyboard waits: the user's keys are in a row's menu.
@@ -36,6 +38,11 @@ pub enum Item {
     LocalFolder,
     #[serde(rename = "from_github")]
     FromGitHub,
+    /// An app pane's ⋯: the slot dialog, to keep this place for its app's windows.
+    SlotKeep,
+    /// A slot's ⋯: the dialog on its rule (Look Again and Give Back at its foot), or Clear Slot.
+    SlotEdit,
+    SlotClear,
 }
 
 impl Item {
@@ -50,6 +57,9 @@ impl Item {
             Item::DeleteWorktree => "Delete worktree…",
             Item::LocalFolder => "Local folder…",
             Item::FromGitHub => "From GitHub…",
+            Item::SlotKeep => "Create slot…",
+            Item::SlotEdit => "Edit slot…",
+            Item::SlotClear => "Clear slot",
         }
     }
 }
@@ -63,6 +73,8 @@ pub enum MenuOf {
     Transcript,
     /// The Repos section's +.
     ReposAdd,
+    /// An app pane's or a slot's ⋯ (`slots` on).
+    Pane(crate::model::PaneId),
 }
 
 impl From<ListRow> for MenuOf {
@@ -121,6 +133,13 @@ impl Model {
             MenuOf::Space(id) if !self.workbooks.is_kept(*id) => &[Item::Keep],
             MenuOf::Space(_) => &[],
             MenuOf::ReposAdd => &[Item::LocalFolder, Item::FromGitHub],
+            MenuOf::Pane(_) if !self.features.on(Feature::Slots) => &[],
+            // A slot's acts; an app pane's: keep it as one.
+            MenuOf::Pane(id) => match (self.pane(*id).map(|pane| &pane.kind), self.slots.contains_key(id)) {
+                (Some(Kind::App { .. }), false) => &[Item::SlotKeep],
+                (Some(Kind::App { .. } | Kind::Slot { .. }), _) => &[Item::SlotEdit, Item::SlotClear],
+                _ => &[],
+            },
             // One decision with the palette's and the menu bar's (`listen_pause_action`).
             MenuOf::Transcript => match self.listen_pause_action(0).filter(|_| self.listen.shown) {
                 Some(Action::ListenPause { .. }) => &[Item::Pause],
@@ -138,6 +157,8 @@ impl Model {
             MenuOf::Transcript => true,
             // `OTTOSPACE_REPOS` names the list: nothing is added to it.
             MenuOf::ReposAdd => self.sidebar == Some(crate::model::Section::Repos) && !self.repo_dirs.fixed,
+            // On the tab on show.
+            MenuOf::Pane(id) => self.layout.as_ref().is_some_and(|layout| layout.leaves().contains(id)),
         };
         there && !self.menu_items(of).is_empty()
     }
@@ -192,6 +213,11 @@ impl Model {
             (MenuOf::Row(ListRow::Repo(path)), Item::DeleteWorktree) => {
                 return Some(Action::WorktreeDelete { path: path.clone() });
             }
+            // Keep and Edit stand for the dialog: the shell reads the app's windows for its look.
+            (MenuOf::Pane(pane), Item::SlotKeep | Item::SlotEdit) => {
+                return Some(Action::SlotDialogOpen { pane: *pane, look: crate::slot::Look::default() });
+            }
+            (MenuOf::Pane(pane), Item::SlotClear) => return Some(Action::SlotClear { pane: *pane }),
             (MenuOf::Row(ListRow::Workbook(id)) | MenuOf::Space(id), _) => (*id, None),
             (MenuOf::Row(ListRow::WorkbookTab(id, at)), _) => (*id, Some(*at)),
             _ => return None,
@@ -200,7 +226,7 @@ impl Model {
             Item::Rename => Some(Action::WorkbookEdit { workbook, tab }),
             Item::Delete | Item::Remove => Some(Action::WorkbookRemove { workbook, tab }),
             Item::Keep => Some(Action::WorkbookKeep { workbook }),
-            Item::Pause | Item::Resume | Item::DeleteWorktree | Item::LocalFolder | Item::FromGitHub => None,
+            _ => None,
         }
     }
 
@@ -221,6 +247,9 @@ impl Model {
             Action::WorktreeDelete { path } => self.worktree_delete_ask(path, effects),
             Action::RepoPickFolder => effects.push(crate::model::Effect::PickRepoFolder),
             Action::CloneOpen => self.clone_open(effects),
+            // The shell opens the dialog with its look; the core only closed the menu.
+            Action::SlotDialogOpen { .. } => {}
+            action @ Action::SlotClear { .. } => self.slot_act(action, effects),
             _ => {}
         }
     }
@@ -503,5 +532,42 @@ mod tests {
         let rename = m.row_menu_action(None);
         assert_eq!(rename, Some(Action::WorkbookEdit { workbook: 1, tab: None }));
         assert_eq!(rename.and_then(|rename| m.waits(&rename)), Some("visual mode is on"));
+    }
+
+    /// A pane's ⋯ is a menu, the user's alone: an app pane's Create slot… (the dialog), a slot's
+    /// Edit slot… (the dialog) and Clear slot. Nothing with `slots` off.
+    #[test]
+    fn a_panes_dots_offer_its_slot_acts_by_what_it_is() {
+        let app = Kind::App { window: 1, title: "SECRET".into(), bundle: None, name: "Zoom".into() };
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app, axis: Right, beside: None });
+        let menu = |m: &mut Model, origin| {
+            m.update(Action::RowMenu { row: MenuOf::Pane(1), dots: DOTS, keys: true }.sent_by(origin));
+            m.row_menu().map(|(_, items)| items.to_vec()).unwrap_or_default()
+        };
+        assert!(menu(&mut m, Origin::Socket).is_empty(), "a client's");
+        assert_eq!(menu(&mut m, Origin::User), [Item::SlotKeep]);
+        // Create slot… stands for the dialog, which the shell opens with its look; the menu closes.
+        let dialog = Action::SlotDialogOpen { pane: 1, look: crate::slot::Look::default() };
+        assert_eq!(m.row_menu_action(None), Some(dialog.clone()));
+        assert_eq!(m.refusal(&Action::RowMenuChoose { index: None }, Origin::Socket), Some(crate::slot::USERS_ALONE));
+        m.update(Action::RowMenuChoose { index: None });
+        assert!(m.row_menu.is_none());
+        // A filled slot, then one that waits: Edit slot… and Clear slot.
+        m.update(Action::SlotMake { pane: 1, pid: 7, slot: crate::slot::Slot::default() });
+        assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotClear]);
+        assert_eq!(m.row_menu_action(None), Some(dialog));
+        m.update(Action::RowMenuClose);
+        m.update(Action::SlotGiveBack { pane: 1 });
+        assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotClear]);
+        m.update(Action::RowMenuChoose { index: Some(1) });
+        assert!(m.slots.is_empty() && m.pane(1).is_some_and(|p| p.kind == Kind::Empty), "cleared");
+        // An empty pane has no ⋯ menu; nor has any pane with `slots` off.
+        assert!(menu(&mut m, Origin::User).is_empty());
+        let mut off = Model::default();
+        off.update(Action::SetFeatures { features: crate::features::Features::default() }.sent_by(Origin::System));
+        let app = Kind::App { window: 2, title: String::new(), bundle: None, name: "Zoom".into() };
+        off.update(Action::Open { kind: app, axis: Right, beside: None });
+        assert!(menu(&mut off, Origin::User).is_empty());
     }
 }

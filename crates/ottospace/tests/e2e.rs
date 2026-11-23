@@ -17035,7 +17035,15 @@ fn offered_windows_of_one_title_are_told_apart_in_the_offer_list() {
     assert!(!said.contains("SECRET") && !said.contains("1280×800") && !said.contains("400×600"), "{reply}");
 }
 
-/// Slots on screen (`slots` flag): ⋯ on an app pane's header opens the dialog, a checklist made
+/// The user's ⋯ on pane `pane`, then its menu's `item` (`slot_keep`, `slot_edit`, `slot_clear`).
+fn slot_menu(otto: &Otto, pane: u64, item: &str) -> Value {
+    let reply = otto.user_click(at(otto.control(&format!("slot-dots:{pane}")), 0.5, 0.5));
+    let items = reply["row_menu"]["items"].as_array().cloned().unwrap_or_default();
+    let index = items.iter().position(|i| i["item"] == item).unwrap_or_else(|| panic!("no {item}: {reply}"));
+    otto.user_click(at(otto.control(&format!("row-menu:{index}")), 0.5, 0.5))
+}
+
+/// Slots on screen (`slots` flag): ⋯ on an app pane's header opens its menu, whose Keep opens the dialog, a checklist made
 /// from the pane's window (its id ticked); Keep makes the pane a filled slot, marked `slot`. Give
 /// Back leaves it waiting, saying what for; a window the slot selects is offered there, not in a
 /// chip, and only the user's Bring it here fills it. No title or id the looks carried is in the
@@ -17056,11 +17064,14 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
         json!({"cmd": "slot_windows", "look": {"name": "Meetings", "running": true, "windows": windows, "displays": displays}})
     };
     otto.call(look(vec![seen(window, "SECRET sync", Some("zm.meeting.window.main"))]));
-    // A client's ⋯ is refused; the user's opens the dialog, by the window's id.
+    // A client's ⋯ is refused; the user's opens its menu, whose Keep opens the dialog, by the window's id.
     let dots = otto.control(&format!("slot-dots:{pane}"));
     let reply = otto.click(at(dots, 0.5, 0.5), 1);
-    assert_eq!(reply["state"]["slot_dialog"], Value::Null, "{reply}");
+    assert_eq!((&reply["row_menu"], &reply["state"]["slot_dialog"]), (&Value::Null, &Value::Null), "{reply}");
     let reply = otto.user_click(at(dots, 0.5, 0.5));
+    let items = &reply["row_menu"]["items"];
+    assert_eq!((&items[0]["item"], &items[0]["label"]), (&json!("slot_keep"), &json!("Create slot…")), "{reply}");
+    let reply = otto.user_click(at(otto.control("row-menu:0"), 0.5, 0.5));
     let dialog = &reply["state"]["slot_dialog"];
     assert_eq!(
         (&dialog["by_id"], &dialog["by_title"], &dialog["editing"]),
@@ -17070,8 +17081,8 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
     let reply = otto.user_click(at(otto.control("slot-dialog:keep"), 0.5, 0.5));
     let slot = |reply: &Value| reply["state"]["slots"][pane.to_string()].clone();
     assert_eq!((slot(&reply)["status"].clone(), reply["state"]["slot_dialog"].clone()), (json!("filled"), Value::Null));
-    // Give Back: the slot waits, passing over that window.
-    otto.user_click(at(otto.control(&format!("slot-dots:{pane}")), 0.5, 0.5));
+    // Give Back, at the dialog's foot (Edit slot…): the slot waits, passing over that window.
+    slot_menu(&otto, pane, "slot_edit");
     let reply = otto.user_click(at(otto.control("slot-dialog:give-back"), 0.5, 0.5));
     assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "slot", "{reply}");
     // Its window comes back as another one: offered in the slot, not in a chip.
@@ -17134,7 +17145,7 @@ fn three_app_only_slots_take_three_windows_one_by_one() {
         let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
         let pane = reply["state"]["focused"].as_u64().unwrap();
         otto.call(json!({"cmd": "slot_make", "pane": pane, "slot": {"select": {}}}));
-        otto.user_click(at(otto.control(&format!("slot-dots:{pane}")), 0.5, 0.5));
+        slot_menu(&otto, pane, "slot_edit");
         otto.user_click(at(otto.control("slot-dialog:give-back"), 0.5, 0.5));
         panes.push(pane);
     }

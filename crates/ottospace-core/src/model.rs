@@ -4694,6 +4694,13 @@ impl Model {
             Action::SettingsRead { .. } | Action::SetFeatures { .. } if origin == Origin::Socket => {
                 Some("only ottospace reads settings.json")
             }
+            // A pane's ⋯ holds its slot's acts: the user's alone, as the dialog is.
+            Action::RowMenu { row: crate::row_menu::MenuOf::Pane(_), .. } => Some(crate::slot::USERS_ALONE),
+            Action::RowMenuMove { .. } | Action::RowMenuChoose { .. } | Action::RowMenuClose
+                if self.row_menu.as_ref().is_some_and(|menu| matches!(menu.row, crate::row_menu::MenuOf::Pane(_))) =>
+            {
+                Some(crate::slot::USERS_ALONE)
+            }
             // A worktree row's menu holds only Delete worktree…: its own words, not a workspace's.
             Action::RowMenu { row: crate::row_menu::MenuOf::Row(ListRow::Repo(_)), .. } => Some(repos::DELETE_USERS),
             Action::RowMenuMove { .. } | Action::RowMenuChoose { .. } | Action::RowMenuClose

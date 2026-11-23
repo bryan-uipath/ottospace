@@ -34,6 +34,7 @@ fn dots_control(row: &MenuOf) -> Option<String> {
         MenuOf::ReposAdd => Some("bar:add".into()),
         // A right click's: the row itself.
         MenuOf::Row(ListRow::Repo(path)) => Some(format!("repo:{path}")),
+        MenuOf::Pane(id) => Some(format!("slot-dots:{id}")),
         _ => None,
     }
 }
@@ -115,11 +116,15 @@ impl Workspace {
                 // An undo it offers counts its seconds from now; a pause pauses now.
                 self.tick_now();
                 // What was heard before the user's pause is kept.
-                let pause = matches!(self.model.row_menu_action(index), Some(Action::ListenPause { .. }));
-                if pause && self.input == Origin::User {
+                let stood = self.model.row_menu_action(index);
+                if matches!(stood, Some(Action::ListenPause { .. })) && self.input == Origin::User {
                     self.listen_flush(window, cx);
                 }
                 self.row_menu_act(Action::RowMenuChoose { index }, window, cx);
+                // A pane's Create or Edit: the dialog, with a look at the app's windows now (the user's alone).
+                if let Some(Action::SlotDialogOpen { pane, .. }) = stood.filter(|_| self.input == Origin::User) {
+                    self.slot_dialog_open(pane, window, cx);
+                }
             }
         }
     }
@@ -219,6 +224,10 @@ impl Workspace {
             MenuOf::Row(ListRow::Repo(path)) => Some(path),
             _ => None,
         };
+        let pane = match menu.row {
+            MenuOf::Pane(id) => Some(id),
+            _ => None,
+        };
         let item = |(index, item): (usize, &ottospace_core::row_menu::Item)| {
             let drawn = self.controls.bounds(&item_control(index)).map(rect);
             let why = self.model.row_menu_why(index);
@@ -226,7 +235,7 @@ impl Workspace {
         };
         let items: Vec<serde_json::Value> = items.iter().enumerate().map(item).collect();
         serde_json::json!({
-            "workbook": workbook, "tab": tab, "space": space, "transcript": transcript, "worktree": worktree,
+            "workbook": workbook, "tab": tab, "space": space, "transcript": transcript, "worktree": worktree, "pane": pane,
             "selected": menu.selected, "items": items
         })
     }

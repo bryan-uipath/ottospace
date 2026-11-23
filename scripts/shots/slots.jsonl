@@ -1,14 +1,17 @@
-# Slots on screen (`slots` flag): the dialog made from the pane's window, the filled slot's `slot`
+# Slots on screen (`slots` flag): ⋯'s menu, the dialog made from the pane's window, the filled slot's `slot`
 # mark, the slot waiting and saying what for, and offering a window that matches. A test run hosts
 # no window: `app_fixture` makes the pane, `slot_windows` is what a look at the app found.
 {"env":{"OTTOSPACE_FEATURES":"slots"}}
 {"cmd":"app_fixture","name":"Meetings","user":true}
 {"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":0,"window":900000,"title":"Weekly sync","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
 {"click":"slot-dots:1"}
+{"shot":"menu"}
+{"click":"row-menu:0"}
 {"shot":"dialog"}
 {"click":"slot-dialog:keep"}
 {"shot":"filled"}
 {"click":"slot-dots:1"}
+{"click":"row-menu:0"}
 {"click":"slot-dialog:give-back"}
 {"shot":"waiting"}
 {"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":0,"window":700001,"title":"Weekly sync","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}

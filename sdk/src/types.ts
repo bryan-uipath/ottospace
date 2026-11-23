@@ -1161,11 +1161,14 @@ export interface RowMenu {
   transcript: boolean;
   /** A linked worktree's row of the Repos section, by path (a right click opened it). */
   worktree: string | null;
+  /** An app pane's or a slot's ⋯ (`slots` on), by pane: Create slot…, or Edit slot… and Clear slot. */
+  pane: PaneId | null;
   /** The item the keys are on; null: none (a click opened it). */
   selected: number | null;
   /** `why`: the item does nothing now, and why (drawn dimmed). */
   items: {
-    item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree" | "local_folder" | "from_github";
+    item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree" | "local_folder" | "from_github"
+      | "slot_keep" | "slot_edit" | "slot_clear";
     label: string;
     why: string | null;
     rect: Rect | null;
