@@ -361,10 +361,15 @@ impl Model {
             && bar.material(n).is_none_or(|m| !shown.contains(&m.pane) || live == Some(m.pane))
         {
             bar.stop_annotating();
-            // The box's ✎ round ends with it: the box is back, its line takes the keys.
+            // The box's ✎ round ends with it, as ↵ ends it: the box is back with what was marked.
             if bar.boxed {
-                (bar.typing, bar.round) = (true, None);
+                bar.round = None;
             }
+        }
+        // The box's own draft, not marking up, is the box: its line has the keys, whatever came
+        // after the round (a press that reached no picture, seed 42928).
+        if let Some(bar) = self.capture.as_mut().filter(|bar| bar.boxed && bar.annotating.is_none()) {
+            bar.typing = true;
         }
         self.back_to = self.back_to.filter(|pane| self.pane(*pane).is_some());
         self.settle_brief();
@@ -1136,6 +1141,28 @@ mod tests {
         drag(&mut m, [0.2, 0.2], [0.4, 0.5]);
         m.update(Action::AnnotateLeave { title: true });
         assert_eq!((m.compose_centred(), m.bar_draft().is_none()), (true, true));
+    }
+
+    /// The system puts the marked pane's tab away: the round ends as ↵ ends it, the box back with
+    /// what was marked. A press that then reaches no picture leaves the keys with the box's line.
+    #[test]
+    fn a_pen_round_ends_with_its_tab_put_away() {
+        let mut m = terminal_and_app();
+        m.update(Action::NewTab);
+        m.update(Action::SelectVisibleTab { index: 0 });
+        let features = crate::features::Features::all().with(crate::features::Feature::OverlayPanels, true);
+        m.update(Action::SetFeatures { features }.sent_by(Origin::System));
+        m.update(Action::OpenCompose { text: String::new() });
+        typed(&mut m, "fix the cart");
+        pen(&mut m);
+        drag(&mut m, [0.2, 0.2], [0.4, 0.5]);
+        m.update(Action::SelectVisibleTab { index: 1 }.sent_by(Origin::System));
+        assert_eq!(
+            (m.pen_marking(), m.mode(), bar(&m).round, bar(&m).materials.len()),
+            (false, Mode::Compose, None, 1)
+        );
+        m.update(Action::AnnotatePress { at: [0.1, 0.1], shift: false, alt: false, size: [800., 600.] });
+        assert_eq!((m.mode(), m.compose_keys(), title(&m)), (Mode::Compose, true, Some("fix the cart")));
     }
 
     /// Only the user's ✎ starts one; a client's capture stays refused. Over a draft in the bar
