@@ -1,6 +1,6 @@
 # Terminal sessions as tasks
 
-Status: design note, nothing built. Written 2026-11-23 against `main` 4c217597.
+Status: design note, decided (below); nothing built. Written 2026-11-23 against `main` 4c217597.
 
 The owner: "is there a possibility to unify sessions started in the terminal with 'new task'
 sessions created in ottospace. ie, maybe we could show sessions in the terminal as tasks, but in
@@ -265,7 +265,7 @@ you; the same wait across a restart stays hidden (property: a hidden session nev
 
 The transcript is another program's data. Today's watch shows calls, edits and tool output in
 the drawer, never a message's words; the state carries kinds and counts only. See Privacy and
-question 2.
+Decided, 2.
 
 ## Privacy and the socket
 
@@ -277,8 +277,8 @@ as in `sessions_bar`: `doing` is built from names in a transcript a model wrote 
 `cwd`, a file's path, a prompt or a message. `sessions_bar` keeps its shape. Every counter that
 says how many need you (`needs_you`, the badge, the status bar) is one function.
 
-Only by a read-only request: nothing new in slice 1. If the owner wants words in the drawer
-(question 2), they are drawn only: never in the state, the socket, `task_brief` or a log;
+Only by a read-only request: nothing new in slice 1. Words in the drawer (decided, slice 3)
+are drawn only: never in the state, the socket, `task_brief` or a log;
 `drawer.native` keeps counts and kinds.
 
 Guide (`skill/guide.md`, Sessions): "A terminal session the person runs is listed among tasks as
@@ -308,7 +308,7 @@ today. Off: Elsewhere, unchanged.
    cache costs a head read each), Codex from the newest rollouts (heads for cwd and parent,
    times for work). `process` read for each holder, so a held session outside our panes says
    why it waits. Measure it first (`scripts/bench`).
-3. **Words in the drawer**, if the owner says yes (question 2): a cursor that keeps message text
+3. **Words in the drawer** (decided): a cursor that keeps message text
    for the drawer alone, as `with_edits` does for diffs.
 4. **Hooks**, as decided in `sessions.md` (slice 2 there): a runner's own wait, at once, for a
    CLI in our pane. Anything for sessions outside our panes is a new design.
@@ -321,19 +321,17 @@ cut: "read-only cards for sessions in listed repos" is fresh outside our panes o
 is open; making it fresh everywhere is a reader change worth its own measurement (slice 2).
 In-pane sessions qualify anywhere, as ⌘J already treats them.
 
-## Open questions for the owner
+## Decided (owner, 2026-11-23)
 
-1. **Elsewhere.** Keep it as the folded archive of past sessions (to open or resume), or fold it
-   into the cards and drop it? Recommend keep: cards are what is live; Elsewhere is where to
-   find yesterday's session to resume.
-2. **Words in the read-only view.** Today a watched session shows calls and edits, "never its
-   words". The ask is "a live transcript". Show prompts and replies, drawn only, never in the
-   state or the socket? Recommend yes, behind the same flag, slice 3: it is the person's own
-   session on their machine, and a transcript without words is hard to follow.
-3. **An idle Claude Code left open.** Held, quiet: it needs you ("your turn") for as long as the
-   terminal stays open. Recommend yes, the in-pane rule today, with Hide for the ones they do not
-   care about. The alternative: a held idle session needs you once, then sits under Running.
-4. **Where cards sit in a heading.** Recommend after the tasks. Alternative: mixed in by time.
+1. **Elsewhere stays** as the folded archive of past sessions, to open or resume. Cards are
+   what is live.
+2. **Words in the read-only view**: prompts and replies are shown, drawn only, never in the
+   state or the socket, in slice 3.
+3. **An idle Claude Code left open** in a terminal is "your turn" (needs you) while it stays
+   open; Hide is the way out.
+4. **Cards sit after the tasks** within a heading.
+
+Earlier direction stands: active sessions only, ageing out, Hide.
 
 ## Not verified
 
