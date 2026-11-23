@@ -1390,6 +1390,7 @@ function projectRow(value: unknown, at: string): ProjectRow {
     file: bool(o.file, `${at}.file`),
     note: bool(o.note, `${at}.note`),
     modified: num(o.modified, `${at}.modified`),
+    used: orNull(num)(o.used, `${at}.used`),
     row: orNull(rect)(o.row, `${at}.row`),
   };
 }

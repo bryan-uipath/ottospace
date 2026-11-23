@@ -347,7 +347,7 @@ impl Workspace {
         // the edge of the one it goes before (after the last: below it) shows where it lands.
         let carried = self.model.reorder().filter(|_| cx.has_active_drag()).and_then(|reorder| match reorder.item {
             ReorderItem::Workbook { id } => Some((id, reorder.to)),
-            ReorderItem::Space { .. } | ReorderItem::Repo { .. } => None,
+            ReorderItem::Space { .. } | ReorderItem::Repo { .. } | ReorderItem::Project { .. } => None,
         });
         let others: Vec<u32> =
             rows.iter().map(|row| row.id).filter(|id| carried.is_none_or(|(c, _)| c != *id)).collect();
@@ -486,7 +486,9 @@ impl Workspace {
         // Released over the list: the row carried lands; anything else is put back.
         let list = list.on_drop(cx.listener(|this, dragged: &DraggedItem, window, cx| match dragged.item {
             ReorderItem::Workbook { .. } => this.reorder_released(dragged, window, cx),
-            ReorderItem::Space { .. } | ReorderItem::Repo { .. } => this.reorder_cancel(window, cx),
+            ReorderItem::Space { .. } | ReorderItem::Repo { .. } | ReorderItem::Project { .. } => {
+                this.reorder_cancel(window, cx)
+            }
         }));
         let list = list.track_scroll(&self.list_scroll).children(empty).children(children);
         self.bars.tracked("workbooks", list, &self.list_scroll, theme::RAISED)

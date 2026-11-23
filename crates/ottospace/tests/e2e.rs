@@ -17611,3 +17611,58 @@ fn the_projects_section_lists_a_made_up_folder_only_once_opened_and_newest_first
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_project_dragged_up_stays_placed_and_a_click_opens_its_note_read_only() {
+    use std::time::SystemTime;
+    // Made-up projects: a folder with no note, and two notes of set ages.
+    let dir = support::temp(&format!("ottospace-e2e-projects-open-{}", std::process::id()));
+    std::fs::create_dir_all(dir.join("hiring")).unwrap();
+    let days_ago = |days: u64| SystemTime::now() - Duration::from_secs(days * 86_400);
+    for (name, days) in [("launch.md", 3), ("spike.md", 10)] {
+        std::fs::write(dir.join(name), format!("# {name}\n")).unwrap();
+        let file = std::fs::File::options().write(true).open(dir.join(name)).unwrap();
+        file.set_modified(days_ago(days)).unwrap();
+    }
+    let settings = json!({"projects_dir": dir, "repos": [], "restore_layout": false, "sessions": false});
+    let home = user_folder("projects-open", &settings.to_string());
+    let launch = |n: &str| Otto::launch_with(n, &[("OTTOSPACE_HOME", home.to_str().unwrap()), PROJECTS]);
+    let rows = |o: &Otto| {
+        o.call(json!({"cmd": "section", "section": "projects"}));
+        o.wait_for("three projects drawn", |o| {
+            let rows = o.call(json!({"cmd": "state"}))["projects_bar"]["rows"].as_array()?.clone();
+            (rows.len() == 3 && rows.iter().all(|row| !row["row"].is_null())).then_some(rows)
+        })
+    };
+    let otto = launch("projects-open-1");
+    let before = rows(&otto);
+    let spike = before[2]["modified"].clone();
+    // A client's drag places nothing; the user's drag of the oldest to the top places it.
+    otto.drag(at(rect(&before[2]["row"]), 0.5, 0.5), at(rect(&before[0]["row"]), 0.5, 0.2));
+    assert!(rows(&otto).iter().all(|row| row["placed"] == false));
+    otto.user_drag(at(rect(&before[2]["row"]), 0.5, 0.5), at(rect(&before[0]["row"]), 0.5, 0.2));
+    let after = rows(&otto);
+    assert_eq!((&after[0]["placed"], &after[0]["modified"]), (&json!(true), &spike));
+    let kept: Value = serde_json::from_str(&std::fs::read_to_string(home.join("projects.json")).unwrap()).unwrap();
+    assert_eq!(kept["placed"].as_array().map(Vec::len), Some(1));
+    // A click opens its note in a viewer; the folder with no note opens nothing.
+    let none = after.iter().position(|row| row["note"] == false).unwrap();
+    let panes = |reply: &Value| reply["state"]["panes"].as_array().unwrap().len();
+    let reply = otto.user_click(at(rect(&after[none]["row"]), 0.5, 0.5));
+    let count = panes(&reply);
+    let reply = otto.user_click(at(rect(&after[0]["row"]), 0.5, 0.5));
+    let path = dir.join("spike.md").to_string_lossy().into_owned();
+    assert!(
+        reply["state"]["panes"].as_array().unwrap().iter().any(|p| p["kind"] == json!({"type": "file", "path": path}))
+    );
+    assert_eq!(panes(&reply), count + 1);
+    drop(otto);
+
+    // Kept across a restart.
+    let otto = launch("projects-open-2");
+    assert_eq!(rows(&otto)[0]["placed"], true);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -720,6 +720,8 @@ export interface ProjectRow {
   note: boolean;
   /** Its last change, ms since 1970. */
   modified: number;
+  /** When ottospace last opened it, or null. */
+  used: number | null;
   /** Where it was drawn, while the section shows it. */
   row: Rect | null;
 }

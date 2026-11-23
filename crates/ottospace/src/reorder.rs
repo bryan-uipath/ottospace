@@ -70,6 +70,7 @@ impl Workspace {
                 }
                 self.repo_place(path, f32::from(at.y))
             }
+            ReorderItem::Project { path } => self.project_place(path, f32::from(at.y)),
         };
         if carried != Some(to) {
             self.dispatch(Action::ReorderOver { item: item.clone(), to }, self.input, window, cx);
@@ -150,6 +151,10 @@ impl Workspace {
             }
             ReorderItem::Repo { path } => {
                 self.dispatch(Action::RepoFold { path: path.clone(), fold: None }, self.input, window, cx);
+            }
+            ReorderItem::Project { path } => {
+                let down = window.modifiers().shift;
+                self.open_project(path.clone(), down, window, cx);
             }
         }
     }

@@ -1592,11 +1592,16 @@ Only you open, answer, skip or close it.
 With `projects` on and `projects_dir` set, the left rail has a Projects cell under Repos. Its list
 is the folder's projects: each folder in it (its note is `README.md`, else `index.md`, else its
 only or newest `.md`) and each lone `.md` file. A row shows the title (the note's first heading,
-else the name) and how long ago it last changed. Projects you placed come first, in your order;
-the rest follow, most recently changed first. ottospace only reads the folder, and only while the
+else the name) and how long ago it was last used (changed, or opened here). A click (or ↵) opens
+its note read-only in a file viewer beside the focused pane, ⇧ below; a project with no note says
+"no note" and opens nothing. Drag a row up to place it: placed projects come first, in your order,
+above a thin line; the rest follow, most recently used first. Esc puts a drag back. The order and
+the open times are kept in `~/.ottospace/projects.json`, never in your notes. ottospace only reads
+the folder, and only while the
 section is open (on opening, then every 10 s): no link is followed, hidden names are skipped, at
 most 500 projects, 200 entries a folder, and 256 KB of a note. Nothing in it is written. The
-state's `projects_bar` gives each row's kind and time, never a title or path (design:
+state's `projects_bar` gives each row's kind and times, never a title or path; an opened note's
+viewer pane has its path, as any viewer's (design:
 [projects.md](ai/projects.md)).
 
 ### Code city
