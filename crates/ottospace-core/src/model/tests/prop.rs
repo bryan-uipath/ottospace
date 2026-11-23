@@ -2094,6 +2094,8 @@ fn selects_tab(action: &Action) -> bool {
             | Action::DropPane { .. }
             | Action::MovePane { .. }
             | Action::Focus { .. }
+            // The status bar's "in a terminal": focuses that agent's pane, as `Focus` does.
+            | Action::TerminalAgentGo
             | Action::Enter { .. }
             | Action::Open { .. }
             | Action::PickerChoose { .. }
@@ -6614,6 +6616,41 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// The status bar's "in a terminal" (`TerminalAgentGo`) goes to that agent's pane, in another
+/// tab: the check had no place for it among the actions that select a tab.
+#[test]
+fn going_to_an_agent_in_a_terminal_selects_its_tab() {
+    let session = |id: &str, last: u64, active: bool| Found {
+        runner: "claude".into(),
+        id: id.into(),
+        cwd: "/code/app".into(),
+        repo: "/code/app".into(),
+        started: Some(1),
+        last_activity: Some(last),
+        active,
+        station: None,
+        label: None,
+        title: None,
+        model: None,
+        held: false,
+    };
+    let in_pane = |id: &str| InPane {
+        pane: 1,
+        runner: "claude".into(),
+        id: id.into(),
+        last_activity: None,
+        waits_for: Some(WaitsFor::Turn),
+    };
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.into(),
+        Action::SetSessions { found: vec![session("s1", 999000, true), session("s2", 5, false)], day: 0 }.into(),
+        Action::WorkbookNew { uid: "00000000000000a1".into() }.into(),
+        Action::SessionsInPanes { found: vec![in_pane("\u{202e}abc\u{7f}/p"), in_pane("s1")] }.sent_by(Origin::Socket),
+        Action::TerminalAgentGo.sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
 
 /// A card's row (`TaskCard`) brings its card to the front, by design: the check took that new
 /// order for a changed transcript.

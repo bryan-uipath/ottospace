@@ -397,7 +397,8 @@ mod tests {
     /// it and a Repos row's terminal goes to a tab of its own; the offer stays.
     #[test]
     fn a_waiting_panes_offer_is_kept_by_cmd_d_and_a_repos_click() {
-        let mut m = offered();
+        // A client's pane: the user's would wait as a slot, not empty.
+        let mut m = offered_by(Origin::Socket);
         m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
         m.update(Action::Focus { pane: 1 });
         assert!(!m.lone_empty(1));
