@@ -7,13 +7,14 @@ use crate::links::{self, Target};
 pub const USERS_ALONE: &str = "only the user's ⌘-click opens a terminal's link";
 
 /// The longest URL read; longer ones are not links.
-const MAX_URL: usize = 2048;
+const MAX_URL: usize = links::MAX_LINK;
 
-/// One grid row: a character per column (`'\0'`: a wide character's second half), each column's
-/// OSC 8 target if it has one, and whether the row wraps into the next.
+/// One grid row: each column's text (a character and its zero-width ones; empty: a wide
+/// character's second half), each column's OSC 8 target if it has one (empty: one too long to
+/// read), and whether the row wraps into the next.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Row {
-    pub cells: Vec<char>,
+    pub cells: Vec<String>,
     pub targets: Vec<Option<String>>,
     pub wraps: bool,
 }
@@ -43,13 +44,14 @@ pub fn link_at(rows: &[Row], row: usize, col: usize) -> Option<Link> {
     let last = (row..rows.len()).find(|r| !rows[*r].wraps).unwrap_or(rows.len().saturating_sub(1));
     let mut flat: Vec<(usize, usize, char, Option<&str>)> = Vec::new();
     for (r, line) in rows.iter().enumerate().take(last + 1).skip(first) {
-        for (c, ch) in line.cells.iter().enumerate().filter(|(_, ch)| **ch != '\0') {
-            flat.push((r, c, *ch, line.targets.get(c).and_then(|t| t.as_deref())));
+        for (c, text) in line.cells.iter().enumerate() {
+            let target = line.targets.get(c).and_then(|t| t.as_deref());
+            flat.extend(text.chars().map(|ch| (r, c, ch, target)));
         }
     }
     // A wide character's second half is the character.
     let at = flat.iter().rposition(|(r, c, ..)| *r == row && *c <= col)?;
-    let wide = |i: usize| rows[flat[i].0].cells.get(flat[i].1 + 1) == Some(&'\0');
+    let wide = |i: usize| rows[flat[i].0].cells.get(flat[i].1 + 1).is_some_and(String::is_empty);
     if flat[at].1 != col && !(flat[at].1 + 1 == col && wide(at)) {
         return None;
     }
@@ -86,17 +88,20 @@ fn url_around(chars: &[char], at: usize) -> Option<(usize, usize)> {
     let lower: Vec<char> = chars.iter().map(char::to_ascii_lowercase).collect();
     let starts = |i: usize, s: &str| s.chars().enumerate().all(|(k, c)| lower.get(i + k) == Some(&c));
     let stops = |c: char| c.is_whitespace() || c.is_control() || "<>\"`{}|^\\⟨⟩".contains(c);
-    let start = (0..=at).rev().find(|i| starts(*i, "http://") || starts(*i, "https://"))?;
+    // The first scheme of the word `at` is in: one URL inside another (`?next=https://…`) is part of it.
+    let word = chars[..at].iter().rposition(|c| stops(*c)).map_or(0, |i| i + 1);
+    let start = (word..=at).find(|i| starts(*i, "http://") || starts(*i, "https://"))?;
     let mut end = start + chars[start..].iter().position(|c| stops(*c)).unwrap_or(chars.len() - start);
-    loop {
-        let text = &chars[start..end];
-        let count = |c: char| text.iter().filter(|t| **t == c).count();
-        match text.last() {
-            Some('.' | ',' | ':' | ';' | '!' | '?' | '\'' | '*') => end -= 1,
-            Some(')') if count('(') < count(')') => end -= 1,
-            Some(']') if count('[') < count(']') => end -= 1,
+    let count = |c: char| chars[start..end].iter().filter(|t| **t == c).count();
+    let (mut round, mut square) = (count('(') as i64 - count(')') as i64, count('[') as i64 - count(']') as i64);
+    while end > start {
+        match chars[end - 1] {
+            '.' | ',' | ':' | ';' | '!' | '?' | '\'' | '*' => {}
+            ')' if round < 0 => round += 1,
+            ']' if square < 0 => square += 1,
             _ => break,
         }
+        end -= 1;
     }
     (at < end && end - start <= MAX_URL).then_some((start, end))
 }
@@ -113,7 +118,7 @@ mod tests {
             let pieces: Vec<&[char]> = if chars.is_empty() { vec![&[]] } else { chars.chunks(cols).collect() };
             let count = pieces.len();
             for (i, piece) in pieces.into_iter().enumerate() {
-                let cells = piece.to_vec();
+                let cells: Vec<String> = piece.iter().map(char::to_string).collect();
                 rows.push(Row { targets: vec![None; cells.len()], cells, wraps: i + 1 < count });
             }
         }
@@ -141,6 +146,24 @@ mod tests {
             let at = text.find(['h', 'H']).unwrap_or(0) + 2;
             assert_eq!(url(&rows, 0, at).as_deref(), Some(want), "{text:?}");
         }
+    }
+
+    #[test]
+    fn a_url_inside_another_is_part_of_it_and_a_long_tail_is_cheap() {
+        let text = "https://web.example.org/web/2024/https://example.com/page";
+        let rows = rows(text, 200);
+        assert_eq!(url(&rows, 0, 40).as_deref(), Some(text), "on the inner one");
+        // A run of brackets after a URL: trimmed in one pass, not one count each.
+        let tail = format!("https://a.example.com/{}", ")".repeat(8_000));
+        assert_eq!(url(&super::tests::rows(&tail, 9_000), 0, 3).as_deref(), Some("https://a.example.com/"));
+    }
+
+    #[test]
+    fn a_zero_width_character_stays_with_its_cell() {
+        let mut rows = rows("https://example.com/cafe x", 80);
+        rows[0].cells[23] = "e\u{301}".into();
+        let link = link_at(&rows, 0, 3).expect("a link");
+        assert_eq!((link.url.as_str(), link.cells.as_slice()), ("https://example.com/cafe\u{301}", &[(0, 0, 23)][..]));
     }
 
     #[test]
@@ -204,6 +227,11 @@ mod tests {
             rows[0].targets[c] = Some("https://example.com/t".into());
         }
         assert_eq!(link_at(&rows, 0, 20).map(|l| l.differs), Some(false));
+        // One too long to read (empty) is no link, and its text is not read as one.
+        for c in 14..35 {
+            rows[0].targets[c] = Some(String::new());
+        }
+        assert_eq!(link_at(&rows, 0, 20), None);
         // A target that may not open is no link, whatever its text.
         for c in 6..10 {
             rows[0].targets[c] = Some("file:///etc/passwd".into());
@@ -213,7 +241,10 @@ mod tests {
 
     #[test]
     fn a_wide_characters_two_columns_are_one_cell() {
-        let cells: Vec<char> = "日\0 https://example.com/日\0 x".chars().collect();
+        let cells: Vec<String> = "日\0 https://example.com/日\0 x"
+            .chars()
+            .map(|c| if c == '\0' { String::new() } else { c.to_string() })
+            .collect();
         let rows = vec![Row { targets: vec![None; cells.len()], cells, wraps: false }];
         let link = link_at(&rows, 0, 4).expect("a link");
         assert_eq!((link.url.as_str(), link.cells.as_slice()), ("https://example.com/日", &[(0, 3, 24)][..]));

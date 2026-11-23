@@ -992,7 +992,8 @@ struct Workspace {
     reporting: Option<(PaneId, Button, CellPoint)>,
     /// The terminal cell the pointer was last over: a move without a button is reported once a cell.
     hovered: Option<(PaneId, usize, usize)>,
-    /// While ⌘ is held, the terminal cell under the pointer when a link is on it: underlined.
+    /// While ⌘ is held, the terminal cell under the pointer: a link on it is underlined (one
+    /// printed there later too: the grid is read as drawn).
     link_hover: Option<(PaneId, CellPoint)>,
     /// The terminal whose program was last told it has the focus (`Model::focus_terminal`).
     focus_told: Option<PaneId>,
@@ -5260,10 +5261,10 @@ impl Workspace {
 
     /// With ⌘ held (`cmd`), the shown terminal cell at `position` if a link is on it: drawn underlined.
     fn link_hover_at(&mut self, position: gpui::Point<Pixels>, cmd: bool, cx: &mut Context<Self>) {
-        let shown = self.model.layout.as_ref().map(Node::leaves).unwrap_or_default();
-        let under = |id: &&PaneId| self.cells.get(id).is_some_and(|c| c.get().contains(&position));
-        let over = shown.iter().find(under).filter(|_| cmd).and_then(|id| Some((*id, self.cell_under(*id, position)?)));
-        let on = over.filter(|(id, at)| self.terminals.get(id).and_then(|terminal| terminal.link_at(*at)).is_some());
+        let on = cmd.then(|| self.model.layout.as_ref().map(Node::leaves).unwrap_or_default()).and_then(|shown| {
+            let under = |id: &&PaneId| self.cells.get(id).is_some_and(|c| c.get().contains(&position));
+            shown.iter().find(under).and_then(|id| Some((*id, self.cell_under(*id, position)?)))
+        });
         if self.link_hover != on {
             self.link_hover = on;
             cx.notify();
@@ -7275,11 +7276,21 @@ impl Workspace {
             // under it when its text says something else.
             let link = self.link_hover.filter(|(pane, _)| *pane == id).and_then(|(_, at)| terminal.link_at(at));
             let underline = link.as_ref().map(|link| link.cells.clone()).unwrap_or_default();
+            let area = self.cells.get(&id).map(|c| c.get().size).unwrap_or_default();
             let target = link.as_ref().filter(|link| link.differs).and_then(|link| {
                 let (row, col, _) = *link.cells.first()?;
                 let below = link.cells.last().map_or(row, |cells| cells.0) + 1;
-                let tip = ui::tooltip(link.url.clone().into(), ui::Tip::Hint).max_w(px(420.));
-                Some(tip.absolute().left(cell.width * col as f32).top(cell.height * below as f32 + px(2.)))
+                const WIDE: f32 = 420.;
+                let tip = ui::tooltip(link.url.clone().into(), ui::Tip::Hint).max_w(px(WIDE)).absolute();
+                // Under the link, or over it near the pane's bottom; kept inside its right edge.
+                let tip = match cell.height * (below + 3) as f32 <= area.height {
+                    true => tip.top(cell.height * below as f32 + px(2.)),
+                    false => tip.bottom(area.height - cell.height * row as f32 + px(2.)),
+                };
+                Some(match cell.width * col as f32 + px(WIDE) <= area.width {
+                    true => tip.left(cell.width * col as f32),
+                    false => tip.right(px(0.)),
+                })
             });
             let grid = canvas(
                 |_, _, _| {},

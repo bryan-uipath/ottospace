@@ -771,6 +771,10 @@ impl Terminal {
     /// screen are left out.
     pub fn link_at(&self, at: CellPoint) -> Option<Link> {
         let term = self.term.lock();
+        // A cell kept from before a resize may be off the grid now.
+        if at.row >= term.screen_lines() || at.col >= term.columns() {
+            return None;
+        }
         let offset = term.grid().display_offset() as i32;
         let line = Line(at.row as i32 - offset);
         // Its line's rows, as far as a URL may reach.
@@ -989,20 +993,21 @@ fn wraps<T>(term: &Term<T>, line: Line) -> bool {
     term.grid()[line][Column(term.columns() - 1)].flags.contains(Flags::WRAPLINE)
 }
 
-/// Grid row `line` as `term_links` reads it: a character a column (a wide one's second half
-/// `'\0'`, hidden text a space), each column's OSC 8 target.
+/// Grid row `line` as `term_links` reads it: each column's text (a wide character's second half
+/// empty, hidden text and a tab a space), and its OSC 8 target (empty: too long to open).
 fn link_row<T>(term: &Term<T>, line: Line) -> term_links::Row {
     let row = &term.grid()[line];
     let spacer = Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
     let (cells, targets) = (0..term.columns())
         .map(|col| {
             let cell = &row[Column(col)];
-            let c = match cell.flags {
-                f if f.intersects(spacer) => '\0',
-                f if f.contains(Flags::HIDDEN) => ' ',
-                _ => cell.c,
+            let text = match cell.flags {
+                f if f.intersects(spacer) => String::new(),
+                f if f.contains(Flags::HIDDEN) || cell.c == '\t' => " ".into(),
+                _ => std::iter::once(cell.c).chain(cell.zerowidth().into_iter().flatten().copied()).collect(),
             };
-            (c, cell.hyperlink().map(|link| link.uri().to_string()))
+            let uri = cell.hyperlink().map(|link| link.uri().to_string());
+            (text, uri.map(|uri| if uri.len() > ottospace_core::links::MAX_LINK { String::new() } else { uri }))
         })
         .unzip();
     term_links::Row { cells, targets, wraps: wraps(term, line) }
