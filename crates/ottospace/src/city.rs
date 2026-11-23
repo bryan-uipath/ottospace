@@ -494,10 +494,17 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Option<(Key, Scene)>
         }
     };
     *last = Some((standing, scene.clone()));
-    let Picture { width, height, bgra } = gpu.render(&scene, w, h, f32::from(key.rise) / 1000., key.glass)?;
+    let scene_us = started.elapsed().as_micros() as u64;
+    let Picture { width, height, bgra, gpu_us, copy_us } =
+        gpu.render(&scene, w, h, f32::from(key.rise) / 1000., key.glass)?;
     let camera = scene.camera.ok_or("no camera")?;
+    let made_at = Instant::now();
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
     let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
+    // Where a picture's time goes, for the bench (`scripts/bench`'s city motion): numbers only.
+    let image_us = made_at.elapsed().as_micros() as u64;
+    let fields = serde_json::json!({ "scene_us": scene_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": w, "h": h });
+    crate::trace::record("city_picture", fields);
     // Each lit building's bounds, and the middle of its top (never hidden).
     let lit = (scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))))
         .filter_map(|b| {

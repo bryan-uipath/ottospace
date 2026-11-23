@@ -12,6 +12,10 @@ pub struct Picture {
     pub width: u32,
     pub height: u32,
     pub bgra: Vec<u8>,
+    /// Microseconds the GPU took (drawn and copied to the read buffer, waited on), then the copy
+    /// out of it into `bgra`.
+    pub gpu_us: u64,
+    pub copy_us: u64,
 }
 
 const SAMPLES: u32 = 4;
@@ -341,18 +345,21 @@ impl Gpu {
             },
             size,
         );
+        let started = std::time::Instant::now();
         self.queue.submit([encoder.finish()]);
         let (done, mapped) = std::sync::mpsc::channel();
         read.slice(..).map_async(wgpu::MapMode::Read, move |result| drop(done.send(result)));
         device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("poll: {e}"))?;
         mapped.recv().map_err(|e| e.to_string())?.map_err(|e| format!("map: {e}"))?;
+        let gpu_us = started.elapsed().as_micros() as u64;
+        let started = std::time::Instant::now();
         let padded = read.slice(..).get_mapped_range().map_err(|e| format!("map: {e}"))?;
         // Row by row, as slices: a byte at a time took 15 ms for a 3200×2000 picture.
         let mut bgra = Vec::with_capacity(width as usize * 4 * height as usize);
         for line in padded.chunks(row as usize) {
             bgra.extend_from_slice(&line[..width as usize * 4]);
         }
-        Ok(Picture { width, height, bgra })
+        Ok(Picture { width, height, bgra, gpu_us, copy_us: started.elapsed().as_micros() as u64 })
     }
 }
 
