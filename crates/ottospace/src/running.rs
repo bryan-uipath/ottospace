@@ -50,7 +50,7 @@ fn release(dir: &Path, pid: u32) {
 }
 
 /// The user's folder, outside a test run: a test never writes it, nor touches the user's.
-fn home() -> Option<&'static Path> {
+pub(crate) fn home() -> Option<&'static Path> {
     if std::env::var_os("OTTOSPACE_E2E").is_some() {
         return None;
     }

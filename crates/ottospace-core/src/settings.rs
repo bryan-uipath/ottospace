@@ -57,6 +57,7 @@ impl RepoEntry {
 ///   "conversation_view": "native",
 ///   "capture_key": "ctrl-alt-cmd-space",
 ///   "return_double_cmd": true,
+///   "return_caps_lock": false,
 ///   "capture": { "keep_images": true, "ax": true },
 ///   "workbook_scrollback_lines": 500,
 ///   "restore_layout": true,
@@ -151,6 +152,10 @@ pub struct Settings {
     /// Default: true. False: only the return key; for a tool of your own that uses ⌘⌘.
     #[serde(default)]
     pub return_double_cmd: Option<bool>,
+    /// Caps Lock is the return key while ottospace runs: one entry added to macOS's key mapping
+    /// at start, taken out at quit (`caps_return`). Default: false. Only this file sets it.
+    #[serde(default)]
+    pub return_caps_lock: Option<bool>,
     #[serde(default)]
     pub capture: Capture,
     /// How many of a terminal's last lines a workbook keeps when it is saved, shown again above
@@ -646,6 +651,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         agent_mode: _,
         capture_key,
         return_double_cmd,
+        return_caps_lock,
         capture: _,
         workbook_scrollback_lines: _,
         restore_layout,
@@ -681,6 +687,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         ("agent_models", *agent_models != started.agent_models),
         ("capture_key", *capture_key != started.capture_key),
         ("return_double_cmd", *return_double_cmd != started.return_double_cmd),
+        ("return_caps_lock", *return_caps_lock != started.return_caps_lock),
         ("restore_layout", *restore_layout != started.restore_layout),
         ("restore_apps", *restore_apps != started.restore_apps),
         ("calendar_ics", *calendar_ics != started.calendar_ics),

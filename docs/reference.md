@@ -1331,14 +1331,21 @@ turns it off, e.g. for another tool that uses ⌘⌘.
 
 F18 works too. Set `OTTOSPACE_RETURN_KEY` to another of `f13`-`f20`. If another program already
 holds the key, ottospace logs that and runs without it. The status bar names the keys in use. Most
-keyboards have no F18; to use Caps Lock for it (lasts until restart):
+keyboards have no F18: `"return_caps_lock": true` makes Caps Lock the return key while ottospace
+runs. At start ottospace adds one entry to macOS's key mapping (`hidutil`'s `UserKeyMapping`),
+Caps Lock to the return key, keeping every entry you have; at quit it takes out only that one. It
+remembers what it added in `~/.ottospace/caps_return.json`, so after a crash the next start finds its
+own entry instead of adding another, and turning the setting off takes it out at the next start.
+While ottospace runs, Caps Lock stops toggling capitals everywhere, in every app. If you have mapped
+Caps Lock to something else, ottospace leaves it and the status bar says so.
+
+By hand instead (lasts until restart; replaces any mapping you have):
 
 ```sh
 hidutil property --set '{"UserKeyMapping":[{"HIDKeyboardModifierMappingSrc":0x700000039,"HIDKeyboardModifierMappingDst":0x70000006D}]}'
 ```
 
-After this, Caps Lock no longer toggles capitals anywhere. The command replaces any key mapping
-you already have. To undo it: `hidutil property --set '{"UserKeyMapping":[]}'`.
+To undo it: `hidutil property --set '{"UserKeyMapping":[]}'`.
 
 ## Compose in your editor
 
@@ -1474,6 +1481,7 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
 | `sessions_range` | Which sessions Elsewhere lists: `today`, `week` (7 days), `month` (30 days) or `all`. Set by hand: nothing on screen picks it | `week` |
 | `capture_key` | The key that captures the pane in use, from any app: modifiers (`ctrl`, `alt`, `cmd`, `shift`) and a key, with `-` between them. `"off"`: no key. `OTTOSPACE_CAPTURE_KEY` wins over it. Not `ctrl-alt-space`: macOS uses it to change the input source | `ctrl-alt-cmd-space` |
 | `return_double_cmd` | ⌘ tapped twice, alone, takes the keyboard back from any app, as the return key does ([the return key](#the-return-key)). `false`: only F18. Read at start | `true` |
+| `return_caps_lock` | Caps Lock is the return key while ottospace runs: one entry added to macOS's key mapping at start, only it taken out at quit; Caps Lock stops toggling capitals everywhere meanwhile. A Caps Lock you mapped yourself is left alone. Read at start ([the return key](#the-return-key)) | `false` |
 | `capture.keep_images` | Keep a capture's pictures on disk. `false`: no picture is ever written | `true` |
 | `developer.ottospace_repo` | A git checkout of ottospace (`~` is your home). While it is one, the [bug button](#bug-reports) shows. Applies at once | none |
 | `capture.ax` | Read an app pane's accessibility tree with its picture. `false`: it is never read for a capture | `true` |
