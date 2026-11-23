@@ -25,7 +25,7 @@ use crate::progress;
 use crate::projects::Project;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::row_menu::MenuOf;
-use crate::sessions::{InPane, Link, Seen, WaitsFor};
+use crate::sessions::{Hidden, InPane, Link, Seen, WaitsFor};
 use crate::sneak_apps;
 use crate::transcript::{Event as Said, Outcome, Text, View};
 use crate::workbook::{self, History, Workbook, WorkbookId};
@@ -1349,7 +1349,8 @@ const MAKERS: &[Make] = &[
                 Some(WaitsFor::Turn),
             ];
             let (pane, last_activity, waits_for) = (g.pane(), g.rng.coin().then(|| g.time()), g.rng.pick(&kinds));
-            InPane { pane, runner, id, last_activity, waits_for }
+            let cwd = g.rng.coin().then(|| g.repo_path());
+            InPane { pane, runner, id, last_activity, waits_for, cwd }
         };
         Action::SessionsInPanes { found: (0..g.rng.below(3)).map(|_| at(g)).collect() }
     },
@@ -1365,6 +1366,17 @@ const MAKERS: &[Make] = &[
     |g| {
         let (runner, id) = g.session();
         Action::SessionHide { runner, id }
+    },
+    |g| {
+        let (runner, id) = g.session();
+        Action::SessionUnhide { runner, id }
+    },
+    |g| {
+        let hidden = |g: &mut Gen| {
+            let (runner, id) = g.session();
+            Hidden { runner, id, at: g.rng.coin().then(|| g.time()) }
+        };
+        Action::SetHiddenSessions { hidden: (0..g.rng.below(3)).map(|_| hidden(g)).collect() }
     },
     |g| {
         let (runner, id) = g.session();
@@ -2226,7 +2238,7 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 fn check_waits(m: &Model) -> Result<(), String> {
     let (all, free) = (m.agents().needs_you, m.waits_unadopted().count());
     ensure!(all >= free, "needs you {all}, fewer than the {free} waits");
-    ensure!(m.features.on(Feature::SessionWaits) || free == 0, "{free} waits counted with the flag off");
+    ensure!(m.panes_read() || free == 0, "{free} waits counted with the flags off");
     let adopted = m.waits_unadopted().filter(|(at, _)| m.tasks.adopted(&at.runner, &at.id)).count();
     ensure!(adopted == 0, "{adopted} waits of a task's session counted besides its task");
     // Agents in a terminal are part of the working count, never a task's nor one that waits.
@@ -2247,6 +2259,45 @@ fn check_waits(m: &Model) -> Result<(), String> {
         })
         .count();
     ensure!(twice == 0, "{twice} agents in a terminal counted twice");
+    Ok(())
+}
+
+/// Terminal sessions' cards (`terminal_tasks`): none with the flag off; each once, never a task's
+/// or a hidden one, never also an Elsewhere row; counted as their state says, an ended one nowhere.
+fn check_cards(m: &Model) -> Result<(), String> {
+    use crate::sessions::CardState;
+    let cards = m.session_cards();
+    ensure!(m.features.on(Feature::TerminalTasks) || cards.is_empty(), "{} cards with the flag off", cards.len());
+    let keys: Vec<(&str, &str)> = cards.iter().map(|c| (c.row.runner.as_str(), c.row.id.as_str())).collect();
+    ensure!(unique(&keys), "a session twice among the cards: {keys:?}");
+    for (runner, id) in &keys {
+        ensure!(!m.tasks.adopted(runner, id) && !m.is_hidden(runner, id), "card {id}: a task's, or hidden");
+    }
+    let rows = m.sessions_bar().rows;
+    let drawn = m.tasks_view == TasksView::State;
+    let both = rows.iter().any(|r| keys.contains(&(r.runner.as_str(), r.id.as_str())));
+    ensure!(!drawn || !both, "a card is an Elsewhere row too");
+    // List mode walks what is drawn: each heading, its tasks, then its cards.
+    if drawn {
+        let sections = m.task_sections(m.now);
+        let drawn: usize = sections.iter().map(|s| 1 + s.rows.len() + s.cards.len()).sum();
+        let bar = m.sessions_bar();
+        let elsewhere = if bar.total > 0 { 1 + bar.rows.len() } else { 0 };
+        let rows = m.task_list_rows(TasksView::State, false).len();
+        ensure!(rows == drawn + elsewhere, "{rows} list rows for {drawn} drawn and {elsewhere} Elsewhere's");
+    }
+    let count = |state| cards.iter().filter(|c| c.state == state).count();
+    ensure!(m.needs_you() == m.tasks.needs_you() + count(CardState::NeedsYou), "needs you is not tasks + cards");
+    if m.features.on(Feature::TerminalTasks) {
+        let agents = m.agents();
+        ensure!(agents.in_terminal == count(CardState::Running), "in a terminal {} of cards", agents.in_terminal);
+    }
+    let ended = cards.iter().filter(|c| c.state == CardState::Ended);
+    ensure!(
+        ended.clone().all(|c| c.row.pane.is_none() && c.row.waits_for.is_none()),
+        "an ended card waits or has a pane"
+    );
+    ensure!(cards.iter().all(|c| !c.take_over || c.state == CardState::Ended), "a live card offers to be taken over");
     Ok(())
 }
 
@@ -2344,6 +2395,7 @@ fn check(m: &Model) -> Result<(), String> {
     }
     ensure!(m.copy_asks.values().all(|ask| !ask.too_large || ask.text.is_empty()), "a refused ask holds its text");
     check_waits(m)?;
+    check_cards(m)?;
     check_slots(m)?;
     // With the overlays on, the panes' room never depends on the sidebar or the drawer being open.
     ensure!(!m.overlays() || !(m.sidebar_takes_room() || m.drawer_takes_room()), "an overlay takes the panes' room");
@@ -5273,6 +5325,16 @@ impl Run {
                             cwd.as_ref().is_some_and(|cwd| m.repo_names().any(|(_, path)| sessions::below(cwd, path)));
                         ensure!(free && listed, "session {id} gone on with in {cwd:?}: at work, held, or outside");
                     }
+                    // A task's session is never gone on with while a program of ours runs it in a pane:
+                    // two writers on one transcript.
+                    let link = subject.task().and_then(|id| m.tasks.get(id)).and_then(|task| task.session.as_ref());
+                    if let Some(link) = link.filter(|_| resumes) {
+                        let pane = m
+                            .in_panes
+                            .iter()
+                            .any(|at| (&at.runner, &at.id) == (&link.runner, &link.id) && m.in_pane_live(at));
+                        ensure!(!pane, "task {subject:?} resumed {} while a pane runs it", link.id);
+                    }
                     let task = subject.task().unwrap_or_default();
                     let uuid = "8f14e45f-ceea-467f-a8d3-0242ac130003";
                     let command = match start {
@@ -5342,6 +5404,21 @@ impl Run {
                     ensure!(labelled.contains(&format!("{source:?}")), "an element with no label is pressed: {path:?}");
                     let key = format!("{pane} {path:?} {role}");
                     ensure!(drawn_before.contains(&key), "a label drawn after its first letter pressed {key}");
+                }
+                // The hidden sessions' own file: written only for a hide or an unhide, with the flag on.
+                Effect::SaveHiddenSessions { hidden } => {
+                    // Or a read that ended a hide (it worked and asked again).
+                    let asked = matches!(action, Action::SessionHide { .. } | Action::SessionUnhide { .. });
+                    let read = origin == Origin::System
+                        && matches!(
+                            action,
+                            Action::SetSessions { .. } | Action::SessionsAtWork { .. } | Action::SessionsInPanes { .. }
+                        );
+                    ensure!(
+                        (asked || read) && m.features.on(Feature::TerminalTasks),
+                        "{action:?} wrote the hidden sessions"
+                    );
+                    ensure!(hidden.len() <= sessions::MAX_HIDDEN, "{} hidden sessions kept", hidden.len());
                 }
                 Effect::SaveApps { changes } => {
                     // The settings file is the user's: no client's action writes it.
@@ -6109,6 +6186,7 @@ fn code(sent: &Envelope) -> String {
         "Found",
         "Seen",
         "InPane",
+        "Hidden",
         "Link",
         "Target",
         "Frame",
@@ -6703,6 +6781,7 @@ fn going_to_an_agent_in_a_terminal_selects_its_tab() {
         id: id.into(),
         last_activity: None,
         waits_for: Some(WaitsFor::Turn),
+        cwd: None,
     };
     replay(&[
         Action::Split { axis: Axis::Down, kind: Kind::Terminal }.into(),
@@ -6897,6 +6976,7 @@ fn seed_513_a_waiting_sessions_row_does_not_change_the_tab() {
         id: id.into(),
         last_activity: None,
         waits_for,
+        cwd: None,
     };
     let found = |id: &str, last_activity, active| Found {
         runner: "claude".into(),

@@ -1,0 +1,20 @@
+# terminal_tasks: a Claude Code asking permission and a Codex idle a minute (not yet quiet), each a stand-in (`sleep`
+# under the CLI's name) in a terminal pane, listed with the tasks as cards: under Needs you and
+# Running, after a task of each. Then the Codex ends: its card stays, dim. Before: the flag is unknown.
+{"cmd": "task_new", "line": "made-up task that needs you"}
+{"cmd": "task_set_state", "id": 1, "state": "needs_you"}
+{"cmd": "split"}
+{"cmd": "split", "axis": "right"}
+{"settle": 1000}
+{"cmd": "wait", "pane": 1, "pattern": "\\$"}
+{"cmd": "type", "pane": 1, "text": "RECORDS='{ROOT}/claude/sessions' /bin/bash '{ROOT}/stand-in.sh' claude '{ROOT}/repos/app' '{\"pid\":PID,\"sessionId\":\"11111111-1111-4111-8111-111111111111\",\"status\":\"waiting\",\"waitingFor\":\"permission prompt\",\"updatedAt\":NOW}'\r"}
+{"cmd": "wait", "pane": 2, "pattern": "\\$"}
+{"cmd": "type", "pane": 2, "text": "touch -A -000100 {ROOT}/codex/sessions/2026/11/12/rollout-2026-11-12T09-30-00-c0de0001-0000-4000-8000-000000000001.jsonl && /bin/bash '{ROOT}/stand-in.sh' codex '{ROOT}/repos/app/crates' ''\r"}
+{"cmd": "section", "section": "tasks"}
+{"until": "status_bar.agents.needs_you", "is": 2}
+{"settle": 6000}
+{"cmd": "mouse", "action": "move", "x": -50, "y": -50, "as": "user"}
+{"shot": "cards"}
+{"cmd": "type", "pane": 2, "text": "\u0003"}
+{"settle": 7000}
+{"shot": "ended"}

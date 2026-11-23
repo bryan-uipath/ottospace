@@ -400,7 +400,8 @@ fn in_panes(runners: &[&dyn SessionReader], panes: &[PaneProc]) -> Vec<InPane> {
         let Some(session) = sessions.iter().find(mine) else { continue };
         let waits_for = process.and_then(|p| p.waits_for).filter(|_| disk.waits);
         let (runner, id, last_activity) = (id.name().to_string(), session.id.clone(), session.last_activity);
-        out.push(InPane { pane: *pane, runner, id, last_activity, waits_for });
+        let cwd = Some(cwd.to_string_lossy().into_owned());
+        out.push(InPane { pane: *pane, runner, id, last_activity, waits_for, cwd });
     }
     out
 }
@@ -410,6 +411,27 @@ fn in_panes(runners: &[&dyn SessionReader], panes: &[PaneProc]) -> Vec<InPane> {
 fn holds(holder: &ottospace_sessions::Holder) -> bool {
     let started = i32::try_from(holder.pid).ok().and_then(ottospace_mac::process::started);
     crate::running::alive(holder.pid) && ottospace_core::sessions::holds(started, holder.recorded)
+}
+
+/// The file of the hidden sessions (`terminal_tasks`), in ottospace's home: runner, id and the
+/// time its file had when hidden. No title or path.
+const HIDDEN: &str = "sessions-hidden.json";
+
+/// The sessions hidden in an earlier run. None: a test run that named no home, or no file.
+pub fn hidden_read() -> Vec<ottospace_core::sessions::Hidden> {
+    let Some(home) = config::get().home.as_deref() else { return Vec::new() };
+    // Small by its own rule (`MAX_HIDDEN`): a larger file is not ours to read.
+    let small = std::fs::metadata(home.join(HIDDEN)).is_ok_and(|meta| meta.is_file() && meta.len() <= 64 << 10);
+    let text = small.then(|| std::fs::read_to_string(home.join(HIDDEN)).ok()).flatten();
+    text.and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+}
+
+/// Replaces the file of hidden sessions with `hidden`. A test run that named no home writes none.
+pub fn hidden_write(hidden: &[ottospace_core::sessions::Hidden]) {
+    let Some(home) = config::get().home.as_deref() else { return };
+    if let Ok(text) = serde_json::to_string(hidden) {
+        let _ = config::write_private(home, HIDDEN, text.as_bytes());
+    }
 }
 
 /// One session, read for a resume the user asked for: where it started, if it is at work or a

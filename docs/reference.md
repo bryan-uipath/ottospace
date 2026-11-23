@@ -1530,6 +1530,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `code_city` | Experimental | off | Code city: An empty tab or pane draws its folder (a task's checkout, a workspace's default, a repository's tab) as a 3D city, its files where they were last time |
 | `session_waits` | Experimental | off | Waiting sessions: An agent CLI you started in a terminal pane needs you when its turn ends, at once when it asks |
 | `projects` | Experimental | off | Projects: The projects in your projects_dir, on the left rail: read, never written |
+| `terminal_tasks` | Experimental | off | Terminal sessions as tasks: A live Claude Code or Codex you started in a terminal is listed with the tasks, read-only, until it ends |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1592,6 +1593,16 @@ then does nothing (a toast says so). A preference is a normal setting.
 - `projects` off: no Projects cell or section, and `section` `projects` answers
   `feature off: projects`. `projects_dir` is not read; the state's `projects_bar` is off and empty.
   On, see [Projects](#projects) (design: [projects.md](ai/projects.md)).
+- `terminal_tasks` off: terminal sessions are Elsewhere's rows only. On (it reads the sessions in
+  panes, as `session_waits` does), each live `claude` or `codex` you started in a terminal (in one of ottospace's
+  panes, anywhere; elsewhere, in a listed repository while Tasks is open) is a card under Needs you
+  or Running, after the tasks, and counts there (`needs you`, ⌘J, the status bar). Live: its pane
+  runs it, or its runner's process record holds it (Claude Code), or its file changed in the last
+  30 s (Codex). A click opens it read-only; Hide takes it out until it works and asks again (kept
+  in `sessions-hidden.json`; "N hidden" under the list shows them). Ended, it stays dim 5 minutes,
+  counted nowhere, with Take over when it can be gone on with here. The Project view shows no
+  cards yet: there they stay Elsewhere's rows.
+  Design note: pull request #423.
 
 ### Decisions
 

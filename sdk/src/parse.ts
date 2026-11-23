@@ -152,6 +152,7 @@ import type {
   TaskReply,
   TaskRow,
   TaskSection,
+  SessionCard,
   TaskState,
   TasksBar,
   Terminal,
@@ -470,6 +471,16 @@ function taskSection(value: unknown, at: string): TaskSection {
     count: num(o.count, `${at}.count`),
     collapsed: bool(o.collapsed, `${at}.collapsed`),
     rows: list(taskRow)(o.rows, `${at}.rows`),
+    cards: list(sessionCard)(o.cards, `${at}.cards`),
+  };
+}
+
+function sessionCard(value: unknown, at: string): SessionCard {
+  const o = fields(value, at);
+  return {
+    ...sessionRow(value, at),
+    state: oneOf(["needs_you", "running", "ended"] as const, "a card's state")(o.state, `${at}.state`),
+    take_over: bool(o.take_over, `${at}.take_over`),
   };
 }
 
@@ -1499,7 +1510,7 @@ function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
   if (value === "overlay_panels" || value === "decisions" || value === "code_city") return value;
-  if (value === "session_waits" || value === "projects") return value;
+  if (value === "session_waits" || value === "projects" || value === "terminal_tasks") return value;
   throw wrong(at, "a feature", value);
 }
 

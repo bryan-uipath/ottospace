@@ -177,6 +177,8 @@ pub struct TaskSection {
     pub count: usize,
     pub collapsed: bool,
     pub rows: Vec<TaskRow>,
+    /// The terminal sessions under it, after its tasks (`terminal_tasks`). None while collapsed.
+    pub cards: Vec<crate::sessions::Card>,
 }
 
 /// The listed tasks by project, as the Project view groups them: projects by name (whatever the

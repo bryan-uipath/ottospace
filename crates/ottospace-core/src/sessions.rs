@@ -148,6 +148,9 @@ pub struct InPane {
     /// What it waits for now, when its runner says so (`Disk::waits`). None: not said.
     #[serde(default)]
     pub waits_for: Option<WaitsFor>,
+    /// The folder its program runs in, as the shell read it: a card's name when no listing has it.
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 impl InPane {
@@ -159,14 +162,21 @@ impl InPane {
     }
 }
 
+/// A session id kept: 1 to 128 bytes, no control characters.
+fn plain_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+}
+
 /// What is kept of the sessions the shell found in panes: of a known runner, with a plain id,
 /// each session and each pane once, by pane (⌘J takes the first).
 pub fn in_panes_kept(found: Vec<InPane>) -> Vec<InPane> {
     let mut kept: Vec<InPane> = Vec::new();
-    for at in found {
-        let plain = !at.id.is_empty() && at.id.len() <= 128 && !at.id.chars().any(char::is_control);
+    for mut at in found {
+        let plain = plain_id(&at.id);
         let again = kept.iter().any(|k| (&k.runner, &k.id) == (&at.runner, &at.id) || k.pane == at.pane);
         if RunnerId::named(&at.runner).is_some() && plain && !again {
+            at.cwd =
+                at.cwd.filter(|cwd| cwd.starts_with('/') && cwd.len() <= 1024 && !cwd.chars().any(char::is_control));
             kept.push(at);
         }
     }
@@ -179,6 +189,82 @@ pub fn in_panes_kept(found: Vec<InPane>) -> Vec<InPane> {
 /// `link` as in `follow`: a state someone else set since is theirs to keep.
 pub fn waiting(link: Option<State>, state: State) -> Option<State> {
     (link == Some(state) && state != State::NeedsYou).then_some(State::NeedsYou)
+}
+
+/// How long a terminal session's card stays after a read showed it ended (`terminal_tasks`): dim,
+/// counted nowhere, then gone. Not `ENDED_GRACE_MS`, which is our own agent's.
+pub const CARD_GRACE_MS: u64 = 300_000;
+
+/// The most sessions kept hidden: the oldest hide goes first.
+pub const MAX_HIDDEN: usize = 200;
+
+/// True if a session runs now, by what its runner can say (`Disk::held`): in one of our panes,
+/// else held by a live process, else (a runner that records none) written in the last 30 s.
+pub fn live(runner: RunnerId, in_pane: bool, held: bool, active: bool) -> bool {
+    in_pane || if runner.spec().disk.held { held } else { active }
+}
+
+/// A session the user hid, and when its file had last changed then.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Hidden {
+    pub runner: String,
+    pub id: String,
+    #[serde(default)]
+    pub at: Option<u64>,
+}
+
+impl Hidden {
+    /// Still hidden, with `terminal_tasks` on: until it needs the user (`needs`) and its file
+    /// changed after the hide (`last`). The same wait, read again after a restart, stays hidden.
+    pub fn holds(&self, needs: bool, last: Option<u64>) -> bool {
+        !(needs && last.is_some_and(|last| self.at.is_none_or(|at| last > at)))
+    }
+}
+
+/// What is kept of the hidden sessions a file gave: plain ids of a known runner, each once, the
+/// newest `MAX_HIDDEN`.
+pub fn hidden_kept(hidden: Vec<Hidden>) -> Vec<Hidden> {
+    let mut kept: Vec<Hidden> = Vec::new();
+    for entry in hidden {
+        let plain = plain_id(&entry.id);
+        if RunnerId::named(&entry.runner).is_some() && plain {
+            kept.retain(|k| (&k.runner, &k.id) != (&entry.runner, &entry.id));
+            kept.push(entry);
+        }
+    }
+    let over = kept.len().saturating_sub(MAX_HIDDEN);
+    kept.drain(..over);
+    kept
+}
+
+/// Where a terminal session's card is among the tasks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CardState {
+    /// It waits on the user (`Row::waits_for` says why): under Needs you.
+    NeedsYou,
+    /// It runs: under Running.
+    Running,
+    /// A read showed it ended, less than `CARD_GRACE_MS` ago: dim, at the end of Running, counted nowhere.
+    Ended,
+}
+
+/// A live terminal session listed with the tasks (`terminal_tasks`): its row, as Elsewhere draws
+/// one, and where it goes. Not a task: nothing of it is written.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Card {
+    #[serde(flatten)]
+    pub row: Row,
+    pub state: CardState,
+    /// When it started, if known: cards keep one order as they work.
+    #[serde(skip)]
+    pub started: Option<u64>,
+    /// Its file's last change, as last read.
+    #[serde(skip)]
+    pub last_activity: Option<u64>,
+    /// The user may take it over here: no program has it, it is listed, and its runner goes on
+    /// with an idle session. Only an ended card.
+    pub take_over: bool,
 }
 
 /// A session as the shell read it.
@@ -548,6 +634,7 @@ mod tests {
             id: "a".into(),
             last_activity: last,
             waits_for,
+            cwd: None,
         };
         let now = 10 * QUIET_MS;
         // No reason from its runner: its turn, once quiet, for any runner alike.
@@ -569,6 +656,7 @@ mod tests {
             id: id.into(),
             last_activity: None,
             waits_for: None,
+            cwd: None,
         };
         let kept = in_panes_kept(vec![
             at(1, "claude", "a"),

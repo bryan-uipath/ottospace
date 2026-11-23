@@ -3262,6 +3262,96 @@ fn a_session_in_a_terminal_needs_you_the_same_way_for_every_runner() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
+fn terminal_sessions_are_listed_with_the_tasks_hidden_until_they_ask_again_and_dim_once_ended() {
+    // Made-up Claude Code and Codex folders, and a stand-in for each CLI (`sleep` under its name).
+    let home = user_folder("terminal-tasks", "").canonicalize().unwrap();
+    let (claude, codex, work) = (home.join("claude"), home.join("codex"), home.join("work"));
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    std::fs::create_dir_all(work.join("crates")).unwrap();
+    let id = "11111111-1111-4111-8111-111111111111";
+    let transcript = claude.join("projects").join(ottospace_sessions::claude::slug(&work)).join(format!("{id}.jsonl"));
+    session_fixture(&format!("claude/projects/-work-app/{id}.jsonl"), &transcript, &work, Duration::ZERO);
+    let rollout = "sessions/2026/11/12/rollout-2026-11-12T09-30-00-c0de0001-0000-4000-8000-000000000001.jsonl";
+    session_fixture(&format!("codex/{rollout}"), &codex.join(rollout), &work, Duration::ZERO);
+    let stand_in = home.join("stand-in.sh");
+    let script = "cd \"$2\" || exit 1\n[ -n \"$3\" ] && printf '%s' \"$3\" | sed \"s/PID/$$/; s/NOW/$(date +%s)000/\" > \"$RECORDS/$$.json\"\nexec -a \"$1\" sleep 300\n";
+    std::fs::write(&stand_in, script).unwrap();
+    let dirs = json!({"claude": [claude], "codex": codex});
+    let settings = json!({"repos": [], "sessions": true, "session_dirs": dirs, "restore_layout": false});
+    std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "session_waits,terminal_tasks")];
+    let otto = Otto::launch_with("terminal-tasks", &env);
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    let record = |status: &str| {
+        let waiting = if status == "waiting" { r#","waitingFor":"permission prompt""# } else { "" };
+        format!(r#"{{"pid":PID,"sessionId":"{id}","status":"{status}"{waiting},"updatedAt":NOW}}"#)
+    };
+    let run = |pane: u32, line: String| otto.call(json!({"cmd": "type", "pane": pane, "text": format!("{line}\r")}));
+    let records = claude.join("sessions");
+    let claude_line = format!(
+        "RECORDS='{}' /bin/bash '{}' claude '{}' '{}'",
+        records.display(),
+        stand_in.display(),
+        work.display(),
+        record("waiting")
+    );
+    run(1, claude_line);
+    run(
+        2,
+        format!("RECORDS=/dev/null /bin/bash '{}' codex '{}' ''", stand_in.display(), work.join("crates").display()),
+    );
+    // Each a card: Claude Code under Needs you (it asks), Codex under Running; no Elsewhere row.
+    let cards = |o: &Otto| {
+        let state = o.call(json!({"cmd": "state"}));
+        let sections = state["tasks_bar"]["sections"].as_array().cloned().unwrap_or_default();
+        let cards = sections.iter().flat_map(|s| {
+            let heading = s["heading"].as_str().unwrap_or_default().to_string();
+            let cards = s["cards"].as_array().cloned().unwrap_or_default();
+            cards.into_iter().map(move |c| {
+                (
+                    heading.clone(),
+                    c["runner"].as_str().unwrap_or_default().to_string(),
+                    c["state"].as_str().unwrap_or_default().to_string(),
+                )
+            })
+        });
+        cards.collect::<Vec<_>>()
+    };
+    let pair = |heading: &str, runner: &str, state: &str| (heading.to_string(), runner.to_string(), state.to_string());
+    let both = vec![pair("needs_you", "claude", "needs_you"), pair("running", "codex", "running")];
+    otto.wait_for("both cards", |o| Some(cards(o)).filter(|c| *c == both));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&state["needs_you"], &state["status_bar"]["agents"]["in_terminal"]), (&json!(1), &json!(1)));
+    assert_eq!(state["sessions_bar"]["total"], 0, "a card is not also an Elsewhere row");
+    // Hidden: counted nowhere. The Tasks section's "1 hidden" brings it back.
+    otto.call(json!({"cmd": "session_hide", "runner": "claude", "id": id}));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["needs_you"], 0);
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let line = otto.wait_for("the hidden line", |o| o.control_opt("sessions-hidden"));
+    otto.user_click(at(line, 0.5, 0.5));
+    otto.wait_for("shown again", |o| Some(cards(o)).filter(|c| *c == both));
+    // Hidden again, it comes back by itself once it works and asks again: not for the same wait.
+    otto.call(json!({"cmd": "session_hide", "runner": "claude", "id": id}));
+    let file = std::fs::read_dir(&records).unwrap().flatten().next().unwrap().path();
+    let text = std::fs::read_to_string(&file).unwrap();
+    std::fs::write(&file, text.replace(r#""status":"waiting","waitingFor":"permission prompt""#, r#""status":"busy""#))
+        .unwrap();
+    otto.wait_for("at work, still hidden", |o| Some(cards(o)).filter(|c| *c == [pair("running", "codex", "running")]));
+    std::thread::sleep(Duration::from_millis(1_100)); // a file time later than the hide's
+    let line = format!("{}\n", std::fs::read_to_string(&transcript).unwrap().lines().last().unwrap());
+    std::fs::OpenOptions::new().append(true).open(&transcript).unwrap().write_all(line.as_bytes()).unwrap();
+    std::fs::write(&file, text).unwrap();
+    otto.wait_for("it asks again", |o| Some(cards(o)).filter(|c| *c == both));
+    // Codex ends: its card stays, dim, counted nowhere.
+    otto.call(json!({"cmd": "type", "pane": 2, "text": "\u{3}"}));
+    let ended = vec![pair("needs_you", "claude", "needs_you"), pair("running", "codex", "ended")];
+    otto.wait_for("codex ended", |o| Some(cards(o)).filter(|c| *c == ended));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["status_bar"]["agents"]["in_terminal"], 0);
+}
+
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
 fn the_status_bar_counts_agents_at_work_in_a_terminal_and_goes_to_them() {
     // A made-up Claude Code session at work in a listed repository, no task's.
     let home = user_folder("terminal-agents", "");
