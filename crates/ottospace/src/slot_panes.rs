@@ -372,13 +372,13 @@ impl Workspace {
         } else {
             body = body.child(line(waits, theme::MUTED));
             body = body.child(line("⌘E Put something else here".into(), theme::MUTED));
-            // Kept when its window closed: as easy to be rid of as the pane was to get.
-            let id = format!("slot-close:{pane}");
-            let close = word(id.clone(), "Close this pane", false)
-                .child(self.controls.mark(id))
-                .on_click(cx.listener(move |this, _, window, cx| this.close_pane(pane, window, cx)));
-            body = body.child(close);
         }
+        // Kept when its window closed: as easy to be rid of as the pane was to get.
+        let id = format!("slot-close:{pane}");
+        let close = word(id.clone(), "Close this pane", false)
+            .child(self.controls.mark(id))
+            .on_click(cx.listener(move |this, _, window, cx| this.close_pane(pane, window, cx)));
+        body = body.child(close);
         Some(body.into_any_element())
     }
 

@@ -5569,8 +5569,9 @@ impl Model {
         let (temporary, tick) = (self.temporary_shown(), matches!(action, Action::Tick { .. }));
         // The main window's: what a closing workspace gives way to there.
         let on_show = self.tabs.get(self.main_at()).map(|tab| tab.id);
-        // A window a client or the app itself put in a pane is not the user's place (`not_placed`).
-        let placed = origin != Origin::Socket && !matches!(action, Action::Adopt { .. });
+        // A window a client or the app itself (the shell's `Adopt`) put in a pane is not the user's
+        // place (`not_placed`); the user's split of an offer, an `Adopt` too, is.
+        let placed = origin == Origin::User || (origin == Origin::System && !matches!(action, Action::Adopt { .. }));
         let held = self.app_windows();
         self.act(action, &mut effects);
         self.settle_placed(&held, placed);

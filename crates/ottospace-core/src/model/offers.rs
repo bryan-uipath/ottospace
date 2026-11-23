@@ -244,8 +244,14 @@ mod tests {
 
     /// Zoom's pane 1, and window 9 it opened by itself, offered.
     fn offered() -> Model {
+        offered_by(Origin::User)
+    }
+
+    /// As `offered`, its pane opened by `origin`: a client's is no place of the user's, so with
+    /// its window gone it waits empty, offering, where the user's would wait as a slot.
+    fn offered_by(origin: Origin) -> Model {
         let mut m = Model::default();
-        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None }.sent_by(origin));
         let offer = new_window(1, 9, "Zoom SECRET Meeting");
         m.update(offer.sent_by(Origin::System));
         m
@@ -328,7 +334,7 @@ mod tests {
     #[test]
     fn a_mark_waits_with_its_pane_and_follows_the_window_brought_in() {
         let marked = || {
-            let mut m = offered();
+            let mut m = offered_by(Origin::Socket);
             m.update(Action::MarkToggle { of: crate::marks::MarkOf::Pane(None), uid: "u1".into(), cwds: vec![] });
             m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
             assert!(m.offer_waits(1));
@@ -364,7 +370,7 @@ mod tests {
     /// the new one. Only the user's Bring it here (↵) fills it; × closes the pane.
     #[test]
     fn a_pane_whose_window_the_app_remade_waits_empty_and_offers_the_new_one() {
-        let mut m = offered();
+        let mut m = offered_by(Origin::Socket);
         m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
         assert_eq!(m.pane(1).map(|p| p.kind.clone()), Some(Kind::Empty), "kept, empty");
         assert!(m.offer_waits(1) && m.offer_of(1).is_some_and(|o| o.window == 9));
@@ -376,7 +382,7 @@ mod tests {
         m.update(Action::Fill { pane: 1, kind: app(9) }.sent_by(Origin::System));
         assert!(m.offers.is_empty() && !m.offer_waits(1));
         // ×: the pane closes, the window floats on.
-        let mut m = offered();
+        let mut m = offered_by(Origin::Socket);
         m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
         m.update(Action::Close { pane: Some(1) });
         assert!(m.pane(1).is_none() && m.offers.is_empty());
@@ -443,7 +449,7 @@ mod tests {
     /// while more than one is left.
     #[test]
     fn several_offers_group_and_their_list_opens_only_for_the_user() {
-        let mut m = offered();
+        let mut m = offered_by(Origin::Socket);
         m.update(Action::OfferList { pane: 1 });
         assert_eq!(m.offer_list, None, "one offer: no list");
         m.update(new_window(1, 10, "b").sent_by(Origin::System));

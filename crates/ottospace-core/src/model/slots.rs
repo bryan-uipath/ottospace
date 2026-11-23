@@ -368,8 +368,16 @@ impl Model {
         // The shell's facts, else what a look listed.
         let listed = self.slot_looks.iter().flat_map(|look| &look.windows).find(|seen| seen.window == *window);
         let was = was.or_else(|| listed.cloned());
-        // A dialog is no slot's candidate (rule 4): a place for one would wait for good.
-        if was.as_ref().is_some_and(|seen| !seen.subrole.is_empty() && seen.subrole != "AXStandardWindow") {
+        // A window the rules do not manage (a dialog, one ignored) is no slot's candidate (rule 4):
+        // a place for one would wait for good.
+        let Some(Kind::App { bundle, name, .. }) = self.pane(pane).map(|p| &p.kind) else { return None };
+        let known = was.as_ref().filter(|seen| !seen.subrole.is_empty());
+        let unmanaged = known.is_some_and(|seen| {
+            let (title, subrole, identifier) = (&seen.title, &seen.subrole, seen.identifier.as_deref());
+            let facts = crate::rules::Facts { app: name, bundle: bundle.as_deref(), title, subrole, identifier };
+            !crate::rules::manages(&self.window_rules, &facts)
+        });
+        if unmanaged {
             return None;
         }
         let (pid, identifier) = was.map_or((0, None), |seen| (seen.pid, Some(seen.identifier.unwrap_or_default())));
@@ -397,14 +405,13 @@ impl Model {
             return;
         }
         if !self.slots.contains_key(&pane) {
-            // An app that remade its window: the pane waits, empty, offering the new one.
-            if self.offer_keeps(pane, effects) {
-                return;
+            match self.kept_place(pane, was) {
+                // The user's place: a slot, before any offer (Zoom's chat must not take a meeting's place).
+                Some((pid, slot)) => self.slot_make(pane, pid, slot),
+                // An app that remade its window: the pane waits, empty, offering the new one.
+                None if self.offer_keeps(pane, effects) => return,
+                None => return self.act(Action::Close { pane: Some(pane) }, effects),
             }
-            let Some((pid, slot)) = self.kept_place(pane, was) else {
-                return self.act(Action::Close { pane: Some(pane) }, effects);
-            };
-            self.slot_make(pane, pid, slot);
         }
         // The keyboard comes back to ottospace, as the shell is told (`Effect::Parked`).
         if self.live == Some(pane) {
@@ -1018,6 +1025,22 @@ mod tests {
         // As easy to be rid of as it came: the user's × closes the waiting one.
         m.update(Action::Close { pane: Some(1) });
         assert!(m.pane(1).is_none() && !m.slots.contains_key(&1));
+    }
+
+    /// The user's place wins over an offer in it (the app's chat must not take a meeting's place),
+    /// and the user's own split of an offered window (an `Adopt` they sent) is their place too.
+    #[test]
+    fn the_users_place_is_kept_over_an_offer_and_their_split_of_one_is_theirs() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: meetings(1, "a"), axis: Right, beside: None });
+        m.update(new_window(1, 7, 9, "chat"));
+        m.update(system(Action::WindowGone { pane: 1, app_running: true, at: 0, was: Some(seen(7, 1, "a")) }));
+        assert!(matches!(m.pane(1).map(|p| &p.kind), Some(Kind::Slot { .. })), "a slot, not an empty pane offering");
+        m.update(Action::Adopt { kind: meetings(9, "chat"), beside: Some(1), seen: None });
+        let split = m.panes.iter().find(|p| matches!(p.kind, Kind::App { window: 9, .. })).map(|p| p.id);
+        let split = split.unwrap_or_default();
+        m.update(system(Action::WindowGone { pane: split, app_running: true, at: 0, was: None }));
+        assert!(matches!(m.pane(split).map(|p| &p.kind), Some(Kind::Slot { .. })), "the user's split");
     }
 
     /// Not the user's place: a pane a client opened, or a window the app opened itself, or a

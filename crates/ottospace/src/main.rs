@@ -3330,8 +3330,19 @@ impl Workspace {
                             drop(self.dispatch(Action::OfferGone { window: id }, Origin::System, window, cx))
                         }
                         (None, Some(pane)) => {
-                            let gone = Action::WindowGone { pane, app_running: true, at: now_ms(), was: None };
-                            drop(self.dispatch(gone, Origin::System, window, cx))
+                            // It is gone from the fixture's look too, as a real look would find.
+                            let fixtures = self.slot_fixtures.iter_mut().flat_map(|look| &mut look.windows);
+                            let was = fixtures.into_iter().find(|seen| seen.window == id).cloned();
+                            let look = self.slot_fixtures.iter_mut().find(|l| l.windows.iter().any(|s| s.window == id));
+                            let look = look.map(|look| {
+                                look.windows.retain(|seen| seen.window != id);
+                                look.clone()
+                            });
+                            let gone = Action::WindowGone { pane, app_running: true, at: now_ms(), was };
+                            drop(self.dispatch(gone, Origin::System, window, cx));
+                            if let Some(look) = look {
+                                drop(self.dispatch(Action::SlotWindows { look }, Origin::System, window, cx));
+                            }
                         }
                         (None, None) => failure = Some(format!("no fixture window {id}")),
                     }
@@ -4655,7 +4666,13 @@ impl Workspace {
             // Listed, but its main window may not be ready yet: try again until the time is up.
             self.launched_later = true;
             let hosted = app.is_some_and(|app| match &launch.wanted {
-                Some(wanted) => settled && self.host_window_of(app.pid, wanted, window, cx).is_ok(),
+                // As whoever asked: a client's window is no place of the user's (`not_placed`).
+                Some(wanted) => {
+                    settled
+                        && self
+                            .with_origin(launch.origin, |this| this.host_window_of(app.pid, wanted, window, cx))
+                            .is_ok()
+                }
                 None => self.with_origin(launch.origin, |this| {
                     this.open_app(&app.name, launch.axis, launch.new_tab, window, cx).is_ok()
                 }),

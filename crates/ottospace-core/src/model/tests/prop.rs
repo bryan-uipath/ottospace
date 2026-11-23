@@ -3862,17 +3862,35 @@ impl Run {
             })
             .map(|p| p.id)
             .collect();
-        // Of those, the ones a look lists as a dialog: no slot's candidate, so they close.
-        let dialog = |window: u32| {
-            let seen = m.slot_looks.iter().flat_map(|look| &look.windows).find(|seen| seen.window == window);
-            seen.is_some_and(|seen| !seen.subrole.is_empty() && seen.subrole != "AXStandardWindow")
+        // Whether the window rules manage a window of pane `id` (a dialog, one ignored: no slot's
+        // candidate, so its pane closes). Unknown facts: managed.
+        let managed = |m: &Model, id: PaneId, seen: Option<&crate::slot::Seen>| {
+            let Some(Kind::App { bundle, name, .. }) = m.pane(id).map(|p| &p.kind) else { return true };
+            let seen = seen.filter(|seen| !seen.subrole.is_empty());
+            seen.is_none_or(|seen| {
+                let facts = crate::rules::Facts {
+                    app: name,
+                    bundle: bundle.as_deref(),
+                    title: &seen.title,
+                    subrole: &seen.subrole,
+                    identifier: seen.identifier.as_deref(),
+                };
+                crate::rules::manages(&m.window_rules, &facts)
+            })
         };
-        let placed_dialogs: Vec<PaneId> = m
+        let look_seen =
+            |window: u32| m.slot_looks.iter().flat_map(|look| &look.windows).find(|seen| seen.window == window);
+        let placed_unmanaged: Vec<PaneId> = m
             .panes
             .iter()
-            .filter(|p| matches!(p.kind, Kind::App { window, .. } if dialog(window)))
+            .filter(|p| matches!(p.kind, Kind::App { window, .. } if !managed(m, p.id, look_seen(window))))
             .map(|p| p.id)
             .collect();
+        let was_managed = match &action {
+            Action::WindowGone { pane, was: Some(seen), .. } => managed(m, *pane, Some(seen)),
+            Action::WindowGone { pane, was: None, .. } => !placed_unmanaged.contains(pane),
+            _ => true,
+        };
         let held_before: Vec<(PaneId, u32)> = m
             .panes
             .iter()
@@ -4001,16 +4019,12 @@ impl Run {
             }
         }
         // A pane the user put a standard window in never goes because the window did (slots on).
-        if let Action::WindowGone { pane, was, .. } = &action
+        if let Action::WindowGone { pane, .. } = &action
             && origin == Origin::System
             && m.features.on(Feature::Slots)
             && placed_before.contains(pane)
         {
-            let standard = match was {
-                Some(seen) => seen.subrole.is_empty() || seen.subrole == "AXStandardWindow",
-                None => !placed_dialogs.contains(pane),
-            };
-            ensure!(!standard || m.pane(*pane).is_some(), "{action:?} closed the user's pane {pane}");
+            ensure!(!was_managed || m.pane(*pane).is_some(), "{action:?} closed the user's pane {pane}");
         }
         // The user's place, its window gone: it waits as a slot (`kept_place`).
         let kept = matches!(&action, Action::WindowGone { pane, .. } if origin == Origin::System
