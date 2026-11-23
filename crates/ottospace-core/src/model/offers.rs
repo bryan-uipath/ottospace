@@ -398,7 +398,7 @@ mod tests {
     #[test]
     fn a_waiting_panes_offer_is_kept_by_cmd_d_and_a_repos_click() {
         let mut m = offered();
-        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
         m.update(Action::Focus { pane: 1 });
         assert!(!m.lone_empty(1));
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
