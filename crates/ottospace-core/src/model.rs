@@ -5673,6 +5673,13 @@ impl Model {
 
     fn act(&mut self, action: Action, effects: &mut Vec<Effect>) {
         match action {
+            // An empty pane alone in its tab is the tab's empty state: ⌘D fills it, as a tab with
+            // no pane (`empty::Surface::LonePane`).
+            Action::Split { axis, kind }
+                if kind != Kind::Empty && self.focused.is_some_and(|id| self.lone_empty(id)) =>
+            {
+                drop(self.open(kind, axis, None, effects))
+            }
             Action::Split { axis, kind } => {
                 self.leave(effects);
                 let id = self.add(kind, self.focused, axis);
@@ -10229,6 +10236,21 @@ impl Model {
     }
 
     /// The `id` of the tab that holds `pane`, active tab included.
+    /// An empty pane alone in its tab, offering no window: its hints and ⌘D fill it.
+    pub fn lone_empty(&self, pane: PaneId) -> bool {
+        self.pane(pane).is_some_and(|p| p.kind == Kind::Empty)
+            && !self.offer_waits(pane)
+            && self.tab_panes().iter().any(|panes| panes[..] == [pane])
+    }
+
+    /// The empty place empty pane `pane` is (`empty::empty`).
+    pub fn empty_surface(&self, pane: PaneId) -> crate::empty::Surface {
+        match self.lone_empty(pane) {
+            true => crate::empty::Surface::LonePane,
+            false => crate::empty::Surface::Pane,
+        }
+    }
+
     pub fn tab_of(&self, pane: PaneId) -> Option<u32> {
         let index = self.tab_panes().iter().position(|panes| panes.contains(&pane))?;
         self.tabs.get(index).map(|tab| tab.id)
@@ -12169,11 +12191,17 @@ mod tests {
     }
 
     #[test]
-    fn split_never_fills_an_empty_pane() {
+    fn split_fills_an_empty_pane_only_alone_in_its_tab() {
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let kinds = |m: &Model| m.panes.iter().map(|p| p.kind.clone()).collect::<Vec<_>>();
+        assert_eq!(kinds(&m), [Kind::Empty, Kind::Empty, Kind::Terminal]);
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
-        assert_eq!(m.panes.iter().map(|p| &p.kind).collect::<Vec<_>>(), [&Kind::Empty, &Kind::Terminal]);
+        assert_eq!(kinds(&m), [Kind::Terminal]);
     }
 
     #[test]
@@ -12512,6 +12540,28 @@ mod tests {
             (Some(Kind::Empty), Mode::Normal, true)
         );
         assert_eq!(effects, [Effect::Opened(2)]);
+    }
+
+    /// ⌘T's empty pane, alone in its tab, is that tab's empty state: every hint, and ⌘D fills it.
+    /// Beside another pane an empty one keeps ⌘E alone, and ⌘D splits.
+    #[test]
+    fn an_empty_pane_alone_in_its_tab_is_filled_by_a_terminal() {
+        use crate::empty::Surface;
+        let mut m = Model::default();
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::NewEmptyTab);
+        assert_eq!((m.lone_empty(2), m.empty_surface(2)), (true, Surface::LonePane));
+        assert_eq!(m.update(Action::Split { axis: Right, kind: Kind::Terminal }), [Effect::Opened(2)]);
+        assert_eq!(
+            (m.layout.as_ref().map(Node::leaves), m.pane(2).map(|p| p.kind.clone())),
+            (Some(vec![2]), Some(Kind::Terminal))
+        );
+        // An empty pane beside a terminal: ⌘D splits beside it.
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        assert_eq!((m.lone_empty(3), m.empty_surface(3)), (false, Surface::Pane));
+        m.update(Action::Split { axis: Down, kind: Kind::Terminal });
+        assert_eq!(m.layout.as_ref().map(Node::leaves), Some(vec![2, 3, 4]));
+        assert_eq!(m.pane(3).map(|p| p.kind.clone()), Some(Kind::Empty));
     }
 
     #[test]
@@ -18285,7 +18335,9 @@ mod tests {
     fn a_drop_on_an_empty_pane_splits_or_swaps_it_and_leaves_it_empty() {
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
-        term(&mut m);
+        // A terminal beside it (⌘D would fill it: it is alone).
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: Some(2) });
         m.update(Action::NewTab);
         term(&mut m);
         // An edge of the empty pane 1: 3 lands beside it. It is not put into it, as `Open` would.
@@ -18505,7 +18557,8 @@ mod tests {
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Empty });
         assert_eq!(m.update(Action::ToggleVisual), [], "not a terminal");
-        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Right, kind: Kind::Empty });
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: Some(2) });
         assert_eq!(m.update(Action::ToggleVisual), [Effect::Visual { pane: 2, on: true }]);
         assert_eq!((m.mode(), m.keyboard_terminal()), (Mode::Visual, None));
         for action in [

@@ -2752,6 +2752,27 @@ fn every_empty_place_shows_the_one_empty_state() {
     assert_eq!((kind["type"].as_str(), pane_ids(&reply).len()), (Some("terminal"), ids_now.len()), "{reply}");
 }
 
+/// ⌘T's tab holds one empty pane: alone, it is the tab's empty state, its three hints, and ⌘D
+/// fills it with a terminal instead of splitting beside it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_cmd_t_tabs_empty_pane_shows_every_hint_and_cmd_d_fills_it() {
+    let otto = Otto::launch("lone-empty");
+    otto.call(json!({"cmd": "split"}));
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-t", "as": "user"}));
+    let pane = reply["state"]["focused"].as_u64().expect("the new tab's pane");
+    otto.drawn();
+    let drawn: Vec<String> = otto.controls().into_iter().map(|(id, _)| id).collect();
+    for id in ["open_app", "terminal", "new_task"] {
+        assert!(drawn.contains(&format!("empty:{pane}:{id}")), "{id} in {drawn:?}");
+    }
+    let before = pane_ids(&reply).len();
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-d", "as": "user"}));
+    let kind =
+        reply["state"]["panes"].as_array().unwrap().iter().find(|p| p["id"] == json!(pane)).unwrap()["kind"].clone();
+    assert_eq!((kind["type"].as_str(), pane_ids(&reply).len()), (Some("terminal"), before), "{reply}");
+}
+
 /// The owner's design: Home's heading is its house and name; an empty workspace is the floor
 /// and three key caps, Open an app, Terminal, New task, whose ⌘N row starts a task there.
 #[test]

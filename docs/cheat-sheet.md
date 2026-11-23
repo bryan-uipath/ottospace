@@ -32,7 +32,7 @@ ottospace            # opens on the Repos list
 | Read a pane's header | A terminal's directory, and its program while one runs (`app-api · cargo test`); an app's icon and window title |
 | Rearrange with the mouse | Drag a pane by its header: onto another pane's edge to split there, its centre to swap, a tab to move there. Esc cancels. Dragging an app you are in parks it: click it to go back in |
 | Close the pane | ⌘W (in the drawer's conversation: Later) |
-| New tab | ⌘T |
+| New tab | ⌘T: its empty pane offers Open an app, Terminal and New task; ⌘D fills it with a terminal |
 | Hide ottospace | ⌘H |
 | Quit | ⌘Q, or the window's close button. Asks first while a terminal or an agent runs ("Quitting ends these:") or a draft has words ("Not sent yet"; click a row to go to it): ↵, Q or ⌘Q again quits; Esc, any other key or shortcut cancels and does nothing else. Shells at a prompt and drafts of only spaces do not count. Dock ▸ Quit and logout do not ask |
 | Start empty next time | File ▸ Start Fresh. Otherwise the tabs, splits, the tab on show and the drawer come back after quitting (`restore_layout`) |
