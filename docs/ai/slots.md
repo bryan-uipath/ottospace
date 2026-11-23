@@ -185,7 +185,7 @@ pane closed and the tab went. Expected: the tab keeps its places, each waiting a
 so the next meeting's windows fill them. So, with `slots` on:
 
 - **Its window closing makes it a slot.** An app pane whose window the user put there (the picker,
-  ⌘E, Bring it here, a restored layout) does not close when the window goes or its app quits: it
+  ⌘E, Put it here, a restored layout) does not close when the window goes or its app quits: it
   becomes a slot (`WindowGone`, `Model::kept_place`), Away then Empty, or Absent, as any slot.
 - **What it waits for:** the app, and the window's `AXIdentifier` as read when it was hosted
   (`Action::WindowGone::was`): Zoom's meeting window is `zm.meeting.window.main`, and so is the next
@@ -203,7 +203,8 @@ so the next meeting's windows fill them. So, with `slots` on:
 - **Drawn (the owner, 2026-11-23):** a dashed outline inset in the pane, the app's icon (dimmed),
   `Waiting for a Zoom window`, the rule in the dialog's words, `Offers it here when one opens` (or
   Takes); no keys and no ⌘E hint (⌘E still works). Offering: a solid accent outline, the window's
-  title and one button, Put it here. A small pane: the icon and one line. The icon is kept by bundle
+  title and one button, Put it here; Not this one and `N more match` stay as quiet words under it.
+  A small pane: the icon and one line (and Put it here while it offers). The icon is kept by bundle
   id (`slot_icon.rs`, `<home>/icons`, 64 at most, read again when the app's bundle is newer); the
   core holds only the bundle id, and the icon is never in the state.
 - The model keeps the panes that are not the user's (`not_placed`, `#[serde(skip)]`), set after

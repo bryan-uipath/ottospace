@@ -20,36 +20,30 @@ fn file_name(bundle: &str) -> Option<String> {
 /// The icon of the app with bundle id `bundle`, `pixels` wide: the kept one while the app is not
 /// newer, else drawn from the installed app and kept in `dir`. None: neither.
 pub(crate) fn png(bundle: &str, dir: Option<&Path>, pixels: u8) -> Option<Vec<u8>> {
-    let kept = dir.zip(file_name(bundle)).map(|(dir, name)| dir.join(name));
+    let name = file_name(bundle);
+    let kept = dir.zip(name.as_deref()).map(|(dir, name)| dir.join(name));
     let app = icon::app_of_bundle(bundle);
     let changed = |path: &Path| fs::metadata(path).and_then(|meta| meta.modified()).ok();
     let (app_at, kept_at) = (app.as_deref().and_then(changed), kept.as_deref().and_then(changed));
+    // A kept file cut short (a crash) is no PNG: drawn again.
     if let (Some(kept), Some(kept_at)) = (&kept, kept_at)
         && app_at.is_none_or(|app_at| app_at <= kept_at)
         && let Ok(png) = fs::read(kept)
+        && png.starts_with(PNG)
     {
         return Some(png);
     }
     let png = icon::png_of_app(app.as_deref()?, pixels)?;
-    if let (Some(dir), Some(kept)) = (dir, kept) {
-        keep(dir, &kept, &png);
+    if let (Some(dir), Some(name)) = (dir, name)
+        && crate::config::write_private(dir, &name, &png).is_ok()
+    {
+        prune(dir, KEEP);
     }
     Some(png)
 }
 
-/// Writes `png` at `path` in `dir` (private, whole or not at all), then drops the oldest past `KEEP`.
-fn keep(dir: &Path, path: &Path, png: &[u8]) {
-    use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-    let _ = fs::DirBuilder::new().recursive(true).mode(0o700).create(dir);
-    let part = path.with_extension("png.part");
-    let open = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(&part);
-    let written = open.and_then(|mut file| std::io::Write::write_all(&mut file, png));
-    if written.is_err() || fs::rename(&part, path).is_err() {
-        let _ = fs::remove_file(&part);
-        return;
-    }
-    prune(dir, KEEP);
-}
+/// A PNG file's first bytes.
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\n";
 
 /// Leaves the `most` newest icons in `dir`.
 fn prune(dir: &Path, most: usize) {
@@ -68,15 +62,7 @@ fn prune(dir: &Path, most: usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A folder of the test's own, removed when it ends, pass or fail.
-    struct Temp(std::path::PathBuf);
-
-    impl Drop for Temp {
-        fn drop(&mut self) {
-            let _ = fs::remove_dir_all(&self.0);
-        }
-    }
+    use crate::scratch::Scratch;
 
     #[test]
     fn an_icon_is_kept_by_its_bundle_id_only() {
@@ -87,17 +73,20 @@ mod tests {
     }
 
     #[test]
-    fn a_kept_icon_is_read_back_and_the_oldest_go_past_the_most() {
-        let dir = Temp(std::env::temp_dir().join(format!("ottospace-slot-icon-{}", std::process::id())));
+    fn a_kept_icon_is_read_back_unless_cut_short_and_the_oldest_go_past_the_most() {
+        let dir = Scratch::dir(&format!("ottospace-slot-icon-{}", std::process::id()));
         let not_installed = "com.example.ottospace.none";
-        let path = dir.0.join(file_name(not_installed).unwrap_or_default());
-        keep(&dir.0, &path, b"png");
+        let name = file_name(not_installed).unwrap_or_default();
+        let icon = [PNG, b"rest"].concat();
+        crate::config::write_private(&dir, &name, &icon).ok();
         // Not installed: the kept one.
-        assert_eq!(png(not_installed, Some(&dir.0), 48).as_deref(), Some(&b"png"[..]));
+        assert_eq!(png(not_installed, Some(&dir), 48), Some(icon));
+        crate::config::write_private(&dir, &name, b"cut").ok();
+        assert_eq!(png(not_installed, Some(&dir), 48), None, "no PNG, and nothing to draw it from");
         for n in 0..3 {
-            keep(&dir.0, &dir.0.join(format!("app{n}.png")), b"x");
+            crate::config::write_private(&dir, &format!("app{n}.png"), b"x").ok();
         }
-        prune(&dir.0, 2);
-        assert_eq!(fs::read_dir(&dir.0).map(Iterator::count).unwrap_or_default(), 2);
+        prune(&dir, 2);
+        assert_eq!(fs::read_dir(&dir).map(Iterator::count).unwrap_or_default(), 2);
     }
 }

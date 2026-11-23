@@ -203,6 +203,8 @@ impl Workspace {
                 return true;
             }
             ("slot-accept", _, Some(pane)) => Action::SlotAccept { pane },
+            ("slot-decline", _, Some(pane)) => Action::SlotDecline { pane },
+            ("slot-next", _, Some(pane)) => Action::SlotNext { pane },
             ("slot-dialog", name, _) => match self.dialog_action(name) {
                 Some(action) => action,
                 None => return false,
@@ -384,12 +386,15 @@ impl Workspace {
             Matching::Automatic => "Takes it here when one opens",
         };
         let size = self.cells.get(&pane).map(|cell| cell.get().size).unwrap_or_default();
-        let small = size.width < px(260.) || size.height < px(180.);
+        // Not laid out yet (a first frame): the full one.
+        let small = size.width > px(0.) && (size.width < px(260.) || size.height < px(180.));
         let line = |text: String, colour: u32| div().text_sm().text_color(rgb(colour)).text_center().child(text);
         let icon = self.slot_icon(run.bundle.as_deref(), if small { 20. } else { 40. }, offered.is_none());
         let mut body = div().flex().items_center().gap_2().child(icon);
         if small {
-            body = body.flex_row().px_2().child(line(headline, theme::TEXT));
+            // One line, cut: a narrow pane never wraps it under the icon.
+            let one = line(headline, theme::TEXT).min_w_0().whitespace_nowrap().overflow_hidden().text_ellipsis();
+            body = body.flex_row().px_2().max_w_full().child(one);
         } else {
             body = body.flex_col().px_4().child(line(headline, theme::TEXT));
             body = body.child(line(run.slot.words(&app), theme::MUTED));
@@ -404,6 +409,26 @@ impl Workspace {
                 cx.listener(move |this, _, window, cx| this.offer_send(Action::SlotAccept { pane }, window, cx)),
             );
             body = body.child(accept);
+            // Quieter: pass over it, or the next that matches.
+            let quiet = |name: &str, label: String, action: Action, cx: &mut Context<Self>| {
+                let id = format!("{name}:{pane}");
+                div()
+                    .id(SharedString::from(id.clone()))
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .child(label)
+                    .child(self.controls.mark(id))
+                    .on_click(cx.listener(move |this, _, window, cx| this.offer_send(action.clone(), window, cx)))
+            };
+            let mut more = div().flex().gap_3();
+            more = more.child(quiet("slot-decline", "Not this one".into(), Action::SlotDecline { pane }, cx));
+            if run.matches > 1 {
+                let next = format!("{} more match", run.matches - 1);
+                more = more.child(quiet("slot-next", next, Action::SlotNext { pane }, cx));
+            }
+            body = body.children((!small).then_some(more));
         }
         // Waiting: dashed and quiet; offering: solid, in the accent. Drawn still, so Reduce Motion has nothing to stop.
         let outline = div().absolute().inset(px(10.)).rounded_md().border_1().flex().items_center().justify_center();
