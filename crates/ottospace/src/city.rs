@@ -25,7 +25,7 @@ use ottospace_core::{status_bar, theme};
 
 use crate::city_gpu::{Gpu, Picture};
 use crate::home::Floor;
-use crate::{Workspace, rect};
+use crate::{FADED, Workspace, rect};
 
 /// How long `git ls-files` may take, how much it may say, and how many files a city has. Past
 /// any of them there is no city: half of one would put files where the whole one does not.
@@ -243,7 +243,7 @@ struct Name {
 /// scene and plan it shows, for what the pointer is over.
 struct Made {
     key: Key,
-    image: Arc<RenderImage>,
+    image: Shown,
     lit: Vec<([f32; 4], (f32, f32))>,
     names: Vec<Name>,
     scene: Scene,
@@ -254,6 +254,20 @@ struct Made {
     /// When a place last painted it: the newest unused are kept (`KEPT_PICTURES`).
     used: Instant,
 }
+
+/// A picture as GPUI paints it: an image it uploads (read back), or the surface it was rendered
+/// into (macOS: no copy).
+enum Shown {
+    Image(Arc<RenderImage>),
+    Surface(Surface),
+}
+
+/// A pixel buffer, sent from the picture's thread.
+struct Surface(core_video::pixel_buffer::CVPixelBuffer);
+
+// SAFETY: a CVPixelBuffer is reference counted by CoreVideo, which is thread-safe; the picture's
+// thread is done with it (rendered and waited on) before it is sent.
+unsafe impl Send for Surface {}
 
 /// One empty place's city, as the last frame drew it.
 #[derive(Default)]
@@ -376,10 +390,14 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Option<(Key, Scene)>
         _ => scene::scene(plan, &lit, w as f32 / h as f32),
     };
     *last = Some((standing, scene.clone()));
-    let Picture { width, height, bgra } = gpu.render(&scene, w, h, f32::from(key.rise) / 1000., key.glass)?;
+    let image = match gpu.render(&scene, w, h, f32::from(key.rise) / 1000., key.glass, true)? {
+        Picture::Shared(buffer) => Shown::Surface(Surface(buffer)),
+        Picture::Bytes { width, height, bgra } => {
+            let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
+            Shown::Image(Arc::new(RenderImage::new([image::Frame::new(image)])))
+        }
+    };
     let camera = scene.camera.ok_or("no camera")?;
-    let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
-    let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
     // Each lit building's bounds, and the middle of its top (never hidden).
     let lit = (scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))))
         .filter_map(|b| {
@@ -547,7 +565,9 @@ impl Workspace {
             match picture {
                 Ok(made) => {
                     if let Some(old) = drawn.pictures.insert(key, made) {
-                        drawn.retired.push(old.image);
+                        if let Shown::Image(image) = old.image {
+                            drawn.retired.push(image);
+                        }
                     }
                     // Another scene: the box under each pointer, found again in it.
                     let found: Vec<(Floor, Option<usize>)> = (drawn.places.iter())
@@ -600,7 +620,9 @@ impl Workspace {
             drawn.pictures.keys().filter(|key| key.rise < 1000 && !used.contains(*key)).cloned().collect();
         for key in unused.into_iter().skip(KEPT_PICTURES).map(|(_, key)| key).chain(rises) {
             if let Some(old) = drawn.pictures.remove(&key) {
-                drawn.retired.push(old.image);
+                if let Shown::Image(image) = old.image {
+                    drawn.retired.push(image);
+                }
             }
         }
         drawn.failed.retain(|key, _| used.iter().any(|used| used.standing() == *key));
@@ -634,6 +656,8 @@ impl Workspace {
             })
             .collect();
         let surface = floor.surface();
+        // Its pane faded while another is live (`FADED`).
+        let dim = matches!(at, At::Pane(pane) if self.model.live.is_some_and(|live| live != pane));
         let (dir, drawn, jobs) = (city.dir.to_string(), self.city_drawn.clone(), self.city_painter.jobs.clone());
         let (home, hints) = (self.home.clone(), self.home.clone());
         let shows = {
@@ -699,7 +723,7 @@ impl Workspace {
                 drawn
             },
             // The hints as this frame laid them out.
-            move |_, drawn: Shared, window, cx| paint(&drawn, floor, home.borrow().hints_at(floor), window, cx),
+            move |_, drawn: Shared, window, cx| paint(&drawn, floor, home.borrow().hints_at(floor), dim, window, cx),
         );
         let picture = picture.absolute().size_full();
         if shows {
@@ -801,7 +825,7 @@ fn area(floor: Bounds<Pixels>, hints: Bounds<Pixels>) -> Bounds<Pixels> {
 /// The picture made for this folder, as large as its area (a stale one stretched until the new
 /// one comes); a backing behind the hints, so they read over any building; and the root's
 /// folders' names, none behind the hints.
-fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Window, cx: &mut gpui::App) {
+fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, dim: bool, window: &mut Window, cx: &mut gpui::App) {
     let mut drawn = drawn.borrow_mut();
     let Some(place) = drawn.places.get_mut(&floor) else { return };
     // Nothing of an earlier paint is on show until this one draws it.
@@ -829,7 +853,17 @@ fn paint(drawn: &Shared, floor: Floor, hints: Bounds<Pixels>, window: &mut Windo
         window.request_animation_frame();
     }
     let shown = made.key.clone();
-    let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
+    match &made.image {
+        Shown::Image(image) => drop(window.paint_image(bounds, Corners::default(), image.clone(), 0, false)),
+        Shown::Surface(Surface(buffer)) => {
+            window.paint_surface(bounds, buffer.clone());
+            // GPUI gives a surface no element opacity: a faded pane's city is dimmed by the
+            // background over it, at an alpha that opacity scales to 1 - FADED.
+            if dim {
+                window.paint_quad(fill(bounds, Hsla::from(rgb(theme::BACKGROUND)).opacity((1. - FADED) / FADED)));
+            }
+        }
+    }
     // A first picture after the lattice waited fades in from the background; one made already
     // (a tab come back) shows at once, as under Reduce Motion.
     let fade = fade.or_else(|| (waited && first_ms.is_none() && !rising).then(Instant::now));

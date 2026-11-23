@@ -196,6 +196,17 @@ in over 250 ms instead. Reduce Motion: at once. No frames at rest (`counts.city_
 `counts.city_fade_frames`). The newest two pictures no place shows are kept, so a tab shown
 again paints its city at once, with no rise. `scripts/bench`: `city_2000_ms`, `city_20000_ms`.
 
+**No read back** (the owner's word, 2026-11-21: "render to a shared texture"). GPUI 0.2.2 paints a
+surface only as biplanar YCbCr (video); ottospace uses a fork with one patch,
+`bryan-uipath/gpui` (zed-industries/zed@69e21302 `crates/gpui`, pinned in `[patch.crates-io]`),
+that paints a 32-bit BGRA pixel buffer too, by its alpha. On macOS the city renders straight into
+an IOSurface-backed pixel buffer (a Metal texture over it, wrapped for wgpu through its hal), one
+per picture, and GPUI paints it: no copy to the CPU and no upload to GPUI's atlas. Elsewhere, or
+if a buffer cannot be made, the picture is read back as before (`city_gpu::Picture`). The two
+are the same, pixel for pixel (`a_shared_picture_is_the_read_back_one`). Offscreen per frame at
+1600×1000 the render saves about 0.3 to 0.6 ms; the main thread no longer copies a picture into
+the atlas each frame (6.4 MB at 1600×1000, 25 MB at 3200×2000), not measurable offscreen.
+
 ## The camera (proposed; the first slice has none: the whole repository, fixed)
 
 The map has a view, a centre and a zoom, apart from the layout, which never changes. A stable

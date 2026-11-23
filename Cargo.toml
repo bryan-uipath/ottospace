@@ -15,6 +15,11 @@ unused = { level = "warn", priority = -1 }
 
 # Smaller build folders: several worktrees build at once. Line numbers in backtraces stay for
 # our crates; dependencies carry no debug info.
+# gpui 0.2.2 with one patch: a surface may be a BGRA pixel buffer (the code city's picture, no
+# read back). https://github.com/bryan-uipath/gpui, a fork of zed-industries/zed@69e21302 crates/gpui.
+[patch.crates-io]
+gpui = { git = "https://github.com/bryan-uipath/gpui", rev = "55ba121d0927a8fd99f7949eadd00f9e8d25a458" }
+
 [profile.dev]
 debug = "line-tables-only"
 

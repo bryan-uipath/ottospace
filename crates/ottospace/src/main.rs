@@ -598,6 +598,8 @@ struct Filled {
 /// Height of the top bar (the native title strip, so all of it drags the window), and the width
 /// it keeps clear on the left for the traffic lights.
 const TOP_BAR: f32 = 40.;
+/// The opacity of a pane while another is live.
+const FADED: f32 = 0.5;
 /// The second row: the selected space's tabs.
 const SPACE_TABS: f32 = 30.;
 /// Height of the status bar, at the window's foot.
@@ -7343,7 +7345,7 @@ impl Workspace {
             .border_1()
             // Neutral on every pane: the header's line marks focus (`theme::focus_line`).
             .border_color(rgb(theme::BORDER))
-            .when(faded, |d| d.opacity(0.5))
+            .when(faded, |d| d.opacity(FADED))
             .relative()
             .when(bar > 0.0, |d| d.p(px(2.)))
             .child(

@@ -1,17 +1,18 @@
 //! The code city's picture: the core's scene (`ottospace_core::scene`) rendered offscreen on
 //! the GPU (wgpu, whichever backend the platform has), with a depth buffer, 4× multisampling, a
-//! light from above, edge lines and fog into the background, then read back as BGRA for GPUI to
-//! paint. Run
-//! on a thread of its own; a still picture, made again only when the scene or its size changes.
+//! light from above, edge lines and fog into the background. On macOS rendered straight into an
+//! IOSurface that GPUI paints as a surface (`Picture::Shared`, a patched GPUI that takes BGRA);
+//! elsewhere, or without one, read back as BGRA bytes (`Picture::Bytes`). Run on a thread of its
+//! own; made again only when the scene, its size or its rise changes.
 
 use ottospace_core::scene::{Block, Kind, Scene};
 use ottospace_core::theme;
 
-/// The picture, `width` × `height` pixels, BGRA, rows packed.
-pub struct Picture {
-    pub width: u32,
-    pub height: u32,
-    pub bgra: Vec<u8>,
+/// A picture made: read back, `width` × `height` pixels, BGRA, rows packed; or (macOS) the
+/// IOSurface-backed BGRA pixel buffer it was rendered into, painted by GPUI with no copy.
+pub enum Picture {
+    Bytes { width: u32, height: u32, bgra: Vec<u8> },
+    Shared(core_video::pixel_buffer::CVPixelBuffer),
 }
 
 const SAMPLES: u32 = 4;
@@ -219,12 +220,21 @@ impl Gpu {
 
     /// `scene` as a picture `width` × `height` pixels, `rise` (0 to 1) of the way through its
     /// buildings' rise (1: standing), its buildings of glass or not, or why there is none.
-    pub fn render(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {
+    /// `shared`: into an IOSurface if one can be made (macOS), else read back.
+    pub fn render(
+        &self,
+        scene: &Scene,
+        width: u32,
+        height: u32,
+        rise: f32,
+        glass: bool,
+        shared: bool,
+    ) -> Result<Picture, String> {
         // An error of the GPU's (out of memory, a lost device) fails the picture; uncaught, wgpu
         // panics.
         let memory = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let valid = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let picture = self.draw(scene, width, height, rise, glass);
+        let picture = self.draw(scene, width, height, rise, glass, shared);
         let errors = [pollster::block_on(valid.pop()), pollster::block_on(memory.pop())];
         match errors.into_iter().flatten().next() {
             Some(error) => Err(format!("render: {error}")),
@@ -232,7 +242,15 @@ impl Gpu {
         }
     }
 
-    fn draw(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {
+    fn draw(
+        &self,
+        scene: &Scene,
+        width: u32,
+        height: u32,
+        rise: f32,
+        glass: bool,
+        shared: bool,
+    ) -> Result<Picture, String> {
         let camera = scene.camera.ok_or("no camera")?;
         let limit = self.device.limits().max_texture_dimension_2d;
         if width == 0 || height == 0 || width > limit || height > limit {
@@ -254,7 +272,12 @@ impl Gpu {
         };
         let target = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let samples = texture(FORMAT, SAMPLES, target);
-        let resolved = texture(FORMAT, 1, target | wgpu::TextureUsages::COPY_SRC);
+        // Resolved into an IOSurface GPUI paints, or into a texture read back.
+        let surface = shared.then(|| shared_target(device, width, height)).flatten();
+        let resolved = match &surface {
+            Some((_, texture)) => texture.clone(),
+            None => texture(FORMAT, 1, target | wgpu::TextureUsages::COPY_SRC),
+        };
         let depth = texture(DEPTH, SAMPLES, target);
 
         // The frame: the camera, the eye, the fog (from a bit before the target to far past it,
@@ -290,14 +313,6 @@ impl Gpu {
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
         });
 
-        // Rows of the read back are padded to 256 bytes.
-        let row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-        let read = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: u64::from(row) * u64::from(height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let view = samples.create_view(&Default::default());
@@ -331,6 +346,20 @@ impl Gpu {
             pass.set_pipeline(&self.glass);
             pass.draw(0..36, solid_count..scene.blocks.len() as u32);
         }
+        if let Some((buffer, _)) = surface {
+            self.queue.submit([encoder.finish()]);
+            // Done before GPUI samples it: each picture has a surface of its own.
+            device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("poll: {e}"))?;
+            return Ok(Picture::Shared(buffer));
+        }
+        // Read back: rows of the read back are padded to 256 bytes.
+        let row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let read = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: u64::from(row) * u64::from(height),
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
         encoder.copy_texture_to_buffer(
             resolved.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
@@ -350,7 +379,7 @@ impl Gpu {
         for line in padded.chunks(row as usize) {
             bgra.extend_from_slice(&line[..width as usize * 4]);
         }
-        Ok(Picture { width, height, bgra })
+        Ok(Picture::Bytes { width, height, bgra })
     }
 }
 
@@ -360,6 +389,68 @@ fn instance(block: &Block, delay: f32, alpha: f32) -> [f32; 16] {
     let glows = if matches!(block.kind, Kind::Lit(_)) { 1. } else { 0. };
     let sides = if matches!(block.kind, Kind::Plate(_)) { 0.25 } else { 1. };
     [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2], delay, sides, alpha]
+}
+
+/// An IOSurface-backed BGRA pixel buffer `width` × `height` and a wgpu texture over it, on
+/// wgpu's own Metal device; none off Metal, or if any step fails (then the picture is read back).
+fn shared_target(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> Option<(core_video::pixel_buffer::CVPixelBuffer, wgpu::Texture)> {
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+    use core_video::pixel_buffer::{
+        CVPixelBuffer, kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey,
+        kCVPixelFormatType_32BGRA,
+    };
+    use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage};
+    let key = |k| unsafe { CFString::wrap_under_get_rule(k) };
+    let none: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[]);
+    let options = CFDictionary::from_CFType_pairs(&[
+        (key(unsafe { kCVPixelBufferIOSurfacePropertiesKey }), none.as_CFType()),
+        (key(unsafe { kCVPixelBufferMetalCompatibilityKey }), CFBoolean::true_value().as_CFType()),
+    ]);
+    let buffer = CVPixelBuffer::new(kCVPixelFormatType_32BGRA, width as usize, height as usize, Some(&options)).ok()?;
+    let surface =
+        unsafe { core_video::pixel_buffer_io_surface::CVPixelBufferGetIOSurface(buffer.as_concrete_TypeRef()) };
+    // SAFETY: the buffer holds its IOSurface while it lives, and the texture retains it too.
+    let surface = unsafe { (surface as *const objc2_io_surface::IOSurfaceRef).as_ref() }?;
+    let hal = unsafe { device.as_hal::<wgpu::hal::api::Metal>() }?;
+    let descriptor = unsafe {
+        MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+            MTLPixelFormat::BGRA8Unorm,
+            width as usize,
+            height as usize,
+            false,
+        )
+    };
+    descriptor.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+    let raw = hal.raw_device().newTextureWithDescriptor_iosurface_plane(&descriptor, surface, 0)?;
+    let copy = wgpu::hal::CopyExtent { width, height, depth: 1 };
+    let raw =
+        unsafe { wgpu::hal::metal::Device::texture_from_raw(raw, FORMAT, MTLTextureType::Type2D, 1, 1, copy, None) };
+    drop(hal);
+    let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+    let texture = unsafe {
+        device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+            raw,
+            &wgpu::TextureDescriptor {
+                label: Some("city surface"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            },
+            wgpu::TextureUses::COLOR_TARGET,
+        )
+    };
+    Some((buffer, texture))
 }
 
 fn bytes(values: &[f32]) -> Vec<u8> {
@@ -402,7 +493,7 @@ mod tests {
             let built = started.elapsed();
             let (w, h) = (1600, 1000);
             let started = std::time::Instant::now();
-            let picture = gpu.render(&scene, w, h, 1., true).unwrap();
+            let picture = bytes_of(gpu.render(&scene, w, h, 1., true, false).unwrap());
             let rendered = started.elapsed();
             println!(
                 "{count} files: layout {laid:.1?}, scene {built:.1?} ({} boxes), render and read back {w}×{h} {rendered:.1?}",
@@ -416,7 +507,7 @@ mod tests {
             let mut slowest = std::time::Duration::ZERO;
             for step in 0..=12 {
                 let frame = std::time::Instant::now();
-                let picture = gpu.render(&scene, w, h, step as f32 / 12., true).unwrap();
+                let picture = bytes_of(gpu.render(&scene, w, h, step as f32 / 12., true, false).unwrap());
                 slowest = slowest.max(frame.elapsed());
                 if let (6, Some(dir)) = (step, std::env::var_os("CITY_PICTURE")) {
                     std::fs::write(std::path::Path::new(&dir).join(format!("city-{count}-rising.bmp")), bmp(&picture))
@@ -424,6 +515,15 @@ mod tests {
                 }
             }
             println!("  its rise: 13 frames in {:.1?}, the slowest {slowest:.1?}", started.elapsed());
+            // Into an IOSurface (macOS), no read back: the same frames.
+            let started = std::time::Instant::now();
+            let mut slowest = std::time::Duration::ZERO;
+            for step in 0..=12 {
+                let frame = std::time::Instant::now();
+                drop(gpu.render(&scene, w, h, step as f32 / 12., true, true).unwrap());
+                slowest = slowest.max(frame.elapsed());
+            }
+            println!("  shared: 13 frames in {:.1?}, the slowest {slowest:.1?}", started.elapsed());
         }
     }
 
@@ -443,7 +543,7 @@ mod tests {
         let face = at((building.min[2] + building.max[2]) / 2.);
         for scale in [1, 2] {
             let (w, h) = (320 * scale, 200 * scale);
-            let p = gpu.render(&scene, w, h, 1., false).unwrap();
+            let p = bytes_of(gpu.render(&scene, w, h, 1., false, false).unwrap());
             let px = |v: f32, n: u32| (v * n as f32) as u32;
             let light = |(x, y): (f32, f32)| {
                 let at = ((px(y, h) * w + px(x, w)) * 4) as usize;
@@ -458,7 +558,47 @@ mod tests {
     }
 
     /// A 32-bit BMP, top row first: enough to look at a picture.
-    fn bmp(p: &Picture) -> Vec<u8> {
+    /// A picture read back.
+    struct Bytes {
+        width: u32,
+        height: u32,
+        bgra: Vec<u8>,
+    }
+
+    fn bytes_of(picture: Picture) -> Bytes {
+        match picture {
+            Picture::Bytes { width, height, bgra } => Bytes { width, height, bgra },
+            Picture::Shared(_) => panic!("asked for bytes"),
+        }
+    }
+
+    /// A picture rendered into an IOSurface is the read back one, pixel for pixel: the city looks
+    /// the same either way. No GPU: nothing to check.
+    #[test]
+    fn a_shared_picture_is_the_read_back_one() {
+        let Ok(gpu) = Gpu::new() else { return eprintln!("no GPU: skipped") };
+        let files: Vec<(String, u64)> = (0..200).map(|i| (format!("d{}/f{i}.rs", i % 5), 300 + i * 97)).collect();
+        let plan = atlas::atlas(&atlas::repo(&files));
+        let lit = [(plan.places.iter().rev().find(|p| !p.group).unwrap().id.as_str(), 0xff6467)];
+        let scene = ottospace_core::scene::scene(&plan, &lit, 1.6);
+        let (w, h) = (640, 400);
+        let read = bytes_of(gpu.render(&scene, w, h, 1., true, false).unwrap());
+        // A GPU that cannot share a surface reads back: nothing to compare.
+        let Picture::Shared(buffer) = gpu.render(&scene, w, h, 1., true, true).unwrap() else {
+            return eprintln!("no shared surface: skipped");
+        };
+        assert_eq!((buffer.get_width(), buffer.get_height()), (w as usize, h as usize));
+        assert_eq!(buffer.lock_base_address(1), 0);
+        let row = buffer.get_bytes_per_row();
+        // SAFETY: locked for reading, `row` × `h` bytes from its base.
+        let all = unsafe { std::slice::from_raw_parts(buffer.get_base_address() as *const u8, row * h as usize) };
+        let packed: Vec<u8> = all.chunks(row).flat_map(|line| &line[..w as usize * 4]).copied().collect();
+        buffer.unlock_base_address(1);
+        let differ = packed.iter().zip(&read.bgra).filter(|(a, b)| a != b).count();
+        assert_eq!(differ, 0, "{differ} bytes differ");
+    }
+
+    fn bmp(p: &Bytes) -> Vec<u8> {
         let size = 54 + p.bgra.len() as u32;
         let mut out = b"BM".to_vec();
         for v in [size, 0, 54, 40, p.width, (-(p.height as i32)) as u32] {

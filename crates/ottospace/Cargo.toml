@@ -68,6 +68,10 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "m
 # A rendered picture as GPUI's image (`RenderImage`): same version gpui uses, in the lock already.
 image = { version = "0.25", default-features = false }
 pollster = "0.4"
+# The city rendered straight into an IOSurface GPUI paints (`city_gpu::Shared`): wgpu's own Metal
+# types (same versions as wgpu-hal), no read back.
+objc2-metal = { version = "0.3", default-features = false, features = ["std", "MTLDevice", "MTLTexture", "MTLResource", "MTLPixelFormat", "MTLTypes", "objc2-io-surface"] }
+objc2-io-surface = { version = "0.3", default-features = false, features = ["std", "IOSurfaceRef", "objc2"] }
 
 [dev-dependencies]
 serde_json = "1"
