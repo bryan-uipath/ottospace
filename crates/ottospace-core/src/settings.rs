@@ -198,8 +198,8 @@ pub struct Settings {
     /// Feature flags by name, e.g. `{ "marks": true }`: see `features`. One not named keeps its default.
     #[serde(default)]
     pub features: std::collections::BTreeMap<String, bool>,
-    /// Retired: ⌘V never asks. Still read, so a file that has it is not refused; the status bar
-    /// says to remove it.
+    /// Retired: ⌘V never asks. Still read, so a file that has it is not refused; a toast says to
+    /// remove it.
     #[serde(default)]
     pub paste_confirm: Option<serde::de::IgnoredAny>,
     /// For working on ottospace itself: `{ "ottospace_repo": "~/code/ottospace" }`.

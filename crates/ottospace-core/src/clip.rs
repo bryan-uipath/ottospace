@@ -89,18 +89,21 @@ impl Clip {
     }
 
     /// What pulses in a terminal scrolled `back` lines, `rows` by `cols`: the copied cells on
-    /// screen. A paste, or a copy with none on screen (scrolled away), lights the border alone:
-    /// never a fill over the text.
-    pub fn lights(&self, back: usize, rows: usize, cols: usize) -> Lights {
-        let Some([(first, from), (last, to)]) = self.range.filter(|_| self.verb != Verb::Pasted) else {
+    /// screen, where its selection is now (`live`: moved with new output) else where it was. A
+    /// paste, or a copy with none on screen (scrolled away), lights the border alone: never a fill
+    /// over the text.
+    pub fn lights(&self, live: Option<[(i32, usize); 2]>, back: usize, rows: usize, cols: usize) -> Lights {
+        let range = live.or(self.range).filter(|_| self.range.is_some() && self.verb != Verb::Pasted);
+        let Some([(first, from), (last, to)]) = range else {
             return Lights { cells: Vec::new(), ring: true };
         };
         let cells: Vec<_> = (first..=last)
             .filter_map(|line| {
                 let row = usize::try_from(line + back as i32).ok().filter(|row| *row < rows)?;
                 let a = if line == first { from } else { 0 };
-                let b = if line == last { to } else { cols.saturating_sub(1) };
-                Some((row, a.min(cols.saturating_sub(1)), b.min(cols.saturating_sub(1))))
+                let b = if line == last { to } else { usize::MAX };
+                // Past a narrowed grid's edge: nothing of it shows.
+                (a < cols).then(|| (row, a, b.min(cols - 1)))
             })
             .collect();
         Lights { ring: cells.is_empty(), cells }
@@ -238,17 +241,24 @@ mod tests {
     fn a_copy_lights_its_cells_on_screen_else_the_border() {
         let copy = |range| Clip { range, ..Clip::new(Some(1), Verb::Copied, Amount::of("a"), 0) };
         // From column 3 of row 1 to column 2 of row 3, 10 wide: the middle row whole.
-        let lit = copy(Some([(1, 3), (3, 2)])).lights(0, 24, 10);
+        let lit = copy(Some([(1, 3), (3, 2)])).lights(None, 0, 24, 10);
         assert_eq!(lit, Lights { cells: vec![(1, 3, 9), (2, 0, 9), (3, 0, 2)], ring: false });
+        // Output moved the selection up a row: the cells follow it.
+        assert_eq!(copy(Some([(1, 3), (1, 5)])).lights(Some([(0, 3), (0, 5)]), 0, 24, 10).cells, [(0, 3, 5)]);
+        // Narrowed to 4 columns: what was past the edge is not drawn.
+        assert_eq!(copy(Some([(1, 6), (2, 1)])).lights(None, 0, 24, 4).cells, [(2, 0, 1)]);
         // Scrolled back 2: two rows of history in view, the copy's rows lower by 2; its last row
         // past the screen's foot is not drawn.
-        assert_eq!(copy(Some([(-2, 0), (1, 4)])).lights(2, 3, 10).cells, [(0, 0, 9), (1, 0, 9), (2, 0, 9)]);
+        assert_eq!(copy(Some([(-2, 0), (1, 4)])).lights(None, 2, 3, 10).cells, [(0, 0, 9), (1, 0, 9), (2, 0, 9)]);
         // Scrolled out of view, or no range: the border.
-        assert_eq!(copy(Some([(-9, 0), (-8, 4)])).lights(0, 24, 10), Lights { cells: vec![], ring: true });
-        assert!(copy(None).lights(0, 24, 10).ring);
+        assert_eq!(copy(Some([(-9, 0), (-8, 4)])).lights(None, 0, 24, 10), Lights { cells: vec![], ring: true });
+        assert!(
+            copy(None).lights(Some([(0, 0), (0, 1)]), 0, 24, 10).ring,
+            "no range: a selection made since is not it"
+        );
         // A paste lights its pane's border, never cells.
         let paste = Clip { range: Some([(0, 0), (0, 1)]), ..Clip::new(Some(1), Verb::Pasted, Amount::of("a"), 0) };
-        assert_eq!(paste.lights(0, 24, 10), Lights { cells: vec![], ring: true });
+        assert_eq!(paste.lights(None, 0, 24, 10), Lights { cells: vec![], ring: true });
     }
 
     #[test]

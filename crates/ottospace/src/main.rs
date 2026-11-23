@@ -4329,15 +4329,16 @@ impl Workspace {
                 }
                 drawn
             }),
-            // Test runs only: where an offer chip's words (`words:<pane>`), their tooltip (`tip`,
-            // while it shows) and a listed offer's picture (`thumb:<window>`) were drawn. Never the
-            // words. Null outside a test run.
-            // Test runs only: what a copy or paste lights now (`Clip::lights`): the cells, by
-            // (row, first column, last column), and whether the pane's border. Null outside a test run.
+            // Test runs only: what a copy or paste lights while its notice shows (`Clip::lights`;
+            // the pulse is its first `PULSE_MS`): the cells, by (row, first column, last column),
+            // and whether the pane's border. Null outside a test run.
             "clip_lights": std::env::var_os("OTTOSPACE_E2E").and_then(|_| {
                 let (lit, _) = self.model.clip.as_ref().and_then(|clip| self.clip_lights(clip.pane?))?;
                 Some(serde_json::json!({"cells": lit.cells, "ring": lit.ring}))
             }),
+            // Test runs only: where an offer chip's words (`words:<pane>`), their tooltip (`tip`,
+            // while it shows) and a listed offer's picture (`thumb:<window>`) were drawn. Never the
+            // words. Null outside a test run.
             "offer_rects": std::env::var_os("OTTOSPACE_E2E").map(|_| {
                 let named = |(mark, bounds): (&Mark, &Bounds<Pixels>)| match mark {
                     Mark::OfferWords(pane) => Some((format!("words:{pane}"), rect(*bounds))),
@@ -5543,7 +5544,10 @@ impl Workspace {
         let now = now_ms();
         let clip = self.model.clip.as_ref().filter(|clip| clip.pane == Some(id) && clip.shows(now))?;
         let lit = match self.terminals.get(&id) {
-            Some(terminal) => clip.lights(terminal.scrollback().0, terminal.grid_size().1, terminal.grid_size().0),
+            Some(terminal) => {
+                let ((cols, rows), back) = (terminal.grid_size(), terminal.scrollback().0);
+                clip.lights(terminal.selection_range(), back, rows, cols)
+            }
             None => clip::Lights { cells: Vec::new(), ring: true },
         };
         Some((lit, clip.glow(now, self.clip_reduced)))
@@ -7332,6 +7336,8 @@ impl Workspace {
                         },
                     )
                     .absolute()
+                    .top_0()
+                    .left_0()
                     .size_full()
                 });
             // The scrollback as a scroll area: the screen is its last page.

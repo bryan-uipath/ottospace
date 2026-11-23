@@ -3600,7 +3600,7 @@ fn mouse_selects_and_copy_paste_use_it() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_copy_lights_its_cells_and_a_multi_line_paste_goes_at_once() {
-    let otto = Otto::launch("paste-ask");
+    let otto = Otto::launch("copy-paste");
     otto.call(json!({"cmd": "split"}));
     otto.bounds(&[1]);
     otto.call(json!({"cmd": "type", "text": "printf 'echo m-one\\necho m-two\\n'\r"}));

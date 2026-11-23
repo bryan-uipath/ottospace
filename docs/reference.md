@@ -1468,7 +1468,7 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
 | `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64. A rule wins over a focus block's green | none: colours by kind |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 | `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in a toast with the flags there are; the others still apply | each flag's default |
-| `paste_confirm` | Retired: ⌘V never asks. Still read, so a file that has it applies; the status bar asks to remove it | |
+| `paste_confirm` | Retired: ⌘V never asks. Still read, so a file that has it applies; a toast asks to remove it | |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
 shown in a toast. That key takes its default and the others still apply. If the file is

@@ -1896,8 +1896,8 @@ export interface Snapshot {
   /** Test runs only: where each Tasks heading's fold mark, name and count were drawn
    * (`done:fold`, `done:label`, `done:count`). Else null. */
   heading_rects: Record<string, Rect> | null;
-  /** Test runs only: what a copy or paste lights now: cells (row, first column, last column) or
-   * the pane's border (`ring`). Else null. */
+  /** Test runs only: what a copy or paste lights while its notice shows (the pulse is its first
+   * 600 ms): cells (row, first column, last column) or the pane's border (`ring`). Else null. */
   clip_lights: { cells: Array<[number, number, number]>; ring: boolean } | null;
   /** The marks, in the user's order. */
   marks: Mark[];
