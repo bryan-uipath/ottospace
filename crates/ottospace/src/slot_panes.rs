@@ -2,9 +2,11 @@
 //! (a checklist made from the pane's window), a slot's pane saying what it waits for and what it
 //! offers, and the shell's side: looks at the slots' apps, hosting what the core names, giving it back.
 
+use std::sync::Arc;
+
 use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, Window, div, prelude::FluentBuilder, px, rgb,
+    StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px, rgb, svg,
 };
 use ottospace_core::features::Feature;
 use ottospace_core::marks::same_app;
@@ -200,10 +202,6 @@ impl Workspace {
                 self.open_row_menu(MenuOf::Pane(pane), true, window, cx);
                 return true;
             }
-            ("slot-close", _, Some(pane)) => {
-                self.close_pane(pane, window, cx);
-                return true;
-            }
             ("slot-accept", _, Some(pane)) => Action::SlotAccept { pane },
             ("slot-decline", _, Some(pane)) => Action::SlotDecline { pane },
             ("slot-next", _, Some(pane)) => Action::SlotNext { pane },
@@ -343,49 +341,102 @@ impl Workspace {
         }
     }
 
-    /// A slot that waits, in its pane: what it waits for, in the dialog's words, and what it offers.
+    /// A slot's app icon, from the cache by bundle id (`slot_icon`); the generic one without.
+    fn slot_icon(&self, bundle: Option<&str>, side: f32, dim: bool) -> AnyElement {
+        let read = |bundle: &str| {
+            let dir = crate::config::get().home.as_ref().map(|home| home.join("icons"));
+            let png = crate::slot_icon::png(bundle, dir.as_deref(), crate::ICON_PIXELS)?;
+            Some(Arc::new(gpui::Image::from_bytes(gpui::ImageFormat::Png, png)))
+        };
+        let image = bundle.and_then(|bundle| {
+            let mut icons = self.slot_icons.borrow_mut();
+            icons.entry(bundle.to_string()).or_insert_with(|| read(bundle)).clone()
+        });
+        let opacity = if dim { 0.5 } else { 1. };
+        match image {
+            Some(image) => img(image).size(px(side)).flex_none().opacity(opacity).into_any_element(),
+            None => svg()
+                .path("icons/apps.svg")
+                .size(px(side))
+                .flex_none()
+                .text_color(rgb(theme::MUTED))
+                .opacity(opacity)
+                .into_any_element(),
+        }
+    }
+
+    /// A slot that waits, in its pane: a dashed outline, its app's icon, what it waits for in the
+    /// dialog's words and whether it offers or takes. Offering: a solid outline and Put it here.
+    /// A small pane: the icon and one line.
     pub(crate) fn slot_body(&self, pane: PaneId, cx: &mut Context<Self>) -> Option<AnyElement> {
         let run = self.model.slots.get(&pane).filter(|_| self.on(Feature::Slots))?;
         let app = run.name.clone();
-        let waits = format!("Waits for: {}", run.slot.words(&app));
-        let said = match run.status {
-            Status::Absent => format!("{app} is not running"),
-            Status::Away => format!("{app}'s window is away"),
-            Status::Offered => match self.model.slot_offer(pane) {
-                Some(seen) => format!("“{}” is open", seen.title),
-                None => "A window is open".into(),
-            },
-            Status::Empty | Status::Filled => format!("Waiting for a {app} window"),
+        let offered = (run.status == Status::Offered).then(|| self.model.slot_offer(pane)).flatten();
+        let headline = match offered {
+            Some(seen) => format!("“{}” is open", seen.title),
+            None => format!("Waiting for a {app} window"),
         };
-        let line = |text: String, colour: u32| div().text_sm().text_color(rgb(colour)).child(text);
-        let mut body = div().flex().flex_col().items_center().gap_2().child(line(said, theme::TEXT));
-        if run.status == Status::Offered {
-            body = body.child(line(format!("Matches this slot: {}", run.slot.words(&app)), theme::MUTED));
-            let act = |name: &str, label: String, action: Action, cx: &mut Context<Self>| {
+        let state = match run.status {
+            Status::Absent => Some(format!("{app} is not running")),
+            Status::Away => Some(format!("{app}'s window is away")),
+            _ => None,
+        };
+        let mode = match run.matching {
+            Matching::Manual => "Offers it here when one opens",
+            Matching::Automatic => "Takes it here when one opens",
+        };
+        let size = self.cells.get(&pane).map(|cell| cell.get().size).unwrap_or_default();
+        // Not laid out yet (a first frame): the full one.
+        let small = size.width > px(0.) && (size.width < px(260.) || size.height < px(180.));
+        let line = |text: String, colour: u32| div().text_sm().text_color(rgb(colour)).text_center().child(text);
+        let icon = self.slot_icon(run.bundle.as_deref(), if small { 20. } else { 40. }, offered.is_none());
+        let mut body = div().flex().items_center().gap_2().child(icon);
+        if small {
+            // One line, cut: a narrow pane never wraps it under the icon.
+            let one = line(headline, theme::TEXT).min_w_0().whitespace_nowrap().overflow_hidden().text_ellipsis();
+            body = body.flex_row().px_2().max_w_full().child(one);
+        } else {
+            body = body.flex_col().px_4().child(line(headline, theme::TEXT));
+            body = body.child(line(run.slot.words(&app), theme::MUTED));
+            body = body.children(state.map(|state| line(state, theme::MUTED)));
+            if offered.is_none() {
+                body = body.child(line(mode.into(), theme::MUTED));
+            }
+        }
+        if offered.is_some() {
+            let id = format!("slot-accept:{pane}");
+            let accept = word(id.clone(), "Put it here", true).child(self.controls.mark(id)).on_click(
+                cx.listener(move |this, _, window, cx| this.offer_send(Action::SlotAccept { pane }, window, cx)),
+            );
+            body = body.child(accept);
+            // Quieter: pass over it, or the next that matches.
+            let quiet = |name: &str, label: String, action: Action, cx: &mut Context<Self>| {
                 let id = format!("{name}:{pane}");
-                word(id.clone(), label, name == "slot-accept")
+                div()
+                    .id(SharedString::from(id.clone()))
+                    .text_xs()
+                    .text_color(rgb(theme::MUTED))
+                    .cursor_pointer()
+                    .hover(|s| s.text_color(rgb(theme::TEXT)))
+                    .child(label)
                     .child(self.controls.mark(id))
                     .on_click(cx.listener(move |this, _, window, cx| this.offer_send(action.clone(), window, cx)))
             };
-            let mut buttons = div().flex().gap_2();
-            buttons = buttons.child(act("slot-accept", "Bring it here ↵".into(), Action::SlotAccept { pane }, cx));
-            buttons = buttons.child(act("slot-decline", "Not this one".into(), Action::SlotDecline { pane }, cx));
+            let mut more = div().flex().gap_3();
+            more = more.child(quiet("slot-decline", "Not this one".into(), Action::SlotDecline { pane }, cx));
             if run.matches > 1 {
-                let more = format!("{} more match", run.matches - 1);
-                buttons = buttons.child(act("slot-next", more, Action::SlotNext { pane }, cx));
+                let next = format!("{} more match", run.matches - 1);
+                more = more.child(quiet("slot-next", next, Action::SlotNext { pane }, cx));
             }
-            body = body.child(buttons);
-        } else {
-            body = body.child(line(waits, theme::MUTED));
-            body = body.child(line("⌘E Put something else here".into(), theme::MUTED));
+            body = body.children((!small).then_some(more));
         }
-        // Kept when its window closed: as easy to be rid of as the pane was to get.
-        let id = format!("slot-close:{pane}");
-        let close = word(id.clone(), "Close this pane", false)
-            .child(self.controls.mark(id))
-            .on_click(cx.listener(move |this, _, window, cx| this.close_pane(pane, window, cx)));
-        body = body.child(close);
-        Some(body.into_any_element())
+        // Waiting: dashed and quiet; offering: solid, in the accent. Drawn still, so Reduce Motion has nothing to stop.
+        let outline = div().absolute().inset(px(10.)).rounded_md().border_1().flex().items_center().justify_center();
+        let outline = match offered {
+            Some(_) => outline.border_color(rgb(theme::PRIMARY)),
+            None => outline.border_dashed().border_color(rgb(theme::BORDER_STRONG)),
+        };
+        Some(outline.child(body).into_any_element())
     }
 
     /// `slot_windows`: what a look at an app found, as the test says (a test run hosts none).

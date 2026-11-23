@@ -1303,17 +1303,20 @@ that kind (`subrole AXSystemDialog`); any other slot takes standard windows only
 offers `Edit slot…` (the dialog, with Look Again (forget the windows passed over), Give Back the
 Window and Clear Slot at its foot) and `Clear slot`. The menu is the user's: ↓ ↑ ↵, Esc closes it.
 
-A slot that waits says so in its pane, in the dialog's words: `Waiting for a Zoom window ·
-Waits for: Zoom · window id zm.meeting.window.main`, or `Zoom is not running`, or `Zoom's window is
-away`. A window it selects is offered there, `“Weekly sync” is open · Matches this slot: …`, with
-Bring it here (↵ while the slot is focused), Not this one and `N more match`. Several slots that select the same windows take them
+A slot that waits draws a dashed outline in its pane with its app's icon (kept by bundle id in
+`~/.ottospace/icons`, so it shows when the app is not running; a generic one without), `Waiting for a
+Zoom window`, the rule in the dialog's words (`Zoom · window id zm.meeting.window.main`), `Zoom is not
+running` or `Zoom's window is away` when so, and whether it offers or takes the window. A window it
+selects is offered there: a solid outline, `“Weekly sync” is open`, Put it here (↵ while the slot
+is focused) and, quieter, Not this one and `N more match`; in a small pane, the icon and one line
+(and Put it here while it offers). Its other acts are in ⋯. Several slots that select the same windows take them
 one by one, in reading order: one window a slot. ⌘E there and a pick end the slot. A filled slot's
 header says `slot`. Only you make, fill or clear a slot; a client's click on one is refused.
 
-A pane you put a window in (the picker, ⌘E, Bring it here) stays when that window closes or its app
+A pane you put a window in (the picker, ⌘E, Put it here) stays when that window closes or its app
 quits: it becomes a slot that waits for the same kind of window, by the window's id (`Waits for:
 Zoom · window id zm.meeting.window.main · the largest`, which the next meeting's window has too), or
-`no window id` for one without, never by its title. Close this pane in it, or ×, closes it. A pane a client opened,
+`no window id` for one without, never by its title. × closes it. A pane a client opened,
 a window the app opened by itself, and a dialog close with their window, as before.
 
 ## The return key
