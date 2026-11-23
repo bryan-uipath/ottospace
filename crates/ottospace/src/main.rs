@@ -3723,8 +3723,9 @@ impl Workspace {
             self.sessions_quiet_told = true;
             let live = config::live();
             self.dispatch(Action::SessionQuiet { ms: live.quiet_ms() }, Origin::System, window, cx);
+            // Read whatever the flag: one turned on later must not write over them.
             let hidden = sessions::hidden_read();
-            if !hidden.is_empty() && self.model.features.on(Feature::TerminalTasks) {
+            if !hidden.is_empty() {
                 self.dispatch(Action::SetHiddenSessions { hidden }, Origin::System, window, cx);
             }
             // Told with it, once: the models (read only at start) and the default agent a task starts with.
@@ -3740,7 +3741,7 @@ impl Workspace {
         // Closed, only the sessions that tasks still follow are looked at, and only their files.
         let Some(poller) = &mut self.sessions else { return };
         let model = &self.model;
-        let waiting = model.features.on(Feature::SessionWaits);
+        let waiting = model.panes_read();
         let terminals = &self.terminals;
         let panes = || pane_runners(terminals);
         poller.ask(open, || model.followed_sessions(), model.worked_sessions(), waiting, panes, now, day_start(now));

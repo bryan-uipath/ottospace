@@ -162,12 +162,17 @@ impl InPane {
     }
 }
 
+/// A session id kept: 1 to 128 bytes, no control characters.
+fn plain_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 128 && !id.chars().any(char::is_control)
+}
+
 /// What is kept of the sessions the shell found in panes: of a known runner, with a plain id,
 /// each session and each pane once, by pane (⌘J takes the first).
 pub fn in_panes_kept(found: Vec<InPane>) -> Vec<InPane> {
     let mut kept: Vec<InPane> = Vec::new();
     for mut at in found {
-        let plain = !at.id.is_empty() && at.id.len() <= 128 && !at.id.chars().any(char::is_control);
+        let plain = plain_id(&at.id);
         let again = kept.iter().any(|k| (&k.runner, &k.id) == (&at.runner, &at.id) || k.pane == at.pane);
         if RunnerId::named(&at.runner).is_some() && plain && !again {
             at.cwd =
@@ -221,7 +226,7 @@ impl Hidden {
 pub fn hidden_kept(hidden: Vec<Hidden>) -> Vec<Hidden> {
     let mut kept: Vec<Hidden> = Vec::new();
     for entry in hidden {
-        let plain = !entry.id.is_empty() && entry.id.len() <= 128 && !entry.id.chars().any(char::is_control);
+        let plain = plain_id(&entry.id);
         if RunnerId::named(&entry.runner).is_some() && plain {
             kept.retain(|k| (&k.runner, &k.id) != (&entry.runner, &entry.id));
             kept.push(entry);

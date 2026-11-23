@@ -2238,7 +2238,7 @@ fn drawn(material: &crate::capture::Material) -> Vec<crate::capture::Shape> {
 fn check_waits(m: &Model) -> Result<(), String> {
     let (all, free) = (m.agents().needs_you, m.waits_unadopted().count());
     ensure!(all >= free, "needs you {all}, fewer than the {free} waits");
-    ensure!(m.features.on(Feature::SessionWaits) || free == 0, "{free} waits counted with the flag off");
+    ensure!(m.panes_read() || free == 0, "{free} waits counted with the flags off");
     let adopted = m.waits_unadopted().filter(|(at, _)| m.tasks.adopted(&at.runner, &at.id)).count();
     ensure!(adopted == 0, "{adopted} waits of a task's session counted besides its task");
     // Agents in a terminal are part of the working count, never a task's nor one that waits.
@@ -2274,7 +2274,18 @@ fn check_cards(m: &Model) -> Result<(), String> {
         ensure!(!m.tasks.adopted(runner, id) && !m.is_hidden(runner, id), "card {id}: a task's, or hidden");
     }
     let rows = m.sessions_bar().rows;
-    ensure!(!rows.iter().any(|r| keys.contains(&(r.runner.as_str(), r.id.as_str()))), "a card is an Elsewhere row too");
+    let drawn = m.tasks_view == TasksView::State;
+    let both = rows.iter().any(|r| keys.contains(&(r.runner.as_str(), r.id.as_str())));
+    ensure!(!drawn || !both, "a card is an Elsewhere row too");
+    // List mode walks what is drawn: each heading, its tasks, then its cards.
+    if drawn {
+        let sections = m.task_sections(m.now);
+        let drawn: usize = sections.iter().map(|s| 1 + s.rows.len() + s.cards.len()).sum();
+        let bar = m.sessions_bar();
+        let elsewhere = if bar.total > 0 { 1 + bar.rows.len() } else { 0 };
+        let rows = m.task_list_rows(TasksView::State, false).len();
+        ensure!(rows == drawn + elsewhere, "{rows} list rows for {drawn} drawn and {elsewhere} Elsewhere's");
+    }
     let count = |state| cards.iter().filter(|c| c.state == state).count();
     ensure!(m.needs_you() == m.tasks.needs_you() + count(CardState::NeedsYou), "needs you is not tasks + cards");
     if m.features.on(Feature::TerminalTasks) {
@@ -5396,8 +5407,17 @@ impl Run {
                 }
                 // The hidden sessions' own file: written only for a hide or an unhide, with the flag on.
                 Effect::SaveHiddenSessions { hidden } => {
+                    // Or a read that ended a hide (it worked and asked again).
                     let asked = matches!(action, Action::SessionHide { .. } | Action::SessionUnhide { .. });
-                    ensure!(asked && m.features.on(Feature::TerminalTasks), "{action:?} wrote the hidden sessions");
+                    let read = origin == Origin::System
+                        && matches!(
+                            action,
+                            Action::SetSessions { .. } | Action::SessionsAtWork { .. } | Action::SessionsInPanes { .. }
+                        );
+                    ensure!(
+                        (asked || read) && m.features.on(Feature::TerminalTasks),
+                        "{action:?} wrote the hidden sessions"
+                    );
                     ensure!(hidden.len() <= sessions::MAX_HIDDEN, "{} hidden sessions kept", hidden.len());
                 }
                 Effect::SaveApps { changes } => {
