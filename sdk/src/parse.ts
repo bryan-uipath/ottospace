@@ -921,9 +921,14 @@ function composePlan(value: unknown, at: string): Snapshot["compose_plan"] & obj
   };
 }
 
-function composePicks(value: unknown, at: string): Snapshot["compose_picks"] {
+function composeChoices(value: unknown, at: string): Snapshot["compose_choices"] & object {
   const o = fields(value, at);
-  return { wheres: list(str)(o.wheres, `${at}.wheres`), whos: list(str)(o.whos, `${at}.whos`) };
+  return {
+    project: orNull(str)(o.project, `${at}.project`),
+    place: orNull(str)(o.place, `${at}.place`),
+    agent: str(o.agent, `${at}.agent`),
+    default: bool(o.default, `${at}.default`),
+  };
 }
 
 function composeWorktree(value: unknown, at: string): Snapshot["compose_worktree"] & object {
@@ -2286,7 +2291,8 @@ export function snapshot(value: unknown): Snapshot {
     compose_plan: orNull(composePlan)(o.compose_plan, "compose_plan"),
     compose_status: orNull(str)(o.compose_status, "compose_status"),
     compose_hint: orNull(str)(o.compose_hint, "compose_hint"),
-    compose_picks: composePicks(o.compose_picks, "compose_picks"),
+    compose_choices: orNull(composeChoices)(o.compose_choices, "compose_choices"),
+    compose_picker: orNull(composeMenu)(o.compose_picker, "compose_picker"),
     compose_worktree: orNull(composeWorktree)(o.compose_worktree, "compose_worktree"),
     compose_target: orNull(composeTarget)(o.compose_target, "compose_target"),
     welcome: bool(o.welcome, "welcome"),

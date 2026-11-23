@@ -58,6 +58,19 @@ fn chips() -> Div {
     group("chip", cases)
 }
 
+/// The new-task box's pickers: short, cut with …, and open.
+fn pickers() -> Div {
+    let cases = [
+        ("short", "@claude", theme::VISUAL, false),
+        ("cut", ">a-repository-with-a-long-name · fix/the-login-loop", theme::PRIMARY, false),
+        ("open", "#checkout", theme::COMPOSE, true),
+    ]
+    .map(|(name, label, accent, open)| {
+        case(name, div().w(px(200.)).child(super::picker(id(format!("picker-{name}")), label, accent, open)))
+    });
+    group("picker", cases)
+}
+
 /// Depth: a lifted dialog with a well in it.
 fn depth() -> Div {
     let well = super::well(div().h(px(36.)), theme::COMPOSE);
@@ -202,6 +215,7 @@ pub(crate) fn view() -> Div {
         .child(buttons())
         .child(pills())
         .child(chips())
+        .child(pickers())
         .child(depth())
         .child(tips())
         .child(filter_rows());

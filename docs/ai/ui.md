@@ -27,6 +27,7 @@ sneak label and its rect in the state), the tooltip and the click.
 | `pill` | a short label in a fill | `Key { lit, small }`: a key cap, lit while held. `Mode(accent)`: the status bar's mode |
 | `lifted` | a dialog over the panes (the new-task box) | none: a faint ring, a close and a deep shadow, a light along its top |
 | `well` | a field set into a `lifted` dialog | its edge's accent |
+| `picker` | a choice in the new-task box's edge (project, repository, agent) | its accent; `open` while its list shows; one line, cut with … |
 | `chip` | an attachment in the new-task box: a meeting, the workspace in front, a folder | an accent for its text, or none; the caller adds its × |
 | `list_row` | a row of a list | `Normal`: a sidebar row, full colour. `Dim`: a row under a heading (a checkout), muted until hover or the keys |
 | `section_heading` | a group's heading in a list | open (▾) or folded (▸), its name and count; a click folds it |

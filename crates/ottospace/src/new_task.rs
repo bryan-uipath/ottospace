@@ -18,6 +18,8 @@ use crate::{Workspace, dialog, ui};
 /// The dropdown's width, and a row's height: the shell knows its room from them.
 const MENU_WIDTH: f32 = 340.;
 const ROW: f32 = 26.;
+/// A picker's list: wide enough for a model's id and its word of detail.
+const PICKER_WIDTH: f32 = 280.;
 
 /// A tag's colour, by its mark: in the line, and on the dropdown's kind marks.
 pub fn tag_color(mark: char) -> u32 {
@@ -44,9 +46,12 @@ impl Workspace {
         let action = match key.key.as_str() {
             "enter" if event.is_held => return,
             "enter" if m.platform => Action::ComposeSubmit { open: true },
+            // In the agent's list: the highlighted one becomes the default.
+            "enter" if m.alt && self.model.picker_default().is_some() => Action::ComposeDefault,
             "enter" if m.shift => Action::ComposeSubmit { open: false },
             "enter" => Action::ComposeEnter,
             "escape" => Action::ComposeEscape,
+            "tab" if m.shift => Action::ComposePickerStep { delta: -1 },
             "tab" => Action::ComposeComplete,
             "up" if plain && !m.control => Action::ComposeMove { delta: -1 },
             "down" if plain && !m.control => Action::ComposeMove { delta: 1 },
@@ -135,7 +140,8 @@ impl Workspace {
     /// Nothing under the box's own panel: that click is the box's.
     fn pointed_at(&self, position: Point<Pixels>) -> Option<(Pointed, Bounds<Pixels>)> {
         // Nor under its dropdown, which may hang past it.
-        let menu = self.model.dropdown().is_some() && self.field.borrow().menu.contains(&position);
+        let listed = self.model.dropdown().is_some() || self.model.picker_menu().is_some();
+        let menu = listed && self.field.borrow().menu.contains(&position);
         if menu || self.field.borrow().over_panel(position) {
             return None;
         }
@@ -221,7 +227,10 @@ impl Workspace {
             .cursor_pointer()
             .when(menu.selected == Some(index), |d| d.bg(rgb(theme::SELECTED)))
             .hover(|s| s.bg(rgb(theme::SELECTED)))
-            .child(div().w(px(46.)).flex_none().text_color(rgb(tag_color(menu.mark))).child(row.kind))
+            // A tag's row says what it is; a picker's needs not (its picker says it).
+            .when(self.model.picker_menu().is_none(), |d| {
+                d.child(div().w(px(46.)).flex_none().text_color(rgb(tag_color(menu.mark))).child(row.kind))
+            })
             .child(
                 div().flex().flex_none().max_w(px(180.)).overflow_hidden().text_color(rgb(theme::MUTED)).children(name),
             )
@@ -280,20 +289,33 @@ impl Workspace {
     /// The dropdown, hung under the line at its tag (over it, if the window has no room below),
     /// over what is under it: nothing in the box moves when it opens.
     fn render_dropdown(&self, menu: &Dropdown, cx: &mut Context<Self>) -> gpui::Deferred {
-        let rows = menu.rows.iter().enumerate().map(|(i, row)| self.dropdown_row(i, row, menu, cx).into_any_element());
-        let note = menu.note.clone().map(|note| {
-            div().h(px(ROW)).px_2().flex().items_center().text_xs().text_color(rgb(theme::MUTED)).child(note)
-        });
         // Above or below by the tallest it can be, not by its rows now: it never jumps as they change.
         let height = px(ROW * (complete::MAX_ROWS + 1) as f32 + 10.);
         let place = self.field_place(menu.start);
         // The line's left edge is the content's: the dropdown is pushed right to sit under its tag.
         let indent = place.map_or(px(0.), |(x, field, _)| (x - field.left()).min(field.size.width - px(MENU_WIDTH)));
         let above = place.is_some_and(|(_, field, viewport)| field.bottom() + height + px(90.) > viewport);
+        let list = self.menu_list(menu, cx).left(indent.max(px(0.)));
+        let list = if above { list.bottom_full().mb_1() } else { list.top_full().mt_1() };
+        gpui::deferred(list)
+    }
+
+    /// A list of rows that floats over the box, `MENU_WIDTH` wide at most: the tag's dropdown, or
+    /// a picker's. The caller places it. Where it is drawn is kept, so a click on it is the box's.
+    fn menu_list(&self, menu: &Dropdown, cx: &mut Context<Self>) -> Div {
+        // At most `MAX_ROWS`, as many as the dropdown's, around the highlighted one: a long list of
+        // projects stays in the window, and ↑ ↓ bring the rest into view.
+        let most = complete::MAX_ROWS;
+        let from = menu.selected.unwrap_or(0).saturating_sub(most - 1).min(menu.rows.len().saturating_sub(most));
+        let shown = menu.rows.iter().enumerate().skip(from).take(most);
+        let rows = shown.map(|(i, row)| self.dropdown_row(i, row, menu, cx).into_any_element());
+        let more = menu.rows.len().saturating_sub(most);
+        let note = menu.note.clone().or_else(|| (more > 0).then(|| format!("{more} more: ↑ ↓"))).map(|note| {
+            div().h(px(ROW)).px_2().flex().items_center().text_xs().text_color(rgb(theme::MUTED)).child(note)
+        });
         let drawn = self.field.clone();
-        let list = div()
+        div()
             .absolute()
-            .left(indent.max(px(0.)))
             .w(px(MENU_WIDTH))
             .max_w_full()
             .py_1()
@@ -312,9 +334,7 @@ impl Workspace {
                     .size_full(),
             )
             .children(rows)
-            .children(note);
-        let list = if above { list.bottom_full().mb_1() } else { list.top_full().mt_1() };
-        gpui::deferred(list)
+            .children(note)
     }
 
     /// What the box will point at, inside its field: the quick note's pills (a meeting, a
@@ -366,6 +386,79 @@ impl Workspace {
         pills.into_iter().chain(folder).collect()
     }
 
+    /// A picker in the box's edge: its sigil and what ↵ will use, ▾; a click opens its list under
+    /// it. Its list, while open.
+    fn picker(&self, mark: char, label: String, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let menu = self.model.picker_menu().filter(|menu| menu.mark == mark);
+        let open = menu.is_some();
+        let id = format!("picker:{mark}");
+        // Its own width, not the picker's; the agent's, at the edge's right, opens leftward.
+        let list = menu.map(|menu| {
+            let list = self.menu_list(&menu, cx).w(px(PICKER_WIDTH)).max_w(px(PICKER_WIDTH)).top_full().mt_1();
+            gpui::deferred(if mark == '@' { list.right_0() } else { list.left_0() })
+        });
+        ui::picker(gpui::SharedString::from(id.clone()), label, tag_color(mark), open)
+            .child(self.controls.mark(id))
+            // On the press, and no further: the line keeps the keyboard.
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    this.dispatch(Action::ComposePicker { mark: Some(mark) }, this.input, window, cx);
+                    cx.stop_propagation();
+                }),
+            )
+            .children(list)
+            .into_any_element()
+    }
+
+    /// The project and repository pickers, and where there is a choice, this checkout or a new
+    /// worktree (⌥⌘N).
+    fn pickers(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        let Some(choices) = self.model.compose_choices() else { return Vec::new() };
+        let project = choices.project.map_or("#no project".into(), |name| format!("#{name}"));
+        let place = choices.place.map_or(">no repository".into(), |place| format!(">{place}"));
+        let worktree = self.model.compose_worktree().map(|choice| {
+            let label = if choice.new { "new worktree" } else { "this checkout" };
+            ui::picker("pick:worktree", label.to_string(), theme::COMPOSE, false)
+                .child(self.controls.mark("pick:worktree"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        this.dispatch(Action::ComposeWorktree { new: None }, this.input, window, cx);
+                        cx.stop_propagation();
+                    }),
+                )
+                .into_any_element()
+        });
+        [self.picker('#', project, cx), self.picker('>', place, cx)].into_iter().chain(worktree).collect()
+    }
+
+    /// The agent's picker, at the edge's right: the default shows from the start.
+    fn agent_picker(&self, cx: &mut Context<Self>) -> Option<gpui::AnyElement> {
+        let choices = self.model.compose_choices()?;
+        Some(self.picker('@', format!("@{}", choices.agent), cx))
+    }
+
+    /// The box's one primary button: ↵ as a click. Start for a task; File for the quick note.
+    fn compose_button(&self, quick: bool, cx: &mut Context<Self>) -> gpui::Stateful<Div> {
+        let label = if quick { "File ↵" } else { "Start ↵" };
+        ui::button("compose-start", ui::Button::Primary(label.into()), ui::State::Rest)
+            .flex_none()
+            .whitespace_nowrap()
+            .child(self.controls.mark("compose-start"))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _, window, cx| {
+                    // Start starts: an open picker's list closes first, its row not taken.
+                    if this.model.picker_menu().is_some() {
+                        this.dispatch(Action::ComposePicker { mark: None }, this.input, window, cx);
+                    }
+                    this.dispatch(Action::ComposeEnter, this.input, window, cx);
+                    cx.stop_propagation();
+                }),
+            )
+    }
+
     /// The new-task box's content, for any host, top to bottom: the field (the line, with the tags
     /// it understands in their colours; what it will point at; + to attach files), the one line
     /// that says what ↵ does, and the tags' sheet when asked for. The dropdown for the tag at the
@@ -402,15 +495,24 @@ impl Workspace {
         let attached = self.attachments(cx);
         let attached =
             (!attached.is_empty()).then(|| div().px_2().pb_1().flex().flex_wrap().gap_1().children(attached));
+        // One row, never two: +, the pickers (cut short with … when there is no room), the button.
         let edge = div()
-            .h(px(32.))
+            .id("compose-edge")
+            .relative()
+            .h(px(36.))
             .px_1()
             .flex()
             .items_center()
             .gap_1()
+            .overflow_hidden()
             .border_t_1()
             .border_color(rgb(theme::BORDER))
-            .child(attach);
+            .child(attach)
+            .children(self.pickers(cx))
+            .child(div().flex_1())
+            .children(self.agent_picker(cx))
+            .child(self.compose_button(quick, cx))
+            .child(self.controls.mark("compose-edge"));
         let field = ui::well(div().flex().flex_col(), theme::COMPOSE).child(line).children(attached).child(edge);
         let sheet_open = self.model.compose_hint().is_some();
         let tags = ui::button(
@@ -548,81 +650,9 @@ impl Workspace {
             .child(crate::mark(&self.marks, crate::Mark::CentredBox))
     }
 
-    /// The new-task state's picks, lines and box (or, closed, the line to open it).
+    /// The new-task state's box (or, closed, the line to open it), under the line that says where it goes.
     fn new_task_body(&self, cx: &mut Context<Self>) -> Div {
         let open = self.model.compose.is_some();
-        let picks = self.model.compose_picks();
-        let draft = self.model.compose_line().map(|line| self.model.draft(line));
-        let repo = draft.as_ref().and_then(|draft| draft.repo.clone());
-        let agent = draft.as_ref().and_then(|draft| draft.agent.clone());
-        let pick = |mark: char, name: Option<String>, label: String, on: bool| {
-            let id = format!("pick:{mark}{}", name.as_deref().unwrap_or(""));
-            div()
-                .id(gpui::SharedString::from(id.clone()))
-                .relative()
-                .px_2()
-                .py_0p5()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(if on { tag_color(mark) } else { theme::BORDER_STRONG }))
-                .text_xs()
-                .text_color(rgb(if on { theme::TEXT } else { theme::MUTED }))
-                .cursor_pointer()
-                .hover(|s| s.bg(rgb(theme::SELECTED)))
-                .child(label)
-                .child(self.controls.mark(id))
-                // A pick fills the line: with the box closed it opens first.
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    if this.model.compose.is_none() {
-                        this.new_task(window, cx);
-                    }
-                    this.dispatch(Action::ComposePick { mark, name: name.clone() }, this.input, window, cx);
-                }))
-        };
-        let wheres = picks
-            .wheres
-            .iter()
-            .map(|name| pick('>', Some(name.clone()), format!(">{name}"), repo.as_ref() == Some(name)));
-        let none = pick('>', None, "no repository".into(), open && repo.is_none());
-        let whos = picks.whos.iter().map(|name| {
-            let on = agent.as_ref().is_some_and(|agent| agent.eq_ignore_ascii_case(name));
-            pick('@', Some(name.clone()), format!("@{name}"), on)
-        });
-        // Where it works, where there is a choice: this checkout, or a new worktree (⌥⌘N switches).
-        let choice = self.model.compose_worktree().map(|choice| {
-            let side = |new: bool, label: &'static str| {
-                let id = format!("pick:worktree:{}", if new { "new" } else { "checkout" });
-                let on = choice.new == new;
-                div()
-                    .id(gpui::SharedString::from(id.clone()))
-                    .relative()
-                    .px_2()
-                    .py_0p5()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(rgb(if on { theme::COMPOSE } else { theme::BORDER_STRONG }))
-                    .text_xs()
-                    .text_color(rgb(if on { theme::TEXT } else { theme::MUTED }))
-                    .cursor_pointer()
-                    .hover(|s| s.bg(rgb(theme::SELECTED)))
-                    .child(label)
-                    .child(self.controls.mark(id))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        drop(this.dispatch(Action::ComposeWorktree { new: Some(new) }, this.input, window, cx))
-                    }))
-            };
-            let key = div().text_xs().text_color(rgb(theme::MUTED)).child("⌥⌘N");
-            div()
-                .flex()
-                .flex_wrap()
-                .items_center()
-                .gap_1()
-                .child(side(false, "this checkout"))
-                .child(side(true, "new worktree"))
-                .child(key)
-        });
         // The view moved on while the box was open: it still goes where it was opened; Switch brings it here.
         let pinned = self.model.compose_space().filter(|_| self.model.compose_elsewhere()).map(|of| {
             let switch = div()
@@ -655,17 +685,6 @@ impl Workspace {
                 .child(self.controls.mark("drawer:new_task"))
                 .on_click(cx.listener(|this, _, window, cx| this.new_task(window, cx)))
         });
-        // The box on top; the picks of where and who under it.
-        let quick = self.model.quick_pills().is_some();
-        let picks = (!quick).then(|| {
-            div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(div().flex().flex_wrap().gap_1().children(wheres).child(none))
-                .child(div().flex().flex_wrap().gap_1().children(whos))
-                .children(choice)
-        });
         div()
             .flex()
             .flex_col()
@@ -674,6 +693,5 @@ impl Workspace {
             .children(pinned)
             .children(open.then(|| self.new_task_content(cx)))
             .children(idle)
-            .children(picks)
     }
 }

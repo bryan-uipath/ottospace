@@ -69,7 +69,7 @@ fn words(line: &str) -> Vec<&str> {
 }
 
 /// Where each word of a line is, in bytes.
-fn spaced(line: &str) -> Vec<std::ops::Range<usize>> {
+pub(crate) fn spaced(line: &str) -> Vec<std::ops::Range<usize>> {
     let (mut words, mut start, mut escaped) = (Vec::new(), None, false);
     for (at, c) in line.char_indices() {
         let ends = c.is_whitespace() && !escaped;
@@ -134,7 +134,7 @@ pub fn taggable(mark: char, name: &str) -> bool {
 }
 
 /// Punctuation that ends a clause, not a name: `#canvas,` names `canvas`.
-fn clause_end(c: char) -> bool {
+pub(crate) fn clause_end(c: char) -> bool {
     c.is_ascii_punctuation() && !matches!(c, '-' | '_')
 }
 

@@ -1261,6 +1261,9 @@ const MAKERS: &[Make] = &[
     // Every mark a cap types, and one no cap does.
     |g| Action::ComposeTag { mark: g.rng.pick(&['#', '>', '@', '/', '$', '^', 'p']) },
     |_| Action::ComposeSheet,
+    |g| Action::ComposePicker { mark: g.rng.pick(&[None, Some('#'), Some('>'), Some('@'), Some('/')]) },
+    |g| Action::ComposePickerStep { delta: g.delta() },
+    |_| Action::ComposeDefault,
     |g| {
         // Paths of every kind: a space, a narrow no-break space, a backslash, a line break,
         // one too long, one that is no path.
@@ -2794,6 +2797,9 @@ fn check(m: &Model) -> Result<(), String> {
     // One line under an open box says what ↵ does; the tags' sheet only while asked for.
     ensure!(m.compose_status().is_some() == m.compose.is_some(), "an open box with no status line, or the reverse");
     ensure!(m.compose_hint().is_none() || m.compose_sheet, "the tags' sheet shows unasked");
+    // A picker's list and the tag's dropdown never both; a list only of a picker the box shows.
+    ensure!(m.picker_menu().is_none() || m.dropdown().is_none(), "a picker's list and the dropdown at once");
+    ensure!(m.picker_menu().is_none_or(|menu| m.compose_pickers().contains(&menu.mark)), "a list of no picker");
     if let Some((of, field)) = m.open_field() {
         let most = match of {
             "compose" => MAX_TITLE,
@@ -3659,6 +3665,10 @@ impl Run {
             }
             _ => false,
         };
+        // So does ↵ in a picker's list: it takes the row.
+        let takes = takes
+            || (matches!(action, Action::ComposeSubmit { open: false } | Action::ComposeEnter)
+                && m.picker_menu().is_some());
         // While the bar asks before discarding, ↵ is the answer: it files nothing.
         let answers = m.capture.as_ref().is_some_and(|draft| draft.asked);
         let submits = matches!(action, Action::ComposeSubmit { .. });
@@ -4109,7 +4119,20 @@ impl Run {
             && done_before.iter().any(|id| m.tasks.get(*id).is_some_and(|t| t.state != State::Done));
         let acts = |e: &Effect| acts(e) && !(reopens && resumes(e));
         ensure!(!selects || !effects.iter().any(acts), "{origin:?}'s {action:?} started an agent: {effects:?}");
-        ensure!(!selects || m.chats == chats_before, "{origin:?}'s {action:?} changed a transcript");
+        // A card's row brings its card to the front (`card_first`, and Deny's message goes): an
+        // order, not what the transcript holds.
+        let ordered = |chats: &[crate::model::chat::Chat]| {
+            let mut chats = chats.to_vec();
+            for chat in chats.iter_mut().filter(|_| matches!(action, Action::TaskCard { .. })) {
+                chat.transcript.cards.make_contiguous().sort_by_key(|card| card.ticket);
+                chat.deny = false;
+            }
+            chats
+        };
+        ensure!(
+            !selects || ordered(&m.chats) == ordered(&chats_before),
+            "{origin:?}'s {action:?} changed a transcript"
+        );
         // A dial moves only on what its agent did (an app it read too), a message sent, or its process starting or ending.
         let moves = matches!(
             action,
@@ -5327,6 +5350,13 @@ impl Run {
                 Effect::SaveTasksView { view } => {
                     ensure!(user && m.tasks_view == *view, "{origin:?} wrote tasks_view {view:?}")
                 }
+                Effect::SaveDefaultAgent { agent } => {
+                    let held = m.default_agent.as_deref() == Some(agent.as_str());
+                    ensure!(
+                        user && matches!(action, Action::ComposeDefault) && held,
+                        "{origin:?} wrote default_agent {agent:?}"
+                    )
+                }
                 Effect::Run { command } => {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
                 }
@@ -6483,6 +6513,75 @@ fn random_actions_keep_the_model_sound_for_long() {
 
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
+
+/// A card's row (`TaskCard`) brings its card to the front, by design: the check took that new
+/// order for a changed transcript.
+#[test]
+fn a_cards_row_brings_its_card_to_the_front_and_changes_nothing_else() {
+    replay(&[
+        Action::TaskAdd { title: "b".into(), priority: 1, state: State::Triaged, tab: None, assign: Assign::default() }
+            .into(),
+        Action::TaskTalk { id: 1 }.into(),
+        Action::TalkStart.into(),
+        Action::AgentStarted { task: Subject::Task(1), session: None, at: 1 }.sent_by(Origin::System),
+        Action::AgentEvents {
+            task: Subject::Task(1),
+            events: vec![
+                Said::TurnStarted,
+                Said::Permission {
+                    ticket: 1,
+                    tool: "AskUserQuestion".into(),
+                    label: "AskUserQuestion".into(),
+                    detail: Text::new(""),
+                    len: 0,
+                    cut: false,
+                    claim: Text::new(""),
+                    questions: vec![crate::ask::tests::question(2, false)],
+                },
+            ],
+            at: 5,
+        }
+        .sent_by(Origin::System),
+        Action::AgentEvents {
+            task: Subject::Task(1),
+            events: vec![Said::Permission {
+                ticket: 0,
+                tool: "Bash".into(),
+                label: "fix".into(),
+                detail: Text::new(&"x".repeat(28)),
+                len: 9,
+                cut: false,
+                claim: Text::new(""),
+                questions: vec![],
+            }],
+            at: 0,
+        }
+        .sent_by(Origin::System),
+        Action::TaskCard { id: 1, ticket: Some(0) }.into(),
+    ])
+    .unwrap();
+}
+
+/// ⇧↵ with a picker's list open took its row, as ↵ does, and the check took it for a lost task.
+#[test]
+fn seed_667_enter_in_a_pickers_list_takes_its_row() {
+    replay(&[
+        Action::OpenCompose { text: "deploy @codex-gpt-6-astra x".into() }.into(),
+        Action::ComposePicker { mark: Some('@') }.sent_by(Origin::Socket),
+        Action::ComposeSubmit { open: false }.into(),
+    ])
+    .unwrap();
+}
+
+/// ⇧Tab's step through the box's pickers added a huge `delta` and overflowed: one step, whatever it is.
+#[test]
+fn seed_255_a_picker_step_is_one_step() {
+    replay(&[
+        Action::OpenCompose { text: "fix".into() }.sent_by(Origin::Socket),
+        Action::ComposePickerStep { delta: i32::MAX }.into(),
+    ])
+    .unwrap();
+}
 
 /// ⌘⇧N over the palette opened the quick box under it: it waits, as ⌘N's box does.
 #[test]

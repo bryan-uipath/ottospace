@@ -2247,6 +2247,11 @@ impl Workspace {
                         self.broke(format!("{}{why}", Self::NOT_WRITTEN));
                     }
                 }
+                Effect::SaveDefaultAgent { agent } => {
+                    if let Err(why) = config::save_value("default_agent", &serde_json::json!(agent)) {
+                        self.broke(format!("{}{why}", Self::NOT_WRITTEN));
+                    }
+                }
                 // Later reads of the list look where the model now does (also after "Unlist?" is
                 // answered); a file not written leaves them as the settings are.
                 Effect::PickRepoFolder => self.pick_repo(window, cx),
@@ -4131,14 +4136,16 @@ impl Workspace {
             // The quick note box's pills (⌘⇧N), by kind: `meeting`, `transcript`, `front`; null while
             // it is closed. A meeting's title is drawn, never here.
             "quick_pills": self.model.quick_pills().map(|pills| pills.iter().map(|pill| pill.kind()).collect::<Vec<_>>()),
-            // What ↵ in the box would do (`agent`, `starts`, `dir`, `branch`), or null; and the
-            // drawer's picks: repository names (`wheres`) and agent names (`whos`).
+            // What ↵ in the box would do (`agent`, `starts`, `dir`, `branch`), or null.
             "compose_plan": self.model.compose_plan(),
+            // What the box's pickers show (`project`, `place`, `agent`, `default`), or null without
+            // them; and the open picker's list (`mark`, `rows`, `selected`), or null.
+            "compose_choices": self.model.compose_choices(),
+            "compose_picker": self.model.picker_menu(),
             // The one line under the box: what ↵ does with the line as it is, then the other keys;
             // null while it is closed. The tag hint, while the box's tags' sheet shows ("? tags", ⌘/).
             "compose_status": self.model.compose_status(),
             "compose_hint": self.model.compose_hint(),
-            "compose_picks": self.model.compose_picks(),
             // Where the open box's ↵ starts its task (`space`, `name`), and whether that is not the
             // space on show (`elsewhere`); null while it is closed.
             "compose_target": self.model.compose.as_ref().and_then(|_| self.model.compose_space()).map(|of| serde_json::json!({
@@ -4282,8 +4289,13 @@ impl Workspace {
             // Where the open box's controls were drawn, by id (`compose-attach`, `compose-sheet`): sneak
             // mode does not label them while the line has the keyboard. Null outside a test run.
             "compose_rects": std::env::var_os("OTTOSPACE_E2E").filter(|_| self.model.compose.is_some()).map(|_| {
-                let ids = ["compose-attach", "compose-sheet"];
-                ids.iter().filter_map(|id| Some((id.to_string(), rect(self.controls.bounds(id)?)))).collect::<BTreeMap<_, _>>()
+                let ids = ["compose-attach", "compose-sheet", "compose-edge", "compose-start", "picker:#", "picker:>", "picker:@"];
+                let mut drawn = ids.iter().filter_map(|id| Some((id.to_string(), rect(self.controls.bounds(id)?)))).collect::<BTreeMap<_, _>>();
+                // The open picker's list.
+                if self.model.picker_menu().is_some() {
+                    drawn.insert("picker-list".into(), rect(self.field.borrow().menu));
+                }
+                drawn
             }),
             // Test runs only: where an offer chip's words (`words:<pane>`), their tooltip (`tip`,
             // while it shows) and a listed offer's picture (`thumb:<window>`) were drawn. Never the

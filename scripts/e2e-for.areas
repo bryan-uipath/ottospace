@@ -60,7 +60,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?working(\.rs|/)                                                   working_line|tasks_are_listed
 ^crates/ottospace-agents/(src|tests/fakes)/                                  conversation|(?<!quit_)question|btw|cards|tool_rows|talked|stopped_agent|later_asks|real_cli|agent_chip|agent_that_ends|message_|dial|follows_its_agent
 /src/(.*/)?(sessions|activity|cadence|station|snapshot|claude|codex)(\.rs|/) session|dial|watched|tool_rows|native_conversation
-/src/(.*/)?(tasks|new_task|progress|list)(\.rs|/)                            tasks_|task_|new_task|a_done_row|inbox|later_asks
+/src/(.*/)?(tasks|new_task|pickers|progress|list)(\.rs|/)                    tasks_|task_|new_task|boxs_pickers|a_done_row|inbox|later_asks
 /src/(.*/)?(finish|seal)(\.rs|/)                                             done|seal
 /src/(.*/)?decisions(\.rs|/)                                                 decisions
 /src/(.*/)?pass(\.rs|/)                                                      pass
