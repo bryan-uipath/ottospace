@@ -22,9 +22,10 @@ is a made-up "Meetings" app; so are the examples here.
 ## Rules (hold from the slice that brings each part)
 
 1. **Only the user makes, edits, fills or clears a slot.** A fill is the user's act now (`Bring it
-   here`, ↵) or their choice made earlier (`Matching: Automatic`, which only they can set). A socket
-   client cannot make one, accept or decline an offer, change one, clear, close, move or swap its
-   pane, and never puts a window into one (§6).
+   here`, ↵) or their choice made earlier (`Matching: Automatic`, which only they can set). Putting
+   a window in a pane is the user's act too: that pane becomes a slot when its window closes (§2a).
+   A socket client cannot make one, accept or decline an offer, change one, clear, close, move or
+   swap its pane, and never puts a window into one (§6).
 2. **Never pull a window from under the user.** Manual (the default) offers and waits. Automatic
    takes only on the tab on show, only a window that opened while the slot waited, and never the
    window the user is using outside ottospace: those are offered (§3).
@@ -173,6 +174,35 @@ Rejected:
   when an identifier does the work.
 - **Making a slot from an empty pane, with an app picker.** No window to fill the dialog from, so
   every field typed by hand. Later, if asked.
+
+## 2a. A pane the user put a window in (the owner, 2026-11-23)
+
+The owner put Zoom's meeting windows in a tab's panes, without Keep; when the meeting ended every
+pane closed and the tab went. Expected: the tab keeps its places, each waiting and saying for what,
+so the next meeting's windows fill them. So, with `slots` on:
+
+- **Its window closing makes it a slot.** An app pane whose window the user put there (the picker,
+  ⌘E, Bring it here, a restored layout) does not close when the window goes or its app quits: it
+  becomes a slot (`WindowGone`, `Model::kept_place`), Away then Empty, or Absent, as any slot.
+- **What it waits for:** the app, and the window's `AXIdentifier` as read when it was hosted
+  (`Action::WindowGone::was`): Zoom's meeting window is `zm.meeting.window.main`, and so is the next
+  meeting's, with another window id and title. A window with no identifier gives `identifier: ""`,
+  which selects only windows with none (§1), so Zoom's home window does not take the meeting's
+  place. Never the title: a meeting's changes (the dialog's own default for a window with no id,
+`Title is “…”` whole, would wait for that one meeting). Of several, the largest. Matching Manual.
+⋯ edits it.
+- **Not the user's, so it closes as before:** a pane a socket client filled, a window the app
+  opened itself (`Adopt`), a dialog or other non-standard window (rule 4: never a candidate, so it
+  would wait for good), and every app pane with `slots` off. The user's own × or close key on the
+  pane is the user saying no: the pane goes, as ever.
+- **As easy to be rid of as to get:** the waiting pane says what it waits for and has `Close this
+  pane` beside `⌘E Put something else here`; × in its header too. Nothing moves or takes focus.
+- The model keeps the panes that are not the user's (`not_placed`, `#[serde(skip)]`), set after
+  each step from who put a window in a pane. The property `check`: a standard window's going never
+  closes the user's pane.
+
+This changes §3's Rejected "Close the pane when the window closes, as app panes do" from slots only
+to every pane the user filled. Pending the owner's look.
 
 ## 3. Lifecycle
 

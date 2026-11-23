@@ -56,7 +56,8 @@ Design rules for every feature. Each change answers to both.
 - Nothing rearranges itself: a new app window never splits a pane by itself; its pane offers it
   (#266).
 - Explicit over magical: the person says where a window goes (slots: only the user makes, fills
-  or clears one, `docs/ai/slots.md`).
+  or clears one; putting a window in a pane is the user's act, and that pane stays, a slot, when
+  the window closes, `docs/ai/slots.md`).
 - Animation never delays input: the next thing is usable while it plays (Done's seal
   plays over a model that has already moved on, #278); under Reduce Motion it is at once.
 - A test run or an agent never takes the person's keyboard or front window (see Tests).
@@ -212,7 +213,7 @@ Design note: `docs/ai/attention/plan.md`.
   - `window_fixture` (`"pane"`, `"size"`, optional `"title"`, `"subrole"`, `"modal"`): a new window of
     that app pane's app, as if just seen (a test run hosts none), judged, logged and offered as a real
     one (to a slot that selects it first); its id (800001 on) is in `offers`. Put in a pane on it opens a pane with no window.
-    `window_fixture_close` (`"window"`): it closed. Outside a test run only ottospace sees an app's windows.
+    `window_fixture_close` (`"window"`): it closed (also an `app_fixture` pane's own, as its app runs on). Outside a test run only ottospace sees an app's windows.
     `window_fixture` also takes `"identifier"` (its `AXIdentifier`).
   - `slot_windows` (`"look"`: an app's windows as a slot's look reads them) and `slot_make` (`"pane"`,
     `"slot"`: the slot dialog's Keep, as the user's act), for slots (`slots` flag) in a test run, which

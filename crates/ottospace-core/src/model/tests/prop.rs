@@ -1974,7 +1974,10 @@ const SLOT_MAKERS: [Make; 17] = [
     |g| Action::SlotWindows { look: g.look() },
     |g| g.slot_hosted(),
     |g| Action::SlotTick { at: g.time() },
-    |g| Action::WindowGone { pane: g.slot_pane(), app_running: g.rng.coin(), at: g.time() },
+    |g| {
+        let was = g.rng.coin().then(|| g.seen());
+        Action::WindowGone { pane: g.slot_pane(), app_running: g.rng.coin(), at: g.time(), was }
+    },
     // Not in `MAKERS`, which has its own `Adopt`.
     |g| g.adopt(),
     // The dialog: on any pane, with a look of its app's windows half the time. Its titles are
@@ -3850,6 +3853,26 @@ impl Run {
         let (default, last_before) = (m.agent.default, m.agent.last.clone());
         let slots_before = m.slots.clone();
         let ids_before: Vec<PaneId> = m.panes.iter().map(|p| p.id).collect();
+        // App panes the user put a window in, not slots yet: theirs to keep when it closes.
+        let placed_before: Vec<PaneId> = m
+            .panes
+            .iter()
+            .filter(|p| {
+                matches!(p.kind, Kind::App { .. }) && !m.not_placed.contains(&p.id) && !m.slots.contains_key(&p.id)
+            })
+            .map(|p| p.id)
+            .collect();
+        // Of those, the ones a look lists as a dialog: no slot's candidate, so they close.
+        let dialog = |window: u32| {
+            let seen = m.slot_looks.iter().flat_map(|look| &look.windows).find(|seen| seen.window == window);
+            seen.is_some_and(|seen| !seen.subrole.is_empty() && seen.subrole != "AXStandardWindow")
+        };
+        let placed_dialogs: Vec<PaneId> = m
+            .panes
+            .iter()
+            .filter(|p| matches!(p.kind, Kind::App { window, .. } if dialog(window)))
+            .map(|p| p.id)
+            .collect();
         let held_before: Vec<(PaneId, u32)> = m
             .panes
             .iter()
@@ -3977,10 +4000,26 @@ impl Run {
                 ensure!(!twice, "{action:?} filled slot {id} with window {window}, which another pane holds");
             }
         }
+        // A pane the user put a standard window in never goes because the window did (slots on).
+        if let Action::WindowGone { pane, was, .. } = &action
+            && origin == Origin::System
+            && m.features.on(Feature::Slots)
+            && placed_before.contains(pane)
+        {
+            let standard = match was {
+                Some(seen) => seen.subrole.is_empty() || seen.subrole == "AXStandardWindow",
+                None => !placed_dialogs.contains(pane),
+            };
+            ensure!(!standard || m.pane(*pane).is_some(), "{action:?} closed the user's pane {pane}");
+        }
+        // The user's place, its window gone: it waits as a slot (`kept_place`).
+        let kept = matches!(&action, Action::WindowGone { pane, .. } if origin == Origin::System
+            && made == [*pane] && placed_before.contains(pane));
         ensure!(
             made.is_empty()
                 || (users && matches!(action, Action::SlotMake { .. } | Action::SlotDialogKeep))
-                || restored,
+                || restored
+                || kept,
             "{origin:?}'s {action:?} made slot {made:?}"
         );
         for (id, run) in &slots_before {
@@ -8333,7 +8372,7 @@ fn a_live_slots_window_going_parks_it() {
         Action::Open { kind: app, axis: Axis::Right, beside: None }.into(),
         slot_make(2, 1, any).into(),
         Action::Enter { pane: 2 }.into(),
-        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 1 }),
+        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 1, was: None }),
     ])
     .unwrap();
 }
@@ -8510,11 +8549,11 @@ fn the_users_pick_of_its_apps_window_fills_a_slot() {
     replay(&[
         Action::Open { kind: app(1), axis: Axis::Right, beside: None }.sent_by(Origin::User),
         slot_make(1, 1, "{\"select\":{}}").sent_by(Origin::User),
-        Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System),
+        Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System),
         Action::OpenPicker { axis: Axis::Right, new_tab: false, items: vec![pick] }.sent_by(Origin::User),
         Action::PickerChoose { index: Some(0) }.sent_by(Origin::User),
         Action::Open { kind: app(2), axis: Axis::Right, beside: None }.sent_by(Origin::User),
-        Action::WindowGone { pane: 1, app_running: false, at: 0 }.sent_by(Origin::System),
+        Action::WindowGone { pane: 1, app_running: false, at: 0, was: None }.sent_by(Origin::System),
     ])
     .unwrap();
 }
@@ -8787,7 +8826,7 @@ fn seed_373_a_pane_emptied_for_an_offer_keeps_its_mark_while_it_waits() {
         .into(),
         Action::MarkToggle { of: MarkOf::Pane(None), uid: "u1".into(), cwds: vec![] }.into(),
         by(Origin::System, window_offered(2, seen, "no slot for this window")),
-        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 201000000 }),
+        by(Origin::System, Action::WindowGone { pane: 2, app_running: true, at: 201000000, was: None }),
     ])
     .unwrap();
 }

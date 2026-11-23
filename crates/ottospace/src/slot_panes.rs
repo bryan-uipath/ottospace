@@ -194,6 +194,10 @@ impl Workspace {
                 self.slot_dialog_open(pane, window, cx);
                 return true;
             }
+            ("slot-close", _, Some(pane)) => {
+                self.close_pane(pane, window, cx);
+                return true;
+            }
             ("slot-accept", _, Some(pane)) => Action::SlotAccept { pane },
             ("slot-decline", _, Some(pane)) => Action::SlotDecline { pane },
             ("slot-next", _, Some(pane)) => Action::SlotNext { pane },
@@ -266,6 +270,8 @@ impl Workspace {
         let (id_row, title_row) = dialog.rows();
         let mut rows = vec![row().child(label("App")).child(app.clone()).into_any_element()];
         if let Some(id) = id_row.filter(|_| dialog.has_id) {
+            // A place kept for a window with no id (`kept_place`) waits for one with none.
+            let id = if id.is_empty() { "none".to_string() } else { id };
             let text = format!("{} Window id is {id}", tick(dialog.by_id));
             let note = div().text_xs().text_color(rgb(theme::MUTED)).child("the app's own name for this window");
             rows.push(row().child(button("by-id", text, dialog.by_id, cx)).child(note).into_any_element());
@@ -366,6 +372,12 @@ impl Workspace {
         } else {
             body = body.child(line(waits, theme::MUTED));
             body = body.child(line("⌘E Put something else here".into(), theme::MUTED));
+            // Kept when its window closed: as easy to be rid of as the pane was to get.
+            let id = format!("slot-close:{pane}");
+            let close = word(id.clone(), "Close this pane", false)
+                .child(self.controls.mark(id))
+                .on_click(cx.listener(move |this, _, window, cx| this.close_pane(pane, window, cx)));
+            body = body.child(close);
         }
         Some(body.into_any_element())
     }

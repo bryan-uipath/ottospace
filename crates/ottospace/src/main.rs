@@ -257,6 +257,8 @@ struct Hosted {
     bundle: Option<String>,
     app: String,
     window: ax::Window,
+    /// Its facts as hosted, for the slot its pane becomes when it closes (`Action::WindowGone`).
+    seen: ottospace_core::slot::Seen,
     original: CGRect,
     /// The window was off screen when hosted: `original` is the middle of the main screen.
     off_screen: bool,
@@ -335,7 +337,16 @@ impl Hosted {
         let (bundle, _) = ax::app_identity(pid);
         let app = capture::name_of(pid).unwrap_or_default();
         give_back::remember(pid, id, recovery::to_frame(original));
+        let seen = ottospace_core::slot::Seen {
+            pid,
+            window: id,
+            title: String::new(),
+            identifier: window.identifier(),
+            subrole: window.subrole().unwrap_or_default(),
+            frame: recovery::to_frame(original),
+        };
         Ok(Self {
+            seen,
             window_id: id,
             off_screen,
             title,
@@ -3311,9 +3322,18 @@ impl Workspace {
                     None
                 }
                 Request::WindowFixtureClose { window: id } => {
-                    match self.offer_fixtures.remove(&id) {
-                        Some(_) => drop(self.dispatch(Action::OfferGone { window: id }, Origin::System, window, cx)),
-                        None => failure = Some(format!("no fixture window {id}")),
+                    // An app pane's own (`app_fixture`): its window went, its app runs on.
+                    let held =
+                        self.model.panes.iter().find(|p| matches!(p.kind, Kind::App { window: w, .. } if w == id));
+                    match (self.offer_fixtures.remove(&id), held.map(|p| p.id)) {
+                        (Some(_), _) => {
+                            drop(self.dispatch(Action::OfferGone { window: id }, Origin::System, window, cx))
+                        }
+                        (None, Some(pane)) => {
+                            let gone = Action::WindowGone { pane, app_running: true, at: now_ms(), was: None };
+                            drop(self.dispatch(gone, Origin::System, window, cx))
+                        }
+                        (None, None) => failure = Some(format!("no fixture window {id}")),
                     }
                     None
                 }
@@ -4743,8 +4763,9 @@ impl Workspace {
             self.gone_since.remove(&id);
             eprintln!("pane {id}: window gone");
             // Nothing to put back, so stop the stream here instead of `release` in `dispatch`.
-            let mut app_running = false;
+            let (mut app_running, mut was) = (false, None);
             if let Some(hosted) = self.hosted.remove(&id) {
+                was = Some(hosted.seen.clone());
                 app_running = ax::app_identity(hosted.pid).1.is_some();
                 trace::record("window_gone", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                 let _ = hosted.stream.stop_capture();
@@ -4754,8 +4775,8 @@ impl Workspace {
                     cx.activate(true);
                 }
             }
-            // A slot waits for it, and so does a pane offering a window its app remade; any other closes.
-            let gone = Action::WindowGone { pane: id, app_running, at: now_ms() };
+            // A slot waits for it, and so do the user's pane and one offering a window its app remade.
+            let gone = Action::WindowGone { pane: id, app_running, at: now_ms(), was };
             self.dispatch(gone, Origin::System, window, cx);
         }
     }

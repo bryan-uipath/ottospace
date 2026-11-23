@@ -2244,12 +2244,14 @@ pub enum Action {
     SlotTick {
         at: u64,
     },
-    /// The window of app pane `pane` is gone: closed, or no longer listed. A slot waits for it;
-    /// any other pane closes. The shell's alone.
+    /// The window of app pane `pane` is gone: closed, or no longer listed. A slot waits for it,
+    /// and so does a pane the user put it in (`slots` on); any other closes. `was`: its facts as
+    /// read when it was hosted, if the shell has them. The shell's alone.
     WindowGone {
         pane: PaneId,
         app_running: bool,
         at: u64,
+        was: Option<crate::slot::Seen>,
     },
     /// App pane `pane`'s app opened window `seen` by itself, and it floats
     /// (`rules::Place::Float { offer: true }`): a slot on show that selects it takes it back or
@@ -4208,6 +4210,10 @@ pub struct Model {
     /// A slot that waits the user's ⌘E pick is for: it ends when the pick opens there.
     #[serde(skip)]
     slot_pick: Option<PaneId>,
+    /// App panes a client or the app itself filled: their window closing closes them. The
+    /// user's own stay, waiting as a slot (`slots::window_gone`).
+    #[serde(skip)]
+    not_placed: std::collections::BTreeSet<PaneId>,
     /// Windows apps opened by themselves, floating, each offered by its app's pane. In the state:
     /// the pane and the window id, never the title.
     pub offers: Vec<offers::Offer>,
@@ -4391,6 +4397,7 @@ impl Default for Model {
             slot_dormant: Default::default(),
             slot_dialog: None,
             slot_pick: None,
+            not_placed: Default::default(),
             offers: Vec::new(),
             offer_panes: Default::default(),
             offer_list: None,
@@ -5562,7 +5569,11 @@ impl Model {
         let (temporary, tick) = (self.temporary_shown(), matches!(action, Action::Tick { .. }));
         // The main window's: what a closing workspace gives way to there.
         let on_show = self.tabs.get(self.main_at()).map(|tab| tab.id);
+        // A window a client or the app itself put in a pane is not the user's place (`not_placed`).
+        let placed = origin != Origin::Socket && !matches!(action, Action::Adopt { .. });
+        let held = self.app_windows();
         self.act(action, &mut effects);
+        self.settle_placed(&held, placed);
         // Which tab the main window shows, before what asks it (a closing workspace on the row).
         self.settle_out(out_from, user, &mut effects);
         // A temporary workspace the user took off the row closes; one whose Undo ran out goes.
@@ -7571,7 +7582,7 @@ impl Model {
             | Action::SlotWindows { .. }
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. }) => self.slot_act(action, effects),
-            Action::WindowGone { pane, app_running, at } => self.window_gone(pane, app_running, at, effects),
+            Action::WindowGone { pane, app_running, at, was } => self.window_gone(pane, app_running, at, was, effects),
             action @ (Action::WindowOffered { .. }
             | Action::OfferAccept { .. }
             | Action::OfferDismiss { .. }
@@ -11476,7 +11487,7 @@ mod tests {
             Action::SlotWindows { look: crate::slot::Look::default() },
             Action::SlotHosted { pane: 1, kind: None },
             Action::SlotTick { at: 0 },
-            Action::WindowGone { pane: 9, app_running: true, at: 0 },
+            Action::WindowGone { pane: 9, app_running: true, at: 0, was: None },
             Action::WindowOffered { pane: 1, seen: crate::slot::Seen::default(), why: text() },
             Action::OfferAccept { window: 9, axis: Right },
             Action::OfferDismiss { window: 9 },

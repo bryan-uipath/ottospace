@@ -1308,6 +1308,12 @@ Bring it here (↵ while the slot is focused), Not this one and `N more match`. 
 one by one, in reading order: one window a slot. ⌘E there and a pick end the slot. A filled slot's
 header says `slot`. Only you make, fill or clear a slot; a client's click on one is refused.
 
+A pane you put a window in (the picker, ⌘E, Bring it here) stays when that window closes or its app
+quits: it becomes a slot that waits for the same kind of window, by the window's id (`Waits for:
+Zoom · window id zm.meeting.window.main · the largest`, which the next meeting's window has too), or
+`no window id` for one without, never by its title. Close this pane in it, or ×, closes it. A pane a client opened,
+a window the app opened by itself, and a dialog close with their window, as before.
+
 ## The return key
 
 The return key works while any app is frontmost. It is F18 by default; set `OTTOSPACE_RETURN_KEY`

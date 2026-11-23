@@ -330,7 +330,7 @@ mod tests {
         let marked = || {
             let mut m = offered();
             m.update(Action::MarkToggle { of: crate::marks::MarkOf::Pane(None), uid: "u1".into(), cwds: vec![] });
-            m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+            m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
             assert!(m.offer_waits(1));
             m
         };
@@ -365,7 +365,7 @@ mod tests {
     #[test]
     fn a_pane_whose_window_the_app_remade_waits_empty_and_offers_the_new_one() {
         let mut m = offered();
-        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
         assert_eq!(m.pane(1).map(|p| p.kind.clone()), Some(Kind::Empty), "kept, empty");
         assert!(m.offer_waits(1) && m.offer_of(1).is_some_and(|o| o.window == 9));
         m.update(Action::Focus { pane: 1 });
@@ -377,13 +377,13 @@ mod tests {
         assert!(m.offers.is_empty() && !m.offer_waits(1));
         // ×: the pane closes, the window floats on.
         let mut m = offered();
-        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
         m.update(Action::Close { pane: Some(1) });
         assert!(m.pane(1).is_none() && m.offers.is_empty());
-        // With no offer, a pane whose window went closes as before.
+        // With no offer, a pane a client put the window in closes as before (the user's waits as a slot).
         let mut m = Model::default();
-        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
-        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None }.sent_by(Origin::Socket));
+        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
         assert!(m.pane(1).is_none());
     }
 
@@ -476,7 +476,7 @@ mod tests {
         m.update(Action::Leave);
         // Its pane's window went: the pane waits, with no chip, so no list.
         m.update(list.clone());
-        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0 }.sent_by(Origin::System));
+        m.update(Action::WindowGone { pane: 1, app_running: true, at: 0, was: None }.sent_by(Origin::System));
         assert!(m.offer_waits(1));
         assert_eq!(m.offer_list, None);
         m.update(list);
