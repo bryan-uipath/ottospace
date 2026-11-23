@@ -8305,7 +8305,7 @@ impl Model {
 
     /// The line's tag of `mark` becomes `name` (one the picks offer), or goes: every word that
     /// is such a tag is taken out, and the new one added at the end.
-    fn compose_pick(&mut self, mark: char, name: Option<String>) {
+    fn compose_pick(&mut self, mark: char, mut name: Option<String>) {
         if !matches!(mark, '#' | '>' | '@') {
             return;
         }
@@ -8314,6 +8314,11 @@ impl Model {
             |name: &String| self.picker_rows(mark).iter().any(|row| row.name == *name && row.kind != pickers::NONE);
         if name.as_ref().is_some_and(|name| !listed(name)) {
             return;
+        }
+        self.compose_picker = None;
+        // The quick note keeps its project off the line (its pill's × too): a typed one goes.
+        if let Some(quick) = self.quick.as_mut().filter(|_| mark == '#') {
+            quick.project = name.take();
         }
         let picked = self.compose_picked(mark, name.as_deref());
         let Some(field) = self.compose.as_mut() else { return };
@@ -8421,7 +8426,8 @@ impl Model {
         // Short: it is the part of the line cut last (`fit_status`).
         let first = if untitled && self.capture_title().is_none() { "Type, then " } else { "" };
         if self.quick.is_some() {
-            return Some(format!("{first}↵ files it for later · ⌘↵ starts it now · Esc"));
+            let under = self.quick_project().map(|project| format!(" under #{project}")).unwrap_or_default();
+            return Some(format!("{first}↵ files it for later{under} · ⌘↵ starts it now · Esc"));
         }
         if !plan.starts {
             return Some(format!("{first}↵ files it; nothing starts · Esc"));

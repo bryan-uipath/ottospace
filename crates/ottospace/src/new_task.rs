@@ -342,22 +342,7 @@ impl Workspace {
     /// A meeting's title is drawn from the calendar here, never kept in the state.
     fn attachments(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
         use ottospace_core::model::{Owner, quick::Pill};
-        let off = |id: String, mark: Option<String>, action: Action| {
-            div()
-                .id(gpui::SharedString::from(id))
-                .relative()
-                .px_1()
-                .rounded_sm()
-                .cursor_pointer()
-                .text_color(rgb(theme::MUTED))
-                .hover(|s| s.bg(rgb(theme::BORDER_STRONG)).text_color(rgb(theme::TEXT)))
-                .child("×")
-                .children(mark.map(|mark| self.controls.mark(mark)))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(
-                    cx.listener(move |this, _, window, cx| drop(this.dispatch(action.clone(), this.input, window, cx))),
-                )
-        };
+        let off = |id: String, mark: Option<String>, action: Action| self.pill_off(id, mark, action, cx);
         let label = |pill: &Pill, at: u64| match pill {
             Pill::Meeting(meeting) => format!("Meeting · {}", meeting.title),
             Pill::Transcript(_) => {
@@ -411,9 +396,39 @@ impl Workspace {
             .into_any_element()
     }
 
+    /// A pill's ×: `action` on a click; `mark`, where it is drawn (`compose_rects`, sneak).
+    fn pill_off(&self, id: String, mark: Option<String>, action: Action, cx: &Context<Self>) -> gpui::Stateful<Div> {
+        div()
+            .id(gpui::SharedString::from(id))
+            .relative()
+            .px_1()
+            .rounded_sm()
+            .cursor_pointer()
+            .text_color(rgb(theme::MUTED))
+            .hover(|s| s.bg(rgb(theme::BORDER_STRONG)).text_color(rgb(theme::TEXT)))
+            .child("×")
+            .children(mark.map(|mark| self.controls.mark(mark)))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(
+                cx.listener(move |this, _, window, cx| drop(this.dispatch(action.clone(), this.input, window, cx))),
+            )
+    }
+
     /// The project and repository pickers, and where there is a choice, this checkout or a new
     /// worktree (⌥⌘N).
     fn pickers(&self, cx: &mut Context<Self>) -> Vec<gpui::AnyElement> {
+        // The quick note: its project's alone, × leaves it untagged.
+        if self.model.quick_pills().is_some() {
+            let project = self.model.quick_project();
+            let off = project.as_ref().map(|_| {
+                let untag = Action::ComposePick { mark: '#', name: None };
+                self.pill_off("quick-project-off".into(), Some("quick-project-off".into()), untag, cx)
+            });
+            let label = project.map_or("#no project".into(), |name| format!("#{name}"));
+            let pill =
+                div().flex().flex_shrink().min_w_0().items_center().child(self.picker('#', label, cx)).children(off);
+            return vec![pill.into_any_element()];
+        }
         let Some(choices) = self.model.compose_choices() else { return Vec::new() };
         let project = choices.project.map_or("#no project".into(), |name| format!("#{name}"));
         let place = choices.place.map_or(">no repository".into(), |place| format!(">{place}"));

@@ -46,12 +46,15 @@ impl Pill {
     }
 }
 
-/// The open quick box: when it opened, its pills, and the word its note's folder is named by.
+/// The open quick box: when it opened, its pills, the word its note's folder is named by, and
+/// its project: that of the workspace or task in front as it opened, or the one its picker took
+/// (none: untagged). A `#project` typed in the line wins.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Quick {
     pub now: u64,
     pub pills: Vec<Pill>,
     pub word: String,
+    pub project: Option<String>,
 }
 
 impl Model {
@@ -83,12 +86,24 @@ impl Model {
             .map(Pill::Meeting)
             .into_iter()
             .chain(heard.map(Pill::Transcript))
-            .chain(front.map(|of| Pill::Front { of }))
+            .chain(front.clone().map(|of| Pill::Front { of }))
             .collect();
+        // The project of the task in front there (in a shared space, the one in front, not its owner).
+        let task = front.as_ref().and_then(|of| match of {
+            Owner::Task { id } => self.front(of).or(Some(*id)),
+            of => self.front(of),
+        });
+        let project = task.and_then(|id| self.tasks.get(id)).and_then(|task| task.project.clone());
         if self.compose.is_none() {
             self.open_box(String::new(), false, effects);
         }
-        self.quick = Some(Quick { now, pills, word });
+        self.quick = Some(Quick { now, pills, word, project });
+    }
+
+    /// The quick note's project, as its picker shows it: the line's `#project`, else its own.
+    pub fn quick_project(&self) -> Option<String> {
+        let quick = self.quick.as_ref().filter(|_| self.compose.is_some())?;
+        self.compose_line().and_then(|line| self.draft(line).project).or_else(|| quick.project.clone())
     }
 
     /// × on a pill: it is left out.
@@ -111,6 +126,11 @@ impl Model {
         let line = self.compose_line().cloned().unwrap_or_default();
         let Some(quick) = self.quick.clone() else { return };
         let Some(id) = self.file_titled(&line, None, None) else { return };
+        // Its project, unless the line names one: the line is filed as typed.
+        let task = self.tasks.get(id).filter(|task| task.project.is_none()).map(|task| task.repo.clone());
+        if let (Some(repo), Some(project)) = (task, quick.project.clone()) {
+            self.tasks.tag(id, Some(project), repo);
+        }
         self.compose = None;
         self.compose_reset();
         self.keep_note(id, &quick, effects);
@@ -282,6 +302,66 @@ mod tests {
         let note = &kept(&effects).expect("its note").1.note.as_ref().expect("a note").content;
         assert_eq!(note.meeting.as_ref().map(|m| m.title.as_str()), Some(TITLE));
         assert_eq!(m.tasks.list.last().map(|task| task.state), Some(State::Captured));
+    }
+
+    /// Its project is that of the task in front, filed with the note; its one picker, the
+    /// project's, changes it, and × (or "no project") leaves the note untagged. No agent, no repo.
+    #[test]
+    fn its_project_is_that_of_the_task_in_front_and_its_pill_takes_it_off() {
+        let mut m = model();
+        m.update(Action::TaskFromLine { line: "ship it #canvas".into(), known: Default::default(), open: true });
+        // A line that ends in a backslash files as typed, under the project.
+        open(&mut m, 600_000);
+        type_line(&mut m, "check C:\\");
+        m.update(Action::ComposeEnter);
+        let task = m.tasks.list.last().expect("filed");
+        assert_eq!((task.title.as_str(), task.project.as_deref()), ("check C:\\", Some("canvas")));
+        open(&mut m, 600_000);
+        assert_eq!(
+            (m.quick_project().as_deref(), m.compose_pickers(), m.compose_choices()),
+            (Some("canvas"), &['#'][..], None)
+        );
+        let said = "Type, then ↵ files it for later under #canvas · ⌘↵ starts it now · Esc";
+        assert_eq!(m.compose_status().as_deref(), Some(said));
+        type_line(&mut m, "ask about it");
+        m.update(Action::ComposeEnter);
+        let task = m.tasks.list.last().expect("filed");
+        assert_eq!((task.title.as_str(), task.project.as_deref()), ("ask about it", Some("canvas")));
+        // × on its pill: untagged, and the line says so. Its list, if open, closes: ↵ takes no row.
+        open(&mut m, 600_000);
+        m.update(Action::ComposePicker { mark: Some('#') });
+        m.update(Action::ComposePick { mark: '#', name: None });
+        assert_eq!((m.quick_project(), m.picker_menu()), (None, None));
+        type_line(&mut m, "untagged");
+        assert_eq!(m.compose_status().as_deref(), Some("↵ files it for later · ⌘↵ starts it now · Esc"));
+        m.update(Action::ComposeEnter);
+        assert_eq!(m.tasks.list.last().and_then(|task| task.project.clone()), None);
+        // Its list, from Tab: "no project" first, the project on; a row taken is the note's, off the line.
+        open(&mut m, 600_000);
+        m.update(Action::ComposeComplete);
+        let menu = m.picker_menu().expect("the project's list");
+        assert_eq!((menu.mark, menu.rows[menu.selected.unwrap_or(0)].name.as_str()), ('#', "canvas"));
+        m.update(Action::ComposeMove { delta: -1 });
+        m.update(Action::ComposeEnter);
+        assert_eq!((m.quick_project(), m.compose_line().map(String::as_str)), (None, Some("")));
+        // Tab: its list, then the line again. There is no agent or repository to pick.
+        m.update(Action::ComposeComplete);
+        assert_eq!(m.picker_menu().map(|menu| menu.mark), Some('#'));
+        m.update(Action::ComposeComplete);
+        assert_eq!(m.picker_menu(), None);
+    }
+
+    /// Two tasks in one space: the project is that of the one in front, not of the space's owner.
+    #[test]
+    fn its_project_is_that_of_the_task_in_front_of_a_shared_space() {
+        let mut m = model();
+        for line in ["first #alpha", "second #beta"] {
+            m.update(Action::TaskFromLine { line: line.into(), known: Default::default(), open: true });
+        }
+        let second = m.tasks.list.last().map(|task| task.id);
+        assert_eq!(m.front(m.space()), second, "the second in front");
+        open(&mut m, 600_000);
+        assert_eq!(m.quick_project().as_deref(), Some("beta"));
     }
 
     /// With nothing open the drawer's own empty box shows: ⌘⇧N makes it the quick note.

@@ -9,3 +9,7 @@
 {"cmd":"key","keys":"a s k space a b o u t space t h e space e x p o r t","as":"user"}
 {"settle":500}
 {"shot":"pills"}
+# Its project's picker, opened from Tab: "no project" and the projects.
+{"cmd":"key","keys":"tab","as":"user"}
+{"settle":300}
+{"shot":"project-list"}

@@ -2294,6 +2294,7 @@ export function snapshot(value: unknown): Snapshot {
     compose_hint: orNull(str)(o.compose_hint, "compose_hint"),
     compose_choices: orNull(composeChoices)(o.compose_choices, "compose_choices"),
     compose_picker: orNull(composeMenu)(o.compose_picker, "compose_picker"),
+    quick_project: orNull(str)(o.quick_project, "quick_project"),
     compose_worktree: orNull(composeWorktree)(o.compose_worktree, "compose_worktree"),
     compose_target: orNull(composeTarget)(o.compose_target, "compose_target"),
     welcome: bool(o.welcome, "welcome"),

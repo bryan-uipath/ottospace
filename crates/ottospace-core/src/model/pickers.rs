@@ -28,14 +28,18 @@ pub struct Choices {
 pub(super) const NONE: &str = "none";
 
 impl Model {
-    /// The pickers the open box shows, in Tab's order. The quick note has none.
+    /// The pickers the open box shows, in Tab's order. The quick note's is its project's alone.
     pub fn compose_pickers(&self) -> &'static [char] {
-        if self.compose.is_none() || self.quick.is_some() { &[] } else { &['#', '>', '@'] }
+        match (&self.compose, &self.quick) {
+            (None, _) => &[],
+            (Some(_), Some(_)) => &['#'],
+            (Some(_), None) => &['#', '>', '@'],
+        }
     }
 
     /// What the pickers show, while the box has them.
     pub fn compose_choices(&self) -> Option<Choices> {
-        if self.compose_pickers().is_empty() {
+        if self.compose_pickers().len() < 3 {
             return None;
         }
         let draft = self.draft(self.compose_line()?);
@@ -53,6 +57,7 @@ impl Model {
         let draft = self.compose_line().map(|line| self.draft(line));
         let draft = draft.as_ref();
         match mark {
+            '#' if self.quick.is_some() => self.quick_project(),
             '#' => draft.and_then(|draft| draft.project.clone()),
             '>' => draft.and_then(|draft| draft.repo.clone()),
             _ => Some(draft.and_then(|draft| draft.agent.clone()).unwrap_or_else(|| self.default_agent().into())),
@@ -164,7 +169,6 @@ impl Model {
         let Some(menu) = self.picker_menu() else { return };
         let Some(row) = menu.rows.get(index) else { return };
         let name = (row.kind != NONE).then(|| row.name.clone());
-        self.compose_picker = None;
         self.compose_pick(menu.mark, name);
     }
 

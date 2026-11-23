@@ -1843,6 +1843,8 @@ export interface Snapshot {
   compose_choices: { project: string | null; place: string | null; agent: string; default: boolean } | null;
   /** The open picker's list (`mark` `#`, `>` or `@`), as `compose_menu`; null with none open. */
   compose_picker: ComposeMenu | null;
+  /** The quick note's project (⌘⇧N): the line's `#project`, else that of the task or workspace in front as it opened, or its picker's; null untagged or closed. */
+  quick_project: string | null;
   /** Where the box offers a choice of where the task works: in its checkout, or (`new`, the user's choice) a new worktree of the repository `repo` on `branch`. Null where there is no repository to make one of. */
   compose_worktree: { new: boolean; repo: string; branch: string } | null;
   /** Where the open box's ↵ starts its task: the space it was opened in (or the user switched it to), its name, and whether that is not the space on show (the box then says so, with Switch). Null while the box is closed. */
