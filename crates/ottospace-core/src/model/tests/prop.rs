@@ -9133,6 +9133,50 @@ fn seed_37143_the_main_windows_space_keeps_the_tab_it_shows_after_a_tab_out_sett
     .unwrap();
 }
 
+/// A tab out, a worktree made meanwhile, ⌘T, then ⌘⇧O again on the new tab: a fold out keeps the
+/// main window on its space.
+#[test]
+fn seed_914_a_second_fold_out_keeps_the_main_windows_space() {
+    let display =
+        |uid: &str, x| Display { uid: uid.into(), frame: Frame { x, y: 0.0, w: 1728.0, h: 1117.0 }, scale: 2.0 };
+    let worktree = |name: &str, path: &str, branch: &str| Worktree {
+        name: name.into(),
+        path: path.into(),
+        branch: Some(branch.into()),
+    };
+    let repos = vec![
+        Repo {
+            name: "#x>y🏳\u{fe0f}\u{200d}🌈🏳\u{fe0f}\u{200d}🌈".into(),
+            path: "/code/app-2".into(),
+            branch: None,
+            worktrees: vec![],
+        },
+        Repo {
+            name: "My Project".into(),
+            path: "/code/app".into(),
+            branch: Some("fix/zoom".into()),
+            worktrees: vec![worktree("  ", "/code/canvas", "fix/zoom"), worktree("2048", "/tmp", "main")],
+        },
+    ];
+    replay(&[
+        Action::Adopt { kind: Kind::Terminal, beside: None, seen: None }.sent_by(Origin::User),
+        Action::SetDisplays { displays: vec![display("d1", 0.0), display("d2", 1728.0)], main: Some("d1".into()) }
+            .sent_by(Origin::User),
+        Action::TabOut { tab: None }.sent_by(Origin::User),
+        Action::WorktreeAdded {
+            repo: "@\\".into(),
+            path: "/tmp".into(),
+            asked: "/code/app-2".into(),
+            fresh: true,
+            repos,
+        }
+        .sent_by(Origin::System),
+        Action::NewTab.sent_by(Origin::User),
+        Action::TabOut { tab: None }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
 /// The box opened in one workspace, its line taken by a capture's draft, then ↵ in a workspace
 /// of a default: the draft is filed, the bar goes, and the task joined the box's first workspace.
 #[test]

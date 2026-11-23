@@ -210,7 +210,11 @@ impl Model {
         let stand_in = alone.then(|| self.stand_in(at));
         let main = match stand_in {
             Some((tab, _)) => tab,
-            None if main == id => was.unwrap_or_else(|| self.main_after(at)),
+            // A swap brings the tab coming in to the main window if it is of the same space: the
+            // main window keeps its space (else another tab of it).
+            None if main == id => was
+                .filter(|was| self.space_of(*was) == Some(&self.tabs[at].space))
+                .unwrap_or_else(|| self.main_after(at)),
             None => main,
         };
         self.out.push(Out { tab: id, display: display.clone(), stand_in });
@@ -220,6 +224,10 @@ impl Model {
         self.add_space(&of);
         self.key_to(at, effects);
         self.away = Some(main);
+    }
+
+    fn space_of(&self, id: u32) -> Option<&Owner> {
+        self.tabs.iter().find(|tab| tab.id == id).map(|tab| &tab.space)
     }
 
     /// A new empty tab right after tab `at`, in its space and folder, not put on show: its id and title.
