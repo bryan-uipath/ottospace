@@ -5418,9 +5418,11 @@ impl Model {
         let Envelope { action, origin } = sent;
         let user = origin == Origin::User;
         // The user's click on the rail item the drawer shows is ⌘⇧R, as the left rail's open cell. Asked
-        // before the box's line is put aside, which would show the item under it; not over its brief.
+        // before the box's line is put aside, which would show the item under it; not over that
+        // item's own brief (another task's brief under the transcript is not on show).
+        let over_brief = |item: &rail::RailItem| matches!(item, rail::RailItem::Task { id } if self.brief == Some(*id));
         let action = match action {
-            Action::RailSelect { item } if user && self.brief.is_none() && self.rail_shown() == Some(item) => {
+            Action::RailSelect { item } if user && !over_brief(&item) && self.rail_shown() == Some(item) => {
                 Action::TalkToggle
             }
             action => action,
