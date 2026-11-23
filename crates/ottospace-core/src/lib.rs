@@ -12,6 +12,7 @@ pub mod ax;
 pub mod bug;
 pub mod cadence;
 pub mod calendar;
+pub mod caps_return;
 pub mod capture;
 pub mod capture_model;
 pub mod cell_art;

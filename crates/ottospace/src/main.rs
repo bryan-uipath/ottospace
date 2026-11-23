@@ -74,6 +74,7 @@ mod ax_debug;
 mod btw;
 mod bug;
 mod calendar;
+mod caps_return;
 mod chat_select;
 mod child;
 mod city;
@@ -1523,6 +1524,7 @@ impl Workspace {
                     pass::sweep(&pass::folder());
                 }
                 running::remove();
+                caps_return::quit();
                 async {}
             }),
         ];
@@ -9634,8 +9636,12 @@ fn main() {
                 let _ = RETURN_KEY.set(name.to_uppercase());
             }
             let double = listen_double_cmd();
+            // Caps Lock as the return key, if the user's settings ask: else a leftover goes.
+            let on = config::get().settings.return_caps_lock == Some(true);
+            let f = RETURN_KEY.get().filter(|_| on).and_then(|key| key.trim_start_matches('F').parse().ok());
+            let caps = caps_return::start(f.and_then(ottospace_core::caps_return::caps_as));
             let captures = collect::register_key(host_only.is_some());
-            let notice: Vec<String> = returns.into_iter().chain(double).chain(captures).collect();
+            let notice: Vec<String> = returns.into_iter().chain(double).chain(caps).chain(captures).collect();
             if !notice.is_empty() {
                 eprintln!("{}", notice.join("; "));
                 let _ = workspace.update(cx, |this, _, cx| {
