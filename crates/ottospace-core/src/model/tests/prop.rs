@@ -9448,6 +9448,63 @@ fn seed_42928_a_pen_round_ends_with_its_tab_put_away() {
     .unwrap();
 }
 
+/// A worktree's delete question over a split, then a terminal adopted: the question asked about nothing.
+#[test]
+fn seed_47160_a_delete_question_is_about_its_worktree() {
+    replay(&[
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Open {
+            kind: Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() },
+            axis: Axis::Right,
+            beside: Some(1),
+        }
+        .sent_by(Origin::User),
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Split { axis: Axis::Down, kind: Kind::Empty }.sent_by(Origin::User),
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::WorktreeAdded {
+            repo: "/code/app".into(),
+            path: "/code/app-2".into(),
+            asked: "/code/app".into(),
+            fresh: false,
+            repos: vec![
+                Repo {
+                    name: "app".into(),
+                    path: "relative".into(),
+                    branch: Some("fix/zoom".into()),
+                    worktrees: vec![],
+                },
+                Repo {
+                    name: "canvas".into(),
+                    path: "/tmp".into(),
+                    branch: Some("fix/zoom".into()),
+                    worktrees: vec![
+                        Worktree { name: "My Project".into(), path: "/Users/me/My Notes".into(), branch: None },
+                        Worktree { name: "2048".into(), path: "/code/app-2".into(), branch: None },
+                    ],
+                },
+                Repo {
+                    name: "2048".into(),
+                    path: "/code/app".into(),
+                    branch: Some("main".into()),
+                    worktrees: vec![Worktree {
+                        name: "My Project".into(),
+                        path: "".into(),
+                        branch: Some("main".into()),
+                    }],
+                },
+            ],
+        }
+        .sent_by(Origin::User),
+        Action::Close { pane: Some(8) }.sent_by(Origin::System),
+        Action::WorktreeDelete { path: "/code/app-2".into() }.sent_by(Origin::User),
+        Action::Adopt { kind: Kind::Terminal, beside: None, seen: None }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
 /// The box opened in one workspace, its line taken by a capture's draft, then ↵ in a workspace
 /// of a default: the draft is filed, the bar goes, and the task joined the box's first workspace.
 #[test]

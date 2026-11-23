@@ -5373,13 +5373,14 @@ impl Model {
         // After the tabs out: a fold-in may move the main window's tab (seed 37143).
         self.settle_selected();
         self.settle_zoom();
-        self.settle_confirm();
         // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its space's default.
         for effect in &effects {
             if let Effect::Opened(pane) = effect {
                 self.start_in_default(*pane);
             }
         }
+        // After the new terminals' folders: one opened in a worktree asked about makes it busy (seed 47160).
+        self.settle_confirm();
         self.settle_left();
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
