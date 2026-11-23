@@ -1290,17 +1290,18 @@ is resized unless you ask.
 
 ### Slots
 
-With the `slots` flag on, ⋯ in an app pane's header keeps the pane as a slot: a pane that keeps its
-place and waits for a window you name. The dialog is a checklist made from the pane's window, each
+With the `slots` flag on, ⋯ in an app pane's header opens its menu, whose `Create slot…` keeps the
+pane as a slot: a pane that keeps its place and waits for a window you name. The dialog is a checklist made from the pane's window, each
 row a choice: App (fixed), `Window id is zm.meeting.window.main` (the app's own name for the window,
 shown when it has one, ticked then), `Title is “Weekly sync”`, which window when several match now
 (the largest, the smallest, on display N, any), and Matching: Manual (the default: it offers) or
 Automatic (it takes a window that opens while it waits, on the tab on show, never the one you are
 in). Its foot says what the slot will wait for, `Waits for: Zoom · window id zm.meeting.window.main`,
 and Keep (↵) makes it. A slot made from a dialog or panel (Zoom's popped-out meeting chat) waits for
-that kind (`subrole AXSystemDialog`); any other slot takes standard windows only. A title pattern (`*Incident*`) is written by hand in `layout.json`, under the
-pane's `slot.select.title`. ⋯ on a slot edits it, with Look Again (forget the windows passed over),
-Give Back the Window and Clear Slot at its foot.
+that kind (`subrole AXSystemDialog`); any other slot takes standard windows only. A title pattern
+(`*Incident*`) is written by hand in `layout.json`, under the pane's `slot.select.title`. ⋯ on a slot
+offers `Edit slot…` (the dialog, with Look Again (forget the windows passed over), Give Back the
+Window and Clear Slot at its foot) and `Clear slot`. The menu is the user's: ↓ ↑ ↵, Esc closes it.
 
 A slot that waits says so in its pane, in the dialog's words: `Waiting for a Zoom window ·
 Waits for: Zoom · window id zm.meeting.window.main`, or `Zoom is not running`, or `Zoom's window is

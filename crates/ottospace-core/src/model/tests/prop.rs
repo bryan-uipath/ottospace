@@ -275,12 +275,13 @@ impl Gen<'_> {
 
     /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not; or the transcript's header.
     fn menu_row(&mut self) -> MenuOf {
-        match self.rng.below(7) {
+        match self.rng.below(8) {
             0 => ListRow::Task(self.task()).into(),
             1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)).into(),
             2 => MenuOf::Transcript,
             3 => MenuOf::Space(self.workbook()),
             4 => ListRow::Repo(self.checkout()).into(),
+            5 => MenuOf::Pane(self.pane()),
             _ => ListRow::Workbook(self.workbook()).into(),
         }
     }
@@ -3117,6 +3118,12 @@ fn check(m: &Model) -> Result<(), String> {
             }
             MenuOf::Transcript => m.listen.shown && !items.is_empty(),
             MenuOf::ReposAdd => m.sidebar == Some(Section::Repos) && !m.repo_dirs.fixed,
+            // A pane's ⋯: on show, an app pane or a slot, `slots` on.
+            MenuOf::Pane(id) => {
+                let shown = m.layout.as_ref().is_some_and(|layout| layout.leaves().contains(id));
+                let kind = m.pane(*id).map(|pane| &pane.kind);
+                shown && m.features.on(Feature::Slots) && matches!(kind, Some(Kind::App { .. } | Kind::Slot { .. }))
+            }
         };
         ensure!(listed, "a menu of {:?}, which is not listed", menu.row);
         let on = menu.selected.is_none_or(|at| at < items.len());

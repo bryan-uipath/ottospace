@@ -242,7 +242,7 @@ impl Model {
         true
     }
 
-    pub(super) fn slot_act(&mut self, action: Action, effects: &mut Vec<Effect>) {
+    pub(crate) fn slot_act(&mut self, action: Action, effects: &mut Vec<Effect>) {
         // The dialog's foot does its act and closes it.
         if let Action::SlotClear { pane } | Action::SlotLookAgain { pane } | Action::SlotGiveBack { pane } = &action
             && self.by_user
