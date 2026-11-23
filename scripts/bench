@@ -387,12 +387,17 @@ def city_motion(binary, scratch, files):
         mouse("up", x + 360)
         time.sleep(0.5)
         turn = motion_of(trace_events(inst), start, last())
-        # At rest after it: no frame and no picture (idle stays idle).
+        # At rest after it: the picture full size and named again, then no frame and no picture.
+        city = shot.path_get(inst.state(), "city")
+        full = [round(v * city["scale"]) for v in city["bounds"][2:]]
+        turn["rest_full"] = int(city["picture"] == full and city["labels"] > 0)
         start = last()
         time.sleep(2)
-        rest = [e for e in trace_events(inst) if e.get("ms", 0) > start and e.get("ev") in ("frame", "city_picture")]
-        turn["rest_frames"] = len(rest)
-        rise["rest_frames"] = None
+        after = [e for e in trace_events(inst) if e.get("ms", 0) > start]
+        turn["rest_frames"] = sum(1 for e in after if e.get("ev") == "frame")
+        turn["rest_pictures"] = sum(1 for e in after if e.get("ev") == "city_picture")
+        for key in ("rest_full", "rest_frames", "rest_pictures"):
+            rise[key] = None
         return {"rise": rise, "turn": turn}
     finally:
         inst.close()
@@ -557,7 +562,7 @@ def motion_table(result):
     """The code city in motion, each side: a row a phase and size."""
     f = lambda v, d=1: "—" if v is None else f"{v:.{d}f}"
     lines = ["", f"Code city in motion, at 1024×674, the median of {MOTION_RUNS} runs a side (frame: render to paint on the main thread; gap: from one frame to the next; picture: made on its own thread; paint: the picture's paint on the main thread):", "",
-             "| side | phase | files | frames | frame median / p95 (ms) | over 16.7 | gap median / p95 (ms) | gaps over 16.7 | pictures | scene / GPU (p95) / copy out (p95) / image / names (ms) | paint median / p95 (ms) | at rest after: frames, pictures (2 s) |",
+             "| side | phase | files | frames | frame median / p95 (ms) | over 16.7 | gap median / p95 (ms) | gaps over 16.7 | pictures | scene / GPU (p95) / copy out (p95) / image / names (ms) | paint median / p95 (ms) | after it: full size and named (runs) / frames / pictures in 2 s |",
              "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for name, side in result.items():
         for files, phases in (side.get("motion") or {}).items():
@@ -567,7 +572,7 @@ def motion_table(result):
                     f"| {name} | {phase} | {files:,} | {m['frames']} | {f(m['frame_median'])} / {f(m['frame_p95'])} | {m['over_16']} | "
                     f"{f(m['gap_median'])} / {f(m['gap_p95'])} | {m['gaps_over_16']} | {m['pictures']} | "
                     f"{f(m['scene_ms'])} / {f(m['gpu_ms'])} ({f(m['gpu_p95'])}) / {f(m['copy_ms'])} ({f(m['copy_p95'])}) / {f(m['image_ms'])} / {f(m.get('marks_ms'))} | "
-                    f"{f(m.get('paint_ms'))} / {f(m.get('paint_p95'))} | {f(m.get('rest_frames'), 0)} |")
+                    f"{f(m.get('paint_ms'))} / {f(m.get('paint_p95'))} | {f(m.get('rest_full'), 0)} / {f(m.get('rest_frames'), 0)} / {f(m.get('rest_pictures'), 0)} |")
     return lines
 
 

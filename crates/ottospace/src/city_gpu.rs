@@ -218,12 +218,16 @@ impl Gpu {
             })
         };
         let (glass, pipeline) = (pipeline(true), pipeline(false));
-        let gpu = Self { device, queue, pipeline, glass, layout };
-        // Warmed: the first picture shown pays no first draw's setup (60 ms in the bench).
+        Ok(Self { device, queue, pipeline, glass, layout })
+    }
+
+    /// One draw of a one-box city at 16×16, its picture dropped: the first picture shown pays no
+    /// first draw's setup (60 ms in the bench). Its failure is no failure of the GPU.
+    pub fn warm(&self) {
         let one = ottospace_core::atlas::atlas(&ottospace_core::atlas::repo(&[("a/b.rs".into(), 900)]));
         let scene = ottospace_core::scene::scene(&one, &[], 1., &ottospace_core::scene::View::default());
-        gpu.render(&scene, 16, 16, 1., true)?;
-        Ok(gpu)
+        let warmed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.render(&scene, 16, 16, 1., true)));
+        drop(warmed);
     }
 
     /// `scene` as a picture `width` × `height` pixels, `rise` (0 to 1) of the way through its
