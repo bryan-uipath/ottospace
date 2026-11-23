@@ -1426,7 +1426,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in a toast (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `clone_dir`, `transcripts_dir`, `projects_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `agent_commands`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `city_folder_colors` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in a toast (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `clone_dir`, `transcripts_dir`, `projects_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `agent_commands`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `city_folder_colors`, `city_exclude` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -1499,6 +1499,7 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
 | `calendar_email` | Your address among a meeting's attendees in the feed: a meeting you declined is left out. Kept on this machine, never shown. A feed with no attendees (Outlook's published calendars) cannot say who declined: use `calendar_hide_free` | none: nothing is left out |
 | `calendar_hide_free` | Leave out entries that keep the time free (Outlook's FREE, `TRANSP:TRANSPARENT`): the band, the section, the alerts and the `calendar` request | `false` |
 | `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64. A rule wins over a focus block's green | none: colours by kind |
+| `city_exclude` | Folders the code city leaves out, by checkout: `{"*": ["archive"], "~/notes": ["old/drafts"]}`. `*`: every checkout; any other key is a checkout's path (`~` for your home). An entry is a folder's name, left out wherever it is, or a path from the checkout's root (`notes/archive`), left out with all under it; no patterns, nothing outside the checkout (no `/` first, no `..`). `!target` keeps a built-in one. At most 256 | `.git`, `node_modules`, `bower_components`, `jspm_packages`, `target`, `dist`, `.next`, `.nuxt`, `.turbo`, `.gradle`, `.venv`, `venv`, `__pycache__`, `.tox`, `Pods` |
 | `city_folder_colors` | The code city's colours by folder name, over the built-in ones: `{"notes": "teal", "docs": "red"}`. A name is one folder's (case ignored), a colour `red`, `orange`, `yellow`, `green`, `teal`, `cyan`, `blue`, `indigo`, `violet`, `pink`, `brown` or `slate`. At most 64 | `docs`/`doc` green, `tests`/`test`/`__tests__`/`spec` violet, `e2e` pink, `src`/`lib` blue, `crates`/`packages`/`pkg` teal, `apps` cyan, `scripts`/`tools` slate, `assets` brown, `examples` yellow |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 | `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in a toast with the flags there are; the others still apply | each flag's default |
@@ -1663,7 +1664,9 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   the call runs, and after it while the agent still works and has run no other call. A shell
   command lights none. The call names only the last two parts of a path, so two files that share
   them are both lit.
-- The files are what `git ls-files` lists there (tracked, and new ones not ignored), read off
+- The files are what `git ls-files` lists there (tracked, and new ones not ignored), less the
+  folders `city_exclude` leaves out and built-in ones (`node_modules`, `target`, `dist`, …):
+  dropped before the layout, they take no room, move nothing and count toward no limit. Read off
   the main thread with the status bar's hardened git, only in a checkout listed in Repos, when
   the tab comes on show and when the lit files change. No timer. Over 20,000 files, 4 MB of
   names or 10 seconds: no city, the lattice stays.

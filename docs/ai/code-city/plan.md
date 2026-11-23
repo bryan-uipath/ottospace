@@ -160,6 +160,18 @@ Windows). It replaces the 2D plan this note first recommended.
   district is a plinth three times its terrace's lift (up to 4.5 beside a few tall towers), its
   top edge lit, its sides' edges dim (a per-instance factor in the shader: still one draw). A
   plinth's edge is where a folder's name goes, as in the original city.
+- **Folders left out** (the owner, 2026-11-23: "node_modules, or an archives folder inside a
+  notes checkout"). What the city read before: `git ls-files --cached --others
+  --exclude-standard` (tracked and untracked files, `.gitignore` honoured), only in a checkout
+  Repos lists (any other folder, a git one or not, has no city), links skipped, no folder
+  skipped by name. Now `city_filter` (pure, tested) drops a file under a folder named by a
+  built-in list (tools' output, other people's code) or by `city_exclude` (`*` and the
+  checkout's own key): a name anywhere, or a path from the root; no globs, so an entry says
+  plainly what goes, and nothing can reach outside the checkout. Dropped before the count and
+  the layout: what stays is laid out as if the folder never was, and keeps its colours.
+  Recommended next (not built): a folder's right-click "Hide from the city" (the user's click
+  only) writes the checkout's entry; the place's corner says "2 folders hidden" beside Reset
+  view, and its menu lists them, each with Show, so nothing is hidden without a way back.
 - **Stable folder colours** (the owner, 2026-11-23: "a mapping, customisable"). A building's
   colour is its nearest folder's with a named colour (built in by what the folder is for: `docs`
   green, `tests` violet, `e2e` pink, `src` blue, `crates`/`packages` teal; `city_folder_colors`

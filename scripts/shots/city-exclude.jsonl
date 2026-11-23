@@ -1,0 +1,25 @@
+# Folders left out of the code city (`city_filter`): a made-up tree of 400 files (`notes`, its
+# folders m0 to m5) with a node_modules folder in it (left out built in: 496 places, none of
+# it; the base, which leaves none out, has 502), then `city_exclude` leaving out `m3` in every checkout and `m1/core` in this one (380
+# places): what stays keeps its colours. city-exclude/ is a link to code-city/ (its settings list
+# `app`). A repository's tab, the new-task drawer folded (⌘⇧R).
+{"env": {"OTTOSPACE_FEATURES": "code_city"}}
+{"tree": "repos/notes", "files": 400}
+{"write": "repos/notes/node_modules/left-pad/index.js", "text": "x\n"}
+{"write": "repos/notes/node_modules/left-pad/package.json", "text": "x\n"}
+{"write": "repos/notes/node_modules/react/index.js", "text": "x\n"}
+{"cmd": "repo_add", "path": "{ROOT}/repos/notes"}
+{"until": "repos_bar.1"}
+{"cmd": "section", "section": "repos"}
+{"cmd": "open_repo", "path": "{ROOT}/repos/notes"}
+{"cmd": "close"}
+{"cmd": "key", "keys": "escape", "as": "user"}
+{"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
+{"until": "city.picture", "timeout_ms": 60000}
+{"print": "city.places"}
+{"settle": 800}
+{"shot": "all"}
+{"write": "home/settings.json", "text": "{\"repos\": [\"{ROOT}/repos/app\", \"{ROOT}/repos/notes\"], \"conversation_view\": \"native\", \"session_dirs\": {\"claude\": [\"{ROOT}/sessions/claude\"]}, \"restore_layout\": false, \"city_exclude\": {\"*\": [\"m3\"], \"{ROOT}/repos/notes\": [\"m1/core\"]}}\n"}
+{"until": "city.places", "is": 380, "timeout_ms": 60000}
+{"settle": 800}
+{"shot": "left-out"}
