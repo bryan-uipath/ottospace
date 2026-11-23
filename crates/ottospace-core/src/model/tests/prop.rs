@@ -9415,16 +9415,24 @@ fn seed_2522_a_read_of_sessions_writes_a_hide_that_is_over() {
         waits_for: Some(WaitsFor::Turn),
         cwd: Some("/code/canvas".into()),
     };
-    let hidden = vec![Hidden { runner: "claude".into(), id: "s1".into(), at: None }];
-    replay(&[
+    let s2 = Hidden { runner: "claude".into(), id: "s2".into(), at: Some(201_060_000) };
+    let hidden = vec![Hidden { runner: "claude".into(), id: "s1".into(), at: None }, s2.clone()];
+    let steps = [
         Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
         Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
         Action::SessionsInPanes { found: vec![waits] }.sent_by(Origin::User),
         Action::Tick { now: 1_000_000 }.sent_by(Origin::System),
         Action::SetHiddenSessions { hidden }.sent_by(Origin::System),
         Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::User),
-    ])
-    .unwrap();
+    ];
+    replay(&steps).unwrap();
+    // The read writes the list once, without the hide that is over and with the other one.
+    let mut m = Model::default();
+    let mut effects = Vec::new();
+    for step in steps {
+        effects = m.update(step);
+    }
+    assert_eq!(effects, [Effect::SaveHiddenSessions { hidden: vec![s2] }]);
 }
 
 /// Go to's ↵ on a checkout: its Repos row's click selects the space made for it.
