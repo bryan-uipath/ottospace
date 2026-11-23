@@ -12,7 +12,7 @@ ottospace            # opens on the Repos list
 - Repos lists each repository's name over its checkouts, one line each: a dot (lit while an agent works there, amber while a task there needs you, one pulse per commit), the branch, `default` on the repository's own folder. The chevron (or a click on the name) folds a repository; a count shows while folded, and a dot after it while something there works (amber: needs you). Point at a name: + makes a worktree (an existing branch, or a new one from HEAD), the trash stops listing it. Click a row: the workspace of that checkout (its default worktree, else one with a task there), else a new workspace for it, named for its branch, with a terminal there. A workspace's new terminals and tasks start in its default worktree; tasks of one workspace in different worktrees name theirs on their rows. A task whose agent makes a worktree and works there follows it (its workspace too, when it is its one task). A row a task works in carries the task's badge until it is done (Terminal, on hover, opens a terminal anyway). A done task shows only in Tasks' Done: not on a row, nor on the top row, where its workspace stays under its name.
 - The status bar's far left names the mode only where nothing else shows where keys go: `APP`, `LIST`, `SELECT` (⌘⇧C), `GO TO` (⌘' waits), `LETTER` (a mark waits for its letter). Else a dimmed `NORMAL`: a palette, a question or a field shows itself. After it, where you are (the folder, `~/code/app · main ●`, a dot for changes in a checkout listed in Repos; a click copies the path), its right end the next meeting (`Team sync in 12 min`, `now · Join`) and the agents (`● 2 working · ● 1 needs you`, `● 3 working · 1 in a terminal` with an agent at work in a terminal; a click goes to the next that needs you, one on `in a terminal` to that agent); the version is under About ottospace (⌘⇧P, or the app menu) and the hover of the bar's empty middle.
 - A card at the window's bottom right, over the status bar (a toast), is a notice: red an error, amber a warning, blue information, indigo a meeting that started. Up to three stack, the most pressing at the foot, the others upward, then `+N more`; nothing moves for them. × dismisses a card, Esc the lowest one; a settings problem offers Open settings, a meeting Join.
-- Stuck in an app? Click ottospace's rail or top bar. Or press the return key: F18, which most keyboards lack, so map Caps Lock to it (see [the return key](reference.md#the-return-key)) or start with `OTTOSPACE_RETURN_KEY=f13` (f13 to f20). The status bar names the key in use.
+- Stuck in an app? Tap ⌘ twice. Or click ottospace's rail or top bar, or press F18 (see [the return key](reference.md#the-return-key)). The status bar names the keys in use.
 
 ## Panes and tabs
 
@@ -88,7 +88,7 @@ Without it, ⌘E puts an app in a pane.
 | Find an app among all installed | Apps, "All apps (N)", then click the filter or `/` in list mode, and type |
 | Type in the app | Click its pane. The status bar turns `APP`; ottospace keys stop |
 | Scroll the app | Wheel or trackpad over its pane: it enters the app (`APP`), as a click does, and the scroll reaches it |
-| Come back | Click ottospace itself, or the return key |
+| Come back | Click ottospace itself, ⌘⌘, or F18 |
 | Give the window back to macOS | Come back to ottospace first, then ⌘W on its pane: the window returns to where it was |
 | Find a window lost off screen | `ottospace rescue` in a terminal, or Developer ▸ Bring All Windows Back |
 
@@ -247,6 +247,7 @@ restart, and the rest applies at once:
   "agent_models": { "claude": ["claude-opus-5-5"], "codex": ["gpt-6-astra"] },
   "agent_commands": { "claude": "ja claude" },
   "capture_key": "ctrl-alt-cmd-space",
+  "return_double_cmd": true,
   "capture": { "keep_images": true, "ax": true },
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
@@ -266,7 +267,7 @@ setting takes its default.
 
 `features`: [feature flags](reference.md#features), each `true` or `false`; ⌘⇧P ▸ Features… writes them. A flag is temporary and about readiness; a preference is a normal setting.
 
-`capture_key`: the key that captures the pane in use (`"off"` for none). `capture`: `keep_images` `false` writes no picture; `ax` `false` reads no accessibility tree for a capture.
+`capture_key`: the key that captures the pane in use (`"off"` for none). `return_double_cmd`: `false` turns ⌘⌘ off. `capture`: `keep_images` `false` writes no picture; `ax` `false` reads no accessibility tree for a capture.
 
 The Calendar section (third on the rail, under Tasks, only while `calendar_ics` is set) draws a day as Outlook's day view: blocks as tall as they last, overlaps side by side, over an hour free pressed into a band (`2 h free`), all-day events in a strip at the top, and now's line across in the accent colour with the time; it opens with now in view, and ⌘⌃E starts on the meeting that runs (else the next); `‹ ›` in its header (← → in list mode) go a day back and on, 7 each way, `Today` (`t`) comes back; ↵ or `Join` opens a meeting's link. Its rail cell has an amber dot near a meeting, a filled badge while its notice stands.
 

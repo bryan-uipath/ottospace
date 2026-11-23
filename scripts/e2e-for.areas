@@ -77,6 +77,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?(sneak|sneak_place|sneak_apps)(\.rs|/)                            sneak
 /src/(.*/)?marks(\.rs|/)                                                     mark
 /src/(.*/)?projects(\.rs|/)                                                  projects_section|a_project_dragged
+/src/(.*/)?double_cmd(\.rs|/)                                                double_tap_of_cmd
 /src/(.*/)?scrollbar(\.rs|/)                                                 scrollbar|scrolls|fades|long_list|wheel
 /src/(.*/)?(status_bar|calendar|ics)(\.rs|/)                                 calendar|timeline|meeting|feed|band|status_bar|busy_day|focus_block
 /src/(.*/)?(listen|listen_file|listen_live|listen_meter|transcribe|transcript)(\.rs|/)   transcript|hears|lost_stream|speaks|heard

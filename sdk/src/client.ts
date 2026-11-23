@@ -615,6 +615,15 @@ export class Client {
     return this.snapshot({ cmd: "zoom_press" });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): modifier changes as ⌘⌘'s listener would see them in another app;
+   * a double tap of ⌘ returns as the return key (`counts.double_cmds`). Rejects outside a test run.
+   */
+  modifierFlags(args: {
+    changes: { at: number; cmd: boolean; others?: boolean; input_at?: number | null }[];
+  }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "modifier_flags", ...args });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): the displays changed, as macOS says when one is plugged in or
    * taken away. The app kicks its window to draw again (`counts.redraws`). Rejects outside a test run.
    */

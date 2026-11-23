@@ -83,9 +83,8 @@ once, in System Settings > Privacy & Security:
 
 A window opens on your repositories. Press ⌘D to split with a new terminal, and ⌘/ to see every key.
 
-Click an app pane and the app has the keyboard. The return key gives it back to ottospace from
-any app. It is F18, which most keyboards lack, so map Caps Lock to it:
-[the return key](docs/reference.md#the-return-key).
+Click an app pane and the app has the keyboard. Tap ⌘ twice to give it back to ottospace, from
+any app, or press F18: [the return key](docs/reference.md#the-return-key).
 
 ## Learn more
 

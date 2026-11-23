@@ -16313,6 +16313,24 @@ fn a_lost_stream_greys_the_dot_and_the_bar_says_why_until_the_user_puts_it_away(
     );
 }
 
+/// ⌘ tapped twice, alone, returns as the return key does; ⌘C then ⌘, or a slow pair, does not.
+/// The changes are made up (`modifier_flags`): a test run listens to no keyboard.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_double_tap_of_cmd_returns_and_a_shortcut_does_not() {
+    let otto = Otto::launch("double-cmd");
+    let send = |changes: Value| {
+        otto.call(json!({"cmd": "modifier_flags", "changes": changes}))["counts"]["double_cmds"].clone()
+    };
+    // ⌘C (a key down while ⌘ is), then a tap; then two taps 500 ms apart.
+    let shortcut = json!([{"at": 0, "cmd": true}, {"at": 90, "cmd": false, "input_at": 40}, {"at": 200, "cmd": true}, {"at": 260, "cmd": false, "input_at": 40}]);
+    assert_eq!(send(shortcut), 0);
+    let slow = json!([{"at": 1000, "cmd": true}, {"at": 1080, "cmd": false}, {"at": 1580, "cmd": true}, {"at": 1650, "cmd": false}]);
+    assert_eq!(send(slow), 0);
+    let double = json!([{"at": 3000, "cmd": true}, {"at": 3080, "cmd": false}, {"at": 3200, "cmd": true}, {"at": 3270, "cmd": false}]);
+    assert_eq!(send(double), 1);
+}
+
 /// A change of the displays (a laptop taken off its monitors) has the shell kick GPUI to draw
 /// again, by GPUI's own `windowDidChangeScreen:` and `displayLayer:`, and the window goes on
 /// drawing after it. A test cannot unplug a display, so its display link never breaks here:

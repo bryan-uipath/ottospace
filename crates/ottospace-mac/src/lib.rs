@@ -13,6 +13,7 @@ pub mod image;
 pub mod input;
 pub mod locale;
 pub mod meeting;
+pub mod modifiers;
 pub mod oslog;
 pub mod pasteboard;
 pub mod process;
