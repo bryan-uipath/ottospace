@@ -5409,13 +5409,13 @@ impl Run {
                 }
                 // The hidden sessions' own file: written only for a hide or an unhide, with the flag on.
                 Effect::SaveHiddenSessions { hidden } => {
-                    // Or a read that ended a hide (it worked and asked again).
+                    // Or a read that ended a hide (it worked and asked again): the read decides, as
+                    // the hide's own rule says, whoever sent it (no request of a client is a read).
                     let asked = matches!(action, Action::SessionHide { .. } | Action::SessionUnhide { .. });
-                    let read = origin == Origin::System
-                        && matches!(
-                            action,
-                            Action::SetSessions { .. } | Action::SessionsAtWork { .. } | Action::SessionsInPanes { .. }
-                        );
+                    let read = matches!(
+                        action,
+                        Action::SetSessions { .. } | Action::SessionsAtWork { .. } | Action::SessionsInPanes { .. }
+                    );
                     ensure!(
                         (asked || read) && m.features.on(Feature::TerminalTasks),
                         "{action:?} wrote the hidden sessions"
@@ -9343,6 +9343,30 @@ fn seed_42535_a_drafts_task_starts_where_the_user_is() {
         .into(),
         Action::OpenRepo { path: notes(), axis: Axis::Down }.into(),
         Action::ComposeSubmit { open: true }.into(),
+    ])
+    .unwrap();
+}
+
+/// A hide that is over (its session waits in a pane, past the hide's file time) is dropped and
+/// written by the next read of sessions, whoever sent that read: the read decides, not its sender.
+#[test]
+fn seed_2522_a_read_of_sessions_writes_a_hide_that_is_over() {
+    let waits = InPane {
+        pane: 2,
+        runner: "claude".into(),
+        id: "s1".into(),
+        last_activity: Some(1),
+        waits_for: Some(WaitsFor::Turn),
+        cwd: Some("/code/canvas".into()),
+    };
+    let hidden = vec![Hidden { runner: "claude".into(), id: "s1".into(), at: None }];
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::SessionsInPanes { found: vec![waits] }.sent_by(Origin::User),
+        Action::Tick { now: 1_000_000 }.sent_by(Origin::System),
+        Action::SetHiddenSessions { hidden }.sent_by(Origin::System),
+        Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::User),
     ])
     .unwrap();
 }
