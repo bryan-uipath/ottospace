@@ -316,6 +316,7 @@ mod tests {
         table += &row("watch", &|spec| format!("{:?}", spec.attach.watch));
         table += &row("take over when idle", &|spec| format!("{:?}", spec.attach.take_over_when_idle));
         table += &row("attach live", &|spec| format!("{:?}", spec.attach.attach_live));
+        table += &row("told of ottospace", &|spec| format!("{:?}", spec.introduced));
         let note = include_str!("../../../docs/ai/agent-runners.md");
         assert!(note.contains(&table), "docs/ai/agent-runners.md must hold:\n{table}");
     }

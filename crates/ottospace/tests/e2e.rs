@@ -9719,7 +9719,7 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let argv = otto.wait_for("the argv", |_| agent_argv(&bin, "claude"));
     let state = otto.call(json!({"cmd": "state"}));
     let session = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
-    let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Claude, "fix login", None);
+    let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Claude, "fix login", None, false);
     assert_eq!(argv, [app.as_str(), "--session-id", &session, "--", &prompt]);
     assert_eq!(state["state"]["tasks"]["list"][0]["state"], "running");
     // Its space is selected; the workspace's tab and panes are as they were.
@@ -9766,7 +9766,7 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     // A task tagged with a Codex model starts Codex with that model, in the home folder.
     otto.start_task(2);
     let argv = otto.wait_for("codex's argv", |_| agent_argv(&bin, "codex"));
-    let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Codex, "try codex", None);
+    let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Codex, "try codex", None, false);
     assert_eq!(argv[1..], ["--model", "gpt-6-astra", "--", &prompt]);
     assert_eq!(Some(&argv[0]), std::env::var("HOME").ok().as_ref(), "no repository: the home folder");
     // Codex names its own session: it is found where Codex wrote it, and the task follows it.
