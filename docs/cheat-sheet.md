@@ -53,7 +53,7 @@ ottospace            # opens on the Repos list
 | Save the tab into its workspace, else as a new one | ⌘⇧S |
 | Fill the whole display, over the menu bar and Dock | ⌃⌘F, the green button, or the expand button at the top right (again to restore) |
 
-## The bar on the left (Repos, Tasks, Calendar, Workspaces; Apps and Marks behind flags)
+## The bar on the left (Repos, Tasks, Calendar, Workspaces; Apps, Marks and Projects behind flags)
 
 | I want to | Do |
 |---|---|
@@ -70,6 +70,7 @@ ottospace            # opens on the Repos list
 | Fold a repository | Its chevron, or ← / → in list mode |
 | Reorder repositories | Drag a name in Repos, folded or not: a bar shows where it lands, Esc puts it back. Kept in `repos` in the settings |
 | A worktree's pull request | Its `#number` at the row's end: muted draft, ✓ ready, amber waiting, red failing. Hover for checks, review and merge; click opens it (via `gh`, `repos_prs`) |
+| See your projects | Set `projects_dir` to your projects folder (the `projects` flag): Projects on the rail lists each folder or `.md` in it, by title, placed ones first, then the most recently changed. Read only, never written |
 | Close the bar | × in its header |
 | Click anything without the mouse | ⌘; or ⌘⌃G: every control gets a letter label (a × gets two), beside a small control and outlining it, and so do the buttons and text fields of the focused app pane, in orange, two letters or more. Type it · ⌫ takes a letter back · Esc or a wrong letter leaves. An orange label presses that button in the app, or puts you in its text field |
 

@@ -49,6 +49,7 @@ pub mod new_window;
 pub mod notice;
 pub mod palette;
 pub mod progress;
+pub mod projects;
 pub mod prs;
 pub mod repos;
 pub mod restore;

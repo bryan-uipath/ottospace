@@ -140,6 +140,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     },
     sessions_bar: { count: 0, total: 0, range: "today", collapsed: true, rows: [], enabled: false, reads: 0, slow_reads: 0 },
     repos_bar: [],
+    projects_bar: { on: false, rows: [] },
     home: { nodes: [], needs_you: [], counts: { needs_you: 0, running: 0, captured: 0, on_hold: 0, done: 0 } },
     home_drawn: { area: [0, 30, 1400, 846], panel: [80, 300, 520, 120], nodes: {}, heading: "Home", lattice_builds: 1, lattice_paints: 2 },
     city: {

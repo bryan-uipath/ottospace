@@ -166,6 +166,13 @@ pub fn transcripts_dir() -> Option<PathBuf> {
     Some(named.unwrap_or_else(|| home.join("transcripts")))
 }
 
+/// The projects folder: `projects_dir` (`~` expanded; a relative path is inside the ottospace
+/// folder). None by default, and in a test run with no folder of its own: nothing is read.
+pub fn projects_dir() -> Option<PathBuf> {
+    let home = get().home.as_ref()?;
+    live().projects_dir.as_ref().map(|dir| home.join(expand_home(dir, &user_home())))
+}
+
 /// The settings' `repos` as the Repos section last changed them: each entry as named, and pinned.
 static NAMED: Mutex<Option<Vec<(String, bool)>>> = Mutex::new(None);
 

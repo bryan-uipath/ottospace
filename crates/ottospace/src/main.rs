@@ -122,6 +122,7 @@ mod pick;
 mod picture;
 mod pop_ups;
 mod progress;
+mod projects;
 mod prs;
 mod record;
 mod reorder;
@@ -556,6 +557,7 @@ impl AssetSource for Assets {
             "icons/repos.svg" => Some(include_bytes!("../assets/icons/repos.svg")),
             "icons/pull-request.svg" => Some(include_bytes!("../assets/icons/pull-request.svg")),
             "icons/marks.svg" => Some(include_bytes!("../assets/icons/marks.svg")),
+            "icons/projects.svg" => Some(include_bytes!("../assets/icons/projects.svg")),
             "icons/calendar.svg" => Some(include_bytes!("../assets/icons/calendar.svg")),
             "icons/folder.svg" => Some(include_bytes!("../assets/icons/folder.svg")),
             "icons/waveform.svg" => Some(include_bytes!("../assets/icons/waveform.svg")),
@@ -666,8 +668,9 @@ pub(crate) fn rail_id(label: &str) -> String {
 }
 
 /// Rail sections in order, with their icon and label.
-const SECTIONS: [(Section, &str, &str); 6] = [
+const SECTIONS: [(Section, &str, &str); 7] = [
     (Section::Repos, "icons/repos.svg", "Repos"),
+    (Section::Projects, "icons/projects.svg", "Projects"),
     (Section::Tasks, "icons/tasks.svg", "Tasks"),
     (Section::Calendar, "icons/calendar.svg", "Calendar"),
     (Section::Apps, "icons/apps.svg", "Apps"),
@@ -717,6 +720,8 @@ enum Mark {
     Repo(usize),
     /// A checkout's row in the Repos section, by its place in the list.
     Checkout(usize),
+    /// A project's row in the Projects section, by its place in the list.
+    Project(usize),
     /// The left column's title strip, and the open section's header.
     Strip,
     BarHeader,
@@ -1224,6 +1229,8 @@ struct Workspace {
     /// Pull requests read with gh; why none are, when the settings say `"repos_prs": "on"`; how many
     /// the user opened (a test run counts them and opens none).
     prs: prs::Reader,
+    /// Reads `projects_dir` while the Projects section is open.
+    projects: projects::Reader,
     pr_note: Option<&'static str>,
     /// Frames a checkout dot's pulse asked for (the state's `counts.repo_pulse_frames`, test runs).
     repo_pulse_frames: Cell<u64>,
@@ -1660,6 +1667,7 @@ impl Workspace {
                         this.take_clones(window, cx);
                         this.tell_day(window, cx);
                         this.tick_prs(window, cx);
+                        this.tick_projects(window, cx);
                         if ticks.every(60, 30) {
                             this.read_heads(cx);
                         }
@@ -1719,6 +1727,8 @@ impl Workspace {
         let links_only = settings.calendar_notify_for == Some(ottospace_core::settings::NotifyFor::Links);
         let (hide_free, colors) = (settings.calendar_hide_free.unwrap_or(false), settings.color_rules());
         model.update(Action::SetCalendar { on, notify, links_only, hide_free, colors }.sent_by(Origin::System));
+        let projects = Action::SetProjects { on: config::projects_dir().is_some(), listed: Vec::new() };
+        model.update(projects.sent_by(Origin::System));
         // Before what a restore reads: a section behind a flag that is off is not put back.
         model.update(Action::SetFeatures { features: features::startup() }.sent_by(Origin::System));
         // A test run's fixture is a transcript's sound: a terminal pane may be heard.
@@ -1855,6 +1865,7 @@ impl Workspace {
             told_day: 0,
             told: None,
             prs: prs::Reader::new(),
+            projects: projects::Reader::new(),
             pr_note: None,
             repo_pulse_frames: Cell::default(),
             space_pulse_frames: Cell::default(),
@@ -4243,6 +4254,10 @@ impl Workspace {
             // The Repos section: each repository's name with where its heading was laid out
             // (`header`), and its checkouts (`rows`: `path`, `branch`, `default`, `label`, `row`).
             "repos_bar": self.repos_bar(),
+            // The Projects section (`projects`): `on` while `projects_dir` is set, and each row in
+            // its order: `placed`, `file`, `note`, `modified` and where it was drawn. Never a
+            // project's title or path: those are the user's. Off and empty with the flag off.
+            "projects_bar": self.projects_bar(),
             // The home screen, or null while the tab on show has a pane: each task's node (its
             // lane, depth and crossing of the lattice) and the rows under "Needs you".
             "home": self.model.home(&self.home.borrow().keep_out()),
@@ -6286,6 +6301,7 @@ impl Workspace {
             Section::Tasks => self.render_tasks(cx).into_any_element(),
             Section::Marks => self.render_marks(cx).into_any_element(),
             Section::Calendar => self.render_calendar(cx).into_any_element(),
+            Section::Projects => self.render_projects_section().into_any_element(),
             Section::Workbook => self.render_workbooks(cx).into_any_element(),
         };
         div()

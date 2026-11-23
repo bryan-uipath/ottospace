@@ -39,10 +39,11 @@ pub enum Feature {
     Decisions,
     CodeCity,
     SessionWaits,
+    Projects,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 10] = [
+pub const ALL: [Feature; 11] = [
     Feature::Marks,
     Feature::AppsSection,
     Feature::Transcripts,
@@ -53,6 +54,7 @@ pub const ALL: [Feature; 10] = [
     Feature::Decisions,
     Feature::CodeCity,
     Feature::SessionWaits,
+    Feature::Projects,
 ];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
@@ -72,6 +74,7 @@ impl Feature {
             Feature::Decisions => "decisions",
             Feature::CodeCity => "code_city",
             Feature::SessionWaits => "session_waits",
+            Feature::Projects => "projects",
         }
     }
 
@@ -86,7 +89,8 @@ impl Feature {
             | Feature::OverlayPanels
             | Feature::Decisions
             | Feature::CodeCity
-            | Feature::SessionWaits => Stage::Experimental,
+            | Feature::SessionWaits
+            | Feature::Projects => Stage::Experimental,
         }
     }
 
@@ -108,6 +112,7 @@ impl Feature {
             Feature::Decisions => "Decisions",
             Feature::CodeCity => "Code city",
             Feature::SessionWaits => "Waiting sessions",
+            Feature::Projects => "Projects",
         }
     }
 
@@ -143,6 +148,7 @@ impl Feature {
             Feature::SessionWaits => {
                 "An agent CLI you started in a terminal pane needs you when its turn ends, at once when it asks"
             }
+            Feature::Projects => "The projects in your projects_dir, on the left rail: read, never written",
         }
     }
 
@@ -163,6 +169,7 @@ impl Feature {
             Feature::Decisions => "feature off: decisions",
             Feature::CodeCity => "feature off: code_city",
             Feature::SessionWaits => "feature off: session_waits",
+            Feature::Projects => "feature off: projects",
         }
     }
 }
@@ -289,7 +296,8 @@ mod tests {
                 Feature::OverlayPanels,
                 Feature::Decisions,
                 Feature::CodeCity,
-                Feature::SessionWaits
+                Feature::SessionWaits,
+                Feature::Projects
             ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
@@ -302,10 +310,11 @@ mod tests {
                 .with(Feature::OverlayPanels, true)
                 .with(Feature::Decisions, true)
                 .with(Feature::CodeCity, true)
-                .with(Feature::SessionWaits, true),
+                .with(Feature::SessionWaits, true)
+                .with(Feature::Projects, true),
             Features::all()
         );
-        let list = " session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
@@ -415,7 +424,8 @@ mod tests {
                     ("overlay_panels", false),
                     ("decisions", false),
                     ("code_city", false),
-                    ("session_waits", false)
+                    ("session_waits", false),
+                    ("projects", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -440,7 +450,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

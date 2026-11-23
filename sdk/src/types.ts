@@ -159,7 +159,7 @@ export interface AgentLine {
 
 export type Axis = "right" | "down";
 export type Dir = "left" | "right" | "up" | "down";
-export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar";
+export type Section = "apps" | "workbook" | "tasks" | "repos" | "marks" | "calendar" | "projects";
 /** A feature flag (`features` in `settings.json`). Off, its requests answer "feature off: <name>". */
 export type Feature =
   | "marks"
@@ -171,7 +171,8 @@ export type Feature =
   | "overlay_panels"
   | "decisions"
   | "code_city"
-  | "session_waits";
+  | "session_waits"
+  | "projects";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** The clone dialog and the clone on its way, in a test run. */
@@ -700,6 +701,27 @@ export interface AppsBar {
   filtering: boolean;
   /** What the line at the top offers to take back: `Pinned`, `Unpinned`, `Suggestion hidden`. */
   undo: string | null;
+}
+
+/** The Projects section (flag `projects`). Never a project's title or path. */
+export interface ProjectsBar {
+  /** `projects_dir` is set and the flag is on. */
+  on: boolean;
+  /** In the section's order: those the user placed first. */
+  rows: ProjectRow[];
+}
+
+export interface ProjectRow {
+  /** The user placed it. */
+  placed: boolean;
+  /** A lone `.md` file, not a folder. */
+  file: boolean;
+  /** It has a note. */
+  note: boolean;
+  /** Its last change, ms since 1970. */
+  modified: number;
+  /** Where it was drawn, while the section shows it. */
+  row: Rect | null;
 }
 
 /** The Elsewhere group of the Tasks section. */
@@ -1866,6 +1888,7 @@ export interface Snapshot {
   sessions_bar: SessionsBar;
   /** The Repos section: `state.repos` as its rows, and where each was laid out. */
   repos_bar: ReposGroup[];
+  projects_bar: ProjectsBar;
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;

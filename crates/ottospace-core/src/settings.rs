@@ -86,6 +86,10 @@ pub struct Settings {
     /// beside the settings file (`~/.ottospace/transcripts`).
     #[serde(default)]
     pub transcripts_dir: Option<String>,
+    /// The folder of projects the Projects section lists (`projects` flag): each folder in it, or
+    /// lone `.md` file, is one. Only read, never written. None (the default): nothing is read.
+    #[serde(default)]
+    pub projects_dir: Option<String>,
     /// Each worktree's open pull request, read with `gh`: `auto`, `on` or `off`. See `prs::Setting`.
     #[serde(default)]
     pub repos_prs: Option<crate::prs::Setting>,
@@ -619,6 +623,7 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         worktrees_dir: _,
         clone_dir: _,
         transcripts_dir: _,
+        projects_dir: _,
         repos_prs: _,
         apps,
         apps_hidden,
@@ -1345,7 +1350,7 @@ mod tests {
             wrong,
             [
                 "features: \"apps_section\" must be true or false",
-                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits"
+                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects"
             ]
         );
         assert!(Settings::parse(r#"{"features": {"tabs": true}}"#).unwrap_err().contains("marks, apps_section"));
@@ -1363,7 +1368,8 @@ mod tests {
             .with(crate::features::Feature::OverlayPanels, false)
             .with(crate::features::Feature::Decisions, false)
             .with(crate::features::Feature::CodeCity, false)
-            .with(crate::features::Feature::SessionWaits, false);
+            .with(crate::features::Feature::SessionWaits, false)
+            .with(crate::features::Feature::Projects, false);
         assert_eq!(Settings::read(&set).0.features(), both);
         assert_eq!(with_feature("", "marks", false).unwrap(), "{\n  \"features\": {\n    \"marks\": false\n  }\n}\n");
         assert!(with_feature(r#"{"features": true}"#, "marks", true).unwrap_err().contains("not an object"));

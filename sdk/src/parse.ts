@@ -128,6 +128,8 @@ import type {
   SessionRunner,
   SessionsBar,
   ReposGroup,
+  ProjectsBar,
+  ProjectRow,
   RepoDirs,
   CheckoutRow,
   PullRequest,
@@ -281,7 +283,7 @@ function mode(value: unknown, at: string): Mode {
 
 function section(value: unknown, at: string): Section {
   if (value === "apps" || value === "workbook" || value === "tasks" || value === "repos") return value;
-  if (value === "marks" || value === "calendar") return value;
+  if (value === "marks" || value === "calendar" || value === "projects") return value;
   throw wrong(at, "a section", value);
 }
 
@@ -1376,6 +1378,22 @@ function appsBar(value: unknown, at: string): AppsBar {
   };
 }
 
+function projectsBar(value: unknown, at: string): ProjectsBar {
+  const o = fields(value, at);
+  return { on: bool(o.on, `${at}.on`), rows: list(projectRow)(o.rows, `${at}.rows`) };
+}
+
+function projectRow(value: unknown, at: string): ProjectRow {
+  const o = fields(value, at);
+  return {
+    placed: bool(o.placed, `${at}.placed`),
+    file: bool(o.file, `${at}.file`),
+    note: bool(o.note, `${at}.note`),
+    modified: num(o.modified, `${at}.modified`),
+    row: orNull(rect)(o.row, `${at}.row`),
+  };
+}
+
 function inboxRow(value: unknown, at: string): InboxRow {
   return { ...task(value, at), group: group(fields(value, at).group, `${at}.group`) };
 }
@@ -1479,7 +1497,7 @@ function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
   if (value === "overlay_panels" || value === "decisions" || value === "code_city") return value;
-  if (value === "session_waits") return value;
+  if (value === "session_waits" || value === "projects") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -2312,6 +2330,7 @@ export function snapshot(value: unknown): Snapshot {
     tasks_progress: tasksProgress(o.tasks_progress, "tasks_progress"),
     sessions_bar: sessionsBar(o.sessions_bar, "sessions_bar"),
     repos_bar: list(reposGroup)(o.repos_bar, "repos_bar"),
+    projects_bar: projectsBar(o.projects_bar, "projects_bar"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     city: orNull(cityDrawn)(o.city, "city"),

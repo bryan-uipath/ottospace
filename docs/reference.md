@@ -1409,7 +1409,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in a toast (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `clone_dir`, `transcripts_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `agent_commands`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in a toast (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `clone_dir`, `transcripts_dir`, `projects_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `agent_commands`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -1448,6 +1448,7 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
 | `clone_dir` | Where From GitHub… (the Repos section's +) clones: `<dir>/<name>`, the repository's name checked (letters, digits, `.`, `_`, `-`; not `.` or `-` first). A folder of that name there already is refused. Missing, it is made after you say so (↵ again). A relative path is inside `~/.ottospace`. Read each time | `~/code` |
 | `worktrees_dir` | Where + on a repository's name makes worktrees: `<dir>/<repo>/<branch>`, slashes in the branch as `-`; a repository whose folder name another listed one shares gets a short hash of its path after it (`app-1f2e3d`). A relative path is inside `~/.ottospace`. Read each time | `worktrees` in `~/.ottospace` |
 | `transcripts_dir` | Where transcripts are kept (the `transcripts` flag): one Markdown file each, `YYYY-MM-DD-HHMM-<app>.md`, written as lines come. With a calendar feed, its header lists the meetings it was possibly of (on at the start, or starting within 5 minutes; else one that ended within 5): `- Possibly, by your calendar:` and each title with its times; never a place, link or attendees. One that starts later while it records is a `*calendar*` line at its start. A transcript of an app keeps one file a meeting: when the meeting's windows (the one picked and those the app opened since) are gone for 10 s, the file ends; the next words heard begin a new one with its own header; 30 minutes with nothing heard after, it stops. A folder ottospace makes is private to you (0700), each file too (0600). A relative path is inside `~/.ottospace`. Read at each start | `transcripts` in `~/.ottospace` |
+| `projects_dir` | The folder the Projects section lists (the `projects` flag): each folder in it is a project, its note `README.md`, else `index.md`, else its only or newest `.md`; a lone `.md` file is a project too. Its title is the note's first heading, else its name. Hidden names and links are skipped; at most 500 projects and 200 entries a folder; a note over 256 KB is titled by its name. Only read, while the section is open (on opening, then every 10 s); never written. `~` is expanded; a relative path is inside `~/.ottospace` | none: no section, nothing read |
 | `repos_prs` | Each worktree's open pull request, read with your `gh` (`gh pr list`, read-only) while Repos is open: every 5 minutes, and on opening at most once a minute. `auto`: when gh is installed and logged in, silently otherwise; `on`: as `auto`, and the pane says why when it cannot; `off`: gh never runs. A pull request is a worktree's only if it is of its branch and from the repository the branch pushes to (a fork's of the same name is not) | `auto` |
 | `sessions` | List agent sessions that are no task's under Elsewhere in the Tasks section. `false`: no session file is ever read | `true` |
 | `session_dirs` | Where the runners keep their sessions: `claude` is a list of Claude Code config directories (one for each account), `codex` is Codex's home. A runner left out keeps its default. An app started from the Dock does not see `CLAUDE_CONFIG_DIR` or `CODEX_HOME`: name other directories here | `~/.claude`, `~/.codex` |
@@ -1510,6 +1511,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `decisions` | Experimental | off | Decisions (⌘J): A workspace that shows what waits on you, one question at a time |
 | `code_city` | Experimental | off | Code city: An empty tab or pane draws its folder (a task's checkout, a workspace's default, a repository's tab) as a 3D city, its files where they were last time |
 | `session_waits` | Experimental | off | Waiting sessions: An agent CLI you started in a terminal pane needs you when its turn ends, at once when it asks |
+| `projects` | Experimental | off | Projects: The projects in your projects_dir, on the left rail: read, never written |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1569,6 +1571,9 @@ then does nothing (a toast says so). A preference is a normal setting.
   from it needs you with it; one no task has counts in the status bar's `needs you`, its Elsewhere
   row's dot is the needs-you colour, and ⌘J, with no task needing you, focuses its pane. Nothing is
   installed and nothing is typed into it (design: [sessions.md](ai/sessions.md#waiting-on-the-user)).
+- `projects` off: no Projects cell or section, and `section` `projects` answers
+  `feature off: projects`. `projects_dir` is not read; the state's `projects_bar` is off and empty.
+  On, see [Projects](#projects) (design: [projects.md](ai/projects.md)).
 
 ### Decisions
 
@@ -1581,6 +1586,18 @@ hour (snoozed), Esc closes. Other… is typed in the drawer. ⌘L talks the card
 on its task; the right rail shows it. Panes you add close when you answer, skip or put off the
 card. A card answered elsewhere leaves; after the last, Decisions closes and the tab you came from is back. Never kept.
 Only you open, answer, skip or close it.
+
+### Projects
+
+With `projects` on and `projects_dir` set, the left rail has a Projects cell under Repos. Its list
+is the folder's projects: each folder in it (its note is `README.md`, else `index.md`, else its
+only or newest `.md`) and each lone `.md` file. A row shows the title (the note's first heading,
+else the name) and how long ago it last changed. Projects you placed come first, in your order;
+the rest follow, most recently changed first. ottospace only reads the folder, and only while the
+section is open (on opening, then every 10 s): no link is followed, hidden names are skipped, at
+most 500 projects, 200 entries a folder, and 256 KB of a note. Nothing in it is written. The
+state's `projects_bar` gives each row's kind and time, never a title or path (design:
+[projects.md](ai/projects.md)).
 
 ### Code city
 
@@ -1796,6 +1813,7 @@ first brainstorm:
 
 [capture.md](ai/capture.md): the capture key, annotate mode, what a capture stores, and how a brief quotes it.
 [marks.md](ai/marks.md): marks, what one records, and how they sit beside session restore, pins and tasks.
+[projects.md](ai/projects.md): the Projects section, what a project is on disk, the order rule, the slices, and a proposal for progress and next actions.
 [workbook.md](ai/workbook.md): workspaces (there still "workbooks") beside tasks, marks and session restore; stages 1 and 2 as built, and what is later.
 [session-restore.md](ai/session-restore.md): the workspace back after quitting, in layers; layer 1, the layout file, as built.
 [terminal-persistence.md](ai/terminal-persistence.md): terminals and agents that outlive a quit or an update, held outside the app; with session restore, tasks come back as they were.

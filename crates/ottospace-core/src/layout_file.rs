@@ -381,8 +381,8 @@ impl Model {
             dials: self.saved_dials().into_iter().filter(|(task, _)| self.tasks.live(*task).is_some()).collect(),
             away: self.finish.away.iter().copied().filter(|task| self.tasks.live(*task).is_some()).collect(),
         };
-        // Not the Calendar: a build without it could not read the file back.
-        let section = self.sidebar.filter(|s| *s != Section::Calendar);
+        // Not the Calendar or Projects: a build without it could not read the file back.
+        let section = self.sidebar.filter(|s| !matches!(s, Section::Calendar | Section::Projects));
         // Of listed repositories only: one gone from the list takes its fold with it.
         let listed = |path: &&String| folded_path(path) && self.repos.iter().any(|repo| repo.path == **path);
         let repos_folded = self.repos_folded.iter().filter(listed).take(MAX_FOLDED).cloned().collect();
