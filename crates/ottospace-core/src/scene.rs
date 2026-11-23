@@ -400,6 +400,36 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, view: &View) -> Sc
 
 /// `scene`, its fitted middle `lower` of the picture's height below the picture's middle.
 pub fn scene_lowered(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, view: &View, lower: f32) -> Scene {
+    layout(atlas, lit, aspect, lower).scene(view)
+}
+
+/// A city laid out, before any camera: its boxes (none cut down), its fitted framing, and how
+/// low a lit building may be cut. A camera move needs none of it again: `Layout::scene`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Layout {
+    pub blocks: Vec<Block>,
+    fit: Option<Fit>,
+    aspect: f32,
+    lit_floor: f32,
+}
+
+impl Layout {
+    /// The city seen from `view`: its boxes as laid out, cut down only for the fitted view (a
+    /// moved one cuts nothing: `clear_sight`). Nothing is laid out again.
+    pub fn scene(&self, view: &View) -> Scene {
+        let mut blocks = self.blocks.clone();
+        let Some(fit) = self.fit else { return Scene { blocks, camera: None, fit: None, tints: Vec::new() } };
+        let camera = fit.camera(view, self.aspect);
+        if *view == View::default() {
+            clear_sight(&mut blocks, camera.eye, self.lit_floor);
+        }
+        Scene { blocks, camera: Some(camera), fit: Some(fit), tints: Vec::new() }
+    }
+}
+
+/// `atlas` laid out as a city for a picture `aspect` wide to 1 tall, its fitted middle `lower`
+/// below the picture's (`scene`): what a camera does not change.
+pub fn layout(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, lower: f32) -> Layout {
     let ground = Block { min: [0., -0.01, 0.], max: [WIDE, 0., 1.], kind: Kind::Ground, place: None, district: None };
     let mut blocks = vec![ground];
     // A typical lot's side: e.g. 0.24 for 28 files, 0.018 for 5,000 (where the constants rule).
@@ -474,14 +504,8 @@ pub fn scene_lowered(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, view: &Vie
         block.max[1] = block.max[1].max(highest + LIT_ABOVE);
     }
     blocks.extend(buildings);
-    let Some(fit) = frame(&blocks, aspect, lower) else {
-        return Scene { blocks, camera: None, fit: None, tints: Vec::new() };
-    };
-    let camera = fit.camera(view, aspect);
-    if *view == View::default() {
-        clear_sight(&mut blocks, camera.eye, highest + LIT_ABOVE);
-    }
-    Scene { blocks, camera: Some(camera), fit: Some(fit), tints: Vec::new() }
+    let fit = frame(&blocks, aspect, lower);
+    Layout { blocks, fit, aspect, lit_floor: highest + LIT_ABOVE }
 }
 
 impl Camera {
@@ -1002,6 +1026,27 @@ mod tests {
         let near = [near[0], 0., near[2]];
         assert!(camera.project(near).unwrap().1 > 0.5);
         assert!(camera.project(sub(camera.eye, sub(camera.target, camera.eye))).is_none(), "behind it");
+    }
+
+    /// A camera move lays nothing out again: every view of one layout has its boxes, the
+    /// fitted one cut down only where they hide a lit building; and it is the scene `scene`
+    /// makes for that view.
+    #[test]
+    fn a_camera_move_rebuilds_no_blocks() {
+        let atlas = many();
+        let lit_id = atlas.places.iter().rev().find(|p| !p.group).unwrap().id.clone();
+        let lit = [(lit_id.as_str(), 0xff0000)];
+        let laid = layout(&atlas, &lit, 1.4, LOWER);
+        let turned = View::default().orbited(50., -10.).zoomed(0.5, [0.1, 0.]);
+        let (a, b) = (laid.scene(&turned), laid.scene(&View::default().panned(0.2, 0.1)));
+        assert_eq!((&a.blocks, &b.blocks), (&laid.blocks, &laid.blocks));
+        assert!(a.camera != b.camera);
+        assert_eq!(laid.scene(&turned), scene(&atlas, &lit, 1.4, &turned));
+        let fitted = laid.scene(&View::default());
+        assert_eq!(fitted, scene(&atlas, &lit, 1.4, &View::default()));
+        for (cut, whole) in fitted.blocks.iter().zip(&laid.blocks) {
+            assert!(cut.max[1] <= whole.max[1] && cut.min == whole.min && cut.kind == whole.kind);
+        }
     }
 
     /// The fitted city sits below the picture's middle and whole, at CI's window and a larger

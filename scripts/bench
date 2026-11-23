@@ -334,7 +334,28 @@ def motion_of(events, start, end):
         "gaps_over_16": sum(1 for g in gaps if g > 16.7), "pictures": len(pictures),
         "scene_ms": med("scene_us"), "gpu_ms": med("gpu_us"), "gpu_p95": p95("gpu_us"),
         "copy_ms": med("copy_us"), "copy_p95": p95("copy_us"), "image_ms": med("image_us"),
+        "marks_ms": stat([e["us"] / 1000 for e in inside if e.get("ev") == "city_marks"], 50),
+        "paint_ms": stat([e["us"] / 1000 for e in inside if e.get("ev") == "city_paint"], 50),
+        "paint_p95": stat([e["us"] / 1000 for e in inside if e.get("ev") == "city_paint"], 95),
     }
+
+
+def stat(values, p):
+    """The median (`p` 50) or another percentile of `values`; none: None."""
+    return (statistics.median(values) if p == 50 else pct(values, p)) if values else None
+
+
+MOTION_RUNS = 3
+
+
+def median_of(runs):
+    """Each measure's median over `runs` (dicts of numbers or None)."""
+    keys = runs[0].keys()
+    out = {}
+    for key in keys:
+        values = [r[key] for r in runs if r[key] is not None]
+        out[key] = statistics.median(values) if values else None
+    return out
 
 
 def city_motion(binary, scratch, files):
@@ -366,6 +387,12 @@ def city_motion(binary, scratch, files):
         mouse("up", x + 360)
         time.sleep(0.5)
         turn = motion_of(trace_events(inst), start, last())
+        # At rest after it: no frame and no picture (idle stays idle).
+        start = last()
+        time.sleep(2)
+        rest = [e for e in trace_events(inst) if e.get("ms", 0) > start and e.get("ev") in ("frame", "city_picture")]
+        turn["rest_frames"] = len(rest)
+        rise["rest_frames"] = None
         return {"rise": rise, "turn": turn}
     finally:
         inst.close()
@@ -453,8 +480,16 @@ def bench(sides, args, scratch):
         for name in order_of(names, i):
             for files in cities[name]:
                 cities[name][files].append(city(sides[name], scratch, files))
-    say("code city in motion ...")
-    motion = {name: {files: city_motion(sides[name], scratch, files) for files in (2000, 20000)} for name in names}
+    say(f"code city in motion ({MOTION_RUNS} runs a side) ...")
+    runs = {name: {files: [] for files in (2000, 20000)} for name in names}
+    for i in range(MOTION_RUNS):
+        for name in order_of(names, i):
+            for files in runs[name]:
+                runs[name][files].append(city_motion(sides[name], scratch, files))
+    motion = {
+        name: {files: {phase: median_of([r[phase] for r in rs]) for phase in ("rise", "turn")} for files, rs in by.items()}
+        for name, by in runs.items()
+    }
     result = {}
     for name in names:
         say(f"memory and CPU, {name} ({IDLE_S + STREAM_S + 20} s) ...")
@@ -521,9 +556,9 @@ def regressions(before, after, held):
 def motion_table(result):
     """The code city in motion, each side: a row a phase and size."""
     f = lambda v, d=1: "—" if v is None else f"{v:.{d}f}"
-    lines = ["", "Code city in motion, at 1024×674 (frame: render to paint on the main thread; gap: from one frame to the next; picture: made on its own thread):", "",
-             "| side | phase | files | frames | frame median / p95 (ms) | over 16.7 | gap median / p95 (ms) | gaps over 16.7 | pictures | scene / GPU (p95) / copy out (p95) / image (ms) |",
-             "|---|---|---|---|---|---|---|---|---|---|"]
+    lines = ["", f"Code city in motion, at 1024×674, the median of {MOTION_RUNS} runs a side (frame: render to paint on the main thread; gap: from one frame to the next; picture: made on its own thread; paint: the picture's paint on the main thread):", "",
+             "| side | phase | files | frames | frame median / p95 (ms) | over 16.7 | gap median / p95 (ms) | gaps over 16.7 | pictures | scene / GPU (p95) / copy out (p95) / image / names (ms) | paint median / p95 (ms) | at rest after: frames, pictures (2 s) |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|"]
     for name, side in result.items():
         for files, phases in (side.get("motion") or {}).items():
             for phase in ("rise", "turn"):
@@ -531,7 +566,8 @@ def motion_table(result):
                 lines.append(
                     f"| {name} | {phase} | {files:,} | {m['frames']} | {f(m['frame_median'])} / {f(m['frame_p95'])} | {m['over_16']} | "
                     f"{f(m['gap_median'])} / {f(m['gap_p95'])} | {m['gaps_over_16']} | {m['pictures']} | "
-                    f"{f(m['scene_ms'])} / {f(m['gpu_ms'])} ({f(m['gpu_p95'])}) / {f(m['copy_ms'])} ({f(m['copy_p95'])}) / {f(m['image_ms'])} |")
+                    f"{f(m['scene_ms'])} / {f(m['gpu_ms'])} ({f(m['gpu_p95'])}) / {f(m['copy_ms'])} ({f(m['copy_p95'])}) / {f(m['image_ms'])} / {f(m.get('marks_ms'))} | "
+                    f"{f(m.get('paint_ms'))} / {f(m.get('paint_p95'))} | {f(m.get('rest_frames'), 0)} |")
     return lines
 
 
