@@ -1686,6 +1686,7 @@ empty and not renamed, and the main window shows the tab again.
   the main window's.
 - ⌘T, ⌘1–9 and ⌘} ⌘{ typed there act on the main window's row; ⌘⇧W closes the tab out. Its red
   button folds it back in; only the main window's quits.
+- Closing a temporary workspace folds its tab out back in, and it cannot fold out while closing; its Undo brings it back as a tab (an empty stand-in tab goes).
 - Unplugging the display folds the tab back in; plugging the same display in again (by its UUID)
   takes it back, unless the main window shows it then. Folded in by you, it stays in.
 - Not yet: a tab holding an app pane stays in the main window (a notice says so), as does a

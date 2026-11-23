@@ -184,6 +184,10 @@ impl Model {
             return self.tab_in(Some(id), effects);
         }
         let Some(at) = self.tabs.iter().position(|tab| tab.id == id) else { return };
+        // A closing workspace's tab stays in: only its Undo brings it back.
+        if self.closing(&self.tabs[at].space) {
+            return;
+        }
         let notice = |text: &str| Effect::Notice { text: text.into() };
         if id == HOME_TAB {
             return effects.push(notice(HOME_STAYS));
@@ -346,7 +350,9 @@ impl Model {
                 && self.other_display(&out.display)
                 && !seen.contains(&out.display)
                 && !self.out.iter().any(|kept| kept.tab == out.tab)
-                && at.is_some_and(|at| !self.holds_app(at));
+                && at.is_some_and(|at| !self.holds_app(at))
+                // A closing workspace's tab folds in: nothing but its Undo or time changes it.
+                && at.is_some_and(|at| !self.closing(&self.tabs[at].space));
             if keeps {
                 seen.push(out.display.clone());
                 self.out.push(out);
@@ -358,8 +364,20 @@ impl Model {
         if gone.iter().any(|out| out.tab == self.tabs[self.active].id) {
             self.key_main(effects);
         }
-        for out in &gone {
-            self.drop_stand_in(out, effects);
+        // A hide changes no tab: a closing workspace keeps its stand-in until its Undo brings it back
+        // (then an empty one goes) or it ends.
+        for out in gone {
+            match self.tabs.iter().find(|tab| tab.id == out.tab) {
+                Some(tab) if self.closing(&tab.space) => self.folded_closing.push(out),
+                _ => self.drop_stand_in(&out, effects),
+            }
+        }
+        for out in std::mem::take(&mut self.folded_closing) {
+            match self.tabs.iter().find(|tab| tab.id == out.tab) {
+                Some(tab) if self.closing(&tab.space) => self.folded_closing.push(out),
+                Some(_) => self.drop_stand_in(&out, effects),
+                None => {}
+            }
         }
         let main = |model: &Self, id: u32| model.tabs.iter().any(|tab| tab.id == id && !model.is_out(id));
         match (self.is_out(self.tabs[self.active].id), self.away) {
@@ -605,6 +623,31 @@ mod tests {
         // Filled, it is a tab of its own.
         m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
         assert_eq!(m.idle_stand_in(stand_in), None);
+    }
+
+    /// A temporary workspace closed while its only tab is out: the tab folds in, its empty
+    /// stand-in kept while it closes; its Undo brings back the tab alone. A fold out of a
+    /// closing workspace's tab does nothing.
+    #[test]
+    fn a_closing_workspaces_tab_folds_in_and_its_undo_brings_no_stand_in() {
+        let mut m = one();
+        let space = m.tabs[m.active].space.clone();
+        let Owner::Workbook { id: book } = space else { panic!("a workspace") };
+        m.update(Action::TabOut { tab: None });
+        let stand_in = main_id(&m);
+        m.update(Action::KeyWindow { tab: stand_in });
+        m.update(Action::SpaceHide { index: None });
+        assert!(m.workbooks.closing(book), "closing, its Undo offered");
+        assert_eq!((m.tabs_out(), m.away), (vec![], None));
+        assert_eq!(space_tabs_of(&m, &space), [1, stand_in], "a hide changes no tab");
+        m.update(Action::TabOut { tab: Some(1) });
+        assert!(m.tabs_out().is_empty() && m.workbooks.closing(book), "its tab stays in");
+        m.update(Action::WorkbookReopen { workbook: book });
+        assert_eq!(space_tabs_of(&m, &space), [1]);
+    }
+
+    fn space_tabs_of(m: &Model, of: &Owner) -> Vec<u32> {
+        m.space_tabs(of).into_iter().map(|at| m.tabs[at].id).collect()
     }
 
     #[test]

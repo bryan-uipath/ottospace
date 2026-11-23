@@ -2180,6 +2180,8 @@ fn check_out(m: &Model) -> Result<(), String> {
         let leaves = at.and_then(|at| m.tree_at(at)).map(Node::leaves).unwrap_or_default();
         let app = leaves.iter().any(|id| matches!(m.pane(*id).map(|p| &p.kind), Some(Kind::App { .. })));
         ensure!(!app, "tab {} out holds an app pane", out.tab);
+        let closing = at.is_some_and(|at| m.closing(&m.tabs[at].space));
+        ensure!(!closing, "tab {} out is a closing workspace's", out.tab);
     }
     let keys_out = m.is_out(m.tabs[m.active].id);
     ensure!(keys_out == m.away.is_some(), "keyboard on tab {}, out {keys_out}, away {:?}", m.tabs[m.active].id, m.away);
@@ -9253,6 +9255,58 @@ fn seed_914_a_second_fold_out_keeps_the_main_windows_space() {
         .sent_by(Origin::System),
         Action::NewTab.sent_by(Origin::User),
         Action::TabOut { tab: None }.sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
+/// A client's Adopt with no pane beside it, while a temporary workspace closes: its pane went
+/// into the closing workspace's tab.
+#[test]
+fn seed_3397_a_clients_adopt_adds_nothing_to_a_closing_workspace() {
+    replay(&[
+        Action::TaskAdd {
+            title: "a".into(),
+            priority: 2,
+            state: State::Running,
+            tab: None,
+            assign: Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] },
+        }
+        .sent_by(Origin::User),
+        Action::TaskAdd {
+            title: "b".into(),
+            priority: 1,
+            state: State::NeedsYou,
+            tab: None,
+            assign: Assign { agent: None, paths: vec![], resolved: vec![], skills: vec![] },
+        }
+        .sent_by(Origin::User),
+        Action::TaskFromLine {
+            line: "fix zoom #canvas >app p1".into(),
+            known: Known { names: Names { agents: vec![], skills: vec![] }, paths: vec![], entries: vec![] },
+            open: false,
+        }
+        .sent_by(Origin::User),
+        Action::SpaceOpen { space: Owner::Task { id: 3 } }.sent_by(Origin::User),
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::SelectTab { index: 1 }.sent_by(Origin::User),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::DropPane { source: 2, target: 1, zone: Zone::Center }.sent_by(Origin::User),
+        Action::SpaceHide { index: None }.sent_by(Origin::User),
+        Action::SetDisplays {
+            displays: vec![
+                Display { uid: "d1".into(), frame: Frame { x: 0.0, y: 0.0, w: 1728.0, h: 1117.0 }, scale: 2.0 },
+                Display { uid: "d2".into(), frame: Frame { x: 1728.0, y: 0.0, w: 1728.0, h: 1117.0 }, scale: 2.0 },
+            ],
+            main: Some("d1".into()),
+        }
+        .sent_by(Origin::User),
+        Action::TabOut { tab: None }.sent_by(Origin::User),
+        Action::NewEmptyTab.sent_by(Origin::System),
+        Action::Close { pane: Some(3) }.sent_by(Origin::Socket),
+        Action::SpaceHide { index: None }.sent_by(Origin::User),
+        Action::KeyWindow { tab: 2 }.sent_by(Origin::User),
+        Action::Open { kind: Kind::Empty, axis: Axis::Right, beside: Some(1) }.sent_by(Origin::User),
+        Action::Adopt { kind: Kind::Empty, beside: None, seen: None }.sent_by(Origin::Socket),
     ])
     .unwrap();
 }

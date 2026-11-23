@@ -189,7 +189,7 @@ impl Model {
     }
 
     /// Whether a space is a temporary workspace's the user closed, its Undo offered: no tab goes there.
-    fn closing(&self, of: &Owner) -> bool {
+    pub(crate) fn closing(&self, of: &Owner) -> bool {
         matches!(of, Owner::Workbook { id } if self.workbooks.closing(*id))
     }
 
