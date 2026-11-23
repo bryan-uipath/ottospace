@@ -155,6 +155,16 @@ Windows). It replaces the 2D plan this note first recommended.
   none. Text colour, never amber: amber is the beacon of "needs you" (below). A lit building
   has a steady, thinner beam in its task's colour, no label.
 
+- **Hierarchy: plinths** (the owner's word, 2026-11-21: "make folders and hierarchy more
+  visible"; picked 2026-11-23 from five looks: terraces, plinths, tint, labels, blend). Each
+  district is a plinth three times its terrace's lift (up to 4.5 beside a few tall towers), its
+  top edge lit, its sides' edges dim (a per-instance factor in the shader: still one draw). A
+  plinth's edge is where a folder's name goes, as in the original city.
+- **Glass** (the owner's word, 2026-11-21: "a little more transparent"): buildings' faces are 80%
+  opaque, their edges whole; a second pipeline blends them after the solid
+  boxes, farthest first, writing no depth, so the order is fixed and nothing flickers as a camera
+  moves. `developer.city_opaque` draws them solid, for comparing.
+
 Why not paths (the "Oblique" alternative this note first named): GPUI has no depth buffer, so
 every building would be three paths painted back to front each frame, 15,000 paths at 5,000
 files; a rendered picture costs one image a frame however large the city.

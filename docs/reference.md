@@ -1572,9 +1572,9 @@ repository's tab, opened from Repos or `open_repo`, keeps its checkout after its
 closes), its space's (a task's checkout, a workspace's default worktree). Only a checkout listed
 in Repos; Home has none and keeps its lattice, and so does a pane under 320 × 220 points. Places
 of one folder and size share one picture, and a folder's files are read once for all of them.
-In the city a folder is a district, a plate stepped up from its parent's
-and outlined, a street apart from its neighbours and a shade lighter per tier (a folder with one
-child is none of its own: `src/main/java` is one district), a file a building on it, edged, its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
+In the city a folder is a district, a plinth standing on its parent's, its top edge lit,
+a street apart from its neighbours and a shade lighter per tier (a folder with one
+child is none of its own: `src/main/java` is one district), a file a building on it, of glass (its faces see-through, its edges whole), its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
 height by its length. A file is where it was the last time: the same files give
 the same plan, an edit that keeps a file's size class moves nothing, and a new file most times
 moves only its own folder

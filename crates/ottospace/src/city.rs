@@ -197,14 +197,15 @@ pub(crate) fn checkout_files(
     Some((files, cut))
 }
 
-/// A picture asked for: the folder, its plan, the lit files (place ids, colours) and the size
-/// in pixels. Empty places with one key share one picture.
+/// A picture asked for: the folder, its plan, the lit files (place ids, colours), the size in
+/// pixels and whether its buildings are glass. Empty places with one key share one picture.
 #[derive(Clone, PartialEq, Eq, Hash)]
 struct Key {
     dir: String,
     plan: usize,
     lit: Vec<(String, u32)>,
     size: (u32, u32),
+    glass: bool,
 }
 
 /// A district's name on its plate: where it starts and how wide the plate's edge is there, in
@@ -328,7 +329,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>) -> Result<Made, String> {
     let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
     let (w, h) = key.size;
     let scene = scene::scene(plan, &lit, w as f32 / h as f32);
-    let Picture { width, height, bgra } = gpu.render(&scene, w, h)?;
+    let Picture { width, height, bgra } = gpu.render(&scene, w, h, key.glass)?;
     let camera = scene.camera.ok_or("no camera")?;
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
     let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
@@ -418,6 +419,7 @@ impl Drawn {
             "lit": lit, "labels": place.map_or(0, |place| place.labels), "failed": failed, "reads": reads,
             "renders": self.renders, "paints": self.paints, "render_us": made.map(|made| made.render_us),
             "hovered": hovered, "lit_tops": tops, "lit_beams": lit_beams, "pictures": self.pictures.len(),
+            "glass": made.map(|made| made.key.glass),
         })
     }
 }
@@ -564,6 +566,7 @@ impl Workspace {
                     plan: Arc::as_ptr(plan) as usize,
                     lit,
                     size: (size(w), size(h)),
+                    glass: !crate::config::live().developer.city_opaque,
                 });
                 let key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
                 place.asked = key.clone();

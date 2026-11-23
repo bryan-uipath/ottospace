@@ -214,6 +214,9 @@ pub struct Developer {
     /// shows; a report is filed as a task in a new worktree of it (`bug`).
     #[serde(default)]
     pub ottospace_repo: Option<String>,
+    /// The code city's buildings solid, not glass: for comparing. Not documented for users.
+    #[serde(default)]
+    pub city_opaque: bool,
 }
 
 /// One of `calendar_colors`: a title that holds `match` (case ignored) takes `color`.

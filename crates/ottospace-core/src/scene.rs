@@ -1,4 +1,4 @@
-//! The code city in 3D: an atlas's plan as boxes on a ground (districts as stepped terraces,
+//! The code city in 3D: an atlas's plan as boxes on a ground (districts as stepped plinths,
 //! files as buildings), and a perspective camera that frames all of it in a picture of a given
 //! shape. The shell renders it; the core decides what stands where, how tall, and where the
 //! camera is. Design: `docs/ai/code-city/plan.md`, "Drawing".
@@ -16,6 +16,9 @@ const LIFT_MIN: f32 = 1.1;
 /// Plan units per unit of the owner's city: its tallest tower (60) is our `TALLEST`, at three
 /// quarters for terraces, so a backdrop's districts step without towering.
 const UNIT: f32 = TALLEST / 60. * 0.75;
+/// A district is a plinth this many times its terrace's lift (up to half as much again in a city
+/// of few tall towers), so a folder reads as a block standing on its parent.
+const PLINTH: f32 = 3.;
 /// The gap round a district and round a building, at most, in plan units.
 const STREET: f32 = 0.0035;
 /// A folder whose lot's shorter side is under this (plan units, far below a pixel) is no
@@ -93,9 +96,9 @@ pub(crate) fn height(bytes: u64) -> f32 {
     (2. + 6. * (1. + lines / 10.).log2()).clamp(2., 60.) / 60.
 }
 
-/// The top of a district at `depth` (0: the ground).
-fn terrace(depth: usize) -> f32 {
-    (0..depth).map(|at| LIFTS.get(at).copied().unwrap_or(LIFT_MIN) * UNIT).sum()
+/// The top of a district at `depth` (0: the ground), each lift `lift` times the terraces'.
+fn terrace(depth: usize, lift: f32) -> f32 {
+    (0..depth).map(|at| LIFTS.get(at).copied().unwrap_or(LIFT_MIN) * UNIT * lift).sum()
 }
 
 fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
@@ -282,6 +285,9 @@ pub fn scene(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32) -> Scene {
     // A typical lot's side: e.g. 0.24 for 28 files, 0.018 for 5,000 (where the constants rule).
     let lot = (WIDE / atlas.places.iter().filter(|p| !p.group).count().max(1) as f32).sqrt();
     let (tallest, street) = (TALLEST.max(lot * TOWER), STREET.max(lot * LOT_STREET));
+    // A plinth keeps its height beside a few tall towers.
+    let lift = PLINTH * (tallest / TALLEST).min(1.5);
+    let terrace = |tier: usize| terrace(tier, lift);
     // How many children each group has: a group's are the places after it one deeper, up to
     // the next place no deeper than it.
     let mut children = vec![0usize; atlas.places.len()];
@@ -567,7 +573,11 @@ mod tests {
         assert!(plate(&s, &atlas, "a").is_none() && plate(&s, &atlas, "a/b").is_none());
         let (c, z) = (plate(&s, &atlas, "a/b/c").unwrap(), plate(&s, &atlas, "a/b/c/z").unwrap());
         assert_eq!((c.kind, z.kind), (Kind::Plate(1), Kind::Plate(2)));
-        assert_eq!((c.min[1], c.max[1], z.max[1]), (0., terrace(1), terrace(2)));
+        // Plinths: each tier 3 to 4.5 times the owner's lift (more beside this city's tall towers).
+        let lift = c.max[1] / terrace(1, 1.);
+        assert!((PLINTH..=PLINTH * 1.5).contains(&lift), "{lift}");
+        assert_eq!(c.min[1], 0.);
+        assert!((z.max[1] - terrace(2, lift)).abs() < 1e-6, "{} {}", z.max[1], terrace(2, lift));
     }
 
     /// The ray through a point of the picture meets what is drawn there: a building's top, a
