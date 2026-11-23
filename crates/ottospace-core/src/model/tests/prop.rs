@@ -9412,6 +9412,42 @@ fn seed_42928_the_picker_waits_for_the_boxs_pen() {
     .unwrap();
 }
 
+/// The box's pen marks up a pane whose tab the system then puts away: the round ends, and the
+/// box, back, keeps the keyboard; sneak mode does not come on under it.
+#[test]
+fn seed_42928_a_pen_round_ends_with_its_tab_put_away() {
+    let facts = vec![
+        Facts {
+            pane: 2,
+            cwd: Some("@\"".into()),
+            program: Some("flicker".into()),
+            title: Some(" ".into()),
+            ignored: false,
+        },
+        Facts { pane: 5, cwd: Some("/tmp".into()), program: Some("flicker".into()), title: None, ignored: false },
+    ];
+    let slack =
+        Kind::App { window: 7, title: "general".into(), bundle: Some("com.slack".into()), name: "Slack".into() };
+    let target = Target {
+        frame: Frame { x: 0.0, y: 20.0, w: -4.0, h: 0.0 },
+        source: Source::Own { id: "rail:apps".into() },
+        clip: None,
+    };
+    replay(&[
+        Action::Open { kind: slack, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::NewTab.sent_by(Origin::User),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::OpenCompose { text: " q".into() }.sent_by(Origin::Socket),
+        Action::ComposePen.sent_by(Origin::User),
+        Action::CaptureStart { pane: None, draft: "u2".into(), word: "w0rdw0rdw0rd".into(), facts, images: true }
+            .sent_by(Origin::User),
+        Action::SelectVisibleTab { index: 0 }.sent_by(Origin::System),
+        Action::AnnotatePress { at: [0.0, 0.25], shift: false, alt: true, size: [800.0, 1200.0] }.sent_by(Origin::User),
+        Action::Sneak { targets: vec![target] }.sent_by(Origin::System),
+    ])
+    .unwrap();
+}
+
 /// The box opened in one workspace, its line taken by a capture's draft, then ↵ in a workspace
 /// of a default: the draft is filed, the bar goes, and the task joined the box's first workspace.
 #[test]
