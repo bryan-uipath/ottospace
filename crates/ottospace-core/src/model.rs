@@ -155,8 +155,6 @@ pub struct Confirm {
     pub running: Vec<Running>,
     /// Not the quit question: "Stop its agent and dismiss?" for this task, whose agent runs.
     pub dismiss: Option<TaskId>,
-    /// Not the quit question: "Paste 4 lines?" in that pane (`clip::asks`).
-    pub paste: Option<clip::PasteAsk>,
     /// Not the quit question: "Unlist this repository?" for the one at this path, which a live
     /// task works in. Nothing on disk changes either way.
     pub unlist: Option<String>,
@@ -229,9 +227,6 @@ impl Confirm {
         }
         if self.delete.is_some() {
             return "Delete this worktree?".into();
-        }
-        if let Some(ask) = self.paste {
-            return ask.title();
         }
         "Quit?".into()
     }
@@ -1346,15 +1341,17 @@ pub enum Action {
     /// Quit without asking: the socket's `quit`.
     Quit,
     /// Text went to the clipboard: pane `pane`'s selection, or from no pane (a text field, a
-    /// chat's code block). The shell holds the text; the notice says how much.
+    /// chat's code block). The shell holds the text; the notice says how much. `range`: the
+    /// selection's first and last cell (`Clip::range`), which pulse.
     Copied {
         pane: Option<PaneId>,
         verb: clip::Verb,
         amount: clip::Amount,
+        range: Option<[(i32, usize); 2]>,
     },
     /// ⌘V into terminal `pane`, of the clipboard's text as the shell read it. The user's alone: a
-    /// client must not put the user's clipboard where `capture` reads it back. A line break asks
-    /// first (`clip::asks`), answered by `QuitConfirm` or `QuitCancel`.
+    /// client must not put the user's clipboard where `capture` reads it back. It goes at once,
+    /// line breaks too: the user sees what they paste (`clip::paste_bytes`).
     Paste {
         pane: PaneId,
         amount: clip::Amount,
@@ -4031,9 +4028,6 @@ pub struct Model {
     pub confirm: Option<Confirm>,
     /// "Copied 3 lines", while the title strip and the status bar say it.
     pub clip: Option<Clip>,
-    /// When a paste into a terminal asks first (`paste_confirm` in the settings).
-    #[serde(skip)]
-    pub paste_confirm: clip::PasteConfirm,
     /// The key reference overlay is showing.
     pub keys: bool,
     /// How much the user uses each key. Never in the snapshot: it describes the user's habits.
@@ -4310,7 +4304,6 @@ impl Default for Model {
             app_lists: apps::Lists::default(),
             confirm: None,
             clip: None,
-            paste_confirm: clip::PasteConfirm::default(),
             copy_asks: Default::default(),
             copy_always: Default::default(),
             copy_last: 0,
@@ -4768,17 +4761,12 @@ impl Model {
             | Action::SessionOpen { .. }
             | Action::TalkStart
             | Action::TaskStop { .. } => Some(agents::USERS_ALONE),
-            // A paste is of the user's clipboard: only their ⌘V and their answer to "Paste 4 lines?".
+            // A paste is of the user's clipboard: only their ⌘V.
             Action::Paste { .. } => Some(clip::USERS_ALONE),
             // A program's copy goes to the clipboard only by the user's answer.
             Action::CopyAnswer { .. } => Some(copy_ask::USERS_ALONE),
             Action::CopyAsked { .. } if origin == Origin::Socket => Some(copy_ask::SHELLS_ALONE),
             Action::PaneDrop { .. } | Action::TalkDrop { .. } => Some(clip::DROP_USERS),
-            Action::QuitConfirm | Action::QuitCancel
-                if self.confirm.as_ref().is_some_and(|confirm| confirm.paste.is_some()) =>
-            {
-                Some(clip::USERS_ALONE)
-            }
             // So is "Unlist this repository?": it writes the settings.
             Action::QuitConfirm | Action::QuitCancel
                 if self.confirm.as_ref().is_some_and(|confirm| confirm.unlist.is_some()) =>
@@ -5652,8 +5640,6 @@ impl Model {
                 Some(id) => self.agent_runs(&Subject::Task(id)),
                 // "Stop it and put it away?" goes once its turn is over: Later then needs no question.
                 None if confirm.later.is_some() => later_works,
-                // "Paste 4 lines?" goes with its pane.
-                None if let Some(ask) = confirm.paste => panes.iter().any(|p| p.id == ask.pane),
                 // "Close <title>?" goes with its pane, or once nothing in it is unsaved.
                 None if let Some(pane) = confirm.edited => self.edited.contains(&pane),
                 // "Unlist this repository?" goes once it is not listed.
@@ -6932,20 +6918,9 @@ impl Model {
             }
             // Its rows are the user's to click (`quit_go`).
             Action::QuitGo { .. } => {}
-            // Yes to "Paste 4 lines?": into its pane, if that is still a terminal.
-            Action::QuitConfirm if let Some(ask) = self.confirm.as_ref().and_then(|confirm| confirm.paste) => {
-                self.confirm = None;
-                self.pasted(ask.pane, ask.amount, effects);
-            }
-            // Into the terminal that has the keyboard, as ⌘V is: no question over a live app.
+            // Into the terminal that has the keyboard, as ⌘V is: never over a live app.
             Action::Paste { pane, amount } if self.keyboard_terminal() == Some(pane) => {
-                match clip::asks(amount, self.paste_confirm) {
-                    true => {
-                        self.confirm =
-                            Some(Confirm { paste: Some(clip::PasteAsk { pane, amount }), ..Confirm::default() })
-                    }
-                    false => self.pasted(pane, amount, effects),
-                }
+                self.pasted(pane, amount, effects)
             }
             Action::Paste { .. } => {}
             // A program's ask waits in its pane's header; a pane let copy always copies at once.
@@ -7001,8 +6976,11 @@ impl Model {
                 let said = clip::Clip::new(None, clip::Verb::Pasted, clip::Amount::default(), self.now);
                 self.clip = Some(clip::Clip { text: refused.into(), ..said });
             }
-            Action::Copied { pane, verb, amount } => {
-                self.clip = Some(Clip::new(pane.filter(|id| self.pane(*id).is_some()), verb, amount, self.now));
+            Action::Copied { pane, verb, amount, range } => {
+                let pane = pane.filter(|id| self.pane(*id).is_some());
+                // Only a pane's copy has cells to light.
+                let range = range.filter(|_| pane.is_some());
+                self.clip = Some(Clip { range, ..Clip::new(pane, verb, amount, self.now) });
             }
             // Yes to "Stop its agent and dismiss?": the agent stops as Stop stops it, then the task goes.
             Action::QuitConfirm if let Some(id) = self.confirm.as_ref().and_then(|confirm| confirm.dismiss) => {
@@ -9932,7 +9910,6 @@ impl Model {
         self.act(Action::TasksView { view: settings.tasks_view.unwrap_or_default() }, effects);
         self.act(Action::SessionsRange { range: settings.sessions_range.unwrap_or_default() }, effects);
         self.act(Action::SessionQuiet { ms: settings.quiet_ms() }, effects);
-        self.paste_confirm = settings.paste_confirm.unwrap_or_default();
         // For app panes from now: a level set is kept.
         self.agent.default = settings.agent_mode.unwrap_or(crate::agent_mode::Level::Act);
         // The models are read only at start (`agent_models`).
@@ -11263,7 +11240,7 @@ mod tests {
             Action::QuitCancel,
             Action::QuitGo { row: 0 },
             Action::Quit,
-            Action::Copied { pane: Some(1), verb: clip::Verb::Copied, amount: Default::default() },
+            Action::Copied { pane: Some(1), verb: clip::Verb::Copied, amount: Default::default(), range: None },
             Action::Paste { pane: 1, amount: Default::default() },
             Action::CopyAsked { pane: 1, text: text(), now: 0 },
             Action::CopyAnswer { pane: 1, ask: 1, answer: copy_ask::Answer::Copy, now: 0 },
@@ -18616,7 +18593,9 @@ mod tests {
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
         m.update(Action::Tick { now: 10_000 });
         let amount = clip::Amount::of("a\nb\nc");
-        m.update(Action::Copied { pane: Some(1), verb: clip::Verb::Copied, amount }.sent_by(Origin::Socket));
+        m.update(
+            Action::Copied { pane: Some(1), verb: clip::Verb::Copied, amount, range: None }.sent_by(Origin::Socket),
+        );
         let clip = m.clip.clone().expect("a notice");
         assert_eq!((clip.pane, clip.text.as_str(), clip.at), (Some(1), "Copied 3 lines", 10_000));
         assert!(!m.due(10_000 + clip::NOTICE_MS - 1));
@@ -18626,7 +18605,7 @@ mod tests {
         m.update(Action::Tick { now: 10_000 + clip::NOTICE_MS });
         assert_eq!(m.clip, None);
         // From no pane, or one that is gone: the status bar alone says it.
-        m.update(Action::Copied { pane: Some(9), verb: clip::Verb::Cut, amount: clip::Amount::of("ab") });
+        m.update(Action::Copied { pane: Some(9), verb: clip::Verb::Cut, amount: clip::Amount::of("ab"), range: None });
         assert_eq!(m.clip.as_ref().map(|c| (c.pane, c.text.as_str())), Some((None, "Cut 2 characters")));
     }
 
@@ -18771,47 +18750,19 @@ mod tests {
     }
 
     #[test]
-    fn a_paste_with_a_line_break_asks_and_only_the_users_enter_pastes() {
+    fn a_paste_with_a_line_break_goes_at_once_and_a_copy_keeps_its_range() {
         let mut m = Model::default();
         m.update(Action::Split { axis: Right, kind: Kind::Terminal });
         let amount = clip::Amount::of("make\nmake install\n");
-        assert_eq!(m.update(Action::Paste { pane: 1, amount }), [], "it asks first");
-        assert_eq!(m.mode(), Mode::Confirm);
-        let confirm = m.confirm.clone().expect("the question");
-        assert_eq!(
-            (confirm.title(), confirm.paste),
-            ("Paste 2 lines?".into(), Some(clip::PasteAsk { pane: 1, amount }))
-        );
-        // A client neither answers nor cancels it, nor quits under it.
-        for answer in [Action::QuitConfirm, Action::QuitCancel] {
-            assert_eq!(m.refusal(&answer, Origin::Socket), Some(clip::USERS_ALONE));
-            assert_eq!(m.update(answer.sent_by(Origin::Socket)), []);
-        }
-        assert!(m.confirm.is_some());
-        // Quit from the menu under it is no yes to the paste: it asks about the quit instead.
-        assert_eq!(m.update(Action::QuitAsked { running: vec![running(1, "vim")] }), []);
-        assert_eq!(m.confirm.as_ref().map(|c| c.paste), Some(None));
-        m.update(Action::QuitCancel);
-        assert_eq!(m.confirm, None);
-        // Asked again: ↵ pastes; Esc would have pasted nothing.
-        m.update(Action::Paste { pane: 1, amount });
-        assert_eq!(m.update(Action::QuitConfirm), [Effect::Paste { pane: 1 }]);
-        assert_eq!((m.mode(), m.clip.as_ref().map(|c| c.text.as_str())), (Mode::Normal, Some("Pasted 2 lines")));
-        // `never`: no question.
-        m.paste_confirm = clip::PasteConfirm::Never;
         assert_eq!(m.update(Action::Paste { pane: 1, amount }), [Effect::Paste { pane: 1 }]);
-    }
-
-    #[test]
-    fn paste_confirm_is_read_from_the_settings() {
-        let mut m = Model::default();
-        m.update(
-            Action::SettingsRead { text: r#"{"paste_confirm": "never"}"#.into(), written: false }
-                .sent_by(Origin::System),
-        );
-        assert_eq!(m.paste_confirm, clip::PasteConfirm::Never);
-        m.update(Action::SettingsRead { text: "{}".into(), written: false }.sent_by(Origin::System));
-        assert_eq!(m.paste_confirm, clip::PasteConfirm::Multiline);
+        assert_eq!((m.mode(), m.confirm.as_ref()), (Mode::Normal, None));
+        let range = Some([(0, 2), (1, 4)]);
+        let copied = |pane| Action::Copied { pane, verb: clip::Verb::Copied, amount, range };
+        m.update(copied(Some(1)));
+        assert_eq!(m.clip.as_ref().and_then(|clip| clip.range), range);
+        // A copy from no pane, or one gone, has no cells.
+        m.update(copied(Some(9)));
+        assert_eq!(m.clip.as_ref().map(|clip| (clip.pane, clip.range)), Some((None, None)));
     }
 
     #[test]

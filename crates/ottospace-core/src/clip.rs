@@ -1,13 +1,12 @@
-//! Copy and paste: the text a terminal's selection copies, the bytes a paste sends, when a paste
-//! asks first, and the notice that says either happened. The shell holds the text; the core
+//! Copy and paste: the text a terminal's selection copies, the bytes a paste sends, the cells a
+//! copy lights, and the notice that says either happened. The shell holds the text; the core
 //! knows only how much of it there is.
 
-use serde::{Deserialize, Serialize};
+use serde::Serialize;
 
-use crate::keys::Mods;
-use crate::model::{Action, PaneId};
+use crate::model::PaneId;
 
-/// Why a client's paste, or its answer to "Paste 4 lines?", is refused.
+/// Why a client's paste is refused.
 pub const USERS_ALONE: &str = "only the user pastes their clipboard";
 /// Files dropped from Finder are the user's own act: no client types a path this way (`type` is theirs).
 pub const DROP_USERS: &str = "only the user drops files";
@@ -17,7 +16,7 @@ pub const DROP_REFUSED: &str = "Nothing typed: a dropped name holds a control ch
 
 /// How long the title strip and the status bar say "Copied 3 lines".
 pub const NOTICE_MS: u64 = 2_000;
-/// How long the pane the text came from, or went to, pulses.
+/// How long the copied cells, or the pane a paste went to, pulse.
 pub const PULSE_MS: u64 = 600;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -55,7 +54,8 @@ impl Amount {
 }
 
 /// What the title strip of `pane` (none: a copy from no pane, e.g. a chat's code block) and the
-/// status bar say for `NOTICE_MS` from `at`. The pane pulses for the first `PULSE_MS`.
+/// status bar say for `NOTICE_MS` from `at`. For the first `PULSE_MS` the copied cells pulse, or
+/// the pane (`Clip::lights`).
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Clip {
     pub pane: Option<PaneId>,
@@ -64,6 +64,18 @@ pub struct Clip {
     /// "Copied 3 lines".
     pub text: String,
     pub at: u64,
+    /// A copy's first and last cell in its terminal, as (line, column): line 0 the screen's top
+    /// at no scroll, negative in the history.
+    #[serde(skip)]
+    pub range: Option<[(i32, usize); 2]>,
+}
+
+/// What a clip lights for its pulse: these cells of the pane's screen, each (row, first column,
+/// last column), else (`ring`) the pane's border.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Lights {
+    pub cells: Vec<(usize, usize, usize)>,
+    pub ring: bool,
 }
 
 impl Clip {
@@ -73,7 +85,28 @@ impl Clip {
             Verb::Cut => "Cut",
             Verb::Pasted => "Pasted",
         };
-        Self { pane, verb, amount, text: format!("{said} {}", amount.words()), at }
+        Self { pane, verb, amount, text: format!("{said} {}", amount.words()), at, range: None }
+    }
+
+    /// What pulses in a terminal scrolled `back` lines, `rows` by `cols`: the copied cells on
+    /// screen, where its selection is now (`live`: moved with new output) else where it was. A
+    /// paste, or a copy with none on screen (scrolled away), lights the border alone: never a fill
+    /// over the text.
+    pub fn lights(&self, live: Option<[(i32, usize); 2]>, back: usize, rows: usize, cols: usize) -> Lights {
+        let range = live.or(self.range).filter(|_| self.range.is_some() && self.verb != Verb::Pasted);
+        let Some([(first, from), (last, to)]) = range else {
+            return Lights { cells: Vec::new(), ring: true };
+        };
+        let cells: Vec<_> = (first..=last)
+            .filter_map(|line| {
+                let row = usize::try_from(line + back as i32).ok().filter(|row| *row < rows)?;
+                let a = if line == first { from } else { 0 };
+                let b = if line == last { to } else { usize::MAX };
+                // Past a narrowed grid's edge: nothing of it shows.
+                (a < cols).then(|| (row, a, b.min(cols - 1)))
+            })
+            .collect();
+        Lights { ring: cells.is_empty(), cells }
     }
 
     /// Still said at `now`.
@@ -118,47 +151,6 @@ pub fn paste_bytes(text: &str, bracketed: bool) -> Vec<u8> {
     match bracketed {
         true => format!("\x1b[200~{body}\x1b[201~").into_bytes(),
         false => body.into_bytes(),
-    }
-}
-
-/// When a paste into a terminal asks first (`paste_confirm` in the settings).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum PasteConfirm {
-    /// Text with a line break, bracketed paste or not: a program may run each line.
-    #[default]
-    Multiline,
-    Never,
-}
-
-/// A paste waits for the user's ↵: it holds a line break and the settings ask about those.
-pub fn asks(amount: Amount, setting: PasteConfirm) -> bool {
-    amount.newline && setting == PasteConfirm::Multiline
-}
-
-/// "Paste 4 lines?" over pane `pane`, until the user answers. The text is the shell's.
-#[derive(Clone, Copy, Debug, PartialEq, Serialize)]
-pub struct PasteAsk {
-    pub pane: PaneId,
-    pub amount: Amount,
-}
-
-impl PasteAsk {
-    pub fn title(&self) -> String {
-        match self.amount.lines {
-            1 => "Paste 1 line?".into(),
-            lines => format!("Paste {lines} lines?"),
-        }
-    }
-
-    /// The user's ↵ pastes; any other key of theirs cancels. A client's key answers nothing: it
-    /// would paste the user's clipboard.
-    pub fn answer(key: &str, mods: Mods, by_user: bool) -> Option<Action> {
-        match (key, mods == Mods::default()) {
-            _ if !by_user => None,
-            ("enter", true) => Some(Action::QuitConfirm),
-            _ => Some(Action::QuitCancel),
-        }
     }
 }
 
@@ -239,24 +231,34 @@ mod tests {
     }
 
     #[test]
-    fn a_paste_with_a_line_break_asks_unless_told_never() {
-        assert!(asks(Amount::of("a\nb"), PasteConfirm::Multiline));
-        assert!(asks(Amount::of("rm -rf build\n"), PasteConfirm::Multiline), "a last newline runs it");
-        assert!(!asks(Amount::of("one line"), PasteConfirm::Multiline));
-        assert!(!asks(Amount::of("a\nb"), PasteConfirm::Never));
+    fn a_multi_line_paste_without_brackets_goes_as_typed() {
+        // As Terminal does: each line break is a ↵, so the shell runs each line. Brackets, when
+        // the program asked, hold them until the user's own ↵.
+        assert_eq!(paste_bytes("make\nmake install\n", false), b"make\rmake install\r".to_vec());
     }
 
     #[test]
-    fn only_the_users_enter_pastes() {
-        let (plain, cmd) = (Mods::default(), Mods { cmd: true, ..Mods::default() });
-        assert_eq!(PasteAsk::answer("enter", plain, true), Some(Action::QuitConfirm));
-        assert_eq!(PasteAsk::answer("escape", plain, true), Some(Action::QuitCancel));
-        assert_eq!(PasteAsk::answer("q", plain, true), Some(Action::QuitCancel), "not the quit question's q");
-        assert_eq!(PasteAsk::answer("enter", cmd, true), Some(Action::QuitCancel));
-        assert_eq!(PasteAsk::answer("enter", plain, false), None);
-        assert_eq!(PasteAsk::answer("escape", plain, false), None);
-        let ask = |lines| PasteAsk { pane: 1, amount: Amount { lines, chars: 9, newline: true } };
-        assert_eq!((ask(1).title(), ask(4).title()), ("Paste 1 line?".into(), "Paste 4 lines?".into()));
+    fn a_copy_lights_its_cells_on_screen_else_the_border() {
+        let copy = |range| Clip { range, ..Clip::new(Some(1), Verb::Copied, Amount::of("a"), 0) };
+        // From column 3 of row 1 to column 2 of row 3, 10 wide: the middle row whole.
+        let lit = copy(Some([(1, 3), (3, 2)])).lights(None, 0, 24, 10);
+        assert_eq!(lit, Lights { cells: vec![(1, 3, 9), (2, 0, 9), (3, 0, 2)], ring: false });
+        // Output moved the selection up a row: the cells follow it.
+        assert_eq!(copy(Some([(1, 3), (1, 5)])).lights(Some([(0, 3), (0, 5)]), 0, 24, 10).cells, [(0, 3, 5)]);
+        // Narrowed to 4 columns: what was past the edge is not drawn.
+        assert_eq!(copy(Some([(1, 6), (2, 1)])).lights(None, 0, 24, 4).cells, [(2, 0, 1)]);
+        // Scrolled back 2: two rows of history in view, the copy's rows lower by 2; its last row
+        // past the screen's foot is not drawn.
+        assert_eq!(copy(Some([(-2, 0), (1, 4)])).lights(None, 2, 3, 10).cells, [(0, 0, 9), (1, 0, 9), (2, 0, 9)]);
+        // Scrolled out of view, or no range: the border.
+        assert_eq!(copy(Some([(-9, 0), (-8, 4)])).lights(None, 0, 24, 10), Lights { cells: vec![], ring: true });
+        assert!(
+            copy(None).lights(Some([(0, 0), (0, 1)]), 0, 24, 10).ring,
+            "no range: a selection made since is not it"
+        );
+        // A paste lights its pane's border, never cells.
+        let paste = Clip { range: Some([(0, 0), (0, 1)]), ..Clip::new(Some(1), Verb::Pasted, Amount::of("a"), 0) };
+        assert_eq!(paste.lights(None, 0, 24, 10), Lights { cells: vec![], ring: true });
     }
 
     #[test]

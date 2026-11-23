@@ -205,7 +205,7 @@ ottospace ctl '{"cmd":"task_list"}'
 |---|---|
 | Scroll back | Wheel or trackpad · ⇧PageUp ⇧PageDown · ⇧Home ⇧End |
 | Select | Drag · double-click a word · triple-click a line · ⇧-click extends · Esc clears |
-| Copy / paste | ⌘C / ⌘V: the pane pulses and says "Copied 3 lines". Text with a line break asks first: ↵ pastes |
+| Copy / paste | ⌘C / ⌘V: the copied cells pulse and the pane says "Copied 3 lines". A paste goes at once, line breaks too |
 | Give a file to the program | Drag it from Finder onto the terminal (or the drawer's message box): its path is typed, quoted, no ↵ |
 | Select with the keyboard | ⌘⇧C, then `hjkl` move, `v` select, `y` copy, Esc leave |
 

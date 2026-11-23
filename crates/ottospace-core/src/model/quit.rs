@@ -69,7 +69,6 @@ impl Confirm {
     /// It is the quit question, not one of the others the dialog asks.
     pub fn quits(&self) -> bool {
         self.dismiss.is_none()
-            && self.paste.is_none()
             && self.unlist.is_none()
             && self.close.is_none()
             && self.later.is_none()

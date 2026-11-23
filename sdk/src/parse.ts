@@ -66,7 +66,6 @@ import type {
   Clip,
   Confirm,
   Unsent,
-  PasteAsk,
   ComposeMenu,
   Field,
   MenuRow,
@@ -215,6 +214,11 @@ function map<T>(parse: Parse<T>): Parse<Record<string, T>> {
 function pair(value: unknown, at: string): [number, number] {
   if (!Array.isArray(value) || value.length !== 2) throw wrong(at, "two numbers", value);
   return [num(value[0], at), num(value[1], at)];
+}
+
+function triple(value: unknown, at: string): [number, number, number] {
+  if (!Array.isArray(value) || value.length !== 3) throw wrong(at, "three numbers", value);
+  return [num(value[0], at), num(value[1], at), num(value[2], at)];
 }
 
 function range(value: unknown, at: string): [[number, number], [number, number]] {
@@ -1585,11 +1589,6 @@ function amount(value: unknown, at: string): Amount {
   return { lines: num(o.lines, `${at}.lines`), chars: num(o.chars, `${at}.chars`), newline: bool(o.newline, `${at}.newline`) };
 }
 
-function pasteAsk(value: unknown, at: string): PasteAsk {
-  const o = fields(value, at);
-  return { pane: num(o.pane, `${at}.pane`), amount: amount(o.amount, `${at}.amount`) };
-}
-
 function clip(value: unknown, at: string): Clip {
   const o = fields(value, at);
   const verb = o.verb;
@@ -1608,7 +1607,6 @@ function confirm(value: unknown, at: string): Confirm {
   return {
     running: list(running)(o.running, `${at}.running`),
     dismiss: orNull(num)(o.dismiss, `${at}.dismiss`),
-    paste: orNull(pasteAsk)(o.paste, `${at}.paste`),
     unlist: orNull(str)(o.unlist, `${at}.unlist`),
     close: orNull(num)(o.close, `${at}.close`),
     later: orNull(later)(o.later, `${at}.later`),
@@ -2326,6 +2324,10 @@ export function snapshot(value: unknown): Snapshot {
     listen_rects: orNull(map(rect))(o.listen_rects, "listen_rects"),
     offer_rects: orNull(map(rect))(o.offer_rects, "offer_rects"),
     heading_rects: orNull(map(rect))(o.heading_rects, "heading_rects"),
+    clip_lights: orNull((value, at) => {
+      const lit = fields(value, at);
+      return { cells: list(triple)(lit.cells, `${at}.cells`), ring: bool(lit.ring, `${at}.ring`) };
+    })(o.clip_lights, "clip_lights"),
     marks: list(mark)(o.marks, "marks"),
     mark_removed: orNull(str)(o.mark_removed, "mark_removed"),
     unfilled: list((value, at) => {

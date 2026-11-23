@@ -3599,45 +3599,40 @@ fn mouse_selects_and_copy_paste_use_it() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_multi_line_paste_asks_first_and_only_the_users_enter_pastes() {
-    let otto = Otto::launch("paste-ask");
+fn a_copy_lights_its_cells_and_a_multi_line_paste_goes_at_once() {
+    let otto = Otto::launch("copy-paste");
     otto.call(json!({"cmd": "split"}));
     otto.bounds(&[1]);
     otto.call(json!({"cmd": "type", "text": "printf 'echo m-one\\necho m-two\\n'\r"}));
     let t = otto.wait_for("the lines", |o| Some(term1(o)).filter(|t| shows(t, "echo m-two")));
     let lines = t["lines"].as_array().expect("lines");
-    let row = lines.iter().position(|l| l.as_str() == Some("echo m-one")).expect("row") as f32 + 0.5;
+    let at = lines.iter().position(|l| l.as_str() == Some("echo m-one")).expect("row");
+    let row = at as f32 + 0.5;
 
-    // Two whole lines, copied: the stand-in clipboard holds them, with no newline at the end.
+    // Two whole lines, copied: the stand-in clipboard holds them, with no newline at the end,
+    // and their two rows light, not the pane.
     otto.call(json!({"cmd": "mouse_down", "x": 1.5, "y": row, "clicks": 3}));
     otto.call(json!({"cmd": "mouse_drag", "x": 1.5, "y": row + 1.0}));
     let reply = otto.call(json!({"cmd": "key", "keys": "cmd-c"}));
     assert_eq!(reply["copied"], "echo m-one\necho m-two");
     assert_eq!(reply["state"]["clip"]["text"], "Copied 2 lines");
+    let lit = &reply["clip_lights"];
+    let rows: Vec<u64> = lit["cells"].as_array().expect("cells").iter().filter_map(|c| c[0].as_u64()).collect();
+    assert_eq!(
+        (rows, lit["cells"][0][1].as_u64(), lit["ring"].as_bool()),
+        (vec![at as u64, at as u64 + 1], Some(0), Some(false))
+    );
 
-    // The user's ⌘V asks over pane 1; a client neither answers nor cancels it.
-    let user = |keys: &str| otto.call(json!({"cmd": "key", "keys": keys, "as": "user"}));
-    let reply = user("cmd-v");
-    let ask = &reply["state"]["confirm"]["paste"];
+    // A client's ⌘V is refused; the user's pastes at once, with no question: the first line runs,
+    // the second waits at the prompt for its own ↵.
+    let refused = otto.raw(&json!({"cmd": "key", "keys": "cmd-v"}).to_string());
+    assert!(refused["error"].as_str().is_some_and(|e| e.contains("only the user pastes")), "{refused}");
+    let reply = otto.call(json!({"cmd": "key", "keys": "cmd-v", "as": "user"}));
     assert_eq!(
-        (reply["mode"].as_str(), ask["pane"].as_u64(), ask["amount"]["lines"].as_u64()),
-        (Some("confirm"), Some(1), Some(2))
+        (reply["mode"].as_str(), reply["state"]["confirm"].clone(), reply["state"]["clip"]["text"].as_str()),
+        (Some("normal"), Value::Null, Some("Pasted 2 lines"))
     );
-    for keys in ["enter", "escape"] {
-        let refused = otto.raw(&json!({"cmd": "key", "keys": keys}).to_string());
-        assert!(refused["error"].as_str().is_some_and(|e| e.contains("only the user pastes")), "{refused}");
-    }
-    // Esc cancels: nothing is pasted.
-    let reply = user("escape");
-    assert_eq!(reply["state"]["confirm"], Value::Null);
-    assert_ne!(reply["state"]["clip"]["text"], "Pasted 2 lines");
-    // Asked again, ↵ pastes: the first line runs, the second waits at the prompt for its own ↵.
-    user("cmd-v");
-    let reply = user("enter");
-    assert_eq!(
-        (reply["mode"].as_str(), reply["state"]["clip"]["text"].as_str()),
-        (Some("normal"), Some("Pasted 2 lines"))
-    );
+    assert_eq!(reply["clip_lights"]["ring"], true, "a paste lights its pane's border");
     otto.wait_for("the first line's output", |o| Some(term1(o)).filter(|t| shows(t, "m-one")));
     otto.call(json!({"cmd": "type", "text": "\r"}));
     otto.wait_for("the second line's output", |o| Some(term1(o)).filter(|t| shows(t, "m-two")));

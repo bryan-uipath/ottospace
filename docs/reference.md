@@ -127,8 +127,8 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⇧PageUp / ⇧PageDown | Scroll a terminal a page |
 | ⇧Home / ⇧End | Top / bottom of a terminal's history |
 | Drag / double-click / triple-click | Select text / a word / a line in a terminal. ⇧-click moves the selection's end to the click. A drag held past the top or bottom scrolls the history. The selection stays through new output until a click in the pane, Esc, or output written over it |
-| ⌘C | Copy the terminal's selection: a wrapped line as one line, trailing spaces trimmed, no newline at the end. The pane pulses once and its header and the status bar say "Copied 3 lines" for 2 seconds. Nothing selected: ⌘C does nothing (Edit ▸ Copy is off). In a [text field](#keys): its selection. ⌘X in a terminal does nothing |
-| ⌘V | Paste into the terminal, or into the open text field. Into a terminal: line breaks become ↵, other control characters are dropped, bracketed when the program asks for it. Text with a line break asks first in the pane ("Paste 4 lines?", ↵ pastes, Esc cancels; `paste_confirm`). The pane pulses and says "Pasted 4 lines". Only your own ⌘V pastes: a socket client's is refused |
+| ⌘C | Copy the terminal's selection: a wrapped line as one line, trailing spaces trimmed, no newline at the end. The copied cells pulse once (scrolled out of view: the pane's border does), held still under Reduce Motion, and the pane's header and the status bar say "Copied 3 lines" for 2 seconds. Nothing selected: ⌘C does nothing (Edit ▸ Copy is off). In a [text field](#keys): its selection. ⌘X in a terminal does nothing |
+| ⌘V | Paste into the terminal, or into the open text field. Into a terminal: line breaks become ↵, other control characters are dropped, bracketed when the program asks for it. Text with a line break goes at once, as in Terminal: bracketed, the program holds it until your ↵; not bracketed (a plain shell prompt), each line runs. The pane pulses and says "Pasted 4 lines". Only your own ⌘V pastes: a socket client's is refused |
 | Drop files | Files or folders dragged from Finder onto a terminal: the pane takes the keyboard and their paths are typed in, each in single quotes (a `'` as `'\''`), a space between and after, no ↵ (you press it); bracketed when the program asks for it, so Claude Code and Codex take them as pasted file paths. A name with a line break or another control character types nothing, and the pane says so. The quoting holds where a word starts: dropped inside a quote you already typed, the shell reads the text as it would anything typed there. Without bracketed paste the text arrives as keys, so a shell's own key bindings apply (as in any terminal). An image is its path, never read. Onto the drawer's message box: the same quoted paths go into the message. Only your own drop |
 | ⌘N | New task, in the drawer. Type what needs doing, with [tags](#tags): `#project`, `>repo`, `@agent`, `/path`, `$skill`, `^reference`, `p1` to `p9`; a dropdown finishes the one at the cursor. ↵ adds the task and starts its agent; ⇧↵ adds it for later; Esc closes. The line is on top, with what it will point at and + (attach files) inside its field; under it one line says what ↵ will do with it as it is. "? tags" under it, or ⌘/, shows the tags a line may hold (a click on one types its mark); ⌘/ again shows every key. The box starts its task in the workspace it was opened in: if you switch space while it is open, it stays open and says "This task goes to A · Switch to B"; Switch, or ⌘N, brings it to the one on show. [Its keys](#keys) |
 | ⌘L | The keyboard into the drawer's conversation, or back to the workspace |
@@ -1397,7 +1397,7 @@ first. Again while that tab is open brings it forward; quitting the editor close
 you open it: a socket client's ⌘, does nothing. Open at quit, it comes back at the next start,
 the editor running again ([Restoring the layout](#restoring-the-layout)).
 
-A change is read when the file is saved: what is wrong in it is said in a toast (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `clone_dir`, `transcripts_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `agent_commands`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors`, `paste_confirm` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
+A change is read when the file is saved: what is wrong in it is said in a toast (`settings.json:3:1 trailing comma`, or the first of several and how many more) and the last good settings stay, until it is right again. Then `worktrees_dir`, `clone_dir`, `transcripts_dir`, `repos_prs`, `windows`, `capture`, `wheel_to_apps`, `workbook_scrollback_lines`, `default_agent`, `agent_commands`, `conversation_view`, `session_quiet_minutes`, `tasks_view`, `sessions_range`, `calendar_notify`, `calendar_notify_for`, `calendar_hide_free`, `calendar_colors` and `features` apply at once; any other key changed says "restart to apply" with its name, in muted text: information, not an error (`repos`, `apps` and `apps_hidden` only when changed by hand: the app's own writes are already applied). Removing the file goes back to the defaults.
 
 
 ```json
@@ -1421,7 +1421,6 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
   "apps": ["Microsoft Outlook", "Slack"],
   "apps_hidden": ["Music"],
   "suggest_dock_apps": true,
-  "paste_confirm": "multiline",
   "wheel_to_apps": true,
   "windows": [{ "app": "us.zoom.xos", "title": "Zoom Meeting", "do": "ignore" }],
   "features": { "marks": false, "apps_section": false }
@@ -1469,7 +1468,7 @@ A change is read when the file is saved: what is wrong in it is said in a toast 
 | `calendar_colors` | Colours by title, first match wins: `[{"match": "1:1", "color": "teal"}]`. `match`: plain text the title holds, case ignored (not a pattern); `color`: `red`, `indigo`, `orange`, `pink`, `lime`, `purple`, `tan` or `teal`. At most 64. A rule wins over a focus block's green | none: colours by kind |
 | `suggest_dock_apps` | List the Dock's apps that are not running under "Not running". `false`: only pinned apps are listed there, and the Dock is not read | `true` |
 | `features` | [Feature flags](#features), by name: `true` or `false`. A name that is no flag is a mistake, named in a toast with the flags there are; the others still apply | each flag's default |
-| `paste_confirm` | When ⌘V into a terminal asks first: `multiline` (text with a line break, even a last one, bracketed paste or not: a shell may run each line) or `never` | `multiline` |
+| `paste_confirm` | Retired: ⌘V never asks. Still read, so a file that has it applies; a toast asks to remove it | |
 
 A mistake in the file (a key that does not exist, a wrong value, a font that is not installed) is
 shown in a toast. That key takes its default and the others still apply. If the file is

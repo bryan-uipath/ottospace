@@ -168,6 +168,8 @@ Design note: `docs/ai/attention/plan.md`.
   - `compose_drop` with `"pane"`: files dropped on that pane as the user's own drop (`Action::PaneDrop`:
     a terminal types the quoted paths). Outside a test run only the user drops files; `type` is a
     client's way to type.
+  - State field `clip_lights`: what a copy or paste lights while its notice shows (the pulse is its first
+    600 ms): the copied `cells` (row, first column, last column) or the pane's border (`ring`). `counts.clip_frames` counts the frames its pulse asked for. Null outside a test run.
   - State field `overflow`: each scroll area laid out (not a terminal), also one that fits, and which of its edges
     fade (`top`/`bottom`, the tab row's `left`/`right`). Null outside a test run.
   - State field `terminals[n].styled`: each span on show drawn with a style (`row`, `text`, `fg` with

@@ -1405,7 +1405,15 @@ const MAKERS: &[Make] = &[
     |_| Action::Quit,
     |g| {
         let verb = g.rng.pick(&[Verb::Copied, Verb::Cut, Verb::Pasted]);
-        Action::Copied { pane: g.rng.coin().then(|| g.pane()), verb, amount: g.amount() }
+        Action::Copied {
+            pane: g.rng.coin().then(|| g.pane()),
+            verb,
+            amount: g.amount(),
+            range: g
+                .rng
+                .coin()
+                .then(|| [(g.delta().clamp(-50, 50), g.rng.below(90)), (g.delta().clamp(-50, 50), g.rng.below(90))]),
+        }
     },
     |g| Action::Paste { pane: g.pane(), amount: g.amount() },
     // A program's ask to copy, small or past the cap, and the user's answer.
@@ -2438,11 +2446,8 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(!calendar_shown || m.calendar.on, "the Calendar section with no feed");
     ensure!((-7..=7).contains(&m.calendar.day), "the Calendar's day {} is not held", m.calendar.day);
     ensure!(m.calendar.day >= m.calendar.first_day(), "the Calendar shows day {}, cut by the cap", m.calendar.day);
-    // "Paste 4 lines?" is a question of its own, and only of text with a line break.
-    if let Some(confirm) = m.confirm.as_ref().filter(|c| c.paste.is_some()) {
-        let alone = confirm.running.is_empty() && confirm.dismiss.is_none() && confirm.unlist.is_none();
-        ensure!(alone && confirm.paste.is_some_and(|ask| ask.amount.newline), "a paste asks with {confirm:?}");
-    }
+    // Only a pane's copy has cells to light.
+    ensure!(m.clip.as_ref().is_none_or(|c| c.range.is_none() || c.pane.is_some()), "a copy's cells in no pane");
     // The meeting banner is of an event that runs, with no call on.
     if let Some(event) = m.calendar.banner(m.now) {
         ensure!(calendar::stage(event, m.now) == calendar::Stage::Running, "a banner for an event that does not run");
@@ -2867,7 +2872,6 @@ fn check(m: &Model) -> Result<(), String> {
     if let Some(confirm) = &m.confirm {
         let loses = match confirm.dismiss {
             Some(id) => m.agent_runs(&Subject::Task(id)),
-            None if let Some(ask) = confirm.paste => m.pane(ask.pane).is_some(),
             None if let Some(path) = &confirm.unlist => m.repos.iter().any(|r| r.path == *path),
             // "Delete this worktree?" of a listed linked worktree nothing is in.
             None if let Some(path) = &confirm.delete => m.deletable(path),
@@ -5444,9 +5448,9 @@ impl Run {
                         "{origin:?}'s {action:?} typed {text:?}"
                     );
                 }
-                // The user's clipboard goes only into a terminal, by their own ⌘V or ↵, and says so.
+                // The user's clipboard goes only into a terminal, by their own ⌘V, and says so.
                 Effect::Paste { pane } => {
-                    let asked = matches!(action, Action::Paste { .. } | Action::QuitConfirm);
+                    let asked = matches!(action, Action::Paste { .. });
                     let terminal = m.pane(*pane).is_some_and(|p| p.kind == Kind::Terminal);
                     let said = m.clip.as_ref().is_some_and(|c| c.pane == Some(*pane) && c.verb == Verb::Pasted);
                     ensure!(user && asked && terminal && said, "{origin:?}'s {action:?} pasted into pane {pane}");

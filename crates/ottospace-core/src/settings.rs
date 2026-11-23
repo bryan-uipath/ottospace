@@ -198,9 +198,10 @@ pub struct Settings {
     /// Feature flags by name, e.g. `{ "marks": true }`: see `features`. One not named keeps its default.
     #[serde(default)]
     pub features: std::collections::BTreeMap<String, bool>,
-    /// When ⌘V into a terminal asks first: `multiline` (default: text with a line break) or `never`.
+    /// Retired: ⌘V never asks. Still read, so a file that has it is not refused; a toast says to
+    /// remove it.
     #[serde(default)]
-    pub paste_confirm: Option<crate::clip::PasteConfirm>,
+    pub paste_confirm: Option<serde::de::IgnoredAny>,
     /// For working on ottospace itself: `{ "ottospace_repo": "~/code/ottospace" }`.
     #[serde(default)]
     pub developer: Developer,
@@ -504,6 +505,7 @@ pub struct Watch {
 
 /// What the status bar says of a retired key.
 const RETIRED: &str = "settings.json: calendar_window_hours is retired (the band shows calendar_workday): remove it";
+const RETIRED_PASTE: &str = "settings.json: paste_confirm is retired (⌘V never asks): remove it";
 
 /// The longest problem the status bar shows, in characters.
 const MAX_PROBLEM: usize = 240;
@@ -528,7 +530,8 @@ impl Watch {
             started.apps_hidden.clone_from(&settings.apps_hidden);
         }
         self.restart = restart_keys(started, &settings);
-        self.retired = settings.calendar_window_hours.is_some().then_some(RETIRED);
+        self.retired = (settings.calendar_window_hours.is_some().then_some(RETIRED))
+            .or(settings.paste_confirm.is_some().then_some(RETIRED_PASTE));
         Some(settings)
     }
 
@@ -1127,6 +1130,8 @@ mod tests {
         let mut watch = Watch::default();
         assert!(watch.read(r#"{"calendar_window_hours": 8, "tasks_view": "project"}"#, false).is_some());
         assert_eq!((watch.errors(), watch.line().as_deref(), watch.kind()), (0, Some(RETIRED), Kind::SettingsRetired));
+        assert!(watch.read(r#"{"paste_confirm": "never", "tasks_view": "project"}"#, false).is_some());
+        assert_eq!(watch.line().as_deref(), Some(RETIRED_PASTE));
         assert_eq!(read(r#"{"calendar_refresh_minutes": 0}"#).1.len(), 1);
         assert_eq!(read(r#"{"calendar_notify": false}"#).0.calendar_notify, Some(false));
         assert_eq!(read(r#"{"calendar_notify_for": "links"}"#).0.calendar_notify_for, Some(NotifyFor::Links));
