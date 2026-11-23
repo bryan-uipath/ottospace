@@ -1,0 +1,12 @@
+# A terminal's links with ⌘ held over one: a URL printed as text underlined, then an OSC 8 link
+# whose text is not its target, with the target shown under it.
+{"cmd":"split"}
+{"cmd":"wait","pattern":"^\\$"}
+{"cmd":"type","text":"clear; for i in $(seq 60); do echo 'see https://example.com/docs/terminal-links-and-more (details)'; done\r"}
+{"cmd":"wait","pattern":"\\(details\\)$"}
+{"hover":{"rect":"bounds.1"},"at":[0.15,0.5],"modifiers":["cmd"]}
+{"shot":"url"}
+{"cmd":"type","text":"clear; for i in $(seq 60); do printf 'notes: \\033]8;;https://example.com/release-notes\\033\\\\read the release notes\\033]8;;\\033\\\\ today\\n'; done\r"}
+{"cmd":"wait","pattern":"^notes: read the release notes today$"}
+{"hover":{"rect":"bounds.1"},"at":[0.15,0.4],"modifiers":["cmd"]}
+{"shot":"osc8"}

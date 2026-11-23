@@ -26,6 +26,7 @@ use gpui::{
     UnderlineStyle, Window, fill, font, point, px, rgb, size,
 };
 use ottospace_core::keys::{self, Kitty, Mods};
+use ottospace_core::term_links::{self, Link};
 use ottospace_core::terminal::{
     CellPoint, Motion, MouseMode, Pointer, Press, Proc, Processes, Scroll, SelectKind, Wheel, WheelGoes, Work,
     mouse_report, running, saved_command, selection_holds, utf8_locale, wheel_goes,
@@ -766,6 +767,28 @@ impl Terminal {
         text_of(&self.term.lock(), history)
     }
 
+    /// The link on visible cell `at` (`term_links::link_at`), its cells by screen row; those off
+    /// screen are left out.
+    pub fn link_at(&self, at: CellPoint) -> Option<Link> {
+        let term = self.term.lock();
+        let offset = term.grid().display_offset() as i32;
+        let line = Line(at.row as i32 - offset);
+        // Its line's rows, as far as a URL may reach.
+        let reach = term_links::reach(term.columns()) as i32;
+        let (mut from, mut to) = (line, line);
+        while from.0 > line.0 - reach && from > term.topmost_line() && wraps(&term, from - 1) {
+            from -= 1;
+        }
+        while to.0 < line.0 + reach && to < term.bottommost_line() && wraps(&term, to) {
+            to += 1;
+        }
+        let rows: Vec<_> = (from.0..=to.0).map(|l| link_row(&term, Line(l))).collect();
+        let mut link = term_links::link_at(&rows, (line.0 - from.0) as usize, at.col)?;
+        let shown = |r: usize| usize::try_from(from.0 + r as i32 + offset).ok().filter(|row| *row < self.grid.rows);
+        link.cells = link.cells.into_iter().filter_map(|(r, a, b)| Some((shown(r)?, a, b))).collect();
+        Some(link)
+    }
+
     pub fn screen(&self) -> Screen {
         screen_of(&self.term.lock(), self.grid.rows)
     }
@@ -966,6 +989,25 @@ fn wraps<T>(term: &Term<T>, line: Line) -> bool {
     term.grid()[line][Column(term.columns() - 1)].flags.contains(Flags::WRAPLINE)
 }
 
+/// Grid row `line` as `term_links` reads it: a character a column (a wide one's second half
+/// `'\0'`, hidden text a space), each column's OSC 8 target.
+fn link_row<T>(term: &Term<T>, line: Line) -> term_links::Row {
+    let row = &term.grid()[line];
+    let spacer = Flags::WIDE_CHAR_SPACER | Flags::LEADING_WIDE_CHAR_SPACER;
+    let (cells, targets) = (0..term.columns())
+        .map(|col| {
+            let cell = &row[Column(col)];
+            let c = match cell.flags {
+                f if f.intersects(spacer) => '\0',
+                f if f.contains(Flags::HIDDEN) => ' ',
+                _ => cell.c,
+            };
+            (c, cell.hyperlink().map(|link| link.uri().to_string()))
+        })
+        .unzip();
+    term_links::Row { cells, targets, wraps: wraps(term, line) }
+}
+
 /// The first row of the line `line` is part of.
 fn line_start<T>(term: &Term<T>, mut line: Line) -> Line {
     while line > term.topmost_line() && wraps(term, line - 1) {
@@ -1159,6 +1201,7 @@ pub fn paint(
     bounds: Bounds<Pixels>,
     cell: Size<Pixels>,
     focused: bool,
+    link: &[(usize, usize, usize)],
     window: &mut Window,
     cx: &mut App,
 ) {
@@ -1231,6 +1274,12 @@ pub fn paint(
                 }
                 let _ = line.paint(origin, cell.height, window, cx);
             }
+        }
+        // A link under the pointer while ⌘ is held: underlined, in the text's colour.
+        for (row, from, to) in link {
+            let origin = bounds.origin + point(cell.width * *from as f32, cell.height * (*row as f32 + 1.) - px(2.));
+            let line = size(cell.width * (to + 1 - from) as f32, px(1.));
+            window.paint_quad(fill(Bounds { origin, size: line }, Hsla::from(rgb(palette::FOREGROUND))));
         }
         if let Some((row, col, shape)) = screen.cursor {
             let origin = bounds.origin + point(cell.width * col as f32, cell.height * row as f32);

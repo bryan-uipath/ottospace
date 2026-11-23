@@ -1104,9 +1104,15 @@ always scroll ottospace's own history (none while a program is on the alternate 
 program that exited left a mouse mode on. ⇧PageUp and friends go to a program on the alternate screen.
 A click on a terminal focuses it and clears its selection; a drag there selects, even in an
 unfocused pane. While the program has the mouse, hold ⇧ or ⌥ to select (⌘-click still opens a
-path). A program's cursor is the shape it asks for (block, underline or bar). Paste is bracketed when the program asks for it.
+path or a link). A program's cursor is the shape it asks for (block, underline or bar). Paste is bracketed when the program asks for it.
 Text is drawn bold, dim, italic, struck through or underlined (curly and coloured underlines too)
 as the program asks.
+Links: an `http://` or `https://` URL in the text (one wrapped across rows too; punctuation after it
+and a closing bracket it did not open are left out) and an OSC 8 hyperlink. Hold ⌘ over one: it is
+underlined and the pointer is a hand; an OSC 8 link whose text is not its address shows the address
+under it. ⌘-click opens that address in the default browser. Nothing else opens: no `file:`,
+`mailto:` or other scheme, no user name in the address, nothing over 2048 characters. Only your own
+click opens one, never a socket client's. Without ⌘ nothing changes.
 A program that asks for focus events (1004) hears when its terminal gets or loses the keyboard:
 another pane, another tab, a box over the panes or another app in front.
 Programs see `TERM=xterm-256color`, `COLORTERM=truecolor` (24-bit colour), `TERM_PROGRAM=ottospace`

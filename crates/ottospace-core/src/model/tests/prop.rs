@@ -1180,6 +1180,12 @@ const MAKERS: &[Make] = &[
     },
     |g| Action::PrOpen { path: g.repo_path() },
     |g| {
+        let urls =
+            ["https://example.com/a", "http://example.com", "file:///etc/passwd", "javascript:x", "mailto:a@b.c"];
+        let url = if g.rng.coin() { g.rng.pick(&urls).to_string() } else { g.text() };
+        Action::LinkOpen { url }
+    },
+    |g| {
         let heads = (0..g.rng.below(3)).map(|_| (g.repo_path(), g.rng.below(4) as u64 * 80)).collect();
         Action::SetHeads { heads, at: g.rng.below(2_000) as u64, calm: g.rng.coin() }
     },
@@ -5407,6 +5413,12 @@ impl Run {
                 Effect::OpenPr { url } => {
                     ensure!(user && matches!(action, Action::PrOpen { .. }), "{origin:?}'s {action:?} opened {url}");
                     ensure!(crate::prs::openable(url), "{url} is opened");
+                }
+                // A terminal's link opens by the user's ⌘-click alone, and only a web page.
+                Effect::OpenWeb { url } => {
+                    ensure!(user && matches!(action, Action::LinkOpen { .. }), "{origin:?}'s {action:?} opened {url}");
+                    let web = matches!(crate::links::target(url, None), Some(crate::links::Target::Web(_)));
+                    ensure!(web, "{url} is opened");
                 }
                 // The settings file is the user's: only their choice in Features… writes a flag.
                 Effect::SaveFeature { feature, on } => {
