@@ -23,10 +23,11 @@ impl Tab {
         }
     }
 
-    /// The user's name, cleaned (one line, trimmed, at most `MAX_NAME`): empty gives the
-    /// automatic title back.
+    /// The user's name, cleaned (one line, trimmed, at most `MAX_NAME`): empty, or the automatic
+    /// title itself (↵ on it unchanged), gives the automatic title back.
     pub(crate) fn rename(&mut self, name: &str) {
         let name = marks::clean(name);
+        let name = if name == self.auto_title() { String::new() } else { name };
         match (name.is_empty(), self.auto.take()) {
             (true, Some(auto)) => self.title = auto,
             (true, None) => {}
@@ -107,6 +108,20 @@ mod tests {
         typed(&mut m, "   ");
         m.update(Action::MarkSubmit);
         assert_eq!((title(&m), m.tabs[m.active].auto.is_some()), (auto.as_str(), false));
+    }
+
+    /// Review: ↵ on the title unchanged pinned it, and a later automatic title never showed.
+    #[test]
+    fn return_on_the_automatic_title_unchanged_names_nothing() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None });
+        let id = m.tabs[m.active].id;
+        m.update(Action::TabEdit { tab: None });
+        m.update(Action::MarkSubmit);
+        assert!(m.tabs[m.active].auto.is_none());
+        m.tab_rename(id, "mine");
+        m.tab_rename(id, &m.tabs[m.active].auto_title().to_string());
+        assert!(m.tabs[m.active].auto.is_none());
     }
 
     #[test]
