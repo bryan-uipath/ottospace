@@ -77,18 +77,30 @@ pub struct Glimpse {
     pub colour: Option<u8>,
 }
 
-/// `glance` in the checkout `dir`; none for a read of no file there, or a search elsewhere.
+/// `glance` in the checkout `dir`; none for a read of no file there, or a search elsewhere (a
+/// `cd` out of the checkout, or operands all outside it). A search with no operands covers where
+/// it ran: the whole checkout, or the folder its `cd` went to. Its result is read from there.
 fn glimpse(task: TaskId, colour: Option<u8>, glance: &Glance, dir: &str) -> Option<Glimpse> {
+    let mut base = String::new();
     let scope = match &glance.words {
-        Words::Path(path) => vec![city_shell::path(path, dir)?],
-        Words::Line(line) => city_shell::paths(line, dir),
+        Words::Path(path) => vec![city_shell::path(path, dir, "")?],
+        Words::Stage { cds, operands } => {
+            for cd in cds {
+                base = city_shell::path(cd, dir, &base)?;
+            }
+            let inside: Vec<String> = operands.iter().filter_map(|word| city_shell::path(word, dir, &base)).collect();
+            if !operands.is_empty() && inside.is_empty() {
+                return None;
+            }
+            if operands.is_empty() { vec![base.clone()] } else { inside }
+        }
         Words::All => Vec::new(),
     };
     let scope: Vec<String> = scope.into_iter().filter(|path| !path.is_empty()).collect();
     if !glance.search && scope.is_empty() {
         return None;
     }
-    let found = glance.found.iter().filter_map(|word| city_shell::path(word, dir)).filter(|p| !p.is_empty());
+    let found = glance.found.iter().filter_map(|word| city_shell::path(word, dir, &base)).filter(|p| !p.is_empty());
     let (id, search) = (format!("{task}:{}", glance.id), glance.search);
     Some(Glimpse { id, search, scope, found: found.collect(), colour })
 }
@@ -705,6 +717,9 @@ mod tests {
                 start("x", "Read", Station::Files, "/etc/hosts"),
                 start("g", "Grep", Station::Files, r#"{"pattern":"loop"}"#),
                 start("b", "Bash", Station::Shell, "cd /code/app && rg -n loop src/model docs"),
+                start("o", "Bash", Station::Shell, "rg password /etc"),
+                start("e", "Bash", Station::Shell, "cd /elsewhere && rg -n loop"),
+                start("c", "Bash", Station::Shell, "cd src && rg -n loop"),
             ],
         );
         let glimpses = |m: &Model| {
@@ -719,7 +734,8 @@ mod tests {
         let want = vec![
             ("1:r".to_string(), false, s(&["src/main.rs"]), s(&[])),
             ("1:g".to_string(), true, s(&[]), s(&[])),
-            ("1:b".to_string(), true, s(&["src/model"]), s(&[])),
+            ("1:b".to_string(), true, s(&["src/model", "docs"]), s(&[])),
+            ("1:c".to_string(), true, s(&["src"]), s(&[])),
         ];
         assert_eq!(glimpses(&m), Some(want.clone()));
         events(
@@ -731,8 +747,11 @@ src/main.rs:9:loop
 /etc/x:1:loop",
             )],
         );
+        // A result from where the search ran: `cd src && rg` names `ui/mod.rs`, `src/ui/mod.rs`.
+        events(&mut m, vec![done("c", "ui/mod.rs:3:loop")]);
         let mut found = want;
         found[1].3 = s(&["src/lib.rs", "src/main.rs"]);
+        found[3].3 = s(&["src/ui/mod.rs"]);
         assert_eq!(glimpses(&m), Some(found));
         // Its turn over: none.
         events(&mut m, vec![Event::TurnFinished { outcome: Outcome::Completed }]);

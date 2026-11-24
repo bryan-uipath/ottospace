@@ -747,6 +747,7 @@ impl Transcript {
             Event::TurnStarted => {
                 if self.turn.is_none() {
                     self.activity.turn(at);
+                    self.glances.clear();
                 }
                 self.turn.get_or_insert(Turn { since: at, tool: None });
             }

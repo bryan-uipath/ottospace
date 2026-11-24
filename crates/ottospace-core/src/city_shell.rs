@@ -42,7 +42,7 @@ pub fn paths(line: &str, checkout: &str) -> Vec<String> {
 /// taken off (a quoted word may hold spaces and separators), and whether the next runs after it
 /// (`&&`, `;`, a new line) rather than beside it (`|`, `&`). A `#` outside quotes, at a word's
 /// start, comments out the rest of its line. A `\` keeps the next character as it is.
-fn commands(line: &str) -> Vec<(Vec<String>, bool)> {
+pub(crate) fn commands(line: &str) -> Vec<(Vec<String>, bool)> {
     let mut end = line.len().min(MOST_BYTES);
     while !line.is_char_boundary(end) {
         end -= 1;
@@ -105,10 +105,25 @@ fn commands(line: &str) -> Vec<(Vec<String>, bool)> {
     out
 }
 
-/// One path's word (a tool's argument, a result's line) as a path in `checkout`, relative to
-/// it ("": the checkout itself); none outside it. A relative word is from the checkout.
-pub fn path(word: &str, checkout: &str) -> Option<String> {
-    inside(word, checkout.trim_end_matches('/'), Some(""))
+/// A literal path (a tool's argument, a result's line: no shell syntax in it) in `checkout`,
+/// relative to it ("": the checkout itself); a relative one from `base` (relative to the
+/// checkout). None outside it, with a `..`, or a URL.
+pub fn path(word: &str, checkout: &str, base: &str) -> Option<String> {
+    if word.is_empty() || word.len() > 1024 || word.contains("://") || word.contains(char::is_control) {
+        return None;
+    }
+    let (word, checkout) = (plain(word), plain(checkout.trim_end_matches('/')));
+    match word.strip_prefix(checkout) {
+        Some(rest) if rest.is_empty() || rest.starts_with('/') => join("", rest),
+        _ if word.starts_with('/') => None,
+        _ => join(base, word),
+    }
+}
+
+/// macOS's `/tmp` and `/var` are `/private/tmp` and `/private/var`: either names the same place.
+fn plain(path: &str) -> &str {
+    let bare = path.strip_prefix("/private").filter(|rest| rest.starts_with("/tmp/") || rest.starts_with("/var/"));
+    bare.unwrap_or(path)
 }
 
 /// `word` as a path in the checkout, relative to it, from `cwd`; none if it is not one (a flag,
@@ -118,14 +133,8 @@ fn inside(word: &str, checkout: &str, cwd: Option<&str>) -> Option<String> {
     if word.is_empty() || word.len() > 256 || word.starts_with('-') || word.contains("://") || word.contains(odd) {
         return None;
     }
-    // macOS's `/tmp` and `/var` are `/private/tmp` and `/private/var`: either names the same place.
-    let plain = |p: &'_ str| -> String {
-        let bare = p.strip_prefix("/private").filter(|rest| rest.starts_with("/tmp/") || rest.starts_with("/var/"));
-        bare.unwrap_or(p).to_string()
-    };
-    let (word_plain, checkout) = (plain(word), plain(checkout));
-    let word = word_plain.as_str();
-    let rel = match word.strip_prefix(checkout.as_str()) {
+    let (word, checkout) = (plain(word), plain(checkout));
+    let rel = match word.strip_prefix(checkout) {
         Some("") => "",
         Some(rest) => rest.strip_prefix('/')?,
         None if word.starts_with('/') => return None,
@@ -189,7 +198,11 @@ mod tests {
         assert_eq!(paths("cd \"/code/my app\" && cat src/a.rs", "/code/my app"), ["src/a.rs"]);
         // `/private/tmp` is `/tmp`.
         assert_eq!(paths("cat /private/tmp/r/a.rs /tmp/r/b.rs", "/tmp/r"), ["a.rs", "b.rs"]);
-        assert_eq!(path("/tmp/r/c.rs", "/private/tmp/r").as_deref(), Some("c.rs"));
+        assert_eq!(path("/tmp/r/c.rs", "/private/tmp/r", "").as_deref(), Some("c.rs"));
+        // A literal path keeps what a shell word may not: `[id].tsx`.
+        assert_eq!(path("/code/app/src/[id].tsx", APP, "").as_deref(), Some("src/[id].tsx"));
+        assert_eq!(path("mod.rs", APP, "src/ui").as_deref(), Some("src/ui/mod.rs"));
+        assert_eq!(path("/etc/hosts", APP, ""), None);
         // Cut inside a character: no panic.
         assert_eq!(paths(&"é".repeat(MOST_BYTES), APP), Vec::<String>::new());
     }

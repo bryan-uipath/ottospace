@@ -432,8 +432,28 @@ struct Effect {
 #[derive(Default)]
 struct Glimmer {
     seen: HashSet<String>,
+    order: std::collections::VecDeque<String>,
     began: bool,
     effects: Vec<Effect>,
+}
+
+/// The most glimpses a place remembers as played: the oldest are forgotten first.
+const SEEN: usize = 1024;
+
+impl Glimmer {
+    /// Whether `key` is new: then it is played, and remembered.
+    fn see(&mut self, key: String) -> bool {
+        if self.seen.contains(&key) {
+            return false;
+        }
+        if self.order.len() == SEEN
+            && let Some(old) = self.order.pop_front()
+        {
+            self.seen.remove(&old);
+        }
+        self.order.push_back(key.clone());
+        self.seen.insert(key)
+    }
 }
 
 /// An agent working in the city, to draw: its task (none: a session no task has) and a key
@@ -896,7 +916,7 @@ impl Workspace {
     /// files or the size changed; one of a folder, lit files and size already made, for another
     /// place, is painted at once.
     pub(crate) fn render_city(&self, floor: Floor, at: At, lattice: AnyElement, cx: &mut Context<Self>) -> AnyElement {
-        let Some(city) = self.model.city_at(at) else { return lattice };
+        let Some(mut city) = self.model.city_at(at) else { return lattice };
         let view = self.eased_view(at, city.view);
         let easing = self.city_ease.get().is_some_and(|(of, ..)| of == at);
         // Its camera moving: the user's drag of it that has moved, a reset easing back, or a
@@ -916,7 +936,7 @@ impl Workspace {
             })
             .collect();
         let badges = self.badges.borrow();
-        let glimpses = city.glimpses.clone();
+        let glimpses = std::mem::take(&mut city.glimpses);
         let floating: Vec<Floating> = (city.agents.iter())
             .filter_map(|agent| {
                 // A label two files share (`a/src/main.rs`, `b/src/main.rs`): at no known file.
@@ -1602,6 +1622,12 @@ fn paint(
     }
 }
 
+/// The box of the atlas place `id` in a picture's scene: a building, or a folder's plinth.
+fn block_of(made: &Made, id: &str) -> Option<usize> {
+    let at = made.plan.places.iter().position(|place| place.id == id)?;
+    made.scene.blocks.iter().position(|block| block.place == Some(at))
+}
+
 /// The agents' reads and searches (`Glimpse`), each played once, on the picture as it is (no
 /// render): a read flashes its building's top; a search sweeps a band of light across what it
 /// covers (its folders' plinths, the whole ground when unscoped), and the files its result names
@@ -1609,12 +1635,15 @@ fn paint(
 /// Motion. Returns whether one still plays.
 fn glance(g: &mut Glimmer, made: &Made, glimpses: &[Glimpse], bounds: Bounds<Pixels>, window: &mut Window) -> bool {
     let (now, calm) = (Instant::now(), crate::dial::calm());
-    let block_of = |path: &str| {
-        let at = made.plan.places.iter().position(|place| place.id == path)?;
-        made.scene.blocks.iter().position(|block| block.place == Some(at))
+    // A folder with no plinth of its own (its one child stands for it): its buildings'.
+    let blocks_of = |path: &str| -> Vec<usize> {
+        let one = block_of(made, path);
+        let under = |id: &str| id.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'));
+        let inside = (made.plan.places.iter().filter(|place| !place.group && under(&place.id)))
+            .filter_map(|place| block_of(made, &place.id));
+        one.map_or_else(|| inside.collect(), |one| vec![one])
     };
-    g.effects.retain(|e| e.since.elapsed() < e.play.length());
-    let mut present = HashSet::new();
+    g.effects.retain(|e| now.checked_duration_since(e.since).is_none_or(|d| d < e.play.length()));
     for glimpse in glimpses {
         let search = if glimpse.search { Play::Sweep } else { Play::Flash };
         let whole = glimpse.search && glimpse.scope.is_empty();
@@ -1626,25 +1655,43 @@ fn glance(g: &mut Glimmer, made: &Made, glimpses: &[Glimpse], bounds: Bounds<Pix
             if play == Play::Found && paths.is_empty() {
                 continue;
             }
-            present.insert(key.clone());
-            if !g.seen.insert(key) || !g.began || calm {
+            if !g.see(key) || !g.began || calm {
                 continue;
             }
-            let blocks: Vec<usize> = paths.iter().filter_map(|path| block_of(path)).collect();
+            let mut blocks: Vec<usize> = paths.iter().flat_map(|path| blocks_of(path)).collect();
+            blocks.sort_unstable();
+            blocks.dedup();
             if blocks.is_empty() && !whole {
                 continue;
             }
             let colour = theme::identity(glimpse.colour);
-            if let Some(e) = g.effects.iter_mut().find(|e| e.play == play && now - e.since < TOGETHER) {
+            // One ripple: the same play, in the same colour, begun `TOGETHER` ago at most.
+            let together = |e: &Effect| {
+                e.play == play
+                    && e.colour == colour
+                    && now.checked_duration_since(e.since).is_some_and(|d| d < TOGETHER)
+            };
+            if let Some(e) = g.effects.iter_mut().find(|e| together(e)) {
                 e.blocks.extend(blocks);
+                e.blocks.sort_unstable();
+                e.blocks.dedup();
                 e.whole |= whole;
-            } else if !(play == Play::Sweep && g.effects.iter().any(|e| e.play == Play::Sweep)) {
-                g.effects.push(Effect { play, blocks, whole, colour, since: now });
+                continue;
             }
+            // One sweep at a time: the next begins as the last ends (at most one waits).
+            let last = g.effects.iter().filter(|e| e.play == Play::Sweep).map(|e| e.since + SWEEP).max();
+            let since = if play == Play::Sweep { last.map_or(now, |end| end.max(now)) } else { now };
+            if play == Play::Sweep && g.effects.iter().filter(|e| e.play == Play::Sweep).count() >= 2 {
+                continue;
+            }
+            g.effects.push(Effect { play, blocks, whole, colour, since });
         }
     }
-    g.seen.retain(|key| present.contains(key));
     g.began = true;
+    // Reduce Motion turned on mid-play: nothing more plays.
+    if calm {
+        g.effects.clear();
+    }
     let Some(camera) = made.scene.camera else { return false };
     let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let at = |(x, y): (f32, f32)| bounds.origin + point(px(x * w), px(y * h));
@@ -1666,7 +1713,9 @@ fn glance(g: &mut Glimmer, made: &Made, glimpses: &[Glimpse], bounds: Bounds<Pix
         crate::dial::stroke(window, path, colour);
     };
     for e in &g.effects {
-        let t = (e.since.elapsed().as_secs_f32() / e.play.length().as_secs_f32()).min(1.);
+        // A sweep waiting its turn draws nothing yet.
+        let Some(run) = now.checked_duration_since(e.since) else { continue };
+        let t = (run.as_secs_f32() / e.play.length().as_secs_f32()).min(1.);
         let colour = Hsla::from(rgb(e.colour));
         let faces = e.blocks.iter().filter_map(|i| face(*i)).chain(ground().filter(|_| e.whole));
         for f in faces {
@@ -1726,13 +1775,7 @@ fn agents(
     let Some(camera) = made.scene.camera else { return (Vec::new(), false, false) };
     let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let to_window = |p: [f32; 3]| camera.project(p).map(|(x, y)| bounds.origin + point(px(x * w), px(y * h)));
-    let place = |id: &str| made.plan.places.iter().position(|place| place.id == id);
-    let boxes: Vec<Option<usize>> = (floating.iter())
-        .map(|agent| {
-            let at = place(agent.at.as_deref()?)?;
-            made.scene.blocks.iter().position(|block| block.place == Some(at))
-        })
-        .collect();
+    let boxes: Vec<Option<usize>> = floating.iter().map(|agent| block_of(made, agent.at.as_deref()?)).collect();
     let (calm, now) = (crate::dial::calm(), Instant::now());
     let side = gpui::size(px(ICON), px(ICON));
     let (mut gliding, mut pulsing) = (false, false);
