@@ -24,8 +24,8 @@ actions!(ottospace, [ZoomToggle, CanvasNearer, CanvasFarther, CanvasFit]);
 /// bars; narrower, the tab's name alone. Far out nothing is shaped.
 const TEXT: f32 = 360.;
 const BLOCKS: f32 = 120.;
-/// A mouse wheel's line, and a trackpad's point with ⌘: how much nearer.
-const PER_LINE: f32 = 1.12;
+/// A mouse wheel's line, and a trackpad's point with ⌘: how much nearer (the code city's rates).
+const PER_LINE: f32 = 1.15;
 const PER_POINT: f32 = 1.006;
 
 /// The zoom's state between frames, and what it drew.
@@ -79,10 +79,12 @@ impl Workspace {
                 // On screen, in the area's points; off it, not drawn.
                 let f = camera.on_screen(*spot);
                 let cell = Rect { x: f.x * whole.w, y: f.y * whole.h, w: f.w * whole.w, h: f.h * whole.h };
-                if !in_view(f) && *id != grows {
+                let rect = if *id == grows { between(whole, cell, t) } else { cell };
+                // Off screen, also the one growing at rest: not drawn.
+                let shown = Rect { x: rect.x / whole.w, y: rect.y / whole.h, w: rect.w / whole.w, h: rect.h / whole.h };
+                if !in_view(shown) {
                     return None;
                 }
-                let rect = if *id == grows { between(whole, cell, t) } else { cell };
                 let alpha = if *id == grows { 1. } else { t };
                 // Where it is drawn, its border included: a probe inside it would sit inside the border.
                 let at = area.origin + gpui::point(px(rect.x), px(rect.y));

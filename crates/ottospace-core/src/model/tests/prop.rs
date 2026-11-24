@@ -2379,10 +2379,11 @@ fn check_zoom(m: &Model) -> Result<(), String> {
     ensure!(tabs.contains(&zoom.from) && tabs.contains(&zoom.selected), "zoomed out on {zoom:?}, tiles {tabs:?}");
     ensure!(m.live.is_none() && m.away.is_none(), "zoomed out, live {:?}, away {:?}", m.live, m.away);
     // The camera inside its range, and never with every tile off screen: some reaches into the view.
-    use crate::model::canvas::{self, FARTHEST, NEAREST};
+    use crate::model::canvas::{self, NEAREST};
     let cam = zoom.camera;
-    ensure!((FARTHEST..=NEAREST).contains(&cam.scale), "camera scale {}", cam.scale);
     let spots: Vec<_> = m.zoom_spots().into_iter().map(|(_, r)| r).collect();
+    let far = canvas::farthest(canvas::extent(&spots));
+    ensure!((far..=NEAREST).contains(&cam.scale), "camera scale {}", cam.scale);
     let seen = spots.iter().any(|r| canvas::in_view(cam.on_screen(*r)));
     ensure!(seen, "no tile in view: {cam:?} over {spots:?}");
     Ok(())

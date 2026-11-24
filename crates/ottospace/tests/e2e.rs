@@ -18562,7 +18562,8 @@ fn zoomed_out_the_tabs_are_tiles_on_a_grid_and_the_keys_go_in_and_back() {
         let refused = otto.call(json!({"cmd": "key", "keys": "cmd-|"}));
         assert_eq!((&refused["state"]["zoom"], &refused["zoom_tiles"]), (&Value::Null, &Value::Null), "{size}");
         let zoomed = otto.user_key("cmd-|");
-        assert_eq!(zoomed["state"]["zoom"], json!({"from": tabs[0], "selected": tabs[0]}), "{size}");
+        let zoom = &zoomed["state"]["zoom"];
+        assert_eq!((&zoom["from"], &zoom["selected"]), (&json!(tabs[0]), &json!(tabs[0])), "{size}");
         let drawn = otto.drawn();
         let tiles: Vec<[f64; 4]> = tabs.iter().map(|id| rect(&drawn["zoom_tiles"][id.to_string()])).collect();
         // A 2×2 grid inside the panes area, each tile its shape, room between.
@@ -18845,8 +18846,9 @@ fn zoomed_out_the_canvas_zooms_about_the_pointer_pans_and_fits() {
             (panned[0] - near[0] + 60.).abs() < 2. && (panned[1] - near[1] + 30.).abs() < 2.,
             "{size}: {panned:?} {near:?}"
         );
-        // A drag of the empty canvas, by the margin left of the tile: it follows the pointer.
-        let empty = [panned[0] - 12., panned[1] + panned[3] / 2.];
+        // A drag of the empty canvas, from the gap right of the tile: it follows the pointer.
+        let second = rect(&otto.drawn()["zoom_tiles"][state["state"]["tabs"][1]["id"].as_u64().unwrap().to_string()]);
+        let empty = [(panned[0] + panned[2] + second[0]) / 2., panned[1] + panned[3] / 2.];
         otto.user_drag(empty, [empty[0] + 40., empty[1] + 20.]);
         let dragged = tile(&otto);
         assert!(

@@ -1225,8 +1225,9 @@ pub fn paint_blocks(screen: &Screen, bounds: Bounds<Pixels>, cell: Size<Pixels>,
                 if let Some(bg) = s.bg {
                     window.paint_quad(fill(Bounds { origin: point(x, y), size: size(width, cell.height) }, rgb(bg)));
                 }
-                // The text's own length, its trailing spaces left out.
-                let len = s.text.trim_end().chars().count().min(s.cells);
+                // The cells its text covers, its trailing spaces left out (a wide glyph is two).
+                let trailing = s.text.len() - s.text.trim_end().len();
+                let len = s.cells.saturating_sub(trailing);
                 if len > 0 && !s.text.trim().is_empty() {
                     let bar = Bounds {
                         origin: point(x, y + cell.height * 0.25),

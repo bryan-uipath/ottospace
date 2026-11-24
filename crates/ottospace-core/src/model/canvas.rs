@@ -58,13 +58,23 @@ pub fn extent(tiles: &[Rect]) -> Rect {
     Rect { x: x0, y: y0, w: x1 - x0, h: y1 - y0 }
 }
 
+/// The farthest the camera goes over `extent`: `FARTHEST`, or farther for a workspace too big to
+/// fit there (over about a hundred tabs), so a fit always shows every tile.
+pub fn farthest(extent: Rect) -> f32 {
+    FARTHEST.min(fitting(extent))
+}
+
+/// The scale at which `extent` fits with a grid gap round it.
+fn fitting(extent: Rect) -> f32 {
+    (1. / (extent.w + 2. * GRID_GAP)).min(1. / (extent.h + 2. * GRID_GAP))
+}
+
 impl Camera {
     /// Every tile of `extent` in view with a grid gap round it, centred; never nearer than
-    /// `FIT_NEAREST`, never farther than `FARTHEST`.
+    /// `FIT_NEAREST`.
     pub fn fit(extent: Rect) -> Camera {
-        let scale = (1. / (extent.w + 2. * GRID_GAP)).min(1. / (extent.h + 2. * GRID_GAP));
         let center = [extent.x + extent.w / 2., extent.y + extent.h / 2.];
-        Camera { scale: scale.clamp(FARTHEST, FIT_NEAREST), center }
+        Camera { scale: fitting(extent).clamp(farthest(extent), FIT_NEAREST), center }
     }
 
     /// Inside its bounds: a scale from `FARTHEST` to `NEAREST`, and a centre that leaves a tile of
@@ -75,7 +85,7 @@ impl Camera {
         if !(self.scale.is_finite() && self.center.iter().all(|c| c.is_finite())) {
             return Camera::fit(extent);
         }
-        let scale = self.scale.clamp(FARTHEST, NEAREST);
+        let scale = self.scale.clamp(farthest(extent), NEAREST);
         // Half the view, in world units; the view spans center ± half.
         let half = 0.5 / scale;
         let keep = 2. * half * KEEP;
@@ -99,7 +109,7 @@ impl Camera {
             CanvasStep::Fit => return Camera::fit(extent(tiles)),
             CanvasStep::Zoom { factor, about } => {
                 // The world point under `about` stays under it.
-                let scale = (self.scale * factor).clamp(FARTHEST, NEAREST);
+                let scale = (self.scale * factor).clamp(farthest(extent(tiles)), NEAREST);
                 let at = |i: usize| self.center[i] + (about[i] - 0.5) / self.scale - (about[i] - 0.5) / scale;
                 Camera { scale, center: [at(0), at(1)] }
             }
@@ -165,12 +175,12 @@ mod tests {
 
     #[test]
     fn a_fit_shows_every_tile_never_nearer_than_half() {
-        for n in [1, 2, 4, 7, 16, 40] {
+        for n in [1, 2, 4, 7, 16, 40, 150] {
             let e = grid(n);
             let cam = Camera::fit(e);
-            assert!(cam.scale <= FIT_NEAREST && cam.scale >= FARTHEST, "{n}: {cam:?}");
+            assert!(cam.scale <= FIT_NEAREST && cam.scale >= farthest(e), "{n}: {cam:?}");
             let r = cam.on_screen(e);
-            if cam.scale > FARTHEST {
+            if cam.scale > 0. {
                 assert!(r.x >= -1e-4 && r.y >= -1e-4 && r.x + r.w <= 1. + 1e-4 && r.y + r.h <= 1. + 1e-4, "{n}: {r:?}");
             }
             assert!(near(r.x + r.w / 2., 0.5) && near(r.y + r.h / 2., 0.5), "{n}: centred {r:?}");
