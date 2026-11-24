@@ -105,7 +105,8 @@ impl Model {
                 let mut ticked = edit.ticked.clone();
                 ticked.sort_unstable();
                 let seed = self.seed_areas(edit.from).unwrap_or_default();
-                let areas: Vec<Area> = ticked.iter().filter_map(|r| self.edit_area(edit.rows.get(*r)?, &seed)).collect();
+                let areas: Vec<Area> =
+                    ticked.iter().filter_map(|r| self.edit_area(edit.rows.get(*r)?, &seed)).collect();
                 if self.focus.set(&areas, SetBy::User, at) {
                     effects.push(Effect::SaveFocus { kept: self.focus.kept() });
                     // Set from a proposal or last week's: that question is answered too.
@@ -434,12 +435,12 @@ mod tests {
         };
         let own = area("Hiring push", "atlas", vec!["/code/ats".into()]);
         m.focus.set(&[own.clone(), area("B", "beacon", vec![]), area("C", "atlas", vec![])], SetBy::Proposal, 1);
-        m.update(Action::FocusEditOpen);
+        m.update(Action::FocusEditOpen { from: Seed::Current });
         assert_eq!(m.focus_edit.as_ref().map(|e| e.ticked.clone()), Some(vec![0, 1]), "atlas once");
         m.update(Action::FocusEditSave { at: 2 });
         assert_eq!(m.focus.areas()[0], own, "its own name and repositories, unchanged");
         // The palette over it closes it, setting nothing.
-        m.update(Action::FocusEditOpen);
+        m.update(Action::FocusEditOpen { from: Seed::Current });
         m.update(Action::PaletteOpen);
         assert!(m.focus_edit.is_none());
     }
