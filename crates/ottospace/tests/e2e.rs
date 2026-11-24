@@ -19346,3 +19346,56 @@ fn zoomed_out_a_dragged_tile_stays_placed_and_tidy_puts_it_back() {
         assert!(otto.control_opt("zoom-tidy").is_none(), "{size}");
     }
 }
+
+/// The week's focus (`decision_sources`), set by hand: Tasks ▸ This Week's Focus… lists the made-up
+/// Projects entries; the user ticks two and sets them. A client's keys tick nothing. The state says
+/// how many areas and who set them, never a name; `week_focus` gives the names, labelled; kept
+/// across a restart.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn week_focus_is_set_by_hand_from_the_projects_and_kept() {
+    let dir = support::temp(&format!("ottospace-e2e-week-focus-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["atlas", "beacon", "cobalt"] {
+        std::fs::write(dir.join(format!("{name}.md")), format!("# The {name} project\n")).unwrap();
+    }
+    let settings = json!({"projects_dir": dir, "repos": [], "restore_layout": false, "sessions": false});
+    let home = user_folder("week-focus", &settings.to_string());
+    let env =
+        [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "projects,decisions,decision_sources")];
+    let otto = Otto::launch_with("week-focus-1", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let week = otto.call(json!({"cmd": "state"}))["week_focus"].clone();
+    assert_eq!(week["areas"], 0, "{week}");
+    assert!(week["week"].as_str().is_some_and(|w| w.len() == 8 && w.contains("-W")), "{week}");
+    // The palette's This Week's Focus…: the editor, its rows read while it is open.
+    otto.user_key("cmd-shift-p");
+    otto.user_key("w e e k space f o c u s enter");
+    let edit = otto.wait_for("three rows", |o| {
+        let edit = o.call(json!({"cmd": "state"}))["state"]["focus_edit"].clone();
+        (edit["count"] == 3).then_some(edit)
+    });
+    assert_eq!(edit["ticked"], json!([]));
+    // A client's keys tick nothing.
+    otto.call(json!({"cmd": "key", "keys": "space"}));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["focus_edit"]["ticked"], json!([]));
+    otto.user_key("space");
+    otto.user_key("down down space");
+    let set = otto.user_key("enter");
+    assert_eq!(set["state"]["focus_edit"], Value::Null);
+    assert_eq!((&set["week_focus"]["areas"], &set["week_focus"]["set_by"]), (&json!(2), &json!("user")));
+    assert!(!set.to_string().contains("The atlas project"), "an area's name is never in the state");
+    let read = otto.call(json!({"cmd": "week_focus"}));
+    let names: Vec<&str> =
+        read["focus"]["areas"].as_array().unwrap().iter().filter_map(|a| a["name"].as_str()).collect();
+    assert_eq!((names, &read["focus"]["untrusted"]), (vec!["The atlas project", "The cobalt project"], &json!(true)));
+    assert_eq!(read["focus"]["areas"][1]["projects"], json!(["cobalt"]));
+    drop(otto);
+
+    // Kept across a restart.
+    let otto = Otto::launch_with("week-focus-2", &env);
+    assert_eq!(otto.call(json!({"cmd": "state"}))["week_focus"]["areas"], 2);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -300,8 +300,10 @@ four rank alike.
 
 ottospace itself never reads or writes the weekly note. Two ways in:
 
-1. **By hand, in ottospace**: ⌘P › This week's focus…, or the Week strip's ✎. A small editor: four
-   rows, each a name and a project/repository picker. Complete on its own (slice 2).
+1. **By hand, in ottospace**: ⌘P › This week's focus…, or the Week strip's ✎. Built (slice 2a): the
+   editor lists the Projects entries; the user ticks up to four, each an area named by the
+   project's title and linked by its name. An area of no entry (a name a proposal brought, "Hiring")
+   is listed above them, ticked, kept as it is. Typing a free name by hand is not built.
 2. **Proposed by an agent**: a routine (later the secretary) reads the note with its own tools
    and files the week's focus:
 

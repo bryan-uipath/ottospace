@@ -1915,6 +1915,28 @@ pub enum Action {
     },
     /// Z: the last sort or promotion of this run taken back. Only the user's.
     SortUndo,
+    /// The ISO week it is by the user's clock (`2026-W48`): the shell's, when it turns.
+    SetWeek {
+        week: String,
+    },
+    /// `focus.json` read at start. The shell's alone.
+    RestoreFocus {
+        kept: crate::focus::Kept,
+    },
+    /// ⌘P › This Week's Focus…: the editor, the Projects entries to tick. Only the user's.
+    FocusEditOpen,
+    FocusEditClose,
+    FocusEditMove {
+        delta: i32,
+    },
+    /// Ticks or unticks row `row` (`None`: the cursor's); four at most.
+    FocusEditToggle {
+        row: Option<usize>,
+    },
+    /// ↵: the ticked rows are this week's focus, as of `at`.
+    FocusEditSave {
+        at: u64,
+    },
     /// ⌘⇧\: every tab of the space on show as a tile (`zoom_out`); zoomed out, back to the tab it
     /// opened on. Only the user's.
     ZoomOut,
@@ -2650,7 +2672,8 @@ impl Action {
             | Action::BtwOpen
             | Action::BtwKeys { on: true }
             // Its card takes the keys in its pane.
-            | Action::DecisionsOpen => true,
+            | Action::DecisionsOpen
+            | Action::FocusEditOpen => true,
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
@@ -3007,6 +3030,12 @@ impl Action {
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo
+            | Action::SetWeek { .. }
+            | Action::RestoreFocus { .. }
+            | Action::FocusEditClose
+            | Action::FocusEditMove { .. }
+            | Action::FocusEditToggle { .. }
+            | Action::FocusEditSave { .. }
             | Action::CityCamera { .. }
             | Action::ZoomMove { .. }
             | Action::ZoomEnter { .. }
@@ -3054,7 +3083,12 @@ impl Action {
             | Action::SortItem { .. }
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
-            | Action::SortUndo => Some(Feature::DecisionSources),
+            | Action::SortUndo
+            | Action::FocusEditOpen
+            | Action::FocusEditClose
+            | Action::FocusEditMove { .. }
+            | Action::FocusEditToggle { .. }
+            | Action::FocusEditSave { .. } => Some(Feature::DecisionSources),
             Action::SessionUnhide { .. } | Action::HiddenPeek { .. } => Some(Feature::TerminalTasks),
             Action::ZoomOut
             | Action::ZoomMove { .. }
@@ -3384,6 +3418,8 @@ impl Action {
             | Action::SetProjects { .. }
             | Action::RestoreProjects { .. }
             | Action::RestoreDecisions { .. }
+            | Action::SetWeek { .. }
+            | Action::RestoreFocus { .. }
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }
@@ -3592,6 +3628,10 @@ pub enum Effect {
     /// A closed decision's time is up: remove its file.
     RemoveDecision {
         id: u64,
+    },
+    /// The week's focus changed: write `<home>/focus.json`.
+    SaveFocus {
+        kept: crate::focus::Kept,
     },
     /// The user promoted or took back a prefix: write `<home>/decisions/trust.json`.
     SaveTrust {
@@ -3977,6 +4017,7 @@ pub mod zones;
 pub mod decisions;
 pub mod displays;
 mod filed;
+pub mod focus;
 pub mod rail;
 pub mod spaces;
 pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
@@ -4423,6 +4464,12 @@ pub struct Model {
     /// others' (the shell's `filed` gives ids, kinds and counts).
     #[serde(skip)]
     pub filed: crate::filed::Filed,
+    /// The week's focus (`decision_sources`). Not in the state: its names are the user's (the
+    /// shell's `focus` gives counts; the `focus` request the names).
+    #[serde(skip)]
+    pub focus: crate::focus::Focus,
+    /// The week's focus editor while open: counts and ticks, no words.
+    pub focus_edit: Option<focus::Edit>,
     /// The features that are on (`SetFeatures`). In the state, their names.
     pub features: Features,
     /// The code city's camera of each tab and folder, and the drag in flight (`model::city`).
@@ -4651,6 +4698,8 @@ impl Default for Model {
             calendar: Calendar::default(),
             projects: crate::projects::Projects::default(),
             filed: crate::filed::Filed::default(),
+            focus: crate::focus::Focus::default(),
+            focus_edit: None,
             // In this crate's tests every feature is on (a test of one that is off turns it off), but
             // `overlay_panels`: an experiment that changes how the sidebar and the drawer close.
             features: if cfg!(test) {
@@ -5107,6 +5156,15 @@ impl Model {
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo => Some(decisions::USERS_ALONE),
+            // The week's focus is the user's to set; what week it is, the shell's to say.
+            Action::FocusEditOpen
+            | Action::FocusEditClose
+            | Action::FocusEditMove { .. }
+            | Action::FocusEditToggle { .. }
+            | Action::FocusEditSave { .. } => Some(focus::USERS_ALONE),
+            Action::SetWeek { .. } | Action::RestoreFocus { .. } if origin == Origin::Socket => {
+                Some(focus::SHELLS_ALONE)
+            }
             // The overview covers the user's work: only they zoom, and nothing takes the keyboard under it.
             _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
             action if self.zoom.is_some() && action.takes_keyboard() => Some(zoom::ZOOMED_OUT),
@@ -5558,6 +5616,11 @@ impl Model {
         self.settle_tasks(undo && origin == Origin::User, &finished);
         // What expired is closed before Decisions picks what it shows.
         self.settle_filed(&mut effects);
+        // The focus editor is the flag's: off, it closes. Open, its rows follow the Projects list.
+        if !self.features.on(Feature::DecisionSources) {
+            self.focus_edit = None;
+        }
+        self.settle_focus_edit();
         self.settle_decisions(origin, drawer_keys, &mut effects);
         self.settle_spaces(origin, &home);
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
@@ -7679,6 +7742,13 @@ impl Model {
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo) => self.sort_act(action, effects),
+            action @ (Action::SetWeek { .. }
+            | Action::RestoreFocus { .. }
+            | Action::FocusEditOpen
+            | Action::FocusEditClose
+            | Action::FocusEditMove { .. }
+            | Action::FocusEditToggle { .. }
+            | Action::FocusEditSave { .. }) => self.focus_act(action, effects),
             Action::ZoomOut => self.zoom_toggle(effects),
             Action::ZoomMove { dir } => self.zoom_move(dir),
             Action::ZoomCamera { step } => self.zoom_camera(step),
@@ -11830,6 +11900,13 @@ mod tests {
         Action::SortToggle { .. },
         Action::SortPromote { .. },
         Action::SortUndo,
+        Action::SetWeek { .. },
+        Action::RestoreFocus { .. },
+        Action::FocusEditOpen,
+        Action::FocusEditClose,
+        Action::FocusEditMove { .. },
+        Action::FocusEditToggle { .. },
+        Action::FocusEditSave { .. },
         Action::ZoomOut,
         Action::ZoomMove { .. },
         Action::ZoomEnter { .. },
@@ -12255,6 +12332,13 @@ mod tests {
             Action::SortToggle { id: 1, claims: true },
             Action::SortPromote { id: 1 },
             Action::SortUndo,
+            Action::SetWeek { week: "2026-W48".into() },
+            Action::RestoreFocus { kept: crate::focus::Kept::default() },
+            Action::FocusEditOpen,
+            Action::FocusEditClose,
+            Action::FocusEditMove { delta: 1 },
+            Action::FocusEditToggle { row: None },
+            Action::FocusEditSave { at: 0 },
             Action::ZoomOut,
             Action::ZoomMove { dir: Dir::Right },
             Action::ZoomEnter { tab: None },
@@ -12882,6 +12966,14 @@ mod tests {
                     | Action::SortToggle { .. }
                     | Action::SortPromote { .. }
                     | Action::SortUndo => Some(decisions::USERS_ALONE),
+                    Action::FocusEditOpen
+                    | Action::FocusEditClose
+                    | Action::FocusEditMove { .. }
+                    | Action::FocusEditToggle { .. }
+                    | Action::FocusEditSave { .. } => Some(focus::USERS_ALONE),
+                    Action::SetWeek { .. } | Action::RestoreFocus { .. } if origin == Origin::Socket => {
+                        Some(focus::SHELLS_ALONE)
+                    }
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
@@ -20362,6 +20454,14 @@ mod tests {
                     | Action::SortToggle { .. }
                     | Action::SortPromote { .. }
                     | Action::SortUndo => Some(decisions::USERS_ALONE),
+                    Action::FocusEditOpen
+                    | Action::FocusEditClose
+                    | Action::FocusEditMove { .. }
+                    | Action::FocusEditToggle { .. }
+                    | Action::FocusEditSave { .. } => Some(focus::USERS_ALONE),
+                    Action::SetWeek { .. } | Action::RestoreFocus { .. } if origin == Origin::Socket => {
+                        Some(focus::SHELLS_ALONE)
+                    }
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),

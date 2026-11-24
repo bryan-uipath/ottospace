@@ -71,6 +71,7 @@ macro_rules! commands {
                     (Command::FoldTab, _) => Some(Feature::MultiMonitor),
                     (Command::ZoomOut, _) => Some(Feature::ZoomOut),
                     (Command::Decisions, _) => Some(Feature::Decisions),
+                    (Command::WeekFocus, _) => Some(Feature::DecisionSources),
                     (Command::QuickNote, _) => Some(Feature::OverlayPanels),
                     (Command::AgentMenu | Command::AgentOff | Command::AgentSee | Command::AgentAct, _) => {
                         Some(Feature::AgentMode)
@@ -116,6 +117,7 @@ commands! {
     MoveTabToTask: "Move Tab to…", Tabs;
     NextNeedsYou: "Next Task", Tasks;
     Decisions: "Decisions", Tasks;
+    WeekFocus: "This Week's Focus…", Tasks;
     // After Next Task: a query of its name ranks a later tie lower.
     NextSpace: "Next Tab Group", Tabs;
     PrevSpace: "Previous Tab Group", Tabs;

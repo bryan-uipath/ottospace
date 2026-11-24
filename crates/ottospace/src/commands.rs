@@ -81,6 +81,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::QuickNote => Box::new(QuickNote),
         Command::NextNeedsYou => Box::new(NextTask),
         Command::Decisions => Box::new(OpenDecisions),
+        Command::WeekFocus => Box::new(crate::week_focus::WeekFocus),
         Command::CapturePane => Box::new(CapturePane),
         Command::TalkFocus => Box::new(TalkFocus),
         Command::EditMessage => Box::new(EditMessage),

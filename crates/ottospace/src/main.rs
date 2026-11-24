@@ -152,6 +152,7 @@ mod toast;
 mod trace;
 mod ui;
 mod viewer;
+mod week_focus;
 mod words;
 mod workbook;
 mod worktree;
@@ -1818,6 +1819,7 @@ impl Workspace {
         let keeping = kept.error.is_none();
         model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest }.sent_by(Origin::System));
         // After the tasks: an agent's question whose task is there is not taken for an orphan.
+        model.update(Action::RestoreFocus { kept: config::read_focus() }.sent_by(Origin::System));
         let (decisions, trusted) = (config::load_decisions(), config::load_trust());
         model.update(Action::RestoreDecisions { kept: decisions, trusted }.sent_by(Origin::System));
         // The first problem found at start, for the toast: settings, the font, then tasks.
@@ -2407,6 +2409,11 @@ impl Workspace {
                 Effect::RemoveDecision { id } => {
                     if let Err(err) = config::remove_decision(*id) {
                         self.error = Some(format!("decisions: {err}"));
+                    }
+                }
+                Effect::SaveFocus { kept } => {
+                    if let Err(err) = config::save_focus(kept) {
+                        self.error = Some(format!("focus.json: {err}"));
                     }
                 }
                 Effect::SaveTrust { trusted } => {
@@ -3528,6 +3535,10 @@ impl Workspace {
                         Some(Action::DecisionWithdraw { source, key, now: now_ms() })
                     }
                 }
+                Request::WeekFocus => {
+                    let _ = reply.send(self.serve_focus());
+                    continue;
+                }
                 Request::Decision { id } => {
                     self.dispatch(Action::Tick { now: now_ms() }, Origin::Socket, window, cx);
                     let _ = reply.send(match self.model.filed.get(id) {
@@ -4551,6 +4562,9 @@ impl Workspace {
             // `to_sort`, and each one's id, source, `via`, triage, status, revision, times and counts
             // of options and evidence. Never its words: `decision` gives those, labelled untrusted.
             "filed": self.on(Feature::DecisionSources).then(|| self.model.filed.shown(self.model.now())),
+            // The week's focus (`decision_sources`), null with the flag off: the week, and of the
+            // areas set only how many and who set them. Their names: the `week_focus` request.
+            "week_focus": self.on(Feature::DecisionSources).then(|| self.focus_state()),
             // The home screen, or null while the tab on show has a pane: each task's node (its
             // lane, depth and crossing of the lattice) and the rows under "Needs you".
             "home": self.model.home(&self.home.borrow().keep_out()),
@@ -5367,6 +5381,10 @@ impl Workspace {
         }
         // A row's open menu takes the user's plain keys: its own, and any other closes it.
         let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
+        // The week's focus editor: its keys; other plain keys wait. ⌘ shortcuts go to their bindings.
+        if !key.modifiers.platform && self.model.sneak.is_none() && self.week_focus_key(&key.key, window, cx) {
+            return cx.stop_propagation();
+        }
         // The slot dialog: ↵ keeps, Esc closes, its letters choose, its title words type (⌥ and ⌃ edit
         // them); other keys wait. ⌘ shortcuts go to their bindings.
         if !key.modifiers.platform && self.model.sneak.is_none() {
@@ -8802,6 +8820,15 @@ fn pane_runners(terminals: &HashMap<PaneId, Terminal>) -> Vec<sessions::PaneProc
 /// The time now, in milliseconds since 1970. The core has no clock: actions carry this.
 /// When the local day of `now` began (milliseconds since 1970), by the system's time zone: with
 /// the offset at that midnight, not now's, so a clock change during the day does not move it.
+fn local_days(now: u64) -> i64 {
+    use core_foundation::date::CFDate;
+    use core_foundation::timezone::CFTimeZone;
+    const SINCE_2001: f64 = 978_307_200.;
+    let offset = (CFTimeZone::system().seconds_from_gmt(CFDate::new(now as f64 / 1000. - SINCE_2001)) * 1000.) as i64;
+    (now as i64 + offset).div_euclid(86_400_000)
+}
+
+/// When the local day of `now` began (as `day_start`), whose date `local_days` gives.
 fn day_start(now: u64) -> u64 {
     use core_foundation::date::CFDate;
     use core_foundation::timezone::CFTimeZone;
@@ -9372,6 +9399,12 @@ impl Workspace {
                 false => cx.propagate(),
             }))
             // Tasks ▸ Decisions and the palette: the cards waiting, else the next task, at the time now.
+            .on_action(cx.listener(|this, _: &crate::week_focus::WeekFocus, window, cx| {
+                match this.on(Feature::DecisionSources) {
+                    true => drop(this.dispatch(Action::FocusEditOpen, this.input, window, cx)),
+                    false => cx.propagate(),
+                }
+            }))
             .on_action(cx.listener(|this, _: &OpenDecisions, window, cx| match this.on(Feature::Decisions) {
                 true => {
                     this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);
@@ -9728,6 +9761,7 @@ impl Render for Workspace {
             .children(self.render_row_menu(window, cx))
             .children(self.render_agent_menu(window, cx))
             .children(self.render_slot_dialog(cx))
+            .children(self.render_week_focus(cx))
             .children(self.model.sneak.as_ref().map(sneak::labels))
             .children(self.model.picker.as_ref().map(|picker| self.render_picker(picker, cx)))
             .children(self.model.palette.as_ref().map(|palette| self.render_palette(palette, cx)))

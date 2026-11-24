@@ -101,6 +101,7 @@
 {"cmd":"decision_file","source":"slack","key":"slack:C0MADEUP:1763500000.000100","question":"Reply today, or hand it over?","options":[{"label":"Draft a reply","act":{"draft_reply":{"text":"Made-up draft."}}}],"recommend":0,"evidence":[{"kind":"quote","text":"can we flip it?","provenance":{"source":"slack","who":"person"}}],"claims":{"person_waits":true}}
 {"cmd":"decision_withdraw","source":"slack","key":"slack:C0MADEUP:1763500000.000100"}
 {"cmd":"decision","id":1763500000000}
+{"cmd":"week_focus"}
 {"cmd":"workspace","pane":3}
 {"cmd":"marks"}
 {"cmd":"mark_add","pane":1,"name":"notes","key":"n"}

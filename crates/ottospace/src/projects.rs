@@ -64,7 +64,8 @@ impl Workspace {
             self.dispatch(set, Origin::System, window, cx);
             (self.projects.last, self.projects.dir) = (None, dir.clone());
         }
-        let open = self.model.sidebar == Some(Section::Projects);
+        // The week's focus editor lists the projects too: read while it is open.
+        let open = self.model.sidebar == Some(Section::Projects) || self.model.focus_edit.is_some();
         let opened = open && !self.projects.open;
         self.projects.open = open;
         let now = now_ms();

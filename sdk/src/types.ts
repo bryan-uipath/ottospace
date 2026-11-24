@@ -743,6 +743,30 @@ export interface DecisionReply {
   ok: true;
   decision: Captured<Decision>;
 }
+/** The week's focus editor: how many rows, which are ticked (four at most), the cursor. */
+export interface FocusEdit {
+  count: number;
+  ticked: number[];
+  cursor: number;
+}
+/** The week (`2026-W48`), how many areas are set this week and by whom, and the last week set before. */
+export interface WeekFocusState {
+  week: string;
+  areas: number;
+  set_by: "user" | "proposal" | null;
+  last: string | null;
+}
+/** An area of the week's focus: its name, and the projects (by name) and repositories (by path) that are its. */
+export interface FocusArea {
+  name: string;
+  projects: string[];
+  repos: string[];
+}
+export interface WeekFocusReply {
+  ok: true;
+  week: string;
+  focus: Captured<{ areas: FocusArea[]; set_by: "user" | "proposal" | null }>;
+}
 /** A filed decision as the state gives it: never its words. */
 export interface FiledRow {
   id: number;
@@ -1529,6 +1553,8 @@ export interface Model {
   viewers: Record<string, Viewer>;
   /** The Decisions workspace while it is open (the `decisions` flag), else null. */
   decisions: Decisions | null;
+  /** The week's focus editor while the user has it open (`decision_sources`): rows, ticks, cursor; never a name. */
+  focus_edit: FocusEdit | null;
   /** Zoomed out (the `zoom_out` flag): the tab it opened on and the selected tile, by tab id; else null. Only the user zooms. */
   zoom: Zoom | null;
 }
@@ -2165,6 +2191,8 @@ export interface Snapshot {
   projects_bar: ProjectsBar;
   /** Decisions filed from any source (`decision_sources`), null with the flag off. */
   filed: Filed | null;
+  /** The week's focus (`decision_sources`), null with the flag off: never an area's name. */
+  week_focus: WeekFocusState | null;
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;
