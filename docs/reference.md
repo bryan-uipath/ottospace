@@ -1689,8 +1689,10 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   moved camera shows Reset view at the place's corner, which brings back the fitted view (from
   above a corner, 38° down, the city's middle 0.6 of the way down the place, the room over it for
   beams, names and agents), eased (at once under Reduce Motion). Pitch stays between 12° and 80°, zoom between a building filling the tab and
-  the whole city, the point looked at over the city. Each checkout keeps its camera, in every
-  place that shows it and across a restart (in `layout.json`); a changed file list keeps it. Over the hints,
+  the whole city, the point looked at over the city. Each place that shows a city (a tab, a tab
+  folded out, an empty pane) has its own camera: turning one turns no other. A new place starts
+  from the checkout's camera last used, and that one is kept across closing the tab and a restart
+  (in `layout.json`); a changed file list keeps it. Over the hints,
   the hints win. A moved camera cuts no building down for the lit ones (those stay raised and
   coloured).
 - No GPU, or a render that fails: the lattice.

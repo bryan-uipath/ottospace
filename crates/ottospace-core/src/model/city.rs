@@ -85,14 +85,25 @@ pub enum CameraStep {
 /// Only the user's pointer moves a city's camera: a client's drag is refused.
 pub(crate) const USERS_ALONE: &str = "only the user's pointer moves the city's camera";
 
-/// Each tab's camera of each folder, kept while ottospace runs (not across a restart), and the
-/// drag in flight with the view it started from.
+/// Each place's camera (a tab, or an empty pane, showing a city), each checkout's last one used,
+/// and the drag in flight with the view it started from.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(crate) struct Cameras {
-    /// By folder: every place of a checkout shows it from where the user left it, and it is
-    /// kept in the layout file (`layout.json`'s `cameras`).
+    /// By folder: the view last used in any place of the checkout. A place with no camera of its
+    /// own starts from it; it is kept in the layout file (`layout.json`'s `cameras`).
     pub(crate) views: BTreeMap<String, View>,
-    grab: Option<(String, View)>,
+    /// By place (`place_key`): its own, once the user moved it there. Two places of one checkout
+    /// (a tab folded out, two panes) turn apart.
+    places: BTreeMap<String, View>,
+    grab: Option<(String, String, View)>,
+}
+
+/// A place's own camera's key: `tab:3`, `pane:7`.
+fn place_key(at: At) -> String {
+    match at {
+        At::Tab(id) => format!("tab:{id}"),
+        At::Pane(id) => format!("pane:{id}"),
+    }
 }
 
 /// An empty place on show: a tab with no pane (by its id), or an empty pane.
@@ -211,14 +222,16 @@ impl Model {
         (origin == Origin::User && self.tasks.live(task).is_some()).then_some(Action::TaskGo { id: Some(task) })
     }
 
-    /// Whose camera a place's is: its folder's. Every place of a checkout shares it.
+    /// The checkout whose last camera a place starts from: its folder's.
     fn camera_of(&self, at: At) -> Option<String> {
         Some(self.empty_folder(at)?.to_string())
     }
 
-    /// The camera of a place's city: as the user left it, else the fitted view.
+    /// The camera of a place's city: its own as the user left it, else its checkout's last one
+    /// used (a new tab of it starts there), else the fitted view.
     pub fn city_view(&self, at: At) -> View {
-        self.camera_of(at).and_then(|key| self.cameras.views.get(&key).copied()).unwrap_or_default()
+        let own = self.cameras.places.get(&place_key(at)).copied();
+        own.or_else(|| self.camera_of(at).and_then(|key| self.cameras.views.get(&key).copied())).unwrap_or_default()
     }
 
     /// A drag of a city's camera is in flight: Esc cancels it.
@@ -233,36 +246,38 @@ impl Model {
         match step {
             CameraStep::Let => return self.cameras.grab = None,
             CameraStep::Cancel => {
-                if let Some((grabbed, from)) = self.cameras.grab.take() {
-                    self.cameras.views.insert(grabbed, from);
+                if let Some((place, folder, from)) = self.cameras.grab.take() {
+                    self.cameras.places.insert(place, from);
+                    self.cameras.views.insert(folder, from);
                 }
                 return;
             }
             _ => {}
         }
         let Some(key) = self.camera_of(at).filter(|_| self.city_at(at).is_some()) else { return };
-        let now = self.cameras.views.get(&key).copied().unwrap_or_default();
+        let now = self.city_view(at);
         let view = match step {
             CameraStep::Orbit { yaw, pitch } => now.orbited(yaw, pitch),
             CameraStep::Pan { dx, dz } => now.panned(dx, dz),
             CameraStep::Zoom { factor, about } => now.zoomed(factor, about),
             CameraStep::Grab => {
-                self.cameras.grab = Some((key, now));
+                self.cameras.grab = Some((place_key(at), key, now));
                 return;
             }
             // Taken above.
             CameraStep::Let | CameraStep::Cancel => return,
             CameraStep::Reset => View::default(),
         };
-        // A step of no number moves nothing.
+        // A step of no number moves nothing. The place's own, and the checkout's last used.
         if view.sound() {
+            self.cameras.places.insert(place_key(at), view);
             self.cameras.views.insert(key, view);
         }
     }
 
     /// Every camera inside its clamps, and a drag only of a camera kept: for the model's check.
     pub fn cameras_sound(&self) -> Result<(), String> {
-        let bad = self.cameras.views.iter().find(|(_, view)| !view.sound());
+        let bad = self.cameras.views.iter().chain(&self.cameras.places).find(|(_, view)| !view.sound());
         match bad {
             Some((key, view)) => Err(format!("camera {key:?} out of its clamps: {view:?}")),
             None => Ok(()),
@@ -558,6 +573,29 @@ mod tests {
         let on = Features::parse_list("code_city").unwrap();
         m.update(Action::SetFeatures { features: on }.sent_by(Origin::System));
         assert_eq!(m.city_at(at).map(|city| city.view), Some(View::default()));
+    }
+
+    /// Two places of one checkout turn apart: each keeps its own camera. A new place starts from
+    /// the checkout's last camera used, and that is what is kept for it (`layout.json`).
+    #[test]
+    fn each_place_has_its_own_camera_and_a_new_one_starts_from_the_last_used() {
+        let mut m = task_in_app();
+        // Two empty panes of the checkout, beside a terminal.
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Empty });
+        m.update(Action::Split { axis: Axis::Down, kind: Kind::Empty });
+        let [a, b] = m.empty_places()[..] else { panic!("{:?}", m.empty_places()) };
+        m.update(Action::CityCamera { at: a, step: CameraStep::Orbit { yaw: 30., pitch: 0. } });
+        let turned = m.city_view(a);
+        assert!(turned != View::default());
+        assert_eq!(m.city_view(b), turned, "b had none of its own: the checkout's last used");
+        m.update(Action::CityCamera { at: b, step: CameraStep::Orbit { yaw: -50., pitch: 0. } });
+        assert_eq!(m.city_view(a), turned, "a turns apart from b");
+        // A new place starts from the last used: b's.
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Empty });
+        let c = *m.empty_places().iter().find(|p| **p != a && **p != b).unwrap();
+        assert_eq!(m.city_view(c), m.city_view(b));
+        assert_eq!(m.cameras.views.get("/code/app"), Some(&m.city_view(b)), "kept: the last used");
     }
 
     /// Esc during a drag puts the camera back where the drag began; a drag let go keeps it.
