@@ -19,8 +19,8 @@ impl Workspace {
     /// The card pane's body: its header, the ask card, its foot.
     pub(crate) fn decision_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(run) = self.model.decisions.as_ref() else { return div().into_any_element() };
-        // What this frame draws: a key or click names it, and one on another revision takes nothing.
-        self.drawn_decision.set(self.model.on_show().map(|(_, revision)| revision));
+        // What this frame draws: a key or click names it, and one on another card or revision takes nothing.
+        self.drawn_decision.set(self.model.on_show());
         if let Some(card) = run.week {
             return self.week_body(card, (run.at, run.of), cx);
         }
@@ -328,7 +328,7 @@ impl Workspace {
             div()
                 .text_xs()
                 .text_color(rgb(theme::TEXT))
-                .child("Changed since it was shown: read it again. Any key goes on; nothing is taken.")
+                .child("Changed while on show: read it again. Any key goes on; nothing is taken.")
                 .into_any_element()
         })
     }

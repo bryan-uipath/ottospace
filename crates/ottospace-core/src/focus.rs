@@ -214,7 +214,10 @@ impl Focus {
     /// A proposal came, taken or refused: it counts against the hour.
     pub fn attempt(&mut self, now: u64) {
         self.recent.retain(|at| at.saturating_add(HOUR_MS) > now);
-        self.recent.push(now);
+        // A full hour keeps no more: at most `PROPOSALS_PER_HOUR` however many come.
+        if self.recent.len() < PROPOSALS_PER_HOUR {
+            self.recent.push(now);
+        }
     }
 
     /// An agent proposes this week's focus (checked by `refusal` first; `attempt` counted). It sets nothing: it waits
@@ -365,6 +368,16 @@ mod tests {
             !valid_week("2026-W+1") && valid_week("2026-W53") && !valid_week("2025-W53"),
             "2026 is a long ISO year"
         );
+    }
+
+    #[test]
+    fn a_million_refused_proposals_keep_the_hours_count_and_no_more() {
+        let mut focus = Focus { week: "2026-W48".into(), ..Focus::default() };
+        for n in 0..1_000_000 {
+            focus.attempt(n);
+        }
+        assert_eq!(focus.recent.len(), PROPOSALS_PER_HOUR);
+        assert!(focus.refusal("2026-W48", &[], 1_000_000).is_some_and(|why| why.contains("last hour")));
     }
 
     #[test]

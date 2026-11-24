@@ -5604,6 +5604,7 @@ impl Model {
             return Vec::new();
         }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
+        let answer = decisions::answers(&sent.action);
         let overlays = self.overlay_before(&sent);
         let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
         let fronts_were: Vec<TaskId> = self.spaces.iter().filter_map(|space| self.front(&space.of)).collect();
@@ -5666,7 +5667,7 @@ impl Model {
         }
         self.settle_focus_edit();
         self.settle_decisions(origin, drawer_keys, &mut effects);
-        self.settle_changed();
+        self.settle_changed(answer);
         self.settle_spaces(origin, &home);
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         // After the tabs out: a fold-in may move the main window's tab (seed 37143).

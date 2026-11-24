@@ -103,8 +103,8 @@ pub struct Run {
     /// The card on show changed since it was first drawn (a newer proposal, its filer's update):
     /// the next key only says the user saw it (`DecisionsSeen`), nothing is taken.
     pub changed: bool,
-    /// What was on show at the last step, and its revision: a change of revision under the same
-    /// card sets `changed`.
+    /// What was on show at the last step, and its revision: another revision, or another card put
+    /// there by a step that was not an answer, sets `changed`.
     #[serde(skip)]
     pub(crate) seen: Option<(On, u32)>,
 }
@@ -186,7 +186,7 @@ impl Model {
     /// A key on the card pane, while it has the keyboard: 1 to 9 pick, ↑↓ j k move, space picks,
     /// ↵ sends, ⇥ between questions; S skips, L puts it off until `now + LATER_MS`, Esc closes Decisions.
     pub fn decision_key(&self, key: &str, mods: crate::keys::Mods, now: u64) -> Key {
-        self.decision_key_drawn(key, mods, now, self.on_show().map(|(_, revision)| revision))
+        self.decision_key_drawn(key, mods, now, self.on_show())
     }
 
     /// The card on show and its revision: an agent's question (its ticket never changes), the
@@ -208,13 +208,15 @@ impl Model {
     }
 
     /// After every step, one rule for every card a filer can change while it is on show: the same
-    /// card at another revision is marked changed, and its next key only says it was seen.
-    pub(super) fn settle_changed(&mut self) {
+    /// card at another revision, or another card put there by a step that answered none (a filing,
+    /// a withdrawal, an expiry), is marked changed, and its next key only says it was seen.
+    pub(super) fn settle_changed(&mut self, answer: bool) {
         let now = self.on_show();
         let Some(run) = self.decisions.as_mut() else { return };
         match (run.seen, now) {
             (Some((was, from)), Some((on, to))) if was == on && from != to => run.changed = true,
             (Some((was, _)), Some((on, _))) if was == on => {}
+            (seen, Some(_)) if seen != now && !answer => run.changed = true,
             _ => run.changed = false,
         }
         run.seen = now;
@@ -223,7 +225,7 @@ impl Model {
     /// A key on the card pane, as `decision_key`, the shell saying which revision it drew: a key
     /// on a card whose revision moved since (a newer proposal, its filer's update) takes nothing,
     /// and while the card is marked changed, the next key only says the user saw it.
-    pub fn decision_key_drawn(&self, key: &str, mods: crate::keys::Mods, now: u64, drawn: Option<u32>) -> Key {
+    pub fn decision_key_drawn(&self, key: &str, mods: crate::keys::Mods, now: u64, drawn: Option<(On, u32)>) -> Key {
         let bare = !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift;
         if self.keyboard_decision()
             && key != "escape"
@@ -298,7 +300,7 @@ impl Model {
     }
 
     /// A click on one of the week card's buttons: what its key does, wherever the keyboard is.
-    pub fn week_click(&self, key: &str, now: u64, drawn: Option<u32>) -> Key {
+    pub fn week_click(&self, key: &str, now: u64, drawn: Option<(On, u32)>) -> Key {
         let Some(card) = self.decisions.as_ref().and_then(|run| run.week) else { return Key::Pass };
         if let Some(stop) = self.unseen(drawn) {
             return stop;
@@ -307,7 +309,7 @@ impl Model {
     }
 
     /// A click on one of triage's buttons: what its key does, wherever the keyboard is.
-    pub fn sort_click(&self, key: &str, mods: crate::keys::Mods, now: u64, drawn: Option<u32>) -> Key {
+    pub fn sort_click(&self, key: &str, mods: crate::keys::Mods, now: u64, drawn: Option<(On, u32)>) -> Key {
         let Some(sort) = self.decisions.as_ref().and_then(|run| run.sort.as_ref()) else { return Key::Pass };
         if let Some(stop) = self.unseen(drawn) {
             return stop;
@@ -315,11 +317,11 @@ impl Model {
         self.sort_key(sort, key, !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift, now)
     }
 
-    /// A click or key on a card that changed since it was drawn, or that is marked changed: it takes
-    /// nothing (the latter's says the user saw it). `None`: it may act.
-    fn unseen(&self, drawn: Option<u32>) -> Option<Key> {
+    /// A click or key on a card that is not the one drawn (another card, or another revision of it),
+    /// or that is marked changed: it takes nothing (the latter's says the user saw it). `None`: it may act.
+    fn unseen(&self, drawn: Option<(On, u32)>) -> Option<Key> {
         let changed = self.decisions.as_ref().is_some_and(|run| run.changed);
-        let moved = drawn != self.on_show().map(|(_, revision)| revision);
+        let moved = drawn != self.on_show();
         match (changed, moved) {
             (true, _) => Some(Key::Act(Action::DecisionsSeen)),
             (false, true) => Some(Key::Swallow),
@@ -683,6 +685,30 @@ impl Model {
             tab.title = title;
         }
     }
+}
+
+/// A step that answers the card on show, or opens Decisions: the card it puts there is the user's
+/// next, not a change under them.
+pub(super) fn answers(action: &Action) -> bool {
+    use super::focus::Seed;
+    matches!(
+        action,
+        Action::DecisionsOpen
+            | Action::DecisionsAsk { .. }
+            | Action::DecisionsSkip { .. }
+            | Action::DecisionsLater { .. }
+            | Action::SortStart
+            | Action::SortSkip
+            | Action::SortItem { .. }
+            | Action::SortToggle { .. }
+            | Action::SortPromote { .. }
+            | Action::SortUndo
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
+            | Action::FocusEditOpen { from: Seed::Proposal(_) | Seed::Last }
+            | Action::FocusEditSave { .. }
+    )
 }
 
 #[cfg(test)]

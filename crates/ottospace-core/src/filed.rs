@@ -531,7 +531,7 @@ pub struct Filed {
     /// Scopes the user promoted: their items skip triage. Kept in `<home>/decisions/trust.json`.
     pub trusted: Vec<Trust>,
     /// When each counted filing came, by source: for `PER_HOUR`.
-    recent: Vec<(Source, u64)>,
+    pub(crate) recent: Vec<(Source, u64)>,
 }
 
 impl Filed {
@@ -722,10 +722,13 @@ impl Filed {
         }
     }
 
-    /// A filing came and was refused: it counts against its source's hour.
+    /// A filing came and was refused: it counts against its source's hour. A full hour keeps no
+    /// more: the list stays at `PER_HOUR` a source however many come.
     pub fn attempt(&mut self, source: Source, now: u64) {
         self.recent.retain(|(_, at)| at.saturating_add(HOUR_MS) > now);
-        self.recent.push((source, now));
+        if self.recent.iter().filter(|(s, _)| *s == source).count() < PER_HOUR {
+            self.recent.push((source, now));
+        }
     }
 
     /// Files it, if not refused: a new decision, or the next revision of its key's. The id

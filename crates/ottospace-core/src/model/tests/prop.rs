@@ -4413,8 +4413,33 @@ impl Run {
             (dirs, found)
         };
         let repos_before = matches!(action, Action::ReorderDrop).then(|| repo_set(m));
+        // No answer applies to a card other than the one, at the revision, on show before it.
+        let on_show_before = m.on_show();
+        let sort_item = |m: &Model| match &action {
+            Action::SortItem { id, .. } => m.filed.get(*id).cloned(),
+            _ => None,
+        };
+        let (sort_item_before, week_before) = (sort_item(m), m.focus.clone());
         let effects = m.update(sent);
         check(m)?;
+        {
+            use crate::model::decisions::On;
+            let target = match &action {
+                Action::SortItem { id, revision, .. } if sort_item(m) != sort_item_before => {
+                    Some((On::Sort(Some(*id)), *revision))
+                }
+                Action::FocusAccept { revision, .. } | Action::FocusDecline { revision } if m.focus != week_before => {
+                    Some((On::Week, *revision))
+                }
+                Action::FocusCarry { .. } if m.focus != week_before => Some((On::Week, 0)),
+                Action::DecisionsAsk { task, ticket, .. } if !effects.is_empty() => Some((On::Ask(*task, *ticket), 0)),
+                _ => None,
+            };
+            ensure!(
+                target.is_none() || target == on_show_before,
+                "{action:?} applied to {target:?}, not the card on show {on_show_before:?}"
+            );
+        }
         ensure!(repos_before.is_none_or(|was| was == repo_set(m)), "a reorder changed the Repos list's entries");
         // With the overlays on, no client or timer opens one over the user's work.
         if m.overlays() && origin != Origin::User {

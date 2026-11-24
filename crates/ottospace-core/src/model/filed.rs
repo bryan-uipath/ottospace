@@ -319,6 +319,35 @@ mod tests {
     }
 
     #[test]
+    fn another_card_put_on_show_by_its_filer_takes_no_key_drawn_for_the_one_before() {
+        use crate::keys::Mods;
+        use crate::model::{chat::Key, decisions::On};
+        let mut m = Model::in_workspace();
+        let a = file(&mut m, Source::Slack, "slack:C1:1.0", 10);
+        let b = file(&mut m, Source::Slack, "slack:C1:2.0", 11);
+        m.update(Action::Tick { now: 1_000 }.sent_by(Origin::System));
+        m.update(Action::DecisionsOpen);
+        key(&mut m, "enter");
+        let drawn = m.on_show();
+        assert_eq!(drawn, Some((On::Sort(Some(a)), 1)));
+        // Its filer withdraws it: b, at the same revision number, takes its place.
+        m.update(Action::DecisionWithdraw { source: Source::Slack, key: "slack:C1:1.0".into(), now: 1_001 });
+        assert_eq!(m.on_show(), Some((On::Sort(Some(b)), 1)));
+        assert!(m.decisions.as_ref().is_some_and(|r| r.changed), "b is marked changed");
+        // The ↵ the user meant for a: it only says b was seen; neither is sorted.
+        let Key::Act(seen) = m.decision_key_drawn("enter", Mods::default(), 1_002, drawn) else { panic!() };
+        assert_eq!(seen, Action::DecisionsSeen);
+        m.update(seen);
+        assert_eq!(m.filed.get(b).unwrap().triage, Triage::Pending);
+        // Not marked any more, a key drawn for a still takes nothing; one drawn for b sorts b.
+        let stale = m.decision_key_drawn("enter", Mods::default(), 1_003, drawn);
+        assert_eq!(stale, Key::Swallow);
+        let Key::Act(keep) = m.decision_key_drawn("enter", Mods::default(), 1_003, m.on_show()) else { panic!() };
+        m.update(keep);
+        assert_eq!(m.filed.get(b).unwrap().triage, Triage::Sorted);
+    }
+
+    #[test]
     fn a_refused_filing_counts_against_the_hour() {
         let mut m = Model::default();
         let mut bad = filing();
@@ -327,6 +356,19 @@ mod tests {
             m.update(Action::DecisionFile { filing: Box::new(bad.clone()), now: n }.sent_by(Origin::Socket));
         }
         assert!(m.filing_refusal(&filing(), 100).is_some_and(|why| why.contains("last hour")), "probing is metered");
+    }
+
+    #[test]
+    fn a_million_refused_filings_keep_the_hours_count_a_source_and_no_more() {
+        let mut m = Model::default();
+        for n in 0..1_000_000 {
+            m.filed.attempt(Source::Slack, n);
+            m.filed.attempt(Source::AgentSession, n);
+        }
+        assert_eq!(m.filed.recent.len(), 2 * crate::filed::PER_HOUR);
+        let mut f = filing();
+        f.source = Source::Slack;
+        assert!(m.filing_refusal(&f, 1_000_000).is_some_and(|why| why.contains("last hour")), "still refused");
     }
 
     #[test]

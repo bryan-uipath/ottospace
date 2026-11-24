@@ -1265,8 +1265,8 @@ struct Workspace {
     worktrees: (Sender<worktree::Made>, Receiver<worktree::Made>),
     /// The local day's start last told to the core (`LocalDay`).
     told_day: u64,
-    /// The revision of the Decisions card last drawn: what a key or click on it names.
-    drawn_decision: std::cell::Cell<Option<u32>>,
+    /// The Decisions card last drawn and its revision: what a key or click on it names.
+    drawn_decision: std::cell::Cell<Option<(ottospace_core::model::decisions::On, u32)>>,
     /// Done's removals of a task's own worktree, off the main thread.
     removals: (Sender<worktree::Removed>, Receiver<worktree::Removed>),
     /// What the user's last step did, said for a few seconds as information (`Effect::Told`).

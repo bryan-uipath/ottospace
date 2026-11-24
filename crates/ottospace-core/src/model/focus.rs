@@ -69,15 +69,16 @@ impl Model {
                     self.focus.propose(&areas, provenance, now);
                 }
             }
-            Action::FocusAccept { revision, at } => {
+            // The week's card answers only while it is on show, at the revision named.
+            Action::FocusAccept { revision, at } if self.week_on_show(revision) => {
                 if self.focus.accept(revision, at) {
                     effects.push(Effect::SaveFocus { kept: self.focus.kept() });
                 }
             }
-            Action::FocusDecline { revision } => {
+            Action::FocusDecline { revision } if self.week_on_show(revision) => {
                 self.focus.decline(revision);
             }
-            Action::FocusCarry { keep, at } => {
+            Action::FocusCarry { keep, at } if self.week_on_show(0) => {
                 if self.focus.carry(keep, at) && keep {
                     effects.push(Effect::SaveFocus { kept: self.focus.kept() });
                 }
@@ -123,6 +124,11 @@ impl Model {
             }
             _ => {}
         }
+    }
+
+    /// Decisions shows the week's card at `revision` (0: keep last week's?).
+    fn week_on_show(&self, revision: u32) -> bool {
+        self.on_show() == Some((super::decisions::On::Week, revision))
     }
 
     /// The Projects entries' names: what an area's projects link to.
@@ -380,7 +386,12 @@ mod tests {
         key(&mut m, "enter");
         assert!(m.focus.areas().is_empty() && m.decisions.as_ref().is_some_and(|r| !r.changed));
         // A key the shell gives for the revision it drew before the swap takes nothing.
-        let stale = m.decision_key_drawn("enter", crate::keys::Mods::default(), 50, Some(1));
+        let stale = m.decision_key_drawn(
+            "enter",
+            crate::keys::Mods::default(),
+            50,
+            Some((super::super::decisions::On::Week, 1)),
+        );
         assert_eq!(stale, crate::model::chat::Key::Swallow);
         key(&mut m, "enter");
         let names: Vec<&str> = m.focus.areas().iter().map(|a| a.name.as_str()).collect();
