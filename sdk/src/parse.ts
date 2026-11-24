@@ -2090,8 +2090,10 @@ function slotDialog(value: unknown, at: string): SlotDialog {
   return {
     pane: num(o.pane, `${at}.pane`),
     has_id: bool(o.has_id, `${at}.has_id`),
-    by_id: bool(o.by_id, `${at}.by_id`),
-    by_title: bool(o.by_title, `${at}.by_title`),
+    by: oneOf(["any", "id", "title"] as const, "a slot rule's window")(o.by, `${at}.by`),
+    test: oneOf(["is", "contains", "starts_with", "pattern"] as const, "a title test")(o.test, `${at}.test`),
+    has_kind: bool(o.has_kind, `${at}.has_kind`),
+    by_kind: bool(o.by_kind, `${at}.by_kind`),
     pick: pick(o.pick, `${at}.pick`),
     matching: oneOf(["manual", "automatic"] as const, "a slot's matching")(o.matching, `${at}.matching`),
     editing: bool(o.editing, `${at}.editing`),

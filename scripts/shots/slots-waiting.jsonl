@@ -6,8 +6,7 @@
 {"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":0,"window":900000,"title":"Weekly sync","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
 {"cmd":"slot_make","pane":1,"slot":{"select":{"identifier":"meetings.window.main"}}}
 {"click":"slot-dots:1"}
-{"click":"row-menu:0"}
-{"click":"slot-dialog:give-back"}
+{"click":"row-menu:1"}
 {"shot":"waiting"}
 {"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":1,"window":700001,"title":"Retro","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
 {"shot":"offering"}

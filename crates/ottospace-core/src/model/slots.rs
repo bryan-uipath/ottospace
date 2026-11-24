@@ -11,6 +11,9 @@ use crate::features::Feature;
 use crate::marks::{Extra, PaneRecord, RecordKind, Unfilled, same_app};
 use crate::slot::{self, Look, Matching, Seen, Slot, Status};
 
+/// The most a title rule's words hold.
+const WORDS: usize = 200;
+
 /// A slot as the model runs it. In the state: its status, how many windows match and its
 /// matching. What it selects, the windows it offers and passes over: never.
 #[derive(Clone, Debug, PartialEq, Serialize)]
@@ -91,8 +94,8 @@ impl Run {
     }
 }
 
-/// The slot dialog (⋯ on an app pane's header): a checklist made from the pane's window, no free
-/// text. In the state: what is ticked; never the window's title or identifier.
+/// The slot dialog (⋯'s Create slot… or Edit slot…): a form under its rule, said in one line.
+/// In the state: what is chosen; never a window's title or id, nor the words of a title rule.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Dialog {
     pub pane: PaneId,
@@ -102,63 +105,208 @@ pub struct Dialog {
     /// The pane's window: its process, title and identifier.
     #[serde(skip)]
     pub window: Option<Seen>,
-    /// The slot's own selector when the dialog edits one: a ticked row keeps its pattern, and
-    /// fields the dialog has no row for (`subrole`) stay.
+    /// The slot's own selector when the dialog edits one: its id stays the one it waits for.
     #[serde(skip)]
     pub kept: Option<crate::rules::Selector>,
-    /// The window's id is a row: it has one.
+    /// "Window id" is a choice: the window, or the slot, has one.
     pub has_id: bool,
-    /// "Window id is …" ticked.
-    pub by_id: bool,
-    /// "Title is “…”" ticked.
-    pub by_title: bool,
+    /// Which windows of the app: any, the one with the id, or by title.
+    pub by: By,
+    /// How a title rule tests the title, with `words`.
+    pub test: Test,
+    /// A title rule's words: the window's whole title to begin with, for the user to cut down.
+    #[serde(skip)]
+    pub words: crate::edit::Field,
+    /// The window's kind when it is a dialog or panel (`AXDialog`), or the slot's; `by_kind`: the
+    /// rule names it.
+    #[serde(skip)]
+    pub kind: Option<String>,
+    pub has_kind: bool,
+    pub by_kind: bool,
     pub pick: crate::slot::Pick,
     pub matching: Matching,
-    /// A slot already: the dialog edits it, and its foot has Look Again, Give Back and Clear.
+    /// A slot already: the dialog edits it.
     pub editing: bool,
 }
 
-/// A row of the dialog ticked or chosen.
+/// Which windows of the app a slot waits for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum By {
+    /// Any window of the app (with `Pick`, which of several).
+    Any,
+    /// The window with the app's own name for it (`AXIdentifier`).
+    Id,
+    /// A window whose title passes `Test` with the dialog's words.
+    Title,
+}
+
+/// A title rule's test: written as the glob the selector reads (`rules::glob`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Test {
+    Is,
+    Contains,
+    StartsWith,
+    /// A pattern written by hand in `layout.json`, kept as it is: `*Q? review*2026`.
+    Pattern,
+}
+
+impl Test {
+    /// The glob of `words` under this test: `Weekly`, `*Weekly*`, `Weekly*`.
+    pub fn glob(self, words: &str) -> String {
+        match self {
+            Test::Is | Test::Pattern => words.to_string(),
+            Test::Contains => format!("*{words}*"),
+            Test::StartsWith => format!("{words}*"),
+        }
+    }
+
+    /// A glob read back as a test and its words: `*Incident*` contains `Incident`.
+    pub fn read(glob: &str) -> (Test, String) {
+        let inner = |s: &str| !s.contains('*');
+        match glob.strip_prefix('*').and_then(|g| g.strip_suffix('*')) {
+            Some(words) if inner(words) && !words.is_empty() => return (Test::Contains, words.into()),
+            _ => {}
+        }
+        match glob.strip_suffix('*') {
+            Some(words) if inner(words) && !words.is_empty() => (Test::StartsWith, words.into()),
+            _ if inner(glob) => (Test::Is, glob.into()),
+            _ => (Test::Pattern, glob.into()),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Test::Is => "is",
+            Test::Contains => "contains",
+            Test::StartsWith => "starts with",
+            Test::Pattern => "matches",
+        }
+    }
+}
+
+/// A choice in the dialog.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Choice {
-    ById(bool),
-    ByTitle(bool),
+    By(By),
+    Test(Test),
+    Kind(bool),
     Pick(crate::slot::Pick),
     Matching(Matching),
 }
 
+/// A window the dialog lists: whether the rule takes it, and what tells it apart.
+pub struct Listed<'a> {
+    pub seen: &'a Seen,
+    pub taken: bool,
+    pub detail: String,
+}
+
 impl Dialog {
-    /// The slot of what is ticked. Editing one, a ticked row keeps the slot's own pattern.
+    /// The id the slot waits for: its own when edited, else the window's.
+    fn id(&self) -> Option<String> {
+        let kept = self.kept.as_ref().and_then(|select| select.identifier.clone());
+        kept.or_else(|| self.window.as_ref().and_then(|seen| seen.identifier.clone()))
+    }
+
+    /// The slot of what is chosen.
     pub fn slot(&self) -> Slot {
-        let seen = self.window.as_ref();
-        let kept = self.kept.clone().unwrap_or_default();
-        let identifier = kept.identifier.or_else(|| seen.and_then(|s| s.identifier.clone()));
-        let title = kept.title.or_else(|| seen.map(|s| s.title.clone()));
-        // A dialog's slot names its kind, or no dialog would be its candidate (`rules::slot_holds`).
-        let subrole = kept.subrole.or_else(|| seen.and_then(|seen| crate::rules::slot_kind(&seen.subrole)));
+        self.slot_by(self.by)
+    }
+
+    fn slot_by(&self, by: By) -> Slot {
         let select = crate::rules::Selector {
-            identifier: identifier.filter(|_| self.by_id),
-            title: title.filter(|_| self.by_title),
-            subrole,
+            identifier: self.id().filter(|_| by == By::Id),
+            title: (by == By::Title).then(|| self.test.glob(self.words.text())),
+            subrole: self.kind.clone().filter(|_| self.by_kind),
             app: None,
         };
         Slot { select, pick: self.pick, matching: self.matching, ..Default::default() }
     }
 
-    /// The id and title rows, as the dialog words them: the slot's own pattern when editing one.
-    pub fn rows(&self) -> (Option<String>, Option<String>) {
-        let slot = Dialog { by_id: true, by_title: true, ..self.clone() }.slot();
-        (slot.select.identifier, slot.select.title)
+    /// How many of the app's windows open now a rule `by` would select, whichever the pick: the
+    /// count beside each choice, so loosening or tightening shows what it does before it is chosen.
+    pub fn count(&self, by: By, rules: &[crate::rules::Rule]) -> usize {
+        let slot = Slot { pick: crate::slot::Pick::Any, ..self.slot_by(by) };
+        self.look.candidates(&slot, rules, |_| false).len()
     }
 
-    /// How many of the app's windows open now the ticked rows select: over one, it asks which.
+    /// How many the chosen rule selects now.
     pub fn matches(&self, rules: &[crate::rules::Rule]) -> usize {
-        let slot = Slot { pick: crate::slot::Pick::Any, ..self.slot() };
-        self.look.candidates(&slot, rules, |_| false).len()
+        self.count(self.by, rules)
+    }
+
+    /// The app's windows open now, front to back, each ticked if the rule takes it (of several,
+    /// the one its pick chooses), with what tells it apart. Titles drawn, never in the state.
+    pub fn listed(&self, rules: &[crate::rules::Rule]) -> Vec<Listed<'_>> {
+        let found = self.look.candidates(&self.slot(), rules, |_| false);
+        let first = found.first().map(|seen| seen.window);
+        let listed: Vec<crate::same_title::Listed> = self
+            .look
+            .windows
+            .iter()
+            .map(|s| crate::same_title::Listed {
+                window: s.window,
+                title: &s.title,
+                frame: s.frame,
+                subrole: &s.subrole,
+            })
+            .collect();
+        let details = crate::same_title::details(&listed, &self.look.displays);
+        self.look
+            .windows
+            .iter()
+            .zip(details)
+            .map(|(seen, detail)| {
+                let size = format!("{}×{}", seen.frame.w.round(), seen.frame.h.round());
+                let kind = crate::same_title::role(&seen.subrole).filter(|role| *role != "window");
+                let plain = [Some(size), kind.map(String::from)].into_iter().flatten().collect::<Vec<_>>().join(" · ");
+                Listed { seen, taken: Some(seen.window) == first, detail: detail.unwrap_or(plain) }
+            })
+            .collect()
+    }
+
+    /// The rule in one sentence, the dialog's headline: `Waits for any Meetings window, the
+    /// largest, and offers it here.`
+    pub fn headline(&self, app: &str) -> String {
+        let words = self.words.text();
+        let which = match self.by {
+            By::Any => format!("any {app} window"),
+            By::Id => match self.id().unwrap_or_default() {
+                id if id.is_empty() => format!("a {app} window with no window id"),
+                id => format!("the {app} window with id {id}"),
+            },
+            By::Title => match self.test {
+                Test::Is => format!("a {app} window titled “{words}”"),
+                test => format!("a {app} window whose title {} “{words}”", test.label()),
+            },
+        };
+        let kind = self.kind.as_deref().filter(|_| self.by_kind).map(|kind| {
+            let role = crate::same_title::role(kind).unwrap_or(kind);
+            format!(" (a {role})")
+        });
+        let pick = match self.pick {
+            crate::slot::Pick::Largest => Some(", the largest".to_string()),
+            crate::slot::Pick::Smallest => Some(", the smallest".to_string()),
+            crate::slot::Pick::Display(n) => Some(format!(", on display {n}")),
+            crate::slot::Pick::Any => None,
+        };
+        let does = match self.matching {
+            Matching::Manual => "offers it here",
+            Matching::Automatic => "takes it here",
+        };
+        format!("Waits for {which}{}{}, and {does}.", kind.unwrap_or_default(), pick.unwrap_or_default())
     }
 }
 
 impl Model {
+    /// The slot dialog's title words, while its rule is by title and the picker is not over it.
+    pub(crate) fn slot_words(&self) -> Option<&crate::edit::Field> {
+        let dialog = self.slot_dialog.as_ref().filter(|d| d.by == By::Title && self.picker.is_none())?;
+        Some(&dialog.words)
+    }
+
     /// The window slot `pane` offers, as its look found it: for the pane to draw, never the state.
     pub fn slot_offer(&self, pane: PaneId) -> Option<&Seen> {
         let run = self.slots.get(&pane)?;
@@ -256,8 +404,19 @@ impl Model {
             Action::SlotDialogSet { choice } => {
                 if let Some(dialog) = self.slot_dialog.as_mut() {
                     match choice {
-                        Choice::ById(on) => dialog.by_id = on && dialog.has_id,
-                        Choice::ByTitle(on) => dialog.by_title = on && dialog.rows().1.is_some(),
+                        // No id to wait for: the choice is not there.
+                        Choice::By(By::Id) if !dialog.has_id => {}
+                        Choice::By(by) => dialog.by = by,
+                        // A hand-written pattern is kept, never chosen.
+                        Choice::Test(Test::Pattern) => {}
+                        Choice::Test(test) => {
+                            // Its words as they read under the test it had: `*a*` stays `a`.
+                            if dialog.test == Test::Pattern {
+                                dialog.words = crate::edit::Field::new(&Test::read(dialog.words.text()).1, WORDS);
+                            }
+                            dialog.test = test;
+                        }
+                        Choice::Kind(on) => dialog.by_kind = on && dialog.has_kind,
                         Choice::Pick(pick) => dialog.pick = pick,
                         Choice::Matching(matching) => dialog.matching = matching,
                     }
@@ -485,8 +644,8 @@ impl Model {
         (run.pending, run.status) = (None, Status::Empty);
     }
 
-    /// The dialog on app pane or slot `id`, its rows ticked from the slot it is, else from the
-    /// pane's window: its id if it has one, else its title.
+    /// The dialog on app pane or slot `id`, as the slot is, else from the pane's window: by its id
+    /// if it has one, else any window of the app, the largest (a meeting's title changes).
     fn slot_dialog_open(&mut self, id: PaneId, mut look: Look) {
         let window = match self.pane(id).map(|pane| &pane.kind) {
             Some(Kind::App { window, bundle, name, .. }) => {
@@ -502,19 +661,48 @@ impl Model {
         let kept = run.map(|run| run.slot.select.clone());
         let has_id = window.as_ref().is_some_and(|seen| seen.identifier.is_some())
             || kept.as_ref().is_some_and(|select| select.identifier.is_some());
-        let (by_id, by_title) = match &kept {
-            Some(select) => (select.identifier.is_some(), select.title.is_some()),
-            None => (has_id, !has_id && window.is_some()),
+        let title = window.as_ref().map(|seen| seen.title.clone()).unwrap_or_default();
+        let (by, (test, words), kind) = match &kept {
+            Some(select) => {
+                let by = match (&select.identifier, &select.title) {
+                    (Some(_), _) => By::Id,
+                    (None, Some(_)) => By::Title,
+                    (None, None) => By::Any,
+                };
+                let words = select.title.as_deref().map_or((Test::Is, title), Test::read);
+                (by, words, select.subrole.clone())
+            }
+            None => {
+                let kind = window.as_ref().and_then(|seen| crate::rules::slot_kind(&seen.subrole));
+                (if has_id { By::Id } else { By::Any }, (Test::Is, title), kind)
+            }
         };
-        let (pick, matching) = run.map_or_else(Default::default, |run| (run.slot.pick, run.slot.matching));
-        // The pane's own window first: the rows are made from it.
+        let (pick, matching) =
+            run.map_or((crate::slot::Pick::Largest, Matching::Manual), |run| (run.slot.pick, run.slot.matching));
+        // The pane's own window first.
         if let Some(seen) = &window {
             look.windows.retain(|other| other.window != seen.window);
             look.windows.insert(0, seen.clone());
         }
         let editing = run.is_some();
-        self.slot_dialog =
-            Some(Dialog { pane: id, look, window, kept, has_id, by_id, by_title, pick, matching, editing });
+        let (has_kind, by_kind) = (kind.is_some(), kind.is_some());
+        let words = crate::edit::Field::new(&words, WORDS);
+        self.slot_dialog = Some(Dialog {
+            pane: id,
+            look,
+            window,
+            kept,
+            has_id,
+            by,
+            test,
+            words,
+            kind,
+            has_kind,
+            by_kind,
+            pick,
+            matching,
+            editing,
+        });
     }
 
     /// The user's Keep: a live app pane becomes a filled slot, or a slot takes its new settings.
@@ -1048,7 +1236,7 @@ mod tests {
     }
 
     /// The owner's case: Zoom's meeting chat is an `AXSystemDialog`. A slot kept from it (the
-    /// dialog's Keep, its title ticked) names that kind, and the next meeting's chat, a new window
+    /// dialog's Keep: any window of the app, its kind named) names that kind, and the next meeting's chat, a new window
     /// of that kind and title, is offered in it; a slot of standard windows still passes it over.
     #[test]
     fn a_slot_kept_from_a_dialog_matches_the_next_one_of_its_kind() {
@@ -1060,10 +1248,10 @@ mod tests {
         let found =
             Look { bundle: Some(BUNDLE.into()), name: "Meetings".into(), running: true, windows, ..Look::default() };
         m.update(Action::SlotDialogOpen { pane: 2, look: found });
-        assert_eq!(m.slot_dialog.as_ref().map(|d| (d.by_id, d.by_title)), Some((false, true)));
+        assert_eq!(m.slot_dialog.as_ref().map(|d| (d.by, d.by_kind)), Some((By::Any, true)));
         m.update(Action::SlotDialogKeep);
         let words = m.slots.get(&2).map(|run| run.slot.words("Meetings"));
-        assert_eq!(words.as_deref(), Some("Meetings · title “Meeting chat” · subrole AXSystemDialog"));
+        assert_eq!(words.as_deref(), Some("Meetings · subrole AXSystemDialog · the largest"));
         m.update(system(Action::WindowGone { pane: 2, app_running: true, at: 0, was: Some(chat(2)) }));
         m.update(system(Action::SlotTick { at: slot::AWAY_MS }));
         // The next meeting's chat, popped out again: a new window, offered in the slot, not in a chip.
@@ -1461,48 +1649,98 @@ mod tests {
         assert_eq!((m.slot_offer(1).map(|s| s.window), m.slot_offer(2).map(|s| s.window)), (Some(11), Some(12)));
     }
 
+    /// The dialog's default: by the window's id when it has one, else any window of the app, the
+    /// largest (never the whole title: a meeting's changes). Each choice counts the windows it
+    /// would take; a title rule is a test and words, written as the selector's glob; Keep makes
+    /// the slot the headline says.
     #[test]
-    fn the_dialog_is_a_checklist_from_the_panes_window_and_keep_makes_the_slot_it_says() {
+    fn the_dialog_opens_on_the_id_or_any_window_and_keep_makes_the_slot_its_headline_says() {
         use crate::slot::Pick;
         let mut m = Model::default();
         // The pane's title is the shell's (an app pane carries it); the look's is the dialog's.
         m.update(Action::Open { kind: meetings(1, "Pane title"), axis: Right, beside: None });
         let main = Seen { identifier: Some("zm.meeting.window.main".into()), ..seen(7, 1, "Weekly sync") };
         let viewer = seen(7, 2, "Weekly sync");
-        let Action::SlotWindows { look: mut found } = look(vec![viewer, main]) else { return };
+        let home = seen(7, 3, "Home");
+        let Action::SlotWindows { look: mut found } = look(vec![viewer, main, home]) else { return };
         found.windows.iter_mut().for_each(|s| s.frame.w = 900.);
-        let open = Action::SlotDialogOpen { pane: 1, look: found };
+        let open = Action::SlotDialogOpen { pane: 1, look: found.clone() };
         // Only the user opens it.
         assert_eq!(m.refusal(&open, Origin::Socket), Some(slot::USERS_ALONE));
         m.update(open);
         let dialog = m.slot_dialog.clone().unwrap_or_else(|| panic!("open"));
-        // With an id: by id, not by title; the pane's own window is first.
-        assert_eq!((dialog.has_id, dialog.by_id, dialog.by_title), (true, true, false));
+        // With an id: by id; the pane's own window first; the largest of several.
+        assert_eq!((dialog.has_id, dialog.by, dialog.pick), (true, By::Id, Pick::Largest));
         assert_eq!(dialog.look.windows[0].window, 1);
-        assert_eq!(dialog.slot().words("Meetings"), "Meetings · window id zm.meeting.window.main");
-        assert_eq!(dialog.matches(&[]), 1);
-        // By title instead: both windows match, so it asks which.
-        m.update(Action::SlotDialogSet { choice: Choice::ById(false) });
-        m.update(Action::SlotDialogSet { choice: Choice::ByTitle(true) });
-        m.update(Action::SlotDialogSet { choice: Choice::Pick(Pick::Largest) });
-        let dialog = m.slot_dialog.clone().unwrap_or_else(|| panic!("open"));
-        assert_eq!(dialog.matches(&[]), 2);
-        assert_eq!(dialog.slot().words("Meetings"), "Meetings · title “Weekly sync” · the largest");
-        // The state has what is ticked, never the title or the id.
-        let state = serde_json::to_string(&m).unwrap_or_default();
-        assert!(!state.contains("Weekly") && !state.contains("zm.meeting") && state.contains(r#""by_title":true"#));
-        m.update(Action::SlotDialogKeep);
-        assert!(m.slot_dialog.is_none());
         assert_eq!(
-            m.slots.get(&1).map(|run| (run.slot.select.title.clone(), run.status)),
-            Some((Some("Weekly sync".into()), Status::Filled))
+            dialog.headline("Meetings"),
+            "Waits for the Meetings window with id zm.meeting.window.main, the largest, and offers it here."
         );
-        // Opened again on the slot it edits: ticked as the slot is; Clear ends it.
+        // Each choice says how many it would take.
+        let counts = [By::Any, By::Id, By::Title].map(|by| dialog.count(by, &[]));
+        assert_eq!(counts, [3, 1, 2]);
+        let taken: Vec<(u32, bool)> = dialog.listed(&[]).iter().map(|l| (l.seen.window, l.taken)).collect();
+        assert_eq!(taken, [(1, true), (2, false), (3, false)]);
+        // By title, starting with “Weekly”: written as the glob the selector reads.
+        m.update(Action::SlotDialogSet { choice: Choice::By(By::Title) });
+        assert_eq!(m.field().map(|(of, f)| (of, f.text().to_string())), Some(("slot", "Weekly sync".into())));
+        let typed = Action::FieldEdit { edit: crate::edit::Edit::SelectAll };
+        assert_eq!(m.refusal(&typed, Origin::Socket), Some(slot::USERS_ALONE));
+        m.update(typed);
+        m.update(Action::FieldEdit { edit: crate::edit::Edit::Insert("Weekly".into()) });
+        m.update(Action::SlotDialogSet { choice: Choice::Test(Test::StartsWith) });
+        m.update(Action::SlotDialogSet { choice: Choice::Matching(Matching::Automatic) });
+        let dialog = m.slot_dialog.clone().unwrap_or_else(|| panic!("open"));
+        assert_eq!(dialog.slot().select.title.as_deref(), Some("Weekly*"));
+        assert_eq!(dialog.matches(&[]), 2);
+        assert_eq!(
+            dialog.headline("Meetings"),
+            "Waits for a Meetings window whose title starts with “Weekly”, the largest, and takes it here."
+        );
+        // The state has what is chosen, never the title, the id or the words.
+        let state = serde_json::to_string(&m).unwrap_or_default();
+        assert!(!state.contains("Weekly") && !state.contains("zm.meeting") && state.contains(r#""by":"title""#));
+        m.update(Action::SlotDialogKeep);
+        assert!(m.slot_dialog.is_none() && m.field().is_none());
+        assert_eq!(
+            m.slots.get(&1).map(|run| (run.slot.select.title.clone(), run.status, run.matching)),
+            Some((Some("Weekly*".into()), Status::Filled, Matching::Automatic))
+        );
+        // Opened again on the slot it edits: as the slot is.
         let Action::SlotWindows { look: again } = look(vec![seen(7, 1, "Weekly sync")]) else { return };
         m.update(Action::SlotDialogOpen { pane: 1, look: again });
-        assert_eq!(m.slot_dialog.as_ref().map(|d| (d.editing, d.by_title)), Some((true, true)));
-        m.update(Action::SlotClear { pane: 1 });
-        assert!(m.slots.is_empty() && m.slot_dialog.is_none(), "the foot's act closes it");
+        let dialog = m.slot_dialog.clone().unwrap_or_else(|| panic!("open"));
+        assert_eq!(
+            (dialog.editing, dialog.by, dialog.test, dialog.words.text()),
+            (true, By::Title, Test::StartsWith, "Weekly")
+        );
+        // A window with no id: any window of the app, the largest; Window id is no choice.
+        let mut m = Model::default();
+        m.update(Action::Open { kind: meetings(1, "Pane title"), axis: Right, beside: None });
+        let Action::SlotWindows { look: found } = look(vec![seen(7, 1, "Pricing review"), seen(7, 2, "Home")]) else {
+            return;
+        };
+        m.update(Action::SlotDialogOpen { pane: 1, look: found });
+        m.update(Action::SlotDialogSet { choice: Choice::By(By::Id) });
+        let dialog = m.slot_dialog.clone().unwrap_or_else(|| panic!("open"));
+        assert_eq!((dialog.has_id, dialog.by, dialog.pick), (false, By::Any, Pick::Largest));
+        assert_eq!(dialog.headline("Meetings"), "Waits for any Meetings window, the largest, and offers it here.");
+        m.update(Action::SlotDialogKeep);
+        assert_eq!(
+            m.slots.get(&1).map(|run| run.slot.words("Meetings")).as_deref(),
+            Some("Meetings · any window · the largest")
+        );
+    }
+
+    #[test]
+    fn a_title_glob_reads_back_as_its_test_and_words() {
+        assert_eq!(Test::read("*Incident*"), (Test::Contains, "Incident".into()));
+        assert_eq!(Test::read("Weekly*"), (Test::StartsWith, "Weekly".into()));
+        assert_eq!(Test::read("Weekly sync"), (Test::Is, "Weekly sync".into()));
+        assert_eq!(Test::read("*Q*review*"), (Test::Pattern, "*Q*review*".into()));
+        for test in [Test::Is, Test::Contains, Test::StartsWith] {
+            assert_eq!(Test::read(&test.glob("standup")), (test, "standup".into()));
+        }
     }
 
     /// Review: editing a slot keeps its own pattern and its hand-written `subrole`.
@@ -1515,8 +1753,9 @@ mod tests {
         let Action::SlotWindows { look: found } = look(vec![seen(7, 1, "Incident review 11/18")]) else { return };
         m.update(Action::SlotDialogOpen { pane: 2, look: found });
         m.update(Action::SlotDialogSet { choice: Choice::Matching(Matching::Automatic) });
-        let words = m.slot_dialog.as_ref().map(|d| d.slot().words("Meetings"));
-        assert_eq!(words.as_deref(), Some("Meetings · title matching “*incident*” · subrole AXStandardWindow"));
+        let words = m.slot_dialog.as_ref().map(|d| (d.test, d.slot().words("Meetings")));
+        let said = "Meetings · title matching “*incident*” · subrole AXStandardWindow";
+        assert_eq!(words, Some((Test::Contains, said.to_string())));
         m.update(Action::SlotDialogKeep);
         let run = &m.slots[&2];
         assert_eq!(

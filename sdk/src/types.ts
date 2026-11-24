@@ -1548,12 +1548,17 @@ export interface SlotRecord {
   matching?: "manual" | "automatic";
 }
 
-/** The slot dialog's rows: by the window's id, by its title, which when several match, and matching. */
+/**
+ * The slot dialog's choices: which windows (any, by the window's id, by title and its test), the
+ * kind, which when several match, and matching. Never a title, an id or a title rule's words.
+ */
 export interface SlotDialog {
   pane: PaneId;
   has_id: boolean;
-  by_id: boolean;
-  by_title: boolean;
+  by: "any" | "id" | "title";
+  test: "is" | "contains" | "starts_with" | "pattern";
+  has_kind: boolean;
+  by_kind: boolean;
   pick: "largest" | "smallest" | "any" | { display: number };
   matching: "manual" | "automatic";
   /** A slot already: the dialog edits it. */

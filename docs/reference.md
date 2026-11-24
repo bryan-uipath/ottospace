@@ -1295,17 +1295,20 @@ is resized unless you ask.
 ### Slots
 
 With the `slots` flag on, ⋯ in an app pane's header opens its menu, whose `Create slot…` keeps the
-pane as a slot: a pane that keeps its place and waits for a window you name. The dialog is a checklist made from the pane's window, each
-row a choice: App (fixed), `Window id is zm.meeting.window.main` (the app's own name for the window,
-shown when it has one, ticked then), `Title is “Weekly sync”`, which window when several match now
-(the largest, the smallest, on display N, any), and Matching: Manual (the default: it offers) or
-Automatic (it takes a window that opens while it waits, on the tab on show, never the one you are
-in). Its foot says what the slot will wait for, `Waits for: Zoom · window id zm.meeting.window.main`,
-and Keep (↵) makes it. A slot made from a dialog or panel (Zoom's popped-out meeting chat) waits for
-that kind (`subrole AXSystemDialog`); any other slot takes standard windows only. A title pattern
-(`*Incident*`) is written by hand in `layout.json`, under the pane's `slot.select.title`. ⋯ on a slot
-offers `Edit slot…` (the dialog, with Look Again (forget the windows passed over), Give Back the
-Window and Clear Slot at its foot) and `Clear slot`. The menu is the user's: ↓ ↑ ↵, Esc closes it.
+pane as a slot: a pane that keeps its place and waits for a window you name. The dialog says its
+rule in one line on top (`Waits for any Zoom window, the largest, and offers it here.`) and sets it
+in a form under it, each choice with how many of the app's windows open now it takes: Window (any
+window; the window id, the app's own name for it, when it has one; or the title), Title (is,
+contains or starts with, and the words: the window's whole title to begin with), Kind (for a
+dialog or panel: only that kind), Several (the largest, the smallest, the frontmost, display N),
+and When it opens: Offer it (O, the default) or Take it (T: a window that opens while it waits, on
+the tab on show, never the one you are in). Under them, the app's windows open now, those the rule
+takes ticked; the action row says how many match, and Keep slot (↵) makes it. × or Esc closes it.
+By default the rule is the window id when the window has one, else any window of the app, the
+largest. A title test is written as the glob `layout.json` keeps (`*Incident*`, `Weekly*`); a
+pattern written there by hand stays as it is. ⋯ on a slot offers `Edit slot…` (the dialog, with
+Save), `Offer again` (the windows passed over, while there are any), `Give back the window` (while
+it holds one) and `Clear slot`. The menu is the user's: ↓ ↑ ↵, Esc closes it.
 
 A slot that waits draws a dashed outline in its pane with its app's icon (kept by bundle id in
 `~/.ottospace/icons`, so it shows when the app is not running; a generic one without), `Waiting for a
