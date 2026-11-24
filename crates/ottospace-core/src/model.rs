@@ -1238,6 +1238,11 @@ pub enum Action {
     SessionsAtWork {
         found: Vec<Found>,
     },
+    /// The agent CLIs our terminal panes run, by their processes (`sessions::PaneAgent`): read by
+    /// the shell while a code city is on show, for its agents. No request of the socket sends it.
+    PaneAgents {
+        found: Vec<sessions::PaneAgent>,
+    },
     /// When the files of sessions that tasks were adopted from last changed: read by the shell
     /// while the Tasks section is closed, so those tasks follow their sessions all the same.
     SessionsSeen {
@@ -2770,6 +2775,7 @@ impl Action {
             | Action::SessionsSeen { .. }
             | Action::SessionsInPanes { .. }
             | Action::SessionsAtWork { .. }
+            | Action::PaneAgents { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionUnhide { .. }
@@ -3263,6 +3269,7 @@ impl Action {
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
             | Action::SessionsAtWork { .. }
+            | Action::PaneAgents { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionsInPanes { .. }
             | Action::SetHiddenSessions { .. }
@@ -4208,6 +4215,9 @@ pub struct Model {
     /// Of the sessions last read (Tasks or Repos open), those at work: for the checkouts' dots.
     #[serde(skip)]
     at_work: Vec<Found>,
+    /// The agent CLIs our terminal panes run, as last read (`PaneAgents`).
+    #[serde(skip)]
+    pane_agents: Vec<sessions::PaneAgent>,
     /// Sessions whose runners run in our terminal panes (`session_waits`), as last read.
     #[serde(skip)]
     in_panes: Vec<sessions::InPane>,
@@ -4543,6 +4553,7 @@ impl Default for Model {
             local_day: 0,
             found: Vec::new(),
             at_work: Vec::new(),
+            pane_agents: Vec::new(),
             in_panes: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
@@ -6665,6 +6676,7 @@ impl Model {
                 self.list_back(kept);
             }
             Action::SessionQuiet { ms } => self.session_quiet_ms = ms,
+            Action::PaneAgents { found } => self.pane_agents = found,
             Action::SessionsAtWork { found } => {
                 let kept = self.list_row();
                 // Not listed: the Elsewhere group and its actions see none of it.
@@ -11594,6 +11606,7 @@ mod tests {
         Action::SessionsSeen { .. },
         Action::SessionsInPanes { .. },
         Action::SessionsAtWork { .. },
+        Action::PaneAgents { .. },
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
         Action::SessionUnhide { .. },
@@ -11993,6 +12006,7 @@ mod tests {
             Action::SessionsSeen { seen: Vec::new() },
             Action::SessionsInPanes { found: Vec::new() },
             Action::SessionsAtWork { found: Vec::new() },
+            Action::PaneAgents { found: Vec::new() },
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
             Action::SessionUnhide { runner: text(), id: text() },

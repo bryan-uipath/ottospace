@@ -971,6 +971,13 @@ impl Workspace {
                         Floating { task: Some(task), key, colour, mono, title, at, busy, subagents }
                     }
                     // A session no task has: its runner's glyph, in the colour of work going on.
+                    // An agent CLI in a pane, by its process: its runner's glyph, no title of its own.
+                    Who::Pane { pane, runner } => {
+                        let spec = ottospace_core::runner::RunnerId::named(runner)?.spec();
+                        let (key, colour) = (format!("pane:{pane}"), theme::task(Group::Running));
+                        let (mono, title) = (spec.glyph.to_string(), spec.display.to_string());
+                        Floating { task: None, key, colour, mono, title, at, busy, subagents }
+                    }
                     Who::Session { runner, id, title } => {
                         let spec = ottospace_core::runner::RunnerId::named(runner)?.spec();
                         let title = title.unwrap_or(spec.display).to_string();

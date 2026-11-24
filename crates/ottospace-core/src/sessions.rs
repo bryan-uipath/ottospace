@@ -283,6 +283,15 @@ pub struct Card {
     pub hidden: bool,
 }
 
+/// An agent CLI that runs in one of our terminal panes, as the shell found its process (its
+/// program and working folder): no session file read, so no setting needed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PaneAgent {
+    pub pane: PaneId,
+    pub runner: String,
+    pub cwd: String,
+}
+
 /// A session as the shell read it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Found {

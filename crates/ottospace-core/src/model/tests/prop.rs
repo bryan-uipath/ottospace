@@ -26,7 +26,7 @@ use crate::progress;
 use crate::projects::Project;
 use crate::repos::{MAX_DIRS, RepoDir, RepoDirs, Worktree};
 use crate::row_menu::MenuOf;
-use crate::sessions::{Hidden, InPane, Link, Seen, WaitsFor};
+use crate::sessions::{Hidden, InPane, Link, PaneAgent, Seen, WaitsFor};
 use crate::sneak_apps;
 use crate::transcript::{Event as Said, Outcome, Text, View};
 use crate::workbook::{self, History, Workbook, WorkbookId};
@@ -1453,6 +1453,13 @@ const MAKERS: &[Make] = &[
     |g| {
         let found = (0..g.rng.below(3)).map(|_| g.found()).collect();
         Action::SessionsAtWork { found }
+    },
+    |g| {
+        let agent = |g: &mut Gen| {
+            let (runner, _) = g.session();
+            PaneAgent { pane: g.pane(), runner, cwd: g.repo_path() }
+        };
+        Action::PaneAgents { found: (0..g.rng.below(3)).map(|_| agent(g)).collect() }
     },
     |g| {
         let (runner, id) = g.session();
@@ -6531,6 +6538,7 @@ fn code(sent: &Envelope) -> String {
         "Found",
         "Seen",
         "InPane",
+        "PaneAgent",
         "Hidden",
         "Link",
         "Target",
