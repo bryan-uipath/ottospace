@@ -366,13 +366,18 @@ fn user(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
     // What is left is a prompt, unless Claude Code wrote it itself (`isMeta`, a compaction summary).
     let written = content.is_string() || !blocks.is_empty();
     if results.is_empty() && written && record["isMeta"] != true && record["isCompactSummary"] != true {
-        let typed = content.as_str().map(str::to_string).unwrap_or_else(|| texts(blocks));
-        match cursor.words && !typed.trim().is_empty() {
-            true => emit(What::Words { user: true, text: ottospace_core::transcript::Text::new(&typed) }),
-            false => emit(What::UserMessage),
-        }
+        let typed = || content.as_str().map(str::to_string).unwrap_or_else(|| texts(blocks));
+        // Claude Code's own records as a user's (a slash command, its output, bash mode, an
+        // interrupt): a message, never words the user wrote.
+        let own = |text: &str| OWN.iter().any(|mark| text.trim_start().starts_with(mark));
+        let said =
+            cursor.said(true, typed).filter(|what| !matches!(what, What::Words { text, .. } if own(text.text())));
+        emit(said.unwrap_or(What::UserMessage));
     }
 }
+
+/// How Claude Code's own records written as the user's begin.
+const OWN: [&str; 4] = ["<command-", "<local-command-", "<bash-", "[Request interrupted"];
 
 /// The text blocks of a message's content, one after another: not a picture, call or thinking.
 fn texts(blocks: &[Value]) -> String {
@@ -415,11 +420,13 @@ fn assistant(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
         }
     }
     let blocks = message["content"].as_array().map(Vec::as_slice).unwrap_or_default();
-    let said = texts(blocks);
-    if cursor.words && !said.trim().is_empty() {
-        emit(What::Words { user: false, text: ottospace_core::transcript::Text::new(&said) });
-    }
     for block in blocks {
+        // Each text block where it is, as a live chat shows it: a reply, a call, a reply.
+        if block["type"] == "text"
+            && let Some(said) = cursor.said(false, || block["text"].as_str().unwrap_or_default().to_string())
+        {
+            emit(said);
+        }
         let (Some("tool_use"), Some(id), Some(tool)) =
             (block["type"].as_str(), id_of(&block["id"]), block["name"].as_str())
         else {
@@ -667,6 +674,34 @@ mod tests {
         assert_eq!(read(Cursor::with_edits()), (vec![], 1));
         let words = vec![(true, "secret prompt".to_string()), (false, "secret reply".to_string())];
         assert_eq!(read(Cursor::with_words()), (words, 0), "in place of the marker; no thought");
+        // Claude Code's own records written as the user's: a message, never the user's words.
+        for own in [
+            "<command-name>/model</command-name>",
+            "<local-command-stdout>Set</local-command-stdout>",
+            "<bash-input>ls</bash-input>",
+            "[Request interrupted by user]",
+        ] {
+            let record = serde_json::json!({ "type": "user", "message": { "content": own } });
+            let (mut cursor, mut events) = (Cursor::with_words(), Vec::new());
+            record_events(&record, false, &mut cursor, &mut events);
+            assert_eq!(events.into_iter().map(|e| e.what).collect::<Vec<_>>(), [What::UserMessage], "{own}");
+        }
+        // A reply, a call, a reply: in that order, as a live chat shows them.
+        let blocks = serde_json::json!([{ "type": "text", "text": "before" },
+            { "type": "tool_use", "id": "t", "name": "Read", "input": { "file_path": "/w/a.rs" } },
+            { "type": "text", "text": "after" }]);
+        let record = serde_json::json!({ "type": "assistant", "message": { "id": "m2", "content": blocks } });
+        let (mut cursor, mut events) = (Cursor::with_words(), Vec::new());
+        record_events(&record, false, &mut cursor, &mut events);
+        let order: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match &e.what {
+                What::Words { text, .. } => Some(text.text()),
+                What::ToolStart { .. } => Some("call"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, ["before", "call", "after"]);
     }
 
     #[test]

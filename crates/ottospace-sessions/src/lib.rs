@@ -130,6 +130,13 @@ impl Cursor {
     pub fn with_words() -> Self {
         Self { words: true, ..Self::with_edits() }
     }
+
+    /// What `text` gives this cursor: its words if it asks for them and there are some, else
+    /// `None` (a user's message is then the marker). The one gate for `What::Words`.
+    fn said(&self, user: bool, text: impl FnOnce() -> String) -> Option<What> {
+        let text = self.words.then(text).filter(|text| !text.trim().is_empty())?;
+        Some(What::Words { user, text: ottospace_core::transcript::Text::new(&text) })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
