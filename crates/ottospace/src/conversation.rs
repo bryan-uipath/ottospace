@@ -2061,7 +2061,9 @@ impl Workspace {
         if let Some((body, show)) = context {
             parts.push(match open {
                 true => div().flex_shrink().min_h_0().flex().flex_col().px_3().pt_2().child(body),
-                false => part(body.into_any_element()),
+                // Folded, its context gives way first when the card is short of room (a small
+                // window): Show all, the question and the foot stay on show.
+                false => div().flex_shrink().min_h(px(18.)).overflow_hidden().px_3().pt_2().child(body),
             });
             parts.extend(show.map(|show| div().flex_none().px_3().pt_1().child(show)));
         }

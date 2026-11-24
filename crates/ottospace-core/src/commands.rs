@@ -72,7 +72,7 @@ macro_rules! commands {
                     (Command::ZoomOut, _) => Some(Feature::ZoomOut),
                     (Command::Decisions, _) => Some(Feature::Decisions),
                     (Command::WeekFocus, _) => Some(Feature::DecisionSources),
-                    (Command::QuickNote, _) => Some(Feature::OverlayPanels),
+                    (Command::QuickNote | Command::DrawerWide, _) => Some(Feature::OverlayPanels),
                     (Command::AgentMenu | Command::AgentOff | Command::AgentSee | Command::AgentAct, _) => {
                         Some(Feature::AgentMode)
                     }
@@ -129,6 +129,7 @@ commands! {
     TalkFocus: "Type in the Conversation", Tasks;
     EditMessage: "Edit Message in Editor", Tasks;
     DrawerToggle: "Open or Collapse the Drawer", Tasks;
+    DrawerWide: "Pull the Drawer Out or Back", Tasks;
     StopAgent: "Stop the Agent", Tasks;
     DialToggle: "Toggle Agent Dial", Tasks;
     SaveWorkbook: "Save Tab as Workspace", Workbook;

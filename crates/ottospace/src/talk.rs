@@ -415,6 +415,7 @@ impl Workspace {
                 _ => return true,
             },
             ("talk", "talk-close", _) => Action::TalkToggle,
+            ("talk", "talk-wide", _) => Action::TalkWide,
             // The native conversation's buttons: the core says who may.
             ("talk", "chat-allow" | "chat-deny" | "chat-show-all", _) => {
                 let shown = self.model.shown_chat().and_then(|chat| chat.transcript.cards.front());
@@ -752,35 +753,41 @@ impl Workspace {
         });
         // The agent goes on, its rail item with it.
         let close = self.drawer_collapse("talk:talk-close", cx);
-        // As high as the top row above it.
-        let header = div()
-            .h(px(crate::TOP_BAR))
-            .flex_none()
-            .pl_3()
-            .pr_1()
+        // Its own row: the title in full, on two lines at most, the rest on hover with the facts.
+        let tip: gpui::SharedString = match facts.is_empty() {
+            true => title.clone().into(),
+            false => format!("{title}\n{facts}").into(),
+        };
+        let title_row = div()
             .flex()
-            .items_center()
+            .items_start()
             .gap_2()
-            .border_b_1()
-            .border_color(rgb(theme::BORDER))
+            .pt_1p5()
             .child(match shown.and_then(|task| self.task_badge(task.id, 18.)) {
                 Some(badge) => badge,
                 None => home::dot(color),
             })
             .children(self.dial_marker(subject, cx))
-            // Model, mode, time and folder are on its hover; the model is at the drawer's foot too.
             .child(
                 div()
                     .id("talk-title")
                     .flex_1()
-                    .min_w(px(72.))
-                    .truncate()
+                    .min_w_0()
                     .text_sm()
+                    .line_height(px(18.))
+                    // Two lines at most, also of a title with line breaks in it.
+                    .max_h(px(36.))
+                    .line_clamp(2)
+                    .text_ellipsis()
                     .child(title)
-                    .when(!facts.is_empty(), |d| {
-                        d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(facts.clone()))))
-                    }),
-            )
+                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
+            );
+        // Under it, what can be done, the slide buttons last.
+        let controls = div()
+            .h(px(32.))
+            .flex()
+            .items_center()
+            .gap_2()
             // Where it runs, only when that is not its task's own folder: what it can see.
             .children(line.folder.map(|folder| {
                 let tip: gpui::SharedString = format!("The agent runs in {folder}").into();
@@ -797,7 +804,19 @@ impl Workspace {
             .children(adopt)
             .children(stop)
             .children(self.finish_buttons(subject, cx))
+            .child(div().flex_1())
+            .children(self.drawer_pull_button(cx))
             .child(close);
+        let header = div()
+            .flex_none()
+            .pl_3()
+            .pr_1()
+            .flex()
+            .flex_col()
+            .border_b_1()
+            .border_color(rgb(theme::BORDER))
+            .child(title_row)
+            .child(controls);
         Some(header.id("drawer-head"))
     }
 
@@ -963,7 +982,9 @@ impl Workspace {
         };
         let edge = div().id("drawer-edge").absolute().top_0().bottom_0().left(px(-3.)).w(px(6.));
         let edge = edge.cursor(CursorStyle::ResizeLeftRight).on_drag(DraggedEdge, |_, _, _, cx| cx.new(|_| EmptyView));
-        Some(div().relative().flex_none().h_full().flex().child(drawer).child(edge).into_any_element())
+        // Pulled out, its edge is not dragged: the width it goes back to stays as it was.
+        let edge = (!self.model.talk_pulled()).then_some(edge);
+        Some(div().relative().flex_none().h_full().flex().child(drawer).children(edge).into_any_element())
     }
 
     /// The drawer's edge dragged to `x` in the window: its width is what lies right of it.

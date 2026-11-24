@@ -159,9 +159,9 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                     item("Type in the Conversation", TalkFocus),
                     item("Edit Message in Editor", EditMessage),
                     item("Open or Collapse the Drawer", TalkToggle),
-                    item("Stop the Agent", StopAgent),
-                    item("Toggle Agent Dial", DialToggle),
                 ])
+                .chain(quick.then(|| item("Pull the Drawer Out or Back", TalkWide)))
+                .chain([item("Stop the Agent", StopAgent), item("Toggle Agent Dial", DialToggle)])
                 .collect(),
         },
         Menu {

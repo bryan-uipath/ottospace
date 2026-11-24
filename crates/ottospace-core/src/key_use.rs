@@ -47,6 +47,8 @@ pub enum Binding {
     TalkFocus,
     /// ⌘⇧R. `talk_toggle` was ⌘⇧L's: its count is of the old key, so it is not read.
     DrawerToggle,
+    /// ⌘⌥R, the drawer pulled out over the panes (`overlay_panels`).
+    DrawerWide,
     SidebarToggle,
     DialToggle,
     SpaceNumber,
@@ -100,6 +102,7 @@ pub const ALL: &[Binding] = &[
     Binding::NextNeedsYou,
     Binding::TalkFocus,
     Binding::DrawerToggle,
+    Binding::DrawerWide,
     Binding::SidebarToggle,
     Binding::DialToggle,
     Binding::SpaceNumber,
@@ -152,6 +155,7 @@ impl Binding {
             Binding::NextNeedsYou => &[C::NextNeedsYou],
             Binding::TalkFocus => &[C::TalkFocus],
             Binding::DrawerToggle => &[C::DrawerToggle],
+            Binding::DrawerWide => &[C::DrawerWide],
             Binding::SidebarToggle => &[C::SidebarToggle],
             Binding::DialToggle => &[C::DialToggle],
             Binding::NextSpace => &[C::NextSpace, C::PrevSpace],
@@ -222,6 +226,7 @@ impl Binding {
             | B::NextNeedsYou
             | B::TalkFocus
             | B::DrawerToggle
+            | B::DrawerWide
             | B::DialToggle
             | B::CaptureKey
             | B::Transcribe
@@ -264,6 +269,7 @@ impl Binding {
             B::NextNeedsYou => "What needs you next",
             B::TalkFocus => "Type to the agent",
             B::DrawerToggle => "Collapse / open drawer",
+            B::DrawerWide => "Pull drawer out over the panes / back",
             B::SidebarToggle => "Collapse / open sidebar",
             B::DialToggle => "Open / close agent dial",
             B::SpaceNumber => "Go to tab group",

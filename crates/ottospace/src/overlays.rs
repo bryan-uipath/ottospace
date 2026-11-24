@@ -67,9 +67,40 @@ pub(crate) struct Slides {
     pub(crate) ghost: Option<Kept>,
     /// The open drawer's width, kept while it slides back: a fold closes the btw column that widened it.
     inner: f32,
+    /// The drawer pulled out or back: its width then and since when, eased to the new one.
+    /// `pulled`: as last drawn, so a change starts it.
+    grow: Option<(f32, Instant)>,
+    pulled: bool,
+    drawn_width: f32,
 }
 
 impl Slides {
+    /// The drawer's width this frame, on its way to `to`: eased from where it was when it was
+    /// pulled out or back (`pulled` changed), at once under Reduce Motion (`calm`) or for any other
+    /// change (a drag of its edge, the window). True while it moves: the caller asks for a frame.
+    pub(crate) fn drawer_width(&mut self, to: f32, pulled: bool, calm: bool) -> (f32, bool) {
+        let now = Instant::now();
+        if pulled != self.pulled {
+            self.pulled = pulled;
+            self.grow = (!calm && self.drawn_width > 0.).then_some((self.drawn_width, now));
+        }
+        let width = match self.grow {
+            Some((from, since)) => {
+                let t = slide((now - since).as_secs_f32() * 1000., SLIDE_MS);
+                if t >= 1. {
+                    self.grow = None;
+                }
+                from + (to - from) * t
+            }
+            None => to,
+        };
+        self.drawn_width = width;
+        if self.grow.is_some() {
+            self.frames += 1;
+        }
+        (width, self.grow.is_some())
+    }
+
     /// Whether that side is open in the model, not only drawn sliding back.
     fn open(&self, left: bool) -> bool {
         if left { self.left.opening } else { self.right.opening }

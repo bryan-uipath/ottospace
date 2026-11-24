@@ -86,6 +86,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::TalkFocus => Box::new(TalkFocus),
         Command::EditMessage => Box::new(EditMessage),
         Command::DrawerToggle => Box::new(TalkToggle),
+        Command::DrawerWide => Box::new(TalkWide),
         Command::SidebarToggle => Box::new(SidebarToggle),
         Command::StopAgent => Box::new(StopAgent),
         Command::DialToggle => Box::new(DialToggle),

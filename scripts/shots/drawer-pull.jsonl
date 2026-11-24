@@ -1,0 +1,16 @@
+# The drawer as an overlay (`overlay_panels`): its title on a row of its own over its controls,
+# then pulled out over the panes by its |←, an edge of them showing, and back by ⌘⌥R.
+{"env":{"OTTOSPACE_FEATURES":"overlay_panels","OTTOSPACE_REDUCE_MOTION":"1"}}
+{"cmd":"split"}
+{"cmd":"task_new","line":"a made-up task whose title is long enough to want a row of its own >app"}
+{"click":"rail:tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.replies","len":1}
+{"shot":"header"}
+{"click":"talk:talk-wide"}
+{"until":"state.talk_wide","is":true}
+{"shot":"pulled"}
+{"cmd":"key","keys":"cmd-alt-r","as":"user"}
+{"until":"state.talk_wide","is":false}
+{"shot":"back"}
