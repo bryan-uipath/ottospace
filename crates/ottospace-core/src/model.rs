@@ -5062,6 +5062,10 @@ impl Model {
             // So is the composer's text: what ↵ sends must be the user's own words.
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "talk") => Some(chat::USERS_ALONE),
             Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "btw") => Some(btw::USERS_ALONE),
+            // A slot's rule is the user's.
+            Action::FieldEdit { .. } if self.field().is_some_and(|(of, _)| of == "slot") => {
+                Some(crate::slot::USERS_ALONE)
+            }
             // Only the shell's runner reports events (System); a client never does.
             // Only the shell's runner reports an agent's events (a user's is dropped in `chat_act`).
             Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
@@ -6350,6 +6354,7 @@ impl Model {
                 }
                 Some("bug") => drop(self.bug.as_mut().and_then(crate::bug::Report::comment_mut).map(|f| f.apply(edit))),
                 Some("apps") => drop(self.app_lists.filter.apply(edit)),
+                Some("slot") => drop(self.slot_dialog.as_mut().map(|dialog| dialog.words.apply(edit))),
                 Some("talk") => self.talk_edit(edit),
                 Some("btw") => self.btw_edit(edit),
                 Some(_) => {
@@ -10037,6 +10042,9 @@ impl Model {
     /// The text field that is open, and whose it is: a mark's name being typed, the picker's
     /// filter, else the new-task box. It may be under the key reference or the quit question: see `field`.
     pub fn open_field(&self) -> Option<(&'static str, &Field)> {
+        if let Some(words) = self.slot_words() {
+            return Some(("slot", words));
+        }
         match &self.mark_input {
             Some(MarkInput::Rename { text, .. }) => return Some(("mark", text)),
             Some(MarkInput::Workbook { text, .. }) => return Some(("workbook", text)),
@@ -10068,6 +10076,7 @@ impl Model {
             "talk" => self.talk_draft(),
             "btw" => self.btw_field(),
             "apps" => Some(&self.app_lists.filter),
+            "slot" => self.slot_words(),
             "mark" => match &self.mark_input {
                 Some(MarkInput::Rename { text, .. }) => Some(text),
                 _ => None,
@@ -10087,6 +10096,10 @@ impl Model {
     /// The open text field, if it has the keyboard: keys, the clipboard and the input method
     /// edit it. Not while the key reference, the quit question or sneak mode is over it.
     pub fn field(&self) -> Option<(&'static str, &Field)> {
+        // The slot dialog's title words, while its rule is by title: over all else.
+        if let Some(words) = self.slot_words() {
+            return (!self.keys).then_some(("slot", words));
+        }
         // Each field in its own mode: the Apps section's filter in list mode, a mark's name
         // while it is typed, a note on a capture in annotate mode. A mark that waits for a
         // letter is over the filter, not in it.
@@ -12030,7 +12043,7 @@ mod tests {
             Action::AppUsed { task: 1, pane: 1, what: crate::agent_mode::AppUse::Read, refused: None, at: 0 },
             Action::SlotMake { pane: 1, pid: 1, slot: crate::slot::Slot::default() },
             Action::SlotDialogOpen { pane: 1, look: crate::slot::Look::default() },
-            Action::SlotDialogSet { choice: slots::Choice::ById(true) },
+            Action::SlotDialogSet { choice: slots::Choice::By(slots::By::Any) },
             Action::SlotDialogClose,
             Action::SlotDialogKeep,
             Action::SlotClear { pane: 1 },

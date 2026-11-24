@@ -1,18 +1,23 @@
-# Slots on screen (`slots` flag): ⋯'s menu, the dialog made from the pane's window, the filled slot's `slot`
+# Slots on screen (`slots` flag): ⋯'s menu, the dialog made from the pane's window (by its id, then
+# by title, starting with "Weekly"), the filled slot's `slot`
 # mark, the slot waiting and saying what for, and offering a window that matches. A test run hosts
 # no window: `app_fixture` makes the pane, `slot_windows` is what a look at the app found.
 {"env":{"OTTOSPACE_FEATURES":"slots"}}
 {"cmd":"app_fixture","name":"Meetings","user":true}
-{"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":0,"window":900000,"title":"Weekly sync","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
+{"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":0,"window":900000,"title":"Weekly sync","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}},{"pid":0,"window":900002,"title":"Weekly planning","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":640,"h":480}},{"pid":0,"window":900003,"title":"Home","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":400,"h":300}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
 {"click":"slot-dots:1"}
 {"shot":"menu"}
 {"click":"row-menu:0"}
 {"shot":"dialog"}
+{"click":"slot-dialog:by-title"}
+{"click":"slot-dialog:starts-with"}
+{"cmd":"key","keys":"backspace backspace backspace backspace backspace","as":"user"}
+{"shot":"dialog-title"}
 {"click":"slot-dialog:keep"}
 {"shot":"filled"}
 {"click":"slot-dots:1"}
-{"click":"row-menu:0"}
-{"click":"slot-dialog:give-back"}
+{"shot":"menu-filled"}
+{"click":"row-menu:1"}
 {"shot":"waiting"}
 {"cmd":"slot_windows","look":{"name":"Meetings","running":true,"windows":[{"pid":0,"window":700001,"title":"Weekly sync","identifier":"meetings.window.main","subrole":"AXStandardWindow","frame":{"x":0,"y":0,"w":900,"h":700}}],"displays":[{"x":0,"y":0,"w":1920,"h":1080}]}}
 {"shot":"offered"}

@@ -6,7 +6,8 @@
 //! row (Keep), the drawer's transcript header (its ⋯: Pause or Resume), and a linked worktree's
 //! row of the Repos section (a right click: Delete worktree…), and the Repos section's + (Local
 //! folder…, From GitHub…), and an app pane's or a slot's ⋯ (`slots` on: Create slot…, or Edit
-//! slot… and Clear slot); another row gets one by naming its items in `row_items`.
+//! slot…, Offer again, Give back the window and Clear slot); another row gets one by naming its
+//! items in `row_items`.
 
 use serde::Serialize;
 
@@ -40,8 +41,11 @@ pub enum Item {
     FromGitHub,
     /// An app pane's ⋯: the slot dialog, to keep this place for its app's windows.
     SlotKeep,
-    /// A slot's ⋯: the dialog on its rule (Look Again and Give Back at its foot), or Clear Slot.
+    /// A slot's ⋯: the dialog on its rule; the windows passed over offered again (while there
+    /// are any); its window given back (while filled); or Clear slot.
     SlotEdit,
+    SlotLookAgain,
+    SlotGiveBack,
     SlotClear,
 }
 
@@ -59,6 +63,8 @@ impl Item {
             Item::FromGitHub => "From GitHub…",
             Item::SlotKeep => "Create slot…",
             Item::SlotEdit => "Edit slot…",
+            Item::SlotLookAgain => "Offer again",
+            Item::SlotGiveBack => "Give back the window",
             Item::SlotClear => "Clear slot",
         }
     }
@@ -90,6 +96,9 @@ pub struct RowMenu {
     pub row: MenuOf,
     pub selected: Option<usize>,
     pub dots: Option<Rect>,
+    /// Its items when it opened: a change under it (a slot's Offer again going) closes it, so
+    /// the keys' place never lands on another item.
+    pub items: &'static [Item],
 }
 
 /// What a row's menu offers, in order. None: the row has no menu.
@@ -135,11 +144,19 @@ impl Model {
             MenuOf::ReposAdd => &[Item::LocalFolder, Item::FromGitHub],
             MenuOf::Pane(_) if !self.features.on(Feature::Slots) => &[],
             // A slot's acts; an app pane's: keep it as one.
-            MenuOf::Pane(id) => match (self.pane(*id).map(|pane| &pane.kind), self.slots.contains_key(id)) {
-                (Some(Kind::App { .. }), false) => &[Item::SlotKeep],
-                (Some(Kind::App { .. } | Kind::Slot { .. }), _) => &[Item::SlotEdit, Item::SlotClear],
-                _ => &[],
-            },
+            MenuOf::Pane(id) => {
+                let passed = self.slots.get(id).is_some_and(|run| !run.declined.is_empty());
+                match (self.pane(*id).map(|pane| &pane.kind), self.slots.contains_key(id), passed) {
+                    (Some(Kind::App { .. }), false, _) => &[Item::SlotKeep],
+                    (Some(Kind::App { .. }), true, true) => {
+                        &[Item::SlotEdit, Item::SlotLookAgain, Item::SlotGiveBack, Item::SlotClear]
+                    }
+                    (Some(Kind::App { .. }), true, false) => &[Item::SlotEdit, Item::SlotGiveBack, Item::SlotClear],
+                    (Some(Kind::Slot { .. }), _, true) => &[Item::SlotEdit, Item::SlotLookAgain, Item::SlotClear],
+                    (Some(Kind::Slot { .. }), _, false) => &[Item::SlotEdit, Item::SlotClear],
+                    _ => &[],
+                }
+            }
             // One decision with the palette's and the menu bar's (`listen_pause_action`).
             MenuOf::Transcript => match self.listen_pause_action(0).filter(|_| self.listen.shown) {
                 Some(Action::ListenPause { .. }) => &[Item::Pause],
@@ -169,7 +186,8 @@ impl Model {
         let open = self.row_menu.take().is_some_and(|menu| menu.row == row);
         let listed = self.menu_there(&row);
         let selected = (keys || row == MenuOf::ReposAdd).then_some(0);
-        self.row_menu = (!open && listed).then_some(RowMenu { row, selected, dots });
+        let items = self.menu_items(&row);
+        self.row_menu = (!open && listed).then_some(RowMenu { row, selected, dots, items });
     }
 
     /// The … of the open menu as last drawn. Elsewhere than when it opened (a row above came or
@@ -218,6 +236,8 @@ impl Model {
                 return Some(Action::SlotDialogOpen { pane: *pane, look: crate::slot::Look::default() });
             }
             (MenuOf::Pane(pane), Item::SlotClear) => return Some(Action::SlotClear { pane: *pane }),
+            (MenuOf::Pane(pane), Item::SlotLookAgain) => return Some(Action::SlotLookAgain { pane: *pane }),
+            (MenuOf::Pane(pane), Item::SlotGiveBack) => return Some(Action::SlotGiveBack { pane: *pane }),
             (MenuOf::Row(ListRow::Workbook(id)) | MenuOf::Space(id), _) => (*id, None),
             (MenuOf::Row(ListRow::WorkbookTab(id, at)), _) => (*id, Some(*at)),
             _ => return None,
@@ -249,7 +269,9 @@ impl Model {
             Action::CloneOpen => self.clone_open(effects),
             // The shell opens the dialog with its look; the core only closed the menu.
             Action::SlotDialogOpen { .. } => {}
-            action @ Action::SlotClear { .. } => self.slot_act(action, effects),
+            action @ (Action::SlotClear { .. } | Action::SlotLookAgain { .. } | Action::SlotGiveBack { .. }) => {
+                self.slot_act(action, effects)
+            }
             _ => {}
         }
     }
@@ -257,7 +279,11 @@ impl Model {
     /// After every step: the menu is of a row the open section lists, or of the transcript shown,
     /// and offers something.
     pub(crate) fn settle_row_menu(&mut self) {
-        if self.row_menu.as_ref().is_some_and(|menu| !self.menu_there(&menu.row)) {
+        if self
+            .row_menu
+            .as_ref()
+            .is_some_and(|menu| !self.menu_there(&menu.row) || self.menu_items(&menu.row) != menu.items)
+        {
             self.row_menu = None;
         }
     }
@@ -535,7 +561,8 @@ mod tests {
     }
 
     /// A pane's ⋯ is a menu, the user's alone: an app pane's Create slot… (the dialog), a slot's
-    /// Edit slot… (the dialog) and Clear slot. Nothing with `slots` off.
+    /// Edit slot… (the dialog), Offer again, Give back the window and Clear slot. Nothing with
+    /// `slots` off.
     #[test]
     fn a_panes_dots_offer_its_slot_acts_by_what_it_is() {
         let app = Kind::App { window: 1, title: "SECRET".into(), bundle: None, name: "Zoom".into() };
@@ -553,12 +580,24 @@ mod tests {
         assert_eq!(m.refusal(&Action::RowMenuChoose { index: None }, Origin::Socket), Some(crate::slot::USERS_ALONE));
         m.update(Action::RowMenuChoose { index: None });
         assert!(m.row_menu.is_none());
-        // A filled slot, then one that waits: Edit slot… and Clear slot.
+        // A filled slot: Edit slot…, Give back the window, Clear slot.
         m.update(Action::SlotMake { pane: 1, pid: 7, slot: crate::slot::Slot::default() });
-        assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotClear]);
+        assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotGiveBack, Item::SlotClear]);
         assert_eq!(m.row_menu_action(None), Some(dialog));
-        m.update(Action::RowMenuClose);
-        m.update(Action::SlotGiveBack { pane: 1 });
+        m.update(Action::RowMenuChoose { index: Some(1) });
+        assert_eq!(m.pane(1).map(|p| matches!(p.kind, Kind::Slot { .. })), Some(true), "given back");
+        // Waiting, its window passed over: Offer again forgets that, and leaves the menu. Its
+        // items changing under it (the window closed: passed over no more) close it.
+        assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotLookAgain, Item::SlotClear]);
+        m.slots.get_mut(&1).map(|run| run.declined.clear());
+        m.update(Action::RowMenuMove { delta: 1 });
+        assert!(m.row_menu.is_none(), "closed, not on Clear slot");
+        assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotClear]);
+        m.slots.get_mut(&1).map(|run| run.declined.insert(1));
+        m.update(Action::RowMenuMove { delta: 1 });
+        assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotLookAgain, Item::SlotClear]);
+        m.update(Action::RowMenuChoose { index: Some(1) });
+        assert!(m.slots[&1].declined.is_empty());
         assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotClear]);
         m.update(Action::RowMenuChoose { index: Some(1) });
         assert!(m.slots.is_empty() && m.pane(1).is_some_and(|p| p.kind == Kind::Empty), "cleared");

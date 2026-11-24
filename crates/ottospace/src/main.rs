@@ -1086,6 +1086,7 @@ struct Workspace {
     apps_field: field::Shared,
     mark_field: field::Shared,
     inspector_field: field::Shared,
+    slot_field: field::Shared,
     btw_field: field::Shared,
     /// What is held of each capture of the draft in the bar, by its number.
     shots: HashMap<u32, collect::Shot>,
@@ -1851,6 +1852,7 @@ impl Workspace {
             apps_field: field::Shared::default(),
             mark_field: field::Shared::default(),
             inspector_field: field::Shared::default(),
+            slot_field: field::Shared::default(),
             btw_field: field::Shared::default(),
             shots: HashMap::new(),
             annotate_at: Rc::default(),
@@ -5274,10 +5276,15 @@ impl Workspace {
         }
         // A row's open menu takes the user's plain keys: its own, and any other closes it.
         let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
-        // The slot dialog: ↵ keeps, Esc closes, other keys wait.
-        if plain && self.model.sneak.is_none() && self.slot_dialog_key(&key.key, window, cx) {
-            cx.stop_propagation();
-            return;
+        // The slot dialog: ↵ keeps, Esc closes, its letters choose, its title words type (⌥ and ⌃ edit
+        // them); other keys wait. ⌘ shortcuts go to their bindings.
+        if !key.modifiers.platform && self.model.sneak.is_none() {
+            match self.slot_dialog_key(event, window, cx) {
+                Some(true) => return cx.stop_propagation(),
+                // Text: the input method types it into the title words.
+                Some(false) => return,
+                None => {}
+            }
         }
         if plain && self.model.sneak.is_none() && self.agent_menu_key(&key.key, window, cx) {
             cx.stop_propagation();

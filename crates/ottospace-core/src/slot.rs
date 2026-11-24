@@ -37,8 +37,8 @@ pub struct Slot {
 }
 
 impl Slot {
-    /// What it waits for, in the dialog's words: `Zoom · window id zm.meeting.window.main`,
-    /// `Zoom · title “Weekly sync” · the largest`. Only `app`: any window of it.
+    /// What it waits for, as its pane says it: `Zoom · window id zm.meeting.window.main`,
+    /// `Zoom · title is “Weekly sync” · the largest`. Only `app`: any window of it.
     pub fn words(&self, app: &str) -> String {
         let select = &self.select;
         let mut words = vec![app.to_string()];
@@ -46,22 +46,74 @@ impl Slot {
             true => "no window id".to_string(),
             false => format!("window id {id}"),
         }));
-        // A pattern written by hand in layout.json says so.
-        words.extend(select.title.as_ref().map(|t| match t.contains('*') {
-            true => format!("title matching “{t}”"),
-            false => format!("title “{t}”"),
+        // As the dialog's form says it: `title contains “Incident”`.
+        words.extend(select.title.as_ref().map(|t| {
+            let (test, words) = Test::read(t);
+            format!("title {} “{words}”", test.label())
         }));
         words.extend(select.subrole.as_ref().map(|subrole| format!("subrole {subrole}")));
         if words.len() == 1 {
             words.push("any window".into());
         }
-        words.extend(match self.pick {
-            Pick::Largest => Some("the largest".to_string()),
-            Pick::Smallest => Some("the smallest".to_string()),
+        words.extend(self.pick.words());
+        words.join(" · ")
+    }
+}
+
+/// A title rule's test: written as the glob the selector reads (`rules::glob`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Test {
+    Is,
+    Contains,
+    StartsWith,
+    /// A pattern written by hand in `layout.json`, kept as it is: `*Q? review*2026`.
+    Pattern,
+}
+
+impl Test {
+    /// The glob of `words` under this test: `Weekly`, `*Weekly*`, `Weekly*`.
+    pub fn glob(self, words: &str) -> String {
+        match self {
+            Test::Is | Test::Pattern => words.to_string(),
+            Test::Contains => format!("*{words}*"),
+            Test::StartsWith => format!("{words}*"),
+        }
+    }
+
+    /// A glob read back as a test and its words: `*Incident*` contains `Incident`.
+    pub fn read(glob: &str) -> (Test, String) {
+        let inner = |s: &str| !s.contains('*');
+        match glob.strip_prefix('*').and_then(|g| g.strip_suffix('*')) {
+            Some(words) if inner(words) && !words.is_empty() => return (Test::Contains, words.into()),
+            _ => {}
+        }
+        match glob.strip_suffix('*') {
+            Some(words) if inner(words) && !words.is_empty() => (Test::StartsWith, words.into()),
+            _ if inner(glob) => (Test::Is, glob.into()),
+            _ => (Test::Pattern, glob.into()),
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Test::Is => "is",
+            Test::Contains => "contains",
+            Test::StartsWith => "starts with",
+            Test::Pattern => "matches",
+        }
+    }
+}
+
+impl Pick {
+    /// Which of several, in words: `the largest`. None for any.
+    pub fn words(self) -> Option<String> {
+        match self {
+            Pick::Largest => Some("the largest".into()),
+            Pick::Smallest => Some("the smallest".into()),
             Pick::Display(n) => Some(format!("on display {n}")),
             Pick::Any => None,
-        });
-        words.join(" · ")
+        }
     }
 }
 
@@ -265,9 +317,11 @@ mod tests {
         let by_id = slot(r#"{"select": {"identifier": "zm.meeting.window.main"}}"#);
         assert_eq!(by_id.words("Zoom"), "Zoom · window id zm.meeting.window.main");
         let titled = slot(r#"{"select": {"title": "Weekly sync"}, "pick": "largest"}"#);
-        assert_eq!(titled.words("Zoom"), "Zoom · title “Weekly sync” · the largest");
+        assert_eq!(titled.words("Zoom"), "Zoom · title is “Weekly sync” · the largest");
         let pattern = slot(r#"{"select": {"title": "*Incident*"}, "pick": {"display": 2}}"#);
-        assert_eq!(pattern.words("Meetings"), "Meetings · title matching “*Incident*” · on display 2");
+        assert_eq!(pattern.words("Meetings"), "Meetings · title contains “Incident” · on display 2");
+        let hand = slot(r#"{"select": {"title": "*Q*review"}}"#);
+        assert_eq!(hand.words("Meetings"), "Meetings · title matches “*Q*review”");
         assert_eq!(Slot::default().words("Zoom"), "Zoom · any window");
         let no_id = slot(r#"{"select": {"identifier": ""}}"#);
         assert_eq!(no_id.words("Zoom"), "Zoom · no window id");

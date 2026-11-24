@@ -17198,7 +17198,7 @@ fn offered_windows_of_one_title_are_told_apart_in_the_offer_list() {
     assert!(!said.contains("SECRET") && !said.contains("1280×800") && !said.contains("400×600"), "{reply}");
 }
 
-/// The user's ⋯ on pane `pane`, then its menu's `item` (`slot_keep`, `slot_edit`, `slot_clear`).
+/// The user's ⋯ on pane `pane`, then its menu's `item` (`slot_keep`, `slot_edit`, `slot_give_back`, `slot_clear`).
 fn slot_menu(otto: &Otto, pane: u64, item: &str) -> Value {
     let reply = otto.user_click(at(otto.control(&format!("slot-dots:{pane}")), 0.5, 0.5));
     let items = reply["row_menu"]["items"].as_array().cloned().unwrap_or_default();
@@ -17206,9 +17206,9 @@ fn slot_menu(otto: &Otto, pane: u64, item: &str) -> Value {
     otto.user_click(at(otto.control(&format!("row-menu:{index}")), 0.5, 0.5))
 }
 
-/// Slots on screen (`slots` flag): ⋯ on an app pane's header opens its menu, whose Keep opens the dialog, a checklist made
-/// from the pane's window (its id ticked); Keep makes the pane a filled slot, marked `slot`. Give
-/// Back leaves it waiting, saying what for; a window the slot selects is offered there, not in a
+/// Slots on screen (`slots` flag): ⋯ on an app pane's header opens its menu, whose Keep opens the dialog, by the pane's
+/// window's id; Keep makes the pane a filled slot, marked `slot`. ⋯'s Give back the window
+/// leaves it waiting, saying what for; a window the slot selects is offered there, not in a
 /// chip, and only the user's Bring it here fills it. No title or id the looks carried is in the
 /// state while it waits. A test run hosts no window: the looks are fixtures (`slot_windows`).
 #[test]
@@ -17236,17 +17236,13 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
     assert_eq!((&items[0]["item"], &items[0]["label"]), (&json!("slot_keep"), &json!("Create slot…")), "{reply}");
     let reply = otto.user_click(at(otto.control("row-menu:0"), 0.5, 0.5));
     let dialog = &reply["state"]["slot_dialog"];
-    assert_eq!(
-        (&dialog["by_id"], &dialog["by_title"], &dialog["editing"]),
-        (&json!(true), &json!(false), &json!(false))
-    );
+    assert_eq!((&dialog["by"], &dialog["editing"]), (&json!("id"), &json!(false)), "{reply}");
     assert!(!reply.to_string().contains("SECRET") && !reply.to_string().contains("zm.meeting"), "{reply}");
     let reply = otto.user_click(at(otto.control("slot-dialog:keep"), 0.5, 0.5));
     let slot = |reply: &Value| reply["state"]["slots"][pane.to_string()].clone();
     assert_eq!((slot(&reply)["status"].clone(), reply["state"]["slot_dialog"].clone()), (json!("filled"), Value::Null));
-    // Give Back, at the dialog's foot (Edit slot…): the slot waits, passing over that window.
-    slot_menu(&otto, pane, "slot_edit");
-    let reply = otto.user_click(at(otto.control("slot-dialog:give-back"), 0.5, 0.5));
+    // Give back the window, in ⋯'s menu: the slot waits, passing over that window.
+    let reply = slot_menu(&otto, pane, "slot_give_back");
     assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "slot", "{reply}");
     // Its window comes back as another one: offered in the slot, not in a chip.
     let reply = otto.call(look(vec![seen(700_001, "SECRET sync", Some("zm.meeting.window.main"))]));
@@ -17260,6 +17256,70 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
     let state = otto.call(json!({"cmd": "state"}));
     assert_eq!(slot(&state)["status"], "filled", "{reply}");
     assert_eq!(state["state"]["panes"][0]["kind"]["window"], 700_001);
+}
+
+/// The slot dialog (board H4): its rule in one line over a form. A window with no id: any window
+/// of the app, the largest. The user's Title, starts with, and the words cut down to "SECRET
+/// weekly" make a slot that takes both weekly windows and not Home; a client's click or key changes
+/// nothing. Edited again it is as kept; × closes it. No title, id or typed word is in the state.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_slot_dialog_tightens_its_rule_by_title_and_keep_saves_it() {
+    let otto = Otto::launch_with("slot-form", &[("OTTOSPACE_FEATURES", "slots")]);
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let pane = reply["state"]["focused"].as_u64().unwrap();
+    let window = reply["state"]["panes"][0]["kind"]["window"].as_u64().unwrap();
+    let seen = |window: u64, title: &str, w: u32| {
+        json!({"pid": 0, "window": window, "title": title, "subrole": "AXStandardWindow",
+            "frame": {"x": 0, "y": 0, "w": w, "h": 500}})
+    };
+    let look = |windows: Vec<Value>| {
+        let displays = [json!({"x": 0, "y": 0, "w": 1920, "h": 1080})];
+        json!({"cmd": "slot_windows", "look": {"name": "Meetings", "running": true, "windows": windows, "displays": displays}})
+    };
+    otto.call(look(vec![
+        seen(window, "SECRET weekly sync", 900),
+        seen(800_101, "SECRET weekly planning", 600),
+        seen(800_102, "Home", 400),
+    ]));
+    let reply = slot_menu(&otto, pane, "slot_keep");
+    let dialog = &reply["state"]["slot_dialog"];
+    assert_eq!((&dialog["has_id"], &dialog["by"], &dialog["pick"]), (&json!(false), &json!("any"), &json!("largest")));
+    // A client's click on Title is refused; the user's chooses it, and the words have the keys.
+    let title = otto.control("slot-dialog:by-title");
+    assert_eq!(otto.click(at(title, 0.5, 0.5), 1)["state"]["slot_dialog"]["by"], "any");
+    assert_eq!(otto.user_click(at(title, 0.5, 0.5))["state"]["slot_dialog"]["by"], "title");
+    let reply = otto.user_click(at(otto.control("slot-dialog:starts-with"), 0.5, 0.5));
+    assert_eq!(reply["state"]["slot_dialog"]["test"], "starts_with");
+    // The words are the window's title: the user cuts " sync"; a client's typing does not reach them.
+    otto.call(json!({"cmd": "key", "keys": "backspace backspace backspace backspace backspace", "as": "user"}));
+    let reply = otto.call(json!({"cmd": "key", "keys": "x"}));
+    assert!(!reply.to_string().contains("SECRET"), "{reply}");
+    let reply = otto.user_click(at(otto.control("slot-dialog:keep"), 0.5, 0.5));
+    let slot = |reply: &Value| reply["state"]["slots"][pane.to_string()].clone();
+    assert_eq!((slot(&reply)["status"].clone(), reply["state"]["slot_dialog"].clone()), (json!("filled"), Value::Null));
+    // Waiting, it takes the weekly windows only.
+    slot_menu(&otto, pane, "slot_give_back");
+    let reply = otto.call(look(vec![
+        seen(700_001, "SECRET weekly sync", 900),
+        seen(700_002, "SECRET weekly planning", 600),
+        seen(700_003, "Home", 400),
+    ]));
+    assert_eq!(
+        (slot(&reply)["status"].clone(), slot(&reply)["matches"].clone()),
+        (json!("offered"), json!(2)),
+        "{reply}"
+    );
+    // Edit slot…: as kept. × closes it, as Esc does.
+    let reply = slot_menu(&otto, pane, "slot_edit");
+    let dialog = &reply["state"]["slot_dialog"];
+    assert_eq!(
+        (&dialog["by"], &dialog["test"], &dialog["editing"]),
+        (&json!("title"), &json!("starts_with"), &json!(true))
+    );
+    assert!(!reply.to_string().contains("SECRET"), "{reply}");
+    let reply = otto.user_click(at(otto.control("slot-dialog:cancel"), 0.5, 0.5));
+    assert_eq!(reply["state"]["slot_dialog"], Value::Null, "{reply}");
 }
 
 /// A window the user put in a pane (no Keep) closing leaves the pane, a slot waiting for that
@@ -17308,8 +17368,7 @@ fn three_app_only_slots_take_three_windows_one_by_one() {
         let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
         let pane = reply["state"]["focused"].as_u64().unwrap();
         otto.call(json!({"cmd": "slot_make", "pane": pane, "slot": {"select": {}}}));
-        slot_menu(&otto, pane, "slot_edit");
-        otto.user_click(at(otto.control("slot-dialog:give-back"), 0.5, 0.5));
+        slot_menu(&otto, pane, "slot_give_back");
         panes.push(pane);
     }
     let windows: Vec<Value> = (1..=3)

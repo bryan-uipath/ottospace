@@ -2133,10 +2133,11 @@ const SLOT_MAKERS: [Make; 17] = [
         Action::SlotDialogOpen { pane: g.pane(), look }
     },
     |g| {
-        use crate::model::slots::Choice;
+        use crate::model::slots::{By, Choice};
+        use crate::slot::Test;
         let choice = match g.rng.below(4) {
-            0 => Choice::ById(g.rng.coin()),
-            1 => Choice::ByTitle(g.rng.coin()),
+            0 => Choice::By([By::Any, By::Id, By::Title][g.rng.below(3)]),
+            1 => Choice::Test([Test::Is, Test::Contains, Test::StartsWith, Test::Pattern][g.rng.below(4)]),
             2 => Choice::Pick(g.slot().pick),
             _ => Choice::Matching(g.slot().matching),
         };
@@ -2994,6 +2995,8 @@ fn check(m: &Model) -> Result<(), String> {
     let note = m.note().filter(|_| !m.compose_keys());
     let apps = m.app_lists.filtering && !m.compose_modal() && !m.compose_keys();
     let whose = match (m.open_field(), renaming, &m.picker, note, &m.compose) {
+        // The slot dialog's title words: over every other field while its rule is by title.
+        (Some(("slot", field)), ..) => m.slot_words().is_some_and(|words| std::ptr::eq(field, words)),
         (Some(("mark" | "workbook" | "worktree", field)), Some(name), ..) => std::ptr::eq(field, name),
         (Some(("picker", field)), None, Some(picker), ..) => std::ptr::eq(field, &picker.query),
         (Some(("palette", field)), None, None, ..) => m.palette.as_ref().is_some_and(|p| std::ptr::eq(field, &p.query)),
@@ -3010,8 +3013,10 @@ fn check(m: &Model) -> Result<(), String> {
         _ => false,
     };
     ensure!(whose, "the open text field is {:?}; it is not the open box's", m.open_field().map(|(of, _)| of));
+    // The slot dialog covers every mode: its title words have the keys while its rule is by title.
     let has_keys = !m.keys
         && match m.mode() {
+            _ if m.slot_words().is_some() => true,
             Mode::Mark => renaming.is_some(),
             Mode::Pick | Mode::Palette | Mode::Clone | Mode::Inspect => true,
             // The new-task box's line, unless the user's editor has it.
@@ -3559,7 +3564,7 @@ fn check_slots(m: &Model) -> Result<(), String> {
     if let Some(dialog) = &m.slot_dialog {
         let kind = m.pane(dialog.pane).map(|p| &p.kind);
         ensure!(matches!(kind, Some(Kind::App { .. } | Kind::Slot { .. })), "the dialog on {kind:?}");
-        ensure!(!dialog.by_id || dialog.has_id, "by id with no id");
+        ensure!(dialog.by != crate::model::slots::By::Id || dialog.has_id, "by id with no id");
     }
     let in_pane = |w: u32| m.panes.iter().any(|p| matches!(p.kind, Kind::App { window, .. } if window == w));
     let shown = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
@@ -6574,8 +6579,8 @@ fn code(sent: &Envelope) -> String {
     if let Action::SlotDialogSet { choice } = &sent.action {
         use crate::model::slots::Choice;
         let choice = match choice {
-            Choice::ById(on) => format!("ById({on})"),
-            Choice::ByTitle(on) => format!("ByTitle({on})"),
+            Choice::By(by) => format!("By(crate::model::slots::By::{by:?})"),
+            Choice::Test(test) => format!("Test(crate::slot::Test::{test:?})"),
             Choice::Pick(crate::slot::Pick::Display(n)) => format!("Pick(crate::slot::Pick::Display({n}))"),
             Choice::Pick(pick) => format!("Pick(crate::slot::Pick::{pick:?})"),
             Choice::Matching(matching) => format!("Matching(crate::slot::Matching::{matching:?})"),

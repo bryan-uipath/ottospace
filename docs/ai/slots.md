@@ -149,22 +149,29 @@ The dialog, filled in from the live window; the user narrows:
 
 Cancel, Keep (↵). Keep sends `SlotMake` (User only).
 
-**As built (slice 3, the owner's call 2026-11-18): a checklist, no free text.** The rows are made
-from the live window and each is a choice: App (fixed); `☑ Window id is zm.meeting.window.main`
-(shown when it has one, ticked then); `☐ Title is “Weekly sync”` (the whole title, ticked when the
-window has no id); `When several match` (the largest, the smallest, on display N, any), shown when
-more than one of the app's windows open now passes the ticked rows; Matching, Manual or Automatic.
-Its foot says, in the words the empty slot will show, what it waits for: `Waits for: Zoom · window
-id zm.meeting.window.main`. "Contains" and other patterns are not typed in the dialog: write one by
-hand in `layout.json`, under the pane's record, `"slot": {"select": {"title": "*Incident*"}}`; the
-slot then says `title matching “*Incident*”`. More options (Launch, Close the pane) come with slice 5.
-⋯ on a slot opens the same dialog, its rows as the slot has them, with Look Again, Give Back the
-Window and Clear Slot at its foot; each does its act and closes the dialog. The dialog is the core's
-(`Model::slot_dialog`, `SlotDialogOpen` with a look the shell reads on the user's click, then
-`SlotDialogSet`, `SlotDialogKeep`, `SlotDialogClose`, all the user's); the state has what is ticked,
-never the title or id. `subrole` and `has` are not in the dialog:
-they are for hand-written rules, and a slot gets them only by hand in `layout.json` once `has`
-exists.
+**As built (slice 3, the owner's call 2026-11-18): a checklist, no free text.** Replaced by the
+form below (board H4, direction (b), the owner's call 2026-11-23).
+
+**The form (`ui::dialog`, H4).** Its rule in one sentence on top (`Dialog::headline`), then a form
+whose every choice shows how many of the app's windows open now it takes (`Dialog::count`):
+
+| Row | Choices |
+|---|---|
+| Window | Any window · the window id (when the window or the slot has one) · the title |
+| Title | is · contains · starts with, and the words (the window's whole title to begin with). Dimmed while the rule is another; a click on a test or the words chooses it |
+| Kind | for a dialog or panel only: said, not a choice (only that kind; another needs core work) |
+| Several | the largest · the smallest · the frontmost · display N |
+| When it opens | Offer it (O) · Take it (T), and a line saying what that does |
+
+Under them the app's windows open now, those the rule takes ticked (`Dialog::listed`, with #377's
+details); the action row says how many match and has Keep slot (Save when editing) with ↵. × and
+Esc close it. The default with no window id is any window of the app, the largest (§2a's reason:
+a meeting's title changes); with one, the id. A title rule is written as the glob the selector
+reads (`Test::glob`: `Weekly`, `*Weekly*`, `Weekly*`) and read back as a test and words
+(`Test::read`); a pattern written by hand stays as it is (`Test::Pattern`). The words are a text
+field (`"slot"`) that has the keys while the rule is by title; O and T choose only while it does
+not. The state has what is chosen (`by`, `test`, `pick`, ...), never a title, an id or the
+words. Offer again, Give back the window and Clear slot are in ⋯'s menu, not the dialog.
 
 `pick` in the record: `"largest"`, `"smallest"`, `{ "display": 2 }`, `"any"` (unset). Displays
 are numbered by the core from their frames, passed in the look: 1 is the display with the menu
@@ -218,8 +225,8 @@ to every pane the user filled. Pending the owner's look.
 
 The owner found Keep only when told: ⋯ opened the dialog straight away, its name said nothing. ⋯
 now opens the pane's menu (the row menu, `MenuOf::Pane`, the user's alone: ↓ ↑ ↵, Esc), in the
-owner's words: on an app pane `Create slot…` (the dialog); on a slot `Edit slot…` (the dialog, Look
-Again and Give Back at its foot) and `Clear slot`. No other pane act is there: ×, `fit` and the robot
+owner's words: on an app pane `Create slot…` (the dialog); on a slot `Edit slot…` (the dialog), `Offer
+again` (while windows were passed over), `Give back the window` (while it holds one) and `Clear slot`. No other pane act is there: ×, `fit` and the robot
 sit beside it. Pin is left out: the Apps section pins an installed app by its path, which a pane
 does not know.
 

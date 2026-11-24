@@ -1,5 +1,5 @@
 //! Slots on screen (`docs/ai/slots.md`, the `slots` flag): ⋯ on an app pane's header, the dialog
-//! (a checklist made from the pane's window), a slot's pane saying what it waits for and what it
+//! (its rule in one line over a form, `ui::dialog`), a slot's pane saying what it waits for and what it
 //! offers, and the shell's side: looks at the slots' apps, hosting what the core names, giving it back.
 
 use std::sync::Arc;
@@ -10,37 +10,17 @@ use gpui::{
 };
 use ottospace_core::features::Feature;
 use ottospace_core::marks::same_app;
-use ottospace_core::model::slots::Choice;
+use ottospace_core::model::slots::{By, Choice};
 use ottospace_core::model::{Action, Kind, Origin, PaneId};
 use ottospace_core::row_menu::MenuOf;
-use ottospace_core::slot::{Look, Matching, Pick, Seen, Status};
+use ottospace_core::slot::{Look, Matching, Pick, Seen, Status, Test};
 use ottospace_core::theme;
 use ottospace_mac::{ax, display, recovery};
 
-use crate::{Hosted, Workspace, capture, dialog};
+use crate::{Hosted, Workspace, capture, dialog, ui};
 
-/// A clickable word in the dialog or a slot's pane, labelled for sneak mode as `id`.
-fn word(id: String, label: impl Into<SharedString>, on: bool) -> gpui::Stateful<gpui::Div> {
-    div()
-        .id(SharedString::from(id))
-        .flex_none()
-        .px_2()
-        .py_0p5()
-        .rounded_sm()
-        .border_1()
-        .border_color(rgb(if on { theme::PRIMARY } else { theme::BORDER }))
-        .text_color(rgb(if on { theme::PRIMARY } else { theme::TEXT }))
-        .cursor_pointer()
-        .hover(|s| s.bg(rgb(theme::SELECTED)))
-        .child(label.into())
-        // The press must not reach a header: an unsteady click would start a drag.
-        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-}
-
-/// A ticked row: `☑ Window id is zm.meeting.window.main`.
-fn tick(on: bool) -> &'static str {
-    if on { "☑" } else { "☐" }
-}
+/// The most windows the dialog lists; its status line counts them all.
+const LISTED: usize = 5;
 
 impl Workspace {
     /// ⋯ in an app pane's or a slot's header: its menu (`MenuOf::Pane`). None with the flag off.
@@ -215,14 +195,17 @@ impl Workspace {
         true
     }
 
-    /// What a control of the open dialog does: `slot-dialog:by-id`, `slot-dialog:keep`, ...
+    /// What a control of the open dialog does: `slot-dialog:by-title`, `slot-dialog:keep`, ...
     fn dialog_action(&self, name: &str) -> Option<Action> {
-        let dialog = self.model.slot_dialog.as_ref()?;
-        let pane = dialog.pane;
+        self.model.slot_dialog.as_ref()?;
         let set = |choice| Some(Action::SlotDialogSet { choice });
         match name {
-            "by-id" => set(Choice::ById(!dialog.by_id)),
-            "by-title" => set(Choice::ByTitle(!dialog.by_title)),
+            "by-any" => set(Choice::By(By::Any)),
+            "by-id" => set(Choice::By(By::Id)),
+            "by-title" | "words" => set(Choice::By(By::Title)),
+            "is" => set(Choice::Test(Test::Is)),
+            "contains" => set(Choice::Test(Test::Contains)),
+            "starts-with" => set(Choice::Test(Test::StartsWith)),
             "manual" => set(Choice::Matching(Matching::Manual)),
             "automatic" => set(Choice::Matching(Matching::Automatic)),
             "largest" => set(Choice::Pick(Pick::Largest)),
@@ -230,9 +213,6 @@ impl Workspace {
             "any" => set(Choice::Pick(Pick::Any)),
             "keep" => Some(Action::SlotDialogKeep),
             "cancel" => Some(Action::SlotDialogClose),
-            "look-again" => Some(Action::SlotLookAgain { pane }),
-            "give-back" => Some(Action::SlotGiveBack { pane }),
-            "clear" => Some(Action::SlotClear { pane }),
             _ => name
                 .strip_prefix("display-")
                 .and_then(|n| n.parse().ok())
@@ -240,92 +220,200 @@ impl Workspace {
         }
     }
 
-    /// ↵ keeps, Esc closes, while the dialog is open: the user's keys only.
-    pub(crate) fn slot_dialog_key(&mut self, key: &str, window: &Window, cx: &mut Context<Self>) -> bool {
+    /// The user's key while the dialog is open (no ⌘: those go to their bindings): ↵ keeps, Esc
+    /// closes; O and T choose, while the title words do not have the keys; they edit those, ⌥ and
+    /// ⌃ keys too. `None`: not the dialog's. `Some(false)`: text, for the input method to type.
+    pub(crate) fn slot_dialog_key(
+        &mut self,
+        event: &gpui::KeyDownEvent,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) -> Option<bool> {
         if self.input != Origin::User || self.model.slot_dialog.is_none() || self.model.picker.is_some() {
-            return false;
+            return None;
         }
-        match key {
-            "enter" => self.offer_send(Action::SlotDialogKeep, window, cx),
-            "escape" => self.offer_send(Action::SlotDialogClose, window, cx),
-            _ => {}
+        let typing = self.model.field().is_some_and(|(of, _)| of == "slot");
+        let m = event.keystroke.modifiers;
+        let plain = !(m.platform || m.control || m.alt);
+        let action = match event.keystroke.key.as_str() {
+            _ if m.platform => return None,
+            "enter" | "escape" if !plain => None,
+            "enter" => Some(Action::SlotDialogKeep),
+            "escape" => Some(Action::SlotDialogClose),
+            _ if typing => return Some(self.field_key(event, window, cx)),
+            "o" if plain => self.dialog_action("manual"),
+            "t" if plain => self.dialog_action("automatic"),
+            _ => None,
+        };
+        if let Some(action) = action {
+            self.offer_send(action, window, cx);
         }
-        true
+        Some(true)
     }
 
-    /// The dialog: every row a choice, the slot it makes in words at its foot.
+    /// The dialog (board H4): its rule in one line on top, a form under it to loosen or tighten
+    /// it, each choice with how many windows it takes; the app's windows open now, those it takes
+    /// ticked; Keep slot (or Save) with ↵. × and Esc close it.
     pub(crate) fn render_slot_dialog(&self, cx: &mut Context<Self>) -> Option<impl IntoElement + use<>> {
         let dialog = self.model.slot_dialog.as_ref()?;
         let app = self.slot_app(dialog.pane)?;
-        let control = |name: &str| format!("slot-dialog:{name}");
-        let button = |name: &str, label: String, on: bool, cx: &mut Context<Self>| {
+        let rules = &crate::config::live().windows;
+        let typing = self.model.field().is_some_and(|(of, _)| of == "slot");
+        // A control the user clicks or labels: `slot-dialog:<name>`, its action the dialog's.
+        let live = |el: gpui::Stateful<gpui::Div>, name: &str, cx: &mut Context<Self>| {
+            let id = format!("slot-dialog:{name}");
             let action = self.dialog_action(name);
-            word(control(name), label, on).child(self.controls.mark(control(name))).on_click(cx.listener(
-                move |this, _, window, cx| {
+            el.child(self.controls.mark(id))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
                     if let Some(action) = action.clone() {
                         this.offer_send(action, window, cx)
                     }
-                },
-            ))
+                }))
         };
-        let row = || div().flex().items_center().gap_2().flex_wrap();
-        let label = |text: &'static str| div().w(px(150.)).flex_none().text_color(rgb(theme::MUTED)).child(text);
-        // The rows as the slot has them when it is edited, else from the pane's window.
-        let (id_row, title_row) = dialog.rows();
-        let mut rows = vec![row().child(label("App")).child(app.clone()).into_any_element()];
-        if let Some(id) = id_row.filter(|_| dialog.has_id) {
-            // A place kept for a window with no id (`kept_place`) waits for one with none.
-            let id = if id.is_empty() { "none".to_string() } else { id };
-            let text = format!("{} Window id is {id}", tick(dialog.by_id));
-            let note = div().text_xs().text_color(rgb(theme::MUTED)).child("the app's own name for this window");
-            rows.push(row().child(button("by-id", text, dialog.by_id, cx)).child(note).into_any_element());
+        let segment = |name: &str, label: String, key: Option<&'static str>, on: bool, cx: &mut Context<Self>| {
+            let id = SharedString::from(format!("slot-dialog-seg:{name}"));
+            live(ui::dialog::segment(id, label, key.filter(|_| !typing), on, ui::State::Rest), name, cx)
+        };
+        // Window: any, by id (when there is one), by title; each with how many it takes now.
+        let mut bys = vec![("by-any", "Any window", By::Any)];
+        if dialog.has_id {
+            bys.push(("by-id", "Window id", By::Id));
         }
-        if let Some(title) = title_row {
-            let is = if title.contains('*') { "matches" } else { "is" };
-            let text = format!("{} Title {is} “{title}”", tick(dialog.by_title));
-            rows.push(row().child(button("by-title", text, dialog.by_title, cx)).into_any_element());
-        }
-        let matches = dialog.matches(&crate::config::live().windows);
-        if matches > 1 {
-            let mut picks = row().child(label("When several match"));
-            let displays = dialog.look.displays.len().max(1) as u32;
-            let choices = [("largest", "The largest", Pick::Largest), ("smallest", "The smallest", Pick::Smallest)];
-            for (name, text, pick) in choices {
-                picks = picks.child(button(name, text.into(), dialog.pick == pick, cx));
+        bys.push(("by-title", "Title", By::Title));
+        let bys: Vec<_> = bys
+            .into_iter()
+            .map(|(name, label, by)| {
+                let label = format!("{label} · {}", dialog.count(by, rules));
+                segment(name, label, None, dialog.by == by, cx)
+            })
+            .collect();
+        let said = match dialog.by {
+            By::Any => "Any window of the app: Several says which.".to_string(),
+            By::Id => {
+                let id = dialog.kept.as_ref().and_then(|k| k.identifier.clone());
+                let id = id.or_else(|| dialog.window.as_ref().and_then(|w| w.identifier.clone())).unwrap_or_default();
+                if id.is_empty() {
+                    "A window the app gives no id.".into()
+                } else {
+                    format!("The app's own name for it: {id}")
+                }
             }
-            for n in (1..=displays).filter(|_| displays > 1) {
-                let name = format!("display-{n}");
-                picks = picks.child(button(&name, format!("On display {n}"), dialog.pick == Pick::Display(n), cx));
+            By::Title => "A window whose title passes the test.".into(),
+        };
+        // Title: its test and words. There while the rule is another, dimmed: a click on it chooses it.
+        let titled = dialog.by == By::Title;
+        let tests: Vec<_> = [("is", Test::Is), ("contains", Test::Contains), ("starts-with", Test::StartsWith)]
+            .into_iter()
+            .map(|(name, test)| segment(name, test.label().into(), None, titled && dialog.test == test, cx))
+            .collect();
+        let words = match titled {
+            true => self.render_field_of("slot", "words in the title", cx).into_any_element(),
+            false => {
+                div().truncate().text_color(rgb(theme::MUTED)).child(dialog.words.text().to_string()).into_any_element()
             }
-            picks = picks.child(button("any", "Any".into(), dialog.pick == Pick::Any, cx));
-            let note = div().text_xs().text_color(rgb(theme::MUTED)).child(format!("{matches} windows match now"));
-            rows.push(picks.child(note).into_any_element());
+        };
+        let field = ui::dialog::text_box(typing).child(words);
+        let field = match titled {
+            true => field.into_any_element(),
+            false => live(div().id("slot-dialog-words").flex_1().min_w_0().cursor_pointer().child(field), "words", cx)
+                .into_any_element(),
+        };
+        let title_row = div()
+            .flex_1()
+            .flex()
+            .gap(px(theme::SPACE_1_5))
+            .when(!titled, |d| d.opacity(0.5))
+            .child(ui::dialog::segments(tests, false))
+            .child(field);
+        // Several: which, when more than one matches.
+        let mut picks = vec![
+            segment("largest", "The largest".into(), None, dialog.pick == Pick::Largest, cx),
+            segment("smallest", "The smallest".into(), None, dialog.pick == Pick::Smallest, cx),
+            segment("any", "The frontmost".into(), None, dialog.pick == Pick::Any, cx),
+        ];
+        for n in (1..=dialog.look.displays.len() as u32).filter(|_| dialog.look.displays.len() > 1) {
+            let name = format!("display-{n}");
+            picks.push(segment(&name, format!("Display {n}"), None, dialog.pick == Pick::Display(n), cx));
         }
-        let matching = row()
-            .child(label("Matching"))
-            .child(button("manual", "Manual: offer it".into(), dialog.matching == Matching::Manual, cx))
-            .child(button("automatic", "Automatic: take it".into(), dialog.matching == Matching::Automatic, cx));
-        rows.push(matching.into_any_element());
-        let words = dialog.slot().words(&app);
-        let waits = div().text_xs().text_color(rgb(theme::PRIMARY)).child(format!("Waits for: {words}"));
-        let mut foot = div().flex().items_center().gap_2().justify_end();
-        if dialog.editing {
-            let filled = matches!(self.model.pane(dialog.pane).map(|p| &p.kind), Some(Kind::App { .. }));
-            foot = foot.child(button("look-again", "Look Again".into(), false, cx));
-            if filled {
-                foot = foot.child(button("give-back", "Give Back the Window".into(), false, cx));
+        let offers =
+            [("manual", "Offer it", "O", Matching::Manual), ("automatic", "Take it", "T", Matching::Automatic)].map(
+                |(name, label, key, matching)| segment(name, label.into(), Some(key), dialog.matching == matching, cx),
+            );
+        let does = match dialog.matching {
+            Matching::Manual => "Shows it here with Put it here; nothing moves until you press it.",
+            Matching::Automatic => {
+                "Moves it in at once, on the tab on show. A window you are in is still only offered."
             }
-            foot = foot.child(button("clear", "Clear Slot".into(), false, cx));
+        };
+        // The one it takes first, then the rest front to back, at most `LISTED`, then how many more.
+        let mut all = dialog.listed(rules);
+        all.sort_by_key(|l| !l.taken);
+        let more = all.len().saturating_sub(LISTED);
+        let mut listed: Vec<ui::dialog::Listed> = all
+            .into_iter()
+            .take(LISTED)
+            .map(|l| ui::dialog::Listed { taken: l.taken, title: l.seen.title.clone().into(), detail: l.detail.into() })
+            .collect();
+        if more > 0 {
+            listed.push(ui::dialog::Listed {
+                taken: false,
+                title: format!("and {more} more").into(),
+                detail: "".into(),
+            });
         }
-        let foot =
-            foot.child(button("cancel", "Cancel".into(), false, cx)).child(button("keep", "Keep ↵".into(), true, cx));
-        let heading = if dialog.editing { "Edit this slot" } else { "Keep this pane as a slot" };
-        let panel = dialog::floating(560.)
-            .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(heading))
-            .child(div().p_3().flex().flex_col().gap_2().text_sm().children(rows).child(waits).child(foot))
-            .child(dialog::hint("↵ keep · esc cancel"));
+        let mut body = div()
+            .child(ui::dialog::summary(dialog.headline(&app)))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme::SPACE_1_5))
+                    .child(ui::dialog::row("Window", ui::dialog::segments(bys, false)))
+                    .child(ui::dialog::consequence(said)),
+            )
+            .child(ui::dialog::row("Title", title_row));
+        // A dialog's or panel's slot holds its kind only: said, not a choice (another kind needs the core's rules).
+        if let Some(role) = dialog.kind_word() {
+            let only = div().text_size(px(theme::TEXT_XS)).child(format!("Only a {role}, as this one"));
+            body = body.child(ui::dialog::row("Kind", only));
+        }
+        body = body
+            .child(ui::dialog::row("Several", ui::dialog::segments(picks, false)))
+            .child(
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme::SPACE_1_5))
+                    .child(ui::dialog::row("When it opens", ui::dialog::segments(offers, false)))
+                    .child(ui::dialog::consequence(does)),
+            )
+            .children((!listed.is_empty()).then(|| ui::dialog::row("Open now", ui::dialog::window_list(listed))));
+        let (title, purpose, keep) = match dialog.editing {
+            true => (format!("{app} slot"), "Change what it waits for.", "Save"),
+            false => (
+                format!("Keep this pane for {app}"),
+                "The pane stays when the window goes, and waits for the next one.",
+                "Keep slot",
+            ),
+        };
+        let status = format!("{} of {} windows match", dialog.matches(rules), dialog.look.windows.len());
+        let keep = live(
+            ui::dialog::action("slot-dialog-keep", ui::Button::Primary(keep.into()), &["↵"], ui::State::Rest),
+            "keep",
+            cx,
+        );
+        let close = live(ui::dialog::close("slot-dialog-close", ui::State::Rest), "cancel", cx);
+        let panel = ui::dialog::frame(
+            ui::dialog::FORM,
+            title,
+            Some(purpose.into()),
+            close,
+            Some(body),
+            ui::dialog::actions(None, Some(status.into()), vec![keep.into_any_element()]),
+        );
         Some(
-            dialog::backdrop("slot-dialog-backdrop", 0.5, Action::SlotDialogClose, cx)
+            dialog::backdrop("slot-dialog-backdrop", ui::dialog::DIM, Action::SlotDialogClose, cx)
                 .flex()
                 .items_center()
                 .justify_center()
@@ -405,9 +493,16 @@ impl Workspace {
         }
         if offered.is_some() {
             let id = format!("slot-accept:{pane}");
-            let accept = word(id.clone(), "Put it here", true).child(self.controls.mark(id)).on_click(
-                cx.listener(move |this, _, window, cx| this.offer_send(Action::SlotAccept { pane }, window, cx)),
-            );
+            let accept =
+                ui::button(SharedString::from(id.clone()), ui::Button::Primary("Put it here".into()), ui::State::Rest)
+                    .child(self.controls.mark(id))
+                    // The press must not reach a header: an unsteady click would start a drag.
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(
+                        cx.listener(move |this, _, window, cx| {
+                            this.offer_send(Action::SlotAccept { pane }, window, cx)
+                        }),
+                    );
             body = body.child(accept);
             // Quieter: pass over it, or the next that matches.
             let quiet = |name: &str, label: String, action: Action, cx: &mut Context<Self>| {
