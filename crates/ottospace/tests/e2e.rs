@@ -1353,6 +1353,45 @@ fn git(dir: &Path, args: &[&str]) {
     assert!(git.stdin(std::process::Stdio::null()).status().unwrap().success(), "git {args:?}");
 }
 
+/// A right click on a tab: Rename types its name in the tab; ↵ keeps it, and the name wins
+/// from then on; empty gives the automatic title back. A double-click on the title does the same.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_tab_is_renamed_in_place_from_its_right_click_or_a_double_click() {
+    let otto = Otto::launch("tab-rename");
+    otto.call(json!({"cmd": "split", "axis": "right"}));
+    let tab = |o: &Otto| {
+        let state = o.call(json!({"cmd": "state"}))["state"].clone();
+        let at = state["active"].as_u64().unwrap() as usize;
+        (state["tabs"][at]["id"].as_u64().unwrap(), state["tabs"][at]["title"].as_str().unwrap().to_string())
+    };
+    let (id, auto) = tab(&otto);
+    let p = at(otto.control(&format!("tab:{id}")), 0.4, 0.5);
+    let right =
+        |action: &str| json!({"cmd": "mouse", "action": action, "button": "right", "x": p[0], "y": p[1], "as": "user"});
+    otto.call(right("down"));
+    otto.call(right("up"));
+    let menu = otto.drawn()["row_menu"].clone();
+    assert_eq!(menu["open_tab"], id, "{menu}");
+    let labels: Vec<&str> = menu["items"].as_array().unwrap().iter().filter_map(|i| i["label"].as_str()).collect();
+    assert_eq!(labels, ["Rename", "Close"]);
+    let item = rect(&menu["items"][0]["rect"]);
+    assert!((item[0] - p[0]).abs() < 8.0 && (item[1] - p[1]).abs() < 12.0, "not at the pointer: {item:?} {p:?}");
+    otto.user_click(at(item, 0.5, 0.5));
+    // A client's keys do not type in it.
+    otto.call(json!({"cmd": "key", "keys": "x"}));
+    let reply = otto.user_key("t h e space p l a n enter");
+    assert_eq!(reply["mode"], "normal");
+    assert_eq!(tab(&otto), (id, "the plan".to_string()));
+    // A double-click on the title: typed again; empty gives the automatic title back.
+    let p = at(otto.control(&format!("tab:{id}")), 0.4, 0.5);
+    for action in ["down", "up"] {
+        otto.call(json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "clicks": 2, "as": "user"}));
+    }
+    otto.user_key("backspace enter");
+    assert_eq!(tab(&otto), (id, auto));
+}
+
 /// The user's right click on a linked worktree's row: its menu, Delete worktree…, the question
 /// (⌘↵ deletes, ↵ alone does nothing, Esc or Keep it keeps), then git removes a clean one and keeps its branch; a dirty one stays, git's reason said.
 #[test]

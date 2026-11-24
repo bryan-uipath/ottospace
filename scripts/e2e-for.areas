@@ -95,7 +95,8 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?mcp(\.rs|/)|^crates/ottospace/tests/fixtures/mcp-tools\.json$   mcp_server|a_task_agents_pass
 /src/(.*/)?(viewer|markdown|highlight|syntax|text_runs)(\.rs|/)|^crates/ottospace/tests/fixtures/(markdown|code)/   viewer|markdown|a_code_file|cmd_click|native_conversation|tool_rows
 /src/(.*/)?(displays|out_window|display|fill)(\.rs|/)                        display|folds|draws_on
-/src/(.*/)?(palette|menus|row_menu|fuzz|commands|goto)(\.rs|/)               palette|command|done_row|go_to
+/src/(.*/)?(palette|menus|row_menu|fuzz|commands|goto)(\.rs|/)               palette|command|done_row|go_to|right_click|renamed_in_place
+/src/(.*/)?tab_name(\.rs|/)                                                 renamed_in_place|tab_strip|workbook
 /src/(.*/)?(key_use|keycaps|empty)(\.rs|/)                                   key|caps|empty
 /src/(.*/)?(settings|config|features)(\.rs|/)                                settings|feature|font|marks_file|projects_section
 /src/(.*/)?event_log(\.rs|/)                                                 log_says

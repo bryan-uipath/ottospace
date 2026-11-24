@@ -35,6 +35,7 @@ fn dots_control(row: &MenuOf) -> Option<String> {
         // A right click's: the row itself.
         MenuOf::Row(ListRow::Repo(path)) => Some(format!("repo:{path}")),
         MenuOf::Pane(id) => Some(format!("slot-dots:{id}")),
+        MenuOf::Tab(id) => Some(format!("tab:{id}")),
         _ => None,
     }
 }
@@ -66,17 +67,42 @@ impl Workspace {
         Some(dots)
     }
 
+    /// Where a right click opened `row`'s menu, when its … is not drawn: the item itself.
+    fn clicked_control(&self, row: &MenuOf) -> Option<String> {
+        let MenuOf::Space(id) = row else { return None };
+        let of = ottospace_core::model::Owner::Workbook { id: *id };
+        let place = self.model.shown_spaces().iter().position(|space| space.of == of)?;
+        Some(format!("space:{place}"))
+    }
+
     /// Where a row's … was last painted.
     fn dots_at(&self, row: &MenuOf) -> Option<Rect> {
-        let [x, y, w, h] = rect(self.controls.bounds(&dots_control(row)?)?);
+        let control = |name: Option<String>| self.controls.bounds(&name?);
+        let at = control(dots_control(row));
+        let at = if self.row_menu_at.is_some() { control(self.clicked_control(row)).or(at) } else { at };
+        let [x, y, w, h] = rect(at?);
         Some(Rect { x, y, w, h })
     }
 
     /// Opens a row's menu (on the row whose menu is open: closes it). `keys`: by a key or a
     /// label, so the keys are on its first item.
     pub(crate) fn open_row_menu(&mut self, row: MenuOf, keys: bool, window: &Window, cx: &mut Context<Self>) {
+        self.row_menu_at = None;
         let dots = self.dots_at(&row);
         self.row_menu_act(Action::RowMenu { row, dots, keys }, window, cx);
+    }
+
+    /// A right click's menu: at the pointer, on the row or item it opened on.
+    pub(crate) fn open_row_menu_at(
+        &mut self,
+        row: MenuOf,
+        at: gpui::Point<gpui::Pixels>,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.row_menu_at = Some(at);
+        let dots = self.dots_at(&row);
+        self.row_menu_act(Action::RowMenu { row, dots, keys: false }, window, cx);
     }
 
     /// Sends a menu action as whoever is acting; refused, the status bar says why.
@@ -122,8 +148,11 @@ impl Workspace {
                 }
                 self.row_menu_act(Action::RowMenuChoose { index }, window, cx);
                 // A pane's Create or Edit: the dialog, with a look at the app's windows now (the user's alone).
-                if let Some(Action::SlotDialogOpen { pane, .. }) = stood.filter(|_| self.input == Origin::User) {
-                    self.slot_dialog_open(pane, window, cx);
+                match stood.filter(|_| self.input == Origin::User) {
+                    Some(Action::SlotDialogOpen { pane, .. }) => self.slot_dialog_open(pane, window, cx),
+                    // A tab's Close: as its ×, asking first while a program runs there.
+                    Some(Action::CloseTab { index }) => self.ask_close_tab(index, window, cx),
+                    _ => {}
                 }
             }
         }
@@ -157,8 +186,11 @@ impl Workspace {
         self.sync_row_menu(window, cx);
         let Some((menu, items)) = self.model.row_menu() else { return true };
         // A left press on the row a right click opened the menu of is not the menu's: it closes it.
-        let row = dots_control(&menu.row)
-            .filter(|_| !matches!(menu.row, MenuOf::Row(ListRow::Repo(_))) || event.button == MouseButton::Right);
+        let row = match self.row_menu_at {
+            Some(_) => self.clicked_control(&menu.row).or(dots_control(&menu.row)),
+            None => dots_control(&menu.row),
+        };
+        let row = row.filter(|_| self.row_menu_at.is_none() || event.button == MouseButton::Right);
         let own = (0..items.len()).map(item_control).chain(row);
         let inside = |control: String| self.controls.bounds(&control).is_some_and(|b| b.contains(&event.position));
         if own.into_iter().any(inside) {
@@ -174,9 +206,9 @@ impl Workspace {
         let (menu, items) = self.model.row_menu()?;
         let dots = menu.dots?;
         // A right click's: at the pointer, on the row it opened on.
-        let dots = match (&menu.row, self.row_menu_at) {
-            (MenuOf::Row(ListRow::Repo(_)), Some(at)) => Rect { x: f32::from(at.x), y: f32::from(at.y), w: 0., h: 0. },
-            _ => dots,
+        let dots = match self.row_menu_at {
+            Some(at) => Rect { x: f32::from(at.x), y: f32::from(at.y), w: 0., h: 0. },
+            None => dots,
         };
         // An item that does nothing now is dimmed, with why under it.
         let whys: Vec<Option<&str>> = (0..items.len()).map(|index| self.model.row_menu_why(index)).collect();
@@ -220,6 +252,10 @@ impl Workspace {
             _ => (None, None),
         };
         let (transcript, space) = (menu.row == MenuOf::Transcript, matches!(menu.row, MenuOf::Space(_)));
+        let open_tab = match menu.row {
+            MenuOf::Tab(id) => Some(id),
+            _ => None,
+        };
         let worktree = match &menu.row {
             MenuOf::Row(ListRow::Repo(path)) => Some(path),
             _ => None,
@@ -236,6 +272,7 @@ impl Workspace {
         let items: Vec<serde_json::Value> = items.iter().enumerate().map(item).collect();
         serde_json::json!({
             "workbook": workbook, "tab": tab, "space": space, "transcript": transcript, "worktree": worktree, "pane": pane,
+            "open_tab": open_tab,
             "selected": menu.selected, "items": items
         })
     }

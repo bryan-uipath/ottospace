@@ -25,6 +25,7 @@ actions!(
     [
         CommandPalette,
         GoToPlace,
+        RenameTab,
         CopyState,
         CitySpin,
         OpenSettings,
@@ -76,6 +77,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::GoHome => Box::new(GoHome),
         Command::PrevTab => Box::new(PrevTab),
         Command::CloseTab => Box::new(CloseTab),
+        Command::RenameTab => Box::new(RenameTab),
         Command::FoldTab => Box::new(FoldTab),
         Command::ZoomOut => Box::new(crate::zoom::ZoomToggle),
         Command::NewTask => Box::new(NewTask),

@@ -198,7 +198,12 @@ pub enum MarkInput {
         #[serde(skip_serializing_if = "Option::is_none")]
         tab: Option<usize>,
         text: crate::edit::Field,
+        /// Typed in its item on the top row (its right click's Rename), not in its row of the bar.
+        #[serde(skip)]
+        top: bool,
     },
+    /// An open tab's name is being typed in the tab itself (`tab`: its id). The user's alone.
+    Tab { tab: u32, text: crate::edit::Field },
     /// A new worktree's branch is being typed in the rows of the repository at `repo`, as a
     /// workbook's name is. The user's alone.
     Worktree { repo: String, text: crate::edit::Field },
@@ -208,18 +213,20 @@ impl MarkInput {
     /// The name being typed, a mark's, a workbook's or a new worktree's branch.
     pub fn text(&self) -> Option<&crate::edit::Field> {
         match self {
-            MarkInput::Rename { text, .. } | MarkInput::Workbook { text, .. } | MarkInput::Worktree { text, .. } => {
-                Some(text)
-            }
+            MarkInput::Rename { text, .. }
+            | MarkInput::Workbook { text, .. }
+            | MarkInput::Tab { text, .. }
+            | MarkInput::Worktree { text, .. } => Some(text),
             MarkInput::Jump | MarkInput::SetKey { .. } => None,
         }
     }
 
     pub(crate) fn text_mut(&mut self) -> Option<&mut crate::edit::Field> {
         match self {
-            MarkInput::Rename { text, .. } | MarkInput::Workbook { text, .. } | MarkInput::Worktree { text, .. } => {
-                Some(text)
-            }
+            MarkInput::Rename { text, .. }
+            | MarkInput::Workbook { text, .. }
+            | MarkInput::Tab { text, .. }
+            | MarkInput::Worktree { text, .. } => Some(text),
             MarkInput::Jump | MarkInput::SetKey { .. } => None,
         }
     }
@@ -1264,9 +1271,12 @@ impl Model {
                 None => self.mark_input = Some(MarkInput::SetKey { mark }),
             },
             // A name is typed in its text field (`FieldEdit`), not here.
-            renaming @ Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. } | MarkInput::Worktree { .. }) => {
-                self.mark_input = renaming
-            }
+            renaming @ Some(
+                MarkInput::Rename { .. }
+                | MarkInput::Workbook { .. }
+                | MarkInput::Tab { .. }
+                | MarkInput::Worktree { .. },
+            ) => self.mark_input = renaming,
             None => {}
         }
     }
@@ -1275,7 +1285,12 @@ impl Model {
     pub(crate) fn mark_backspace(&mut self) {
         match &mut self.mark_input {
             // A name's ⌫ is its text field's.
-            Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. } | MarkInput::Worktree { .. }) => {}
+            Some(
+                MarkInput::Rename { .. }
+                | MarkInput::Workbook { .. }
+                | MarkInput::Tab { .. }
+                | MarkInput::Worktree { .. },
+            ) => {}
             Some(MarkInput::SetKey { mark }) => {
                 let mark = *mark;
                 self.marks.set_key(mark, None);
@@ -1293,9 +1308,14 @@ impl Model {
                 self.marks.rename(mark, &text);
                 self.mark_input = None;
             }
-            Some(MarkInput::Workbook { workbook, tab, text }) => {
+            Some(MarkInput::Workbook { workbook, tab, text, .. }) => {
                 let (workbook, tab, text) = (*workbook, *tab, text.text().to_string());
                 self.workbook_rename(workbook, tab, &text);
+                self.mark_input = None;
+            }
+            Some(MarkInput::Tab { tab, text }) => {
+                let (tab, text) = (*tab, text.text().to_string());
+                self.tab_rename(tab, &text);
                 self.mark_input = None;
             }
             Some(MarkInput::Worktree { repo, text }) => {

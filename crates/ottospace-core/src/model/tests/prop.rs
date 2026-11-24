@@ -292,8 +292,9 @@ impl Gen<'_> {
 
     /// A row for `RowMenu`: mostly a workbook's or one of its tabs', listed or not; or the transcript's header.
     fn menu_row(&mut self) -> MenuOf {
-        match self.rng.below(8) {
+        match self.rng.below(9) {
             0 => ListRow::Task(self.task()).into(),
+            7 => MenuOf::Tab(self.tab_id()),
             1 => ListRow::WorkbookTab(self.workbook(), self.rng.below(3)).into(),
             2 => MenuOf::Transcript,
             3 => MenuOf::Space(self.workbook()),
@@ -1823,6 +1824,7 @@ const MAKERS: &[Make] = &[
     },
     |g| Action::WorkbookOpen { workbook: g.workbook(), tab: g.book_tab(), home: g.rng.coin().then(|| g.name(DIRS)) },
     |g| Action::WorkbookEdit { workbook: g.workbook(), tab: g.book_tab() },
+    |g| Action::TabEdit { tab: g.rng.coin().then(|| g.tab_id()) },
     |g| Action::WorkbookRemove { workbook: g.workbook(), tab: g.book_tab() },
     |g| Action::WorkbookFold { workbook: g.workbook() },
     |g| Action::WorkbookKeep { workbook: g.workbook() },
@@ -2402,6 +2404,8 @@ fn selects_tab(action: &Action) -> bool {
             | Action::TalkToggle
             // The keyboard to a tab out's window and back, a tab folding in, the flag off.
             | Action::TabOut { .. }
+            // A tab's menu: Fold out.
+            | Action::RowMenuChoose { .. }
             | Action::TabIn { .. }
             | Action::KeyWindow { .. }
             | Action::SetDisplays { .. }
@@ -2856,7 +2860,10 @@ fn check(m: &Model) -> Result<(), String> {
     let shown = |section| m.sidebar == Some(section) || m.rail_focus == Some(zones::RailFocus::Left(section));
     if !m.features.on(Feature::Marks) {
         ensure!(!shown(Section::Marks), "the Marks section with marks off");
-        let waits = !matches!(m.mark_input, None | Some(MarkInput::Workbook { .. } | MarkInput::Worktree { .. }));
+        let waits = !matches!(
+            m.mark_input,
+            None | Some(MarkInput::Workbook { .. } | MarkInput::Tab { .. } | MarkInput::Worktree { .. })
+        );
         ensure!(!waits, "a mark waits with marks off: {:?}", m.mark_input);
         let listed = m.palette.iter().flat_map(Palette::matches).any(|c| c.feature() == Some(Feature::Marks));
         ensure!(!listed, "the palette lists a mark command with marks off");
@@ -3230,7 +3237,7 @@ fn check(m: &Model) -> Result<(), String> {
     let whose = match (m.open_field(), renaming, &m.picker, note, &m.compose) {
         // The slot dialog's title words: over every other field while its rule is by title.
         (Some(("slot", field)), ..) => m.slot_words().is_some_and(|words| std::ptr::eq(field, words)),
-        (Some(("mark" | "workbook" | "worktree", field)), Some(name), ..) => std::ptr::eq(field, name),
+        (Some(("mark" | "workbook" | "tab" | "worktree", field)), Some(name), ..) => std::ptr::eq(field, name),
         (Some(("picker", field)), None, Some(picker), ..) => std::ptr::eq(field, &picker.query),
         (Some(("palette", field)), None, None, ..) => m.palette.as_ref().is_some_and(|p| std::ptr::eq(field, &p.query)),
         (Some(("clone", field)), None, None, ..) => {
@@ -3412,6 +3419,10 @@ fn check(m: &Model) -> Result<(), String> {
         }
         Some(MarkInput::Workbook { workbook, .. }) => {
             ensure!(m.workbooks.get(*workbook).is_some(), "a name is typed for workbook {workbook}, which is gone")
+        }
+        Some(MarkInput::Tab { tab, text }) => {
+            ensure!(m.tabs.iter().any(|open| open.id == *tab), "a name is typed for tab {tab}, which is gone");
+            ensure!(text.text().chars().count() <= marks::MAX_NAME, "a typed tab name is too long");
         }
         Some(MarkInput::Worktree { repo, text }) => {
             ensure!(m.repos.iter().any(|r| r.path == *repo), "a branch is typed for {repo:?}, which is not listed");
@@ -3605,11 +3616,10 @@ fn check(m: &Model) -> Result<(), String> {
     if let Some((menu, items)) = m.row_menu() {
         let listed = match &menu.row {
             MenuOf::Row(row) => m.list_rows().contains(row),
-            // A workspace's item on the top row: on the row, and temporary (Keep its one item).
-            MenuOf::Space(id) => {
-                let of = Owner::Workbook { id: *id };
-                m.shown_spaces().iter().any(|space| space.of == of) && !m.workbooks.is_kept(*id)
-            }
+            // A workspace's item on the top row: on the row.
+            MenuOf::Space(id) => m.shown_spaces().iter().any(|space| space.of == Owner::Workbook { id: *id }),
+            // A tab of the row on show.
+            MenuOf::Tab(id) => m.space_tabs(m.shown_space()).iter().any(|at| m.tabs[*at].id == *id),
             MenuOf::Transcript => m.listen.shown && !items.is_empty(),
             MenuOf::ReposAdd => m.sidebar == Some(Section::Repos) && !m.repo_dirs.fixed,
             // A pane's ⋯: on show, an app pane or a slot, `slots` on.
@@ -4749,6 +4759,7 @@ impl Run {
                     | Action::AppsFilter { .. }
                     | Action::MarkEdit { .. }
                     | Action::WorkbookEdit { .. }
+                    | Action::TabEdit { .. }
                     | Action::WorktreeEdit { .. }
                     | Action::Focus { .. }
                     | Action::Enter { .. }
@@ -5392,6 +5403,8 @@ impl Run {
                 | Action::WorkbookSave { .. }
                 | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookEdit { .. }
+                // And of a tab's name.
+                | Action::TabEdit { .. }
                 // And of a worktree's branch.
                 | Action::WorktreeEdit { .. }
             );

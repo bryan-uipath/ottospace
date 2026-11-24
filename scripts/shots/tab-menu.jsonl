@@ -1,0 +1,19 @@
+# A tab's right click: its menu at the pointer (Rename, Close); Rename types the name in the tab,
+# ↵ keeps it and it wins over the automatic title.
+{"cmd":"task_new","line":"Fix the login loop #auth p1"}
+{"cmd":"open_space","space":{"kind":"task","id":1}}
+{"cmd":"split"}
+{"cmd":"new_tab"}
+{"cmd":"split"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"tabs"}
+{"click":"tab:1","button":"right","at":[0.4,0.5]}
+{"until":"row_menu.open_tab","exists":true}
+{"shot":"menu"}
+{"click":"row-menu:0"}
+{"cmd":"key","keys":"r e l e a s e space n o t e s","as":"user"}
+{"shot":"typing"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"mode","is":"normal"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"renamed"}

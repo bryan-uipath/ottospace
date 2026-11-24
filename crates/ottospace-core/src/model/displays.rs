@@ -239,7 +239,16 @@ impl Model {
         self.next_tab += 1;
         let (id, title) = (self.next_tab, self.free_title());
         let (space, folder) = (self.tabs[at].space.clone(), self.tabs[at].folder.clone());
-        let tab = super::Tab { id, title: title.clone(), space, layout: None, focused: None, display: None, folder };
+        let tab = super::Tab {
+            id,
+            title: title.clone(),
+            space,
+            layout: None,
+            focused: None,
+            display: None,
+            folder,
+            auto: None,
+        };
         self.tabs.insert(at + 1, tab);
         self.active += usize::from(self.active > at);
         (id, title)

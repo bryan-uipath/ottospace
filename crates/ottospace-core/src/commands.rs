@@ -110,6 +110,7 @@ commands! {
     NextTab: "Next Tab", Tabs;
     PrevTab: "Previous Tab", Tabs;
     CloseTab: "Close Tab", Tabs;
+    RenameTab: "Rename Tab", Tabs;
     FoldTab: "Fold Tab Out or In", Tabs;
     ZoomOut: "Zoom Out or In", View;
     NewTask: "New Task", Tasks;

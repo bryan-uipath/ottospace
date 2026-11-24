@@ -1396,7 +1396,7 @@ export interface RowMenu {
   /** The workspace whose row it is of; `tab`: that tab's row, by place. */
   workbook: number | null;
   tab: number | null;
-  /** The workspace's item on the top row's (a temporary one's: Keep), not its row's. */
+  /** The workspace's item on the top row's (Rename; a temporary one's also Keep), not its row's. */
   space: boolean;
   /** The transcript header's: Pause, or Resume while paused. */
   transcript: boolean;
@@ -1404,12 +1404,15 @@ export interface RowMenu {
   worktree: string | null;
   /** An app pane's or a slot's ⋯ (`slots` on), by pane: Create slot…, or Edit slot… and Clear slot. */
   pane: PaneId | null;
+  /** A tab of the tab row, by its `id` (a right click opened it): Rename, Fold out (`multi_monitor` on), Close. */
+  open_tab: number | null;
   /** The item the keys are on; null: none (a click opened it). */
   selected: number | null;
   /** `why`: the item does nothing now, and why (drawn dimmed). */
   items: {
     item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree" | "local_folder" | "from_github"
-      | "slot_keep" | "slot_edit" | "slot_look_again" | "slot_give_back" | "slot_swap" | "slot_resort" | "slot_clear";
+      | "slot_keep" | "slot_edit" | "slot_look_again" | "slot_give_back" | "slot_swap" | "slot_resort" | "slot_clear"
+      | "close" | "fold_out";
     label: string;
     why: string | null;
     rect: Rect | null;
