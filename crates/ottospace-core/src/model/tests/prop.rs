@@ -2463,9 +2463,6 @@ fn check_decisions(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
-/// The workbooks are by name, or each has its own place, in order: none lost or doubled by a drag;
-/// the top row in that order.
-/// A drag in flight carries a row listed or a space shown (not Home's), to a place among them.
 /// Filed decisions: one open per key, the caps, every word as kept, nothing open past its time
 /// or its task, triage as its source says, nothing a client may not file.
 fn check_filed(m: &Model) -> Result<(), String> {
@@ -2499,6 +2496,9 @@ fn check_filed(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
+/// The workbooks are by name, or each has its own place, in order: none lost or doubled by a drag;
+/// the top row in that order.
+/// A drag in flight carries a row listed or a space shown (not Home's), to a place among them.
 fn check_reorder(m: &Model) -> Result<(), String> {
     let orders: Vec<Option<u32>> = m.workbooks.list.iter().map(|book| book.order).collect();
     let by_name = orders.iter().all(Option::is_none);
