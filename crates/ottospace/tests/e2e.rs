@@ -18521,6 +18521,69 @@ fn a_citys_names_stay_apart_and_a_hovered_folder_is_outlined() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner's case in the code city: a `claude` in another terminal (here this test's own pid
+/// holds it), its own file quiet for minutes while a sub-agent works in a worktree elsewhere. Its
+/// checkout's city shows it with its sub-agent counted, and the
+/// file the sub-agent reads (`src/auth.rs` there) lights the building of that name here.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_session_waiting_on_its_subagent_floats_in_the_city_and_lights_its_file() {
+    let root = support::temp(&format!("ottospace-e2e-city-subs-{}", std::process::id()));
+    let (repos, claude) = (root.join("repos"), root.join("sessions/claude"));
+    let app = repos.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    git(&app, &["init", "-q"]);
+    for (file, bytes) in [("src/auth.rs", 3000), ("src/main.rs", 2000)] {
+        std::fs::write(app.join(file), "x".repeat(bytes)).unwrap();
+    }
+    let app = app.canonicalize().unwrap();
+    let id = "99999999-9999-4999-8999-999999999999";
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&app));
+    std::fs::create_dir_all(project.join(id).join("subagents")).unwrap();
+    // Made-up records. Its own file: a prompt and a background agent's call, ten minutes ago.
+    let main = project.join(format!("{id}.jsonl"));
+    let user = json!({"type": "user", "message": {"role": "user", "content": "made-up prompt"},
+        "timestamp": "2026-11-13T09:00:00.000Z", "cwd": app, "sessionId": id});
+    let agent = json!({"type": "tool_use", "id": "toolu_a", "name": "Agent",
+        "input": {"subagent_type": "Explore", "prompt": "made-up"}});
+    let call = json!({"type": "assistant", "message": {"id": "msg_1", "content": [agent]},
+        "timestamp": "2026-11-13T09:00:01.000Z", "sessionId": id});
+    std::fs::write(&main, format!("{user}\n{call}\n")).unwrap();
+    let old = std::time::SystemTime::now() - Duration::from_secs(600);
+    std::fs::File::options().append(true).open(&main).unwrap().set_modified(old).unwrap();
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    let live = json!({"pid": std::process::id(), "sessionId": id, "status": "idle"});
+    std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
+    let settings = json!({"repos": repos_in(&repos), "session_dirs": {"claude": [claude]}, "restore_layout": false});
+    let home = user_folder("city-subs", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "code_city"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ];
+    let otto = Otto::launch_with("city-subs", &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    otto.wait_for("the city", |o| Some(city(o)).filter(|c| !c["picture"].is_null()));
+    // Its sub-agent reads a file, in a worktree of its own elsewhere: written now, kept written.
+    let sub = project.join(id).join("subagents/agent-a1.jsonl");
+    let read = json!({"type": "tool_use", "id": "toolu_r", "name": "Read",
+        "input": {"file_path": "/elsewhere/app-wt/src/auth.rs"}});
+    let record = json!({"type": "assistant", "message": {"id": "msg_s", "content": [read]},
+        "timestamp": "2026-11-13T09:10:00.000Z", "isSidechain": true});
+    std::fs::write(&sub, format!("{record}\n")).unwrap();
+    let floats = otto.wait_for("the session with its sub-agent", |o| {
+        let c = city(o);
+        let agents = c["agents"].as_array()?.clone();
+        (agents.len() == 1 && agents[0]["subagents"] == 1 && c["lit"].as_array()?.len() == 1).then_some(c)
+    });
+    assert!(floats["agents"][0]["task"].is_null(), "no task's: {floats}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// Shell lines as activity in the code city: while `cd <checkout> && ls src/ui` runs, the agent
 /// stands over that folder's plinth, its cone on it, pulsing; while `git status` (no path) runs, it
 /// hovers, its icon pulsing; its turn over, it is gone and no frame pulses. Under Reduce Motion
