@@ -605,6 +605,22 @@ impl Transcript {
         self.activity.pulse(&self.is())
     }
 
+    /// A call of its agent runs now.
+    pub fn calling(&self) -> bool {
+        self.activity.running_label().is_some()
+    }
+
+    /// The command line of its newest shell call that still runs, as its row shows it (a
+    /// Codex call's detail starts `command: `, then its `cwd:`).
+    pub fn shell_line(&self) -> Option<&str> {
+        let id = self.activity.running_on(Station::Shell)?;
+        let detail = self.items.iter().rev().find_map(|item| match &item.entry {
+            Entry::Tool { id: of, detail, .. } if of == id => Some(detail.text()),
+            _ => None,
+        })?;
+        Some(detail.strip_prefix("command: ").map_or(detail, |rest| rest.lines().next().unwrap_or("")))
+    }
+
     /// The one file its agent is at now (`Activity::at`).
     pub fn file_at(&self) -> Option<&str> {
         self.activity.at(&self.is())

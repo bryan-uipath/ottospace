@@ -1914,6 +1914,8 @@ export interface CityAgent {
   cone: boolean;
   fan: [number, number];
   hovered: boolean;
+  /** A call of it runs: it pulses (none under Reduce Motion). */
+  pulsing: boolean;
 }
 
 export interface CityView {
