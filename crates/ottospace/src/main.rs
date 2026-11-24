@@ -497,12 +497,12 @@ impl Hosted {
 
     /// Places the window over its pane and activates its app, on entering. The app may
     /// have resized its window since it was parked: a click is judged against what it covers now.
-    fn bring_up(&mut self, keep: Option<ottospace_core::ax::Frame>, window: &Window, cx: &App) {
-        let rect = on_screen(self.bounds.get(), window, cx);
-        let crop = self.crop_at(rect, top_limit(window, cx));
+    fn bring_up(&mut self, keep: Option<ottospace_core::ax::Frame>, geo: &Geo) {
+        let rect = geo.on_screen(self.bounds.get());
+        let crop = self.crop_at(rect, geo.top_limit());
         self.place(pane_rect(rect, keep, true, crop), crop);
         self.window.raise();
-        self.show(window.scale_factor() as f64);
+        self.show(geo.scale);
     }
 
     /// Stops the stream while the window is live: the real window is on screen, and a captured
@@ -1173,6 +1173,10 @@ struct Workspace {
     out_frames: HashMap<u32, ([f32; 4], u64, isize)>,
     /// Each tab out's window that fills its display: its frame before, and the one it was given.
     out_filled: HashMap<u32, (ottospace_core::ax::Frame, ottospace_core::ax::Frame)>,
+    /// Where each tab out's window was last drawn: its hosted windows follow its panes.
+    out_geos: HashMap<u32, Geo>,
+    /// Where the main window was last drawn, for a pane's window placed from a tab out's window.
+    main_geo: Option<Geo>,
     /// The controls a tab out's window draws, apart from the main window's (`out_window`).
     out_controls: sneak::Controls,
     /// A terminal's or hosted window's output asked for a frame not drawn yet: a stall too.
@@ -1991,6 +1995,8 @@ impl Workspace {
             main_window: Window::window_handle(window),
             out_frames: HashMap::new(),
             out_filled: HashMap::new(),
+            out_geos: HashMap::new(),
+            main_geo: None,
             out_controls: sneak::Controls::default(),
             output: false,
             home: home::Shared::default(),
@@ -2445,13 +2451,12 @@ impl Workspace {
                 }
                 Effect::Parked(id) => {
                     let live_since = self.live_since.take();
-                    let keep = self.bars_leave();
+                    let (geo, keep) = self.pane_geo(*id, window, cx);
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("park", serde_json::json!({ "pane": id, "window": hosted.window_id }));
-                        let limit = top_limit(window, cx);
-                        let rect = on_screen(hosted.bounds.get(), window, cx);
-                        let crop = hosted.crop_at(rect, limit);
-                        let scale = window.scale_factor() as f64;
+                        let rect = geo.on_screen(hosted.bounds.get());
+                        let crop = hosted.crop_at(rect, geo.top_limit());
+                        let scale = geo.scale;
                         hosted.park(pane_rect(rect, keep, false, crop).size, scale, crop);
                         hosted.resume(scale);
                         // Live under a second: `follow_front_app` may not have seen the app's own
@@ -2662,11 +2667,11 @@ impl Workspace {
                 }
                 Effect::Live(id) => {
                     self.went_live += 1;
-                    let keep = self.bars_leave();
+                    let (geo, keep) = self.pane_geo(*id, window, cx);
                     if let Some(hosted) = self.hosted.get_mut(id) {
                         trace::record("unpark", serde_json::json!({ "pane": id, "window": hosted.window_id }));
                         hosted.pause();
-                        hosted.bring_up(keep, window, cx);
+                        hosted.bring_up(keep, &geo);
                     }
                     // After the blocking stop and AX calls: the activation they delay is still ignored.
                     self.live_since = Some(Instant::now());
@@ -5038,7 +5043,7 @@ impl Workspace {
         if let Some(Effect::Opened(id)) = opened {
             // A pane in a background tab is not drawn, so the layout sync never parks its
             // window. Move it off screen now; it is sized when its tab is first shown.
-            let drawn = self.model.main_panes().contains(id);
+            let drawn = self.model.shown_panes().contains(id);
             if !drawn {
                 let _ = hosted.window.set_position(display::parking_spot(window.scale_factor() as f64));
             }
@@ -5345,7 +5350,7 @@ impl Workspace {
                 }
             }
         }
-        let drawn = self.model.main_panes();
+        let drawn = self.model.shown_panes();
         // The id read when it was first seen: read again later it may fail, and it is never seen again.
         for (id, ax_window) in fresh {
             let pid = ax_window.pid();
@@ -5379,7 +5384,8 @@ impl Workspace {
                 }
                 // Only while its app has a pane: an app given back is left alone.
                 rules::Place::Float { offer } if let Some(pane_id) = beside => {
-                    let pane = pane.map(|(b, _)| recovery::to_frame(on_screen(b, window, cx)));
+                    let geo = self.pane_geo(pane_id, window, cx).0;
+                    let pane = pane.map(|(b, _)| recovery::to_frame(geo.on_screen(b)));
                     let screens = recovery::screens();
                     // Parked: no pane of its app is up and the app is not in front, so ottospace is.
                     let up = |id: &PaneId| self.model.live == Some(*id);
@@ -5412,23 +5418,24 @@ impl Workspace {
     /// On a `check`, returns each settled pane's content size, whole size and window size.
     fn sync_layout(&mut self, window: &Window, cx: &App, check: bool) -> Vec<(PaneId, [f32; 2], [f32; 2], [f32; 2])> {
         let mut measured = Vec::new();
-        // Only panes of the main window's tab are drawn; a background pane's bounds are stale.
-        let drawn = self.model.main_panes();
+        // Only panes of the tabs on show are drawn; a background pane's bounds are stale.
+        let drawn = self.model.shown_panes();
         let scale = window.scale_factor() as f64;
         // Only on a check, with windows hosted: it asks each display's mode, and this runs every frame.
         let spot = (check && !self.hosted.is_empty()).then(|| display::parking_spot(scale));
         let live = self.model.live;
-        // The windows follow their panes as laid out in this frame.
-        let limit = top_limit(window, cx);
-        let keep = self.bars_leave();
+        // The windows follow their panes as laid out in this frame, each in the window drawing it.
+        let geos: HashMap<PaneId, (Geo, Option<ottospace_core::ax::Frame>)> =
+            self.hosted.keys().map(|id| (*id, self.pane_geo(*id, window, cx))).collect();
         // While a divider is dragged, no window is resized: once more on release (`divider_released`), not each frame.
         let dragging = self.divider_held(cx).is_some();
         for (id, hosted) in &mut self.hosted {
-            let rect = on_screen(hosted.bounds.get(), window, cx);
+            let Some((geo, keep)) = geos.get(id) else { continue };
+            let (keep, rect) = (*keep, geo.on_screen(hosted.bounds.get()));
             if rect.size.width < 1.0 {
                 continue; // not laid out yet
             }
-            let crop = hosted.crop_at(rect, limit);
+            let crop = hosted.crop_at(rect, geo.top_limit());
             let rect = pane_rect(rect, keep, live == Some(*id), crop);
             if live == Some(*id) && !dragging {
                 let drifted = check && hosted.window_frame().is_some_and(|f| f.origin != raised(rect, crop).origin);
@@ -6503,6 +6510,17 @@ impl Workspace {
     /// While the window fills its display: what the menu bar and the Dock leave when they show.
     fn bars_leave(&self) -> Option<ottospace_core::ax::Frame> {
         self.filled.filter(|_| self.model.fill_display).map(|filled| filled.visible)
+    }
+
+    /// Where pane `id`'s window draws it, and what the bars leave there: a tab out's window, or
+    /// the main one (`window` until it has drawn). Only the main window fills its display.
+    fn pane_geo(&self, id: PaneId, window: &Window, cx: &App) -> (Geo, Option<ottospace_core::ax::Frame>) {
+        if let Some(geo) = self.model.out_tab_of(id).and_then(|tab| self.out_geos.get(&tab)) {
+            return (*geo, None);
+        }
+        let here = window.window_handle() == self.main_window;
+        let geo = self.main_geo.filter(|_| !here).unwrap_or_else(|| Geo::of(window, cx));
+        (geo, self.bars_leave())
     }
 
     /// A click on a pane body. An app pane goes live, then the click is replayed so it lands in
@@ -9387,11 +9405,6 @@ fn picker_title(picker: &Picker) -> &'static str {
     }
 }
 
-/// Lowest global y a raised live window may reach: the bottom of ottospace's top bar.
-fn top_limit(window: &Window, cx: &App) -> f64 {
-    on_screen(Bounds { origin: point(px(0.), px(TOP_BAR)), size: Size::default() }, window, cx).origin.y
-}
-
 /// The window frame for pane content `rect` with a title bar of `crop` above it.
 fn raised(rect: CGRect, crop: f64) -> CGRect {
     CGRect {
@@ -9424,15 +9437,41 @@ fn pane_rect(rect: CGRect, keep: Option<ottospace_core::ax::Frame>, live: bool, 
     recovery::to_rect(fill::app_rect(recovery::to_frame(rect), keep, live, crop))
 }
 
+/// Where an ottospace window is, as last drawn: what puts its panes on screen. The main window's
+/// and each tab out's: a hosted window follows the pane of the window that draws it.
+#[derive(Clone, Copy)]
+struct Geo {
+    /// Its display's global origin: gpui window bounds are relative to the display.
+    screen: CGPoint,
+    frame: Bounds<Pixels>,
+    titlebar: Pixels,
+    scale: f64,
+}
+
+impl Geo {
+    fn of(window: &Window, cx: &App) -> Geo {
+        let screen = window.display(cx).map_or(CGPoint::ZERO, |d| display::bounds(d.id().into()).origin);
+        let frame = window.bounds();
+        let titlebar = frame.size.height - window.viewport_size().height;
+        Geo { screen, frame, titlebar, scale: window.scale_factor() as f64 }
+    }
+
+    /// A pane body's rect (window-content coordinates) in global top-left screen coordinates.
+    fn on_screen(&self, body: Bounds<Pixels>) -> CGRect {
+        let x = self.screen.x + f32::from(self.frame.origin.x + body.origin.x) as f64;
+        let y = self.screen.y + f32::from(self.frame.origin.y + self.titlebar + body.origin.y) as f64;
+        CGRect { origin: CGPoint::new(x, y), size: to_cg(body.size) }
+    }
+
+    /// Lowest global y a raised live window may reach: the bottom of the window's top bar.
+    fn top_limit(&self) -> f64 {
+        self.on_screen(Bounds { origin: point(px(0.), px(TOP_BAR)), size: Size::default() }).origin.y
+    }
+}
+
 /// A pane body's rect (window-content coordinates) in global top-left screen coordinates.
 fn on_screen(body: Bounds<Pixels>, window: &Window, cx: &App) -> CGRect {
-    // gpui window bounds are relative to the window's display; offset by its global origin.
-    let screen = window.display(cx).map_or(CGPoint::ZERO, |d| display::bounds(d.id().into()).origin);
-    let frame = window.bounds();
-    let titlebar = frame.size.height - window.viewport_size().height;
-    let x = screen.x + f32::from(frame.origin.x + body.origin.x) as f64;
-    let y = screen.y + f32::from(frame.origin.y + titlebar + body.origin.y) as f64;
-    CGRect { origin: CGPoint::new(x, y), size: to_cg(body.size) }
+    Geo::of(window, cx).on_screen(body)
 }
 
 /// ottospace's own window, title bar too, in global top-left screen coordinates.
@@ -9853,6 +9892,7 @@ impl Render for Workspace {
         // The cell on this display's pixel grid: again once the window moves to another scale.
         self.cell = terminal::cell_size(window);
         self.scale = window.scale_factor();
+        self.main_geo = Some(Geo::of(window, cx));
         // Each state drawn: the program whose terminal got or lost the focus hears it.
         self.tell_focus(cx);
         // A frame: the tick runs each frame for a while, to take what follows it.

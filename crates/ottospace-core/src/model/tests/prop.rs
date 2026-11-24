@@ -2514,8 +2514,8 @@ fn selects_tab(action: &Action) -> bool {
 }
 
 /// Tabs out: each a tab, not Home's, on a listed display that is not the main window's, one per
-/// display, holding no app pane; none with the flag off. The keyboard is on a tab out exactly while
-/// the main window shows another (`away`), and then nothing of the main window's has it.
+/// display; none with the flag off. The keyboard is on a tab out exactly while the main window
+/// shows another (`away`), and then nothing of the main window's has it: a live app is the tab out's.
 fn check_out(m: &Model) -> Result<(), String> {
     let on = m.features.on(Feature::MultiMonitor);
     ensure!(on || (m.out.is_empty() && m.away.is_none()), "tabs out with the flag off: {:?}", m.out);
@@ -2528,9 +2528,6 @@ fn check_out(m: &Model) -> Result<(), String> {
         let listed = m.displays.iter().any(|d| d.uid == out.display);
         ensure!(listed && !out.display.is_empty(), "tab {} out on display {:?}, not listed", out.tab, out.display);
         ensure!(m.main_display.as_ref() != Some(&out.display), "tab {} out on the main window's display", out.tab);
-        let leaves = at.and_then(|at| m.tree_at(at)).map(Node::leaves).unwrap_or_default();
-        let app = leaves.iter().any(|id| matches!(m.pane(*id).map(|p| &p.kind), Some(Kind::App { .. })));
-        ensure!(!app, "tab {} out holds an app pane", out.tab);
         let closing = at.is_some_and(|at| m.closing(&m.tabs[at].space));
         ensure!(!closing, "tab {} out is a closing workspace's", out.tab);
     }
@@ -2540,7 +2537,8 @@ fn check_out(m: &Model) -> Result<(), String> {
         ensure!(m.tabs.iter().any(|tab| tab.id == away) && !m.is_out(away), "the main window shows tab {away}");
         let chrome = m.talk.as_ref().is_some_and(|talk| talk.keys) || m.list.is_some() || m.rail_focus.is_some();
         ensure!(!chrome && m.compose.is_none(), "the main window's chrome has the keyboard while it is out");
-        ensure!(m.live.is_none(), "an app live while the keyboard is out");
+        let mine = m.tree_at(m.active).map(Node::leaves).unwrap_or_default();
+        ensure!(m.live.is_none_or(|id| mine.contains(&id)), "app {:?} live, not the tab out's", m.live);
     }
     // The selection history names the main window's tab, never one out.
     let main = m.tabs[m.main_at()].id;

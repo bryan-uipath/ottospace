@@ -5,7 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::{Action, Effect, Kind, Model, Owner, spaces::HOME_TAB};
+use super::{Action, Effect, Model, Owner, spaces::HOME_TAB};
 use crate::ax::Frame;
 use crate::features::Feature;
 
@@ -17,8 +17,6 @@ pub const SHELLS_ALONE: &str = "only ottospace reads the displays";
 pub const NO_OTHER: &str = "No other display";
 /// ⌘⇧O on Home.
 pub const HOME_STAYS: &str = "Home stays in the main window";
-/// ⌘⇧O on a tab that holds an app pane: hosted windows follow in a later slice.
-pub const APPS_STAY: &str = "A tab with an app pane stays in the main window";
 
 /// The capture key on a pane in a tab out.
 pub const CAPTURE_HERE: &str = "Capture a pane in the main window: fold its tab back in first";
@@ -102,7 +100,7 @@ impl Model {
         if at == self.active { self.focused } else { self.tabs.get(at)?.focused }
     }
 
-    /// The panes the main window shows. App panes are only ever there (`APPS_STAY`).
+    /// The panes the main window shows.
     pub fn main_panes(&self) -> Vec<super::PaneId> {
         self.tree_at(self.main_at()).map(super::Node::leaves).unwrap_or_default()
     }
@@ -112,6 +110,13 @@ impl Model {
         let out = self.out.iter().filter_map(|out| self.tabs.iter().position(|tab| tab.id == out.tab));
         let trees = std::iter::once(self.main_at()).chain(out).filter_map(|at| self.tree_at(at));
         trees.flat_map(super::Node::leaves).collect()
+    }
+
+    /// The tab out that shows pane `id`, if any: its window, not the main one, draws it.
+    pub fn out_tab_of(&self, id: super::PaneId) -> Option<u32> {
+        let shows =
+            |out: &&Out| self.out_at(out.tab).and_then(|at| self.tree_at(at)).is_some_and(|t| t.leaves().contains(&id));
+        self.out.iter().find(shows).map(|out| out.tab)
     }
 
     /// The place in `tabs` of tab `id`, if it is out.
@@ -124,11 +129,6 @@ impl Model {
             Some(_) => Window::Out(self.tabs[self.active].id),
             None => Window::Main,
         }
-    }
-
-    fn holds_app(&self, at: usize) -> bool {
-        let panes = self.tree_at(at).map(super::Node::leaves).unwrap_or_default();
-        panes.iter().any(|id| self.pane(*id).is_some_and(|p| matches!(p.kind, Kind::App { .. })))
     }
 
     /// Whether display `uid` may hold a tab out: listed, not the main window's, with a UUID.
@@ -199,9 +199,6 @@ impl Model {
         let notice = |text: &str| Effect::Notice { text: text.into() };
         if id == HOME_TAB {
             return effects.push(notice(HOME_STAYS));
-        }
-        if self.holds_app(at) {
-            return effects.push(notice(APPS_STAY));
         }
         let Some(display) = self.display_for(at) else { return effects.push(notice(NO_OTHER)) };
         // A stand-in folded out is the user's tab now: no fold in takes it away.
@@ -344,7 +341,7 @@ impl Model {
             let main = self.tabs[self.main_at()].id;
             let at = (0..self.tabs.len()).find(|at| {
                 let tab = &self.tabs[*at];
-                tab.display.as_ref() == Some(&uid) && !self.is_out(tab.id) && tab.id != main && !self.holds_app(*at)
+                tab.display.as_ref() == Some(&uid) && !self.is_out(tab.id) && tab.id != main
             });
             if let Some(at) = at.filter(|_| !taken(self)) {
                 self.out.push(Out { tab: self.tabs[at].id, display: uid.clone(), stand_in: None, fill: false });
@@ -354,7 +351,7 @@ impl Model {
     }
 
     /// After every step: each tab out is a tab on a display other than the main window's, one per
-    /// display, holding no app pane, and the flag on; any other folds in. `away` is the main
+    /// display, and the flag on; any other folds in. `away` is the main
     /// window's tab exactly while the keyboard is on a tab out. Only the user moves the keyboard
     /// between windows; nobody's step leaves it in the main window's chrome while it is out.
     pub(crate) fn settle_out(&mut self, from: (u32, Window, Owner), user: bool, effects: &mut Vec<Effect>) {
@@ -368,7 +365,6 @@ impl Model {
                 && self.other_display(&out.display)
                 && !seen.contains(&out.display)
                 && !self.out.iter().any(|kept| kept.tab == out.tab)
-                && at.is_some_and(|at| !self.holds_app(at))
                 // A closing workspace's tab folds in: nothing but its Undo or time changes it.
                 && at.is_some_and(|at| !self.closing(&self.tabs[at].space));
             if keeps {
@@ -496,7 +492,7 @@ impl Model {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Axis, Origin, PaneId};
+    use crate::model::{Axis, Kind, Origin, PaneId};
 
     fn display(uid: &str, x: f64) -> Display {
         Display { uid: uid.into(), frame: Frame::new(x, 0., 1728., 1117.), scale: 2. }
@@ -725,7 +721,7 @@ mod tests {
     }
 
     #[test]
-    fn one_display_home_and_app_panes_stay_in_the_main_window() {
+    fn one_display_and_home_stay_in_the_main_window() {
         let mut m = Model::default();
         set(&mut m, &[display("only", 0.)], "only");
         let told = |effects: Vec<Effect>| {
@@ -737,11 +733,27 @@ mod tests {
         assert_eq!(told(m.update(Action::TabOut { tab: None })).as_deref(), Some(HOME_STAYS));
         m.update(Action::NewEmptyTab);
         assert_eq!(told(m.update(Action::TabOut { tab: None })).as_deref(), Some(NO_OTHER));
+        assert!(m.tabs_out().is_empty());
+    }
+
+    /// A tab with an app pane folds out, and its app goes live there: the keyboard with it.
+    #[test]
+    fn an_app_panes_tab_folds_out_and_goes_live_there() {
+        let mut m = Model::default();
         set(&mut m, &[display("only", 0.), display("other", 1728.)], "only");
+        m.update(Action::NewEmptyTab);
         let app = Kind::App { window: 9, title: "w".into(), bundle: None, name: "Slack".into() };
         m.update(Action::Open { kind: app, axis: Axis::Right, beside: None });
-        assert_eq!(told(m.update(Action::TabOut { tab: None })).as_deref(), Some(APPS_STAY));
-        assert!(m.tabs_out().is_empty());
+        let (tab, pane) = (m.tabs[m.active].id, m.focused.unwrap_or_default());
+        m.update(Action::TabOut { tab: None });
+        assert_eq!(m.tabs_out(), vec![(tab, 1)]);
+        assert_eq!(m.out_tab_of(pane), Some(tab));
+        m.update(Action::KeyWindow { tab: m.tabs[m.main_at()].id });
+        assert_eq!(m.update(Action::Enter { pane }), [Effect::Live(pane)]);
+        assert_eq!((m.live, m.tabs[m.active].id, m.away.is_some()), (Some(pane), tab, true));
+        // Folded back in, it is the main window's pane again.
+        m.update(Action::TabIn { tab: Some(tab) });
+        assert_eq!(m.out_tab_of(pane), None);
     }
 
     #[test]

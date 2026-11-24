@@ -189,6 +189,7 @@ impl Workspace {
         // SAFETY: GPUI's own view, on the main thread.
         let number = crate::ns_view(window).map_or(0, |view| unsafe { ottospace_mac::window::number(view) });
         self.out_frames.insert(tab, (frame, drawn, number));
+        self.out_geos.insert(tab, crate::Geo::of(window, cx));
         // Its controls are its window's: noted apart, never as the main window's (sneak, tests).
         std::mem::swap(&mut self.controls, &mut self.out_controls);
         self.controls.begin();

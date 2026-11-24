@@ -1541,6 +1541,41 @@ fn the_inspector_reads_a_hosted_canary_window_and_counts_its_roles() {
     assert!(otto.call(json!({"cmd": "close"}))["inspector"].is_null());
 }
 
+/// A tab with a hosted pane folds out to another display: entered there, the canary's window
+/// covers its pane in the window out, not where the main window would have drawn it.
+#[test]
+#[ignore = "hosts real windows; run with `cargo e2e-apps`"]
+fn a_hosted_panes_tab_folds_out_and_its_window_goes_live_over_the_window_out() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary", "CANARY_SOCKET", &[]);
+    let frame = |index: usize| rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["bounds"]);
+    wait_for("the canary window", || frame(0));
+    let otto = otto_for(&canary, "otto-out", &[("OTTOSPACE_FEATURES", "multi_monitor")]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let main = json!({"uid": "main", "frame": [0, 0, 1728, 1117]});
+    let other = json!({"uid": "other", "frame": [1728, 0, 1920, 1080], "scale": 1});
+    otto.call(json!({"cmd": "displays_set", "displays": [main, other], "main": "main"}));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    let reply = otto.call(json!({"cmd": "open_app", "name": CANARY}));
+    let pane = reply["state"]["focused"].as_u64().expect("the canary's pane");
+    let tab = reply["state"]["tabs"][1]["id"].as_u64().expect("its tab");
+    let folded = otto.call(json!({"cmd": "key", "keys": "cmd-shift-o", "as": "user"}));
+    assert_eq!(folded["out"], json!([{"tab": tab, "display": 1}]), "{folded}");
+    // The window out draws the pane: its frame and the pane's bounds in it.
+    let (out, body) = wait_for("the pane laid out in the window out", || {
+        let s = state();
+        let out = rect(&s["windows"][1]["frame"]).filter(|_| s["windows"][1]["frames"].as_u64() > Some(0))?;
+        Some((out, rect(&s["bounds"][pane.to_string()]).filter(|b| b[2] > 1.0)?))
+    });
+    let crop = wait_for("the title bar's crop", || state()["crop"][pane.to_string()].as_f64().filter(|c| *c > 0.0));
+    assert_eq!(otto.call(json!({"cmd": "enter", "pane": pane}))["mode"], "app");
+    let live = wait_for("the window to cover its pane in the window out", || {
+        frame(0).filter(|f| close(f[0], out[0] + body[0]) && close(f[1], out[1] + body[1] - crop))
+    });
+    assert!(close(live[2], body[2]) && close(live[3], body[3] + crop), "live {live:?} vs pane {body:?}");
+    assert_eq!(otto.call(json!({"cmd": "leave"}))["mode"], "normal");
+}
+
 /// The canary window's frame as Accessibility has it: global, top-left origin.
 fn global_frame(canary: &Proc, index: usize) -> Option<[f64; 4]> {
     rect(&canary.call(json!({"cmd": "state"}))["windows"][index]["frame"])

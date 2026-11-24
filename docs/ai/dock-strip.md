@@ -87,8 +87,8 @@ header or ottospace's top row; it stays above every window. Costs nothing; cover
 - **Displays.** A strip belongs to the main window's tab, so to the display that window is on, not
   to the shared display. Sharing the display ottospace is on: the strip is there. Sharing another:
   docking pulls the bar off the shared display into ottospace's (open question 3). A tab holding an
-  app pane stays in the main window today ([multi-monitor.md](multi-monitor.md)), so a strip in a
-  window out waits for that.
+  app pane may fold out ([multi-monitor.md](multi-monitor.md)); a strip in a window out is not
+  designed yet.
 - **The status bar.** `zoom share statusbar window` (334 × 22, 3 buttons) stays ignored at first:
   only the toolbar is in scope. Where Stop share lives decides whether it joins (slice 0).
 
