@@ -102,6 +102,12 @@ pub enum At {
     Pane(PaneId),
 }
 
+/// The file a session at work is at: its label, while its station is files (as serialized).
+fn file_of(s: &crate::sessions::Found) -> Option<&str> {
+    let file = s.station.as_deref().is_some_and(|station| station.eq_ignore_ascii_case(Station::Files.name()));
+    s.label.as_deref().filter(|_| file)
+}
+
 impl Model {
     /// The empty places on show: in the main window and each folded-out one, the tab if it has
     /// no pane, else its empty panes.
@@ -176,20 +182,25 @@ impl Model {
                 (*task, Agent { who: Who::Task(*task), colour: *colour, at: transcript.file_at() })
             })
             .collect();
+        // A task whose agent runs in a terminal (Codex, or `conversation_view: terminal`) has no
+        // chat: its session at work (its file read, as a terminal's is) stands for it.
+        let in_terminal = (self.at_work.iter()).filter_map(|s| {
+            let task = self.tasks.adopter(&s.runner, &s.id)?;
+            let works = own.map_or(self.task_worktree(task) == Some(dir), |own| own == task);
+            let chatted = tasks.iter().any(|(t, _)| *t == task);
+            let colour = self.tasks.get(task)?.colour;
+            (works && !chatted).then_some((task, Agent { who: Who::Task(task), colour, at: file_of(s) }))
+        });
+        let in_terminal: Vec<(TaskId, Agent)> = in_terminal.collect();
+        tasks.extend(in_terminal);
         tasks.sort_by_key(|(task, _)| *task);
         // A session no task has, at work in this checkout (as its Repos dot says): not in a task's space.
         let sessions = (self.at_work.iter())
             .filter(|s| own.is_none() && s.repo == dir && !self.tasks.adopted(&s.runner, &s.id))
-            .map(|s| {
-                // Its station as serialized: `files`.
-                let file =
-                    s.station.as_deref().is_some_and(|station| station.eq_ignore_ascii_case(Station::Files.name()));
-                let at = s.label.as_deref().filter(|_| file);
-                Agent {
-                    who: Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() },
-                    colour: None,
-                    at,
-                }
+            .map(|s| Agent {
+                who: Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() },
+                colour: None,
+                at: file_of(s),
             });
         let agents: Vec<Agent> = tasks.into_iter().map(|(_, agent)| agent).chain(sessions).collect();
         // A session's file is lit too, in no task's colour.
@@ -497,6 +508,36 @@ mod tests {
         events(&mut m, vec![end("a")]);
         assert_eq!(agents(&m), Some(vec![(1, None)]), "a shell line: at no file");
         events(&mut m, vec![end("c"), Event::TurnFinished { outcome: Outcome::Completed }]);
+        assert_eq!(agents(&m), Some(vec![]));
+    }
+
+    /// A task whose agent runs in a terminal (no chat: Codex, or the terminal view) floats in its
+    /// city by its session at work, at its file; once the session is idle, it is gone.
+    #[test]
+    fn a_task_in_a_terminal_floats_by_its_session() {
+        let mut m = task_in_app();
+        // Its agent ended in the drawer: no chat runs. Its session, adopted, is at work.
+        m.update(Action::AgentExited { task: Subject::Task(1) }.sent_by(Origin::System));
+        let found = |active: bool, station: &str, label: &str| crate::sessions::Found {
+            runner: "codex".into(),
+            id: "s9".into(),
+            cwd: "/code/app".into(),
+            repo: "/code/app".into(),
+            started: Some(1),
+            last_activity: Some(2),
+            active,
+            station: Some(station.into()),
+            label: Some(label.into()),
+            title: None,
+            model: None,
+            held: true,
+        };
+        m.tasks.link(1, crate::sessions::Link { runner: "codex".into(), id: "s9".into(), state: None });
+        m.update(Action::SessionsAtWork { found: vec![found(true, "files", "src/main.rs")] });
+        assert_eq!(agents(&m), Some(vec![(1, Some("src/main.rs"))]));
+        m.update(Action::SessionsAtWork { found: vec![found(true, "shell", "cargo test")] });
+        assert_eq!(agents(&m), Some(vec![(1, None)]), "a shell line: at the edge");
+        m.update(Action::SessionsAtWork { found: vec![] });
         assert_eq!(agents(&m), Some(vec![]));
     }
 

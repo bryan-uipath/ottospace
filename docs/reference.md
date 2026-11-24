@@ -1667,6 +1667,17 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   the call runs, and after it while the agent still works and has run no other call. A shell
   command lights none. The call names only the last two parts of a path, so two files that share
   them are both lit.
+- Each agent at work in the checkout floats over its city as an icon: a task's badge (its letters
+  in its colour), or a session's runner glyph for a `claude` or `codex` you started in a terminal.
+  It shows only while a city is on show (an empty tab or pane of a checkout listed in Repos, with
+  `code_city` on), and only while the agent works: a task's turn runs, or its session is active
+  (its file changed lately). In a task's own space, only that task's agent; elsewhere every task
+  whose checkout it is, and every session at work there that no task has. A task whose agent
+  runs in a terminal (Codex, or `conversation_view: "terminal"`) shows by its session, read from
+  its file (so `sessions` must be on and `session_dirs` must hold its config folder). The icon
+  stands over the file the agent reads or edits now, a cone of its colour on it; at a shell line
+  or between calls, over the city's left corner (under the hints if they cover it). An icon with
+  no room clear of the hints is not drawn.
 - The files are what `git ls-files` lists there (tracked, and new ones not ignored), less the
   folders `city_exclude` leaves out and built-in ones (`node_modules`, `target`, `dist`, …):
   dropped before the layout, they take no room, move nothing and count toward no limit. Read off
