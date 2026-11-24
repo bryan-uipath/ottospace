@@ -3146,6 +3146,42 @@ fn a_window_picked_into_its_apps_slot_fills_it_and_the_apps_quit_leaves_it_waiti
     assert_eq!(state()["state"]["panes"][0]["kind"]["type"], "slot", "{}", state());
 }
 
+/// Swap with a real window: the canary's hosted window in slot 1, a second slot of the canary
+/// waiting beside it. The user's Swap moves the hosted window into slot 2 (parked there), and
+/// slot 1 waits, saying its window is in another pane.
+#[test]
+#[ignore = "moves real windows of the canary app; run with `cargo e2e-apps`"]
+fn swap_moves_a_hosted_window_to_another_slot_of_its_app() {
+    let canary = Proc::launch(env!("CARGO_BIN_EXE_ottospace-canary"), "canary-swap", "CANARY_SOCKET", &[]);
+    wait_for("the canary window", || rect(&canary.call(json!({"cmd": "state"}))["windows"][0]["bounds"]));
+    let otto = otto_for(&canary, "otto-swap", &[("OTTOSPACE_FEATURES", "slots")]);
+    let state = || otto.call(json!({"cmd": "state"}));
+    let spot = host_and_park(&otto);
+    otto.call(json!({"cmd": "slot_make", "pane": 1, "slot": {"select": {}}}));
+    // A second pane of the canary (no window of its own), made a slot and given back: it waits.
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": CANARY, "user": true}));
+    let two = reply["state"]["focused"].as_u64().unwrap_or_else(|| panic!("no second pane: {reply}"));
+    otto.call(json!({"cmd": "slot_make", "pane": two, "slot": {"select": {}}}));
+    user_click_control(&otto, &format!("slot-dots:{two}"));
+    let menu = state()["row_menu"]["items"].as_array().cloned().unwrap_or_default();
+    let give = menu.iter().position(|i| i["item"] == "slot_give_back").unwrap_or_else(|| panic!("{menu:?}"));
+    user_click_control(&otto, &format!("row-menu:{give}"));
+    wait_for("slot 2 waits", || (state()["state"]["panes"][1]["kind"]["type"] == "slot").then_some(()));
+    // The user's Swap on slot 1: its window goes to slot 2, parked there.
+    user_click_control(&otto, "slot-dots:1");
+    let menu = state()["row_menu"]["items"].as_array().cloned().unwrap_or_default();
+    let swap = menu.iter().position(|i| i["item"] == "slot_swap").unwrap_or_else(|| panic!("no swap: {menu:?}"));
+    user_click_control(&otto, &format!("row-menu:{swap}"));
+    let moved = wait_for("the window hosted in slot 2", || {
+        let now = state();
+        (now["hosted"]["1"].is_null()).then(|| rect(&now["hosted"][two.to_string()])).flatten()
+    });
+    assert!(close(moved[0], spot[0]), "parked at the spot: {moved:?}");
+    let now = state();
+    assert_eq!(now["state"]["panes"][0]["kind"]["type"], "slot", "{now}");
+    assert_eq!(now["state"]["slots"]["1"]["status"], "empty", "{now}");
+}
+
 /// Zoom-out (`zoom_out`): no real window floats over the tiles. A parked canary window stays parked
 /// while zoomed out; one the user is in is parked as the overview opens, and is live over its
 /// pane again, where it was, on the way back.
