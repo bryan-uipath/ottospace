@@ -4084,7 +4084,7 @@ pub struct Model {
     /// ⌘T pressed in a folded-out window: the checkout of that window's tab, for the new tab the
     /// main window gets (`main_first`). Taken by that `NewTab`.
     #[serde(skip)]
-    pub(crate) new_tab_from: Option<Option<String>>,
+    pub(crate) new_tab_from: Option<(Owner, Option<String>)>,
     /// Each joined task and its space, as the last step left them.
     #[serde(skip)]
     joined_before: Vec<(TaskId, Owner)>,
@@ -6288,9 +6288,14 @@ impl Model {
                 // The user's carries the checkout of the tab it is opened from (its city, where ⌘D
                 // starts), as a tab `open_repo` made keeps it.
                 // From a folded-out window: that window's tab's.
+                // A folded-out tab of another space: none (its checkout is that space's).
                 let from = self.new_tab_from.take();
                 let own = || self.tabs.get(self.active).and_then(|tab| tab.folder.clone());
-                let carried = if self.by_user { from.unwrap_or_else(own) } else { None };
+                let carried = match from {
+                    _ if !self.by_user => None,
+                    Some((space, folder)) => folder.filter(|_| space == of),
+                    None => own(),
+                };
                 self.leave(effects);
                 self.park_active();
                 self.push_tab_of(of);

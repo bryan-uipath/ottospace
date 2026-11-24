@@ -458,7 +458,8 @@ impl Model {
                 // A new tab opens in the main window, carrying the checkout of the tab the key
                 // was pressed in.
                 if matches!(action, Action::NewTab | Action::NewEmptyTab) {
-                    self.new_tab_from = Some(self.tabs.get(self.active).and_then(|tab| tab.folder.clone()));
+                    let tab = self.tabs.get(self.active);
+                    self.new_tab_from = tab.map(|tab| (tab.space.clone(), tab.folder.clone()));
                 }
                 self.key_main(effects);
                 action
@@ -537,6 +538,13 @@ mod tests {
         m.update(Action::SelectTab { index: 0 });
         m.update(Action::NewTab);
         assert_eq!(m.tabs[m.active].folder.as_deref(), Some("/code/app"));
+        // The main window on another space: a folded-out tab's checkout is not carried into it.
+        let mut m = two();
+        m.tabs[1].folder = Some("/code/web".into());
+        m.update(Action::TabOut { tab: None });
+        m.update(Action::SpaceOpen { space: Owner::Home });
+        m.update(Action::NewTab);
+        assert_eq!(m.tabs[m.active].folder, None);
     }
 
     /// A workspace of one tab, a terminal in it.

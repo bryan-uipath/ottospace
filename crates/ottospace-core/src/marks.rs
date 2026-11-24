@@ -1124,7 +1124,7 @@ impl Model {
         self.retry_unfilled(effects);
         let tab = &mut self.tabs[self.active];
         tab.title = record.title.clone();
-        tab.folder = record.folder.clone();
+        tab.folder = record.folder.clone().filter(|path| crate::tasks::folder_fits(path));
         tab.id
     }
 

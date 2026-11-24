@@ -812,7 +812,8 @@ impl Model {
         if self.tabs.get(index).is_some_and(|tab| tab.space == crate::model::Owner::Decisions) {
             return Err(crate::model::decisions::UNKEPT.into());
         }
-        let record = self.tab_record(index, cwds, histories).ok_or("no tab to save")?;
+        // A workbook's tab opens in that workbook's space: its checkout is the layout file's alone.
+        let record = TabRecord { folder: None, ..self.tab_record(index, cwds, histories).ok_or("no tab to save")? };
         if record.panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
             return Err(EMPTY.into());
         }
