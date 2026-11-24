@@ -18,6 +18,18 @@ use crate::features::Feature;
 /// Why a client's opening of a side overlay, or its dismissal, is refused.
 pub const OVERLAY_USERS: &str = "only the user opens or dismisses a side overlay";
 
+/// Why a client's pull of the drawer out over the panes, or back, is refused.
+pub const WIDE_USERS: &str = "only the user pulls the drawer out or back";
+
+/// How much of the panes a pulled-out drawer leaves showing at its left: it still reads as over them.
+pub const PULLED_EDGE: f32 = 64.;
+
+/// The pulled-out drawer's width, its rail included: the window less what lies left of the panes
+/// (`left`) and `PULLED_EDGE` of them. Never narrower than `normal`, the drawer as it is otherwise.
+pub fn pulled_width(window: f32, left: f32, normal: f32) -> f32 {
+    (window - left - PULLED_EDGE).max(normal)
+}
+
 /// How long an overlay's slide in lasts, in milliseconds. Its close plays it backwards: drawn only,
 /// the model has already closed it.
 pub const SLIDE_MS: f32 = 140.;
@@ -48,6 +60,12 @@ impl Model {
     /// The sidebar and the drawer are overlays (`overlay_panels`).
     pub fn overlays(&self) -> bool {
         self.features.on(Feature::OverlayPanels)
+    }
+
+    /// The drawer is pulled out over the panes, an edge of them left showing: the user's choice,
+    /// kept for every task (`layout.json`'s `drawer.wide`), and only as an overlay.
+    pub fn talk_pulled(&self) -> bool {
+        self.talk_wide && self.overlays()
     }
 
     /// The open sidebar takes its width from the panes: open, and no overlay.
@@ -222,6 +240,29 @@ impl Model {
         if !before.collapsed && moves && right(before.target) && matches!(self.focus_target(), Target::Pane(_)) {
             self.fold_drawer(effects);
         }
+    }
+}
+
+#[cfg(test)]
+mod pulled {
+    use super::*;
+    use crate::features::Features;
+
+    /// Pulled out, the drawer covers the panes but an edge; never narrower than it was; only as
+    /// an overlay; only the user's; kept for every task.
+    #[test]
+    fn the_drawer_pulls_out_over_the_panes_leaving_an_edge_and_only_the_user_pulls_it() {
+        assert_eq!(pulled_width(1400., 56., 420.), 1400. - 56. - PULLED_EDGE);
+        assert_eq!(pulled_width(500., 56., 420.), 420., "a narrow window: as it was");
+        let mut m = Model::default();
+        m.update(Action::TalkWide);
+        assert!(!m.talk_pulled(), "no overlay: nothing to pull out over");
+        m.update(Action::SetFeatures { features: Features::all() }.sent_by(Origin::System));
+        assert_eq!(m.refusal(&Action::TalkWide, Origin::Socket), Some(WIDE_USERS));
+        m.update(Action::TalkWide);
+        assert!(m.talk_pulled());
+        m.update(Action::TalkWide);
+        assert!(!m.talk_pulled());
     }
 }
 

@@ -2160,7 +2160,7 @@ pub enum Action {
     TalkResize {
         width: f32,
     },
-    /// Widen the drawer to half the window, or back.
+    /// Pull the drawer out over the panes, an edge of them left showing, or back (`overlay_panels`).
     TalkWide,
     /// Collapse the shown conversation's dial to its marker, or open it again: kept per task.
     DialToggle,
@@ -3103,7 +3103,9 @@ impl Action {
             | Action::AppsToggle { .. }
             | Action::AppsFilter { .. } => Some(Feature::AppsSection),
             Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(Feature::MultiMonitor),
-            Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(Feature::OverlayPanels),
+            Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } | Action::TalkWide => {
+                Some(Feature::OverlayPanels)
+            }
             Action::CityCamera { .. } => Some(Feature::CodeCity),
             Action::DecisionsOpen
             | Action::DecisionsAsk { .. }
@@ -3448,7 +3450,6 @@ impl Action {
             | Action::TalkToggle
             | Action::TalkKeys { .. }
             | Action::TalkResize { .. }
-            | Action::TalkWide
             | Action::DialToggle
             | Action::FillDisplay
             | Action::FillEnded
@@ -4919,6 +4920,7 @@ impl Model {
             // Nor puts the transcript the user has in the drawer away, or the keys over it.
             // Nor collapses the drawer into its rail, or opens a conversation there is from there.
             Action::TalkToggle => Some(rail::DRAWER_USERS),
+            Action::TalkWide => Some(overlay::WIDE_USERS),
             // Nor opens the new-task box in a drawer the user collapsed: its ⌘N, the bar's or the rail's +.
             Action::OpenCompose { .. } if self.folded.is_some() => Some(rail::DRAWER_USERS),
             Action::TalkKeys { on: true } if self.listen.shown => Some(rail::RAIL_USERS),
@@ -13047,6 +13049,7 @@ mod tests {
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
+                    Action::TalkWide => Some(overlay::WIDE_USERS),
                     Action::ComposeDefault => Some(pickers::DEFAULT_USERS),
                     Action::ComposePen => Some(capture::USERS_ALONE),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),
@@ -13077,7 +13080,9 @@ mod tests {
                     Action::KeyUsed { .. } | Action::ResetKeyUse | Action::RestoreKeyUse { .. } => false,
                     Action::NoticeDismiss { .. } => false,
                     // Its flag is off here: absent, it ends nothing.
-                    Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } => false,
+                    Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } | Action::TalkWide => {
+                        false
+                    }
                     _ => origin == Origin::User,
                 };
                 assert_eq!(m.sneak.is_none(), ends, "{action:?} from {origin:?}");
@@ -18838,8 +18843,7 @@ mod tests {
         // Each task shown has its space: the workspace's tab, one for each of the four, and Home's.
         assert_eq!((m.talk.as_ref().and_then(|talk| talk.task.task()), m.list, m.tabs.len()), (Some(1), None, 6));
         m.update(Action::TalkResize { width: 9e9 });
-        m.update(Action::TalkWide);
-        assert_eq!((m.talk_width, m.talk_wide), (talk::MAX_WIDTH, true));
+        assert_eq!(m.talk_width, talk::MAX_WIDTH);
         // Shown, its space is selected.
         assert_eq!(m.tab_task(), Some(1));
     }
@@ -20539,6 +20543,7 @@ mod tests {
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
+                    Action::TalkWide => Some(overlay::WIDE_USERS),
                     Action::ComposeDefault => Some(pickers::DEFAULT_USERS),
                     Action::ComposePen => Some(capture::USERS_ALONE),
                     Action::WorktreeRemoved { .. } if origin == Origin::Socket => Some(finish::SHELLS_ALONE),

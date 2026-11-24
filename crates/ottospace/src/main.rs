@@ -573,6 +573,7 @@ impl AssetSource for Assets {
             "icons/plus.svg" => Some(include_bytes!("../assets/icons/plus.svg")),
             "icons/fill-expand.svg" => Some(include_bytes!("../assets/icons/fill-expand.svg")),
             "icons/fill-collapse.svg" => Some(include_bytes!("../assets/icons/fill-collapse.svg")),
+            "icons/pull-back.svg" => Some(include_bytes!("../assets/icons/pull-back.svg")),
             "icons/dismiss.svg" => Some(include_bytes!("../assets/icons/dismiss.svg")),
             "icons/slide-left.svg" => Some(include_bytes!("../assets/icons/slide-left.svg")),
             "icons/slide-right.svg" => Some(include_bytes!("../assets/icons/slide-right.svg")),
@@ -892,7 +893,7 @@ actions!(ottospace, [CapturePane]);
 // The bug button's key: report a bug in ottospace, while `developer.ottospace_repo` is set.
 actions!(ottospace, [ReportBug]);
 // The right drawer: the keyboard in or out, closed or open, the task's workspace, its dial.
-actions!(ottospace, [TalkFocus, TalkToggle, SidebarToggle, TalkGo, StopAgent, EditMessage, DialToggle]);
+actions!(ottospace, [TalkFocus, TalkToggle, TalkWide, SidebarToggle, TalkGo, StopAgent, EditMessage, DialToggle]);
 // A tab of no task, and the tab on show taken out of its task or moved to another.
 actions!(ottospace, [MoveTabToTask]);
 // App menu.
@@ -987,6 +988,7 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-n", QuickNote, None),
         KeyBinding::new("cmd-l", TalkFocus, None),
         KeyBinding::new("cmd-shift-r", TalkToggle, None),
+        KeyBinding::new("cmd-alt-r", TalkWide, None),
         KeyBinding::new("cmd-shift-l", SidebarToggle, None),
         KeyBinding::new("cmd-enter", TalkGo, None),
         KeyBinding::new("cmd-shift-a", DialToggle, None),
@@ -9342,6 +9344,7 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &TalkToggle, window, cx| {
                 this.dispatch(Action::TalkToggle, this.input, window, cx);
             }))
+            .on_action(cx.listener(|this, _: &TalkWide, window, cx| this.drawer_pull(window, cx)))
             .on_action(cx.listener(|this, _: &SidebarToggle, window, cx| this.sidebar_toggle(window, cx)))
             .on_action(cx.listener(|this, _: &DialToggle, window, cx| {
                 this.dispatch(Action::DialToggle, this.input, window, cx);
@@ -9671,7 +9674,7 @@ impl Render for Workspace {
         // An overlay takes none: the panes lie as with both collapsed (`overlay_panels`).
         let left = RAIL + if self.model.sidebar_takes_room() { SECTION } else { 0. };
         let half = f32::from(window.viewport_size().width) / 2.;
-        let drawer = if self.model.talk_wide { half } else { self.model.talk_width.min(half.max(MIN_DRAWER)) };
+        let drawer = self.model.talk_width.min(half.max(MIN_DRAWER));
         // The editor gets its columns: a narrower drawer widens while it shows, up to half the window.
         let columns =
             ottospace_core::model::editor::COLUMNS as f32 * f32::from(self.cell.width) + 10. + drawer_rail::WIDTH;
@@ -9679,6 +9682,14 @@ impl Render for Workspace {
         // The btw column widens it, the conversation kept as wide, to three quarters of the window at most.
         let most = f32::from(window.viewport_size().width) * 0.75;
         let drawer = if self.btw_drawn() { (drawer + btw::WIDTH).min(most).max(drawer) } else { drawer };
+        // Pulled out: over the panes, an edge of them left showing; eased there and back.
+        let pulled = self.model.talk_pulled();
+        let window_width = f32::from(window.viewport_size().width);
+        let to = if pulled { ottospace_core::model::overlay::pulled_width(window_width, left, drawer) } else { drawer };
+        let (drawer, grows) = self.slides.drawer_width(to, pulled, crate::dial::calm());
+        if grows {
+            window.request_animation_frame();
+        }
         self.drawer.width = drawer;
         // The drawer's place and its rail, always: the rail alone while it is collapsed, or an overlay.
         let last = self.slides.kept.take();

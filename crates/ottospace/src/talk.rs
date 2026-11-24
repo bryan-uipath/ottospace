@@ -752,35 +752,38 @@ impl Workspace {
         });
         // The agent goes on, its rail item with it.
         let close = self.drawer_collapse("talk:talk-close", cx);
-        // As high as the top row above it.
-        let header = div()
-            .h(px(crate::TOP_BAR))
-            .flex_none()
-            .pl_3()
-            .pr_1()
+        // Its own row: the title in full, on two lines at most, the rest on hover with the facts.
+        let tip: gpui::SharedString = match facts.is_empty() {
+            true => title.clone().into(),
+            false => format!("{title}\n{facts}").into(),
+        };
+        let title_row = div()
             .flex()
-            .items_center()
+            .items_start()
             .gap_2()
-            .border_b_1()
-            .border_color(rgb(theme::BORDER))
+            .pt_2()
             .child(match shown.and_then(|task| self.task_badge(task.id, 18.)) {
                 Some(badge) => badge,
                 None => home::dot(color),
             })
             .children(self.dial_marker(subject, cx))
-            // Model, mode, time and folder are on its hover; the model is at the drawer's foot too.
             .child(
                 div()
                     .id("talk-title")
                     .flex_1()
-                    .min_w(px(72.))
-                    .truncate()
+                    .min_w_0()
                     .text_sm()
+                    .line_height(px(18.))
+                    .line_clamp(2)
                     .child(title)
-                    .when(!facts.is_empty(), |d| {
-                        d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(facts.clone()))))
-                    }),
-            )
+                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
+            );
+        // Under it, what can be done, the slide buttons last.
+        let controls = div()
+            .h(px(crate::TOP_BAR))
+            .flex()
+            .items_center()
+            .gap_2()
             // Where it runs, only when that is not its task's own folder: what it can see.
             .children(line.folder.map(|folder| {
                 let tip: gpui::SharedString = format!("The agent runs in {folder}").into();
@@ -797,7 +800,19 @@ impl Workspace {
             .children(adopt)
             .children(stop)
             .children(self.finish_buttons(subject, cx))
+            .child(div().flex_1())
+            .children(self.drawer_pull_button(cx))
             .child(close);
+        let header = div()
+            .flex_none()
+            .pl_3()
+            .pr_1()
+            .flex()
+            .flex_col()
+            .border_b_1()
+            .border_color(rgb(theme::BORDER))
+            .child(title_row)
+            .child(controls);
         Some(header.id("drawer-head"))
     }
 

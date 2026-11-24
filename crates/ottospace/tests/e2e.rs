@@ -9250,6 +9250,61 @@ fn overlay_panels_opening_the_sidebar_or_the_drawer_moves_no_pane() {
     assert_ne!(open["mode"], "list", "the flag off, the keyboard stays where it was");
 }
 
+/// The owner: "a |< button that pulls all the way over, leaving a bit of an edge to show that it is
+/// overlaying". With `overlay_panels`, the drawer's |← pulls it out over the panes to an edge of
+/// them, easing there (frames counted); no pane moves; ⌘⌥R brings it back. Only the user's: a
+/// client's key does nothing.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_drawer_pulls_out_over_the_panes_to_an_edge_and_back() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let init =
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+    let said = format!(
+        r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{{"type":"text","text":"Made-up notes."}}]}}}}"#
+    );
+    let done = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01,"modelUsage":{"claude-opus-5-5":{"contextWindow":1000000}}}"#;
+    let turn = [init, said, done.to_string()].join("\n");
+    let (root, _, env) = native_setup("drawer-pull", &[("turn1.jsonl", turn)], &[OVERLAYS[0]]);
+    let otto = launch_env("drawer-pull", &env);
+    otto.call(json!({"cmd": "split"}));
+    otto.call(
+        json!({"cmd": "task_new", "line": "a made-up task whose title is long enough to want a row of its own >app"}),
+    );
+    otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5));
+    otto.start_task(1);
+    let before = otto.wait_for("the drawer", |o| Some(o.drawn()).filter(|r| r["overlays"]["drawer"].is_array()));
+    let (window, normal) = (rect(&before["window"]), rect(&before["overlays"]["drawer"]));
+    let pull = otto.control("talk:talk-wide");
+    let frames = before["counts"]["overlay_frames"].as_u64().unwrap();
+    // A client's ⌘⌥R does nothing.
+    otto.call(json!({"cmd": "key", "keys": "cmd-alt-r"}));
+    assert_eq!(otto.drawn()["state"]["talk_wide"], false);
+    // The user's |←: out to an edge of the panes, eased; no pane moves.
+    otto.user_click(at(pull, 0.5, 0.5));
+    let out = otto.wait_for("pulled out", |o| {
+        let r = o.drawn();
+        let d = rect(&r["overlays"]["drawer"]);
+        // At rest: as wide as it goes.
+        (d[2] > normal[2] + 100. && (d[0] - 56. - 64.).abs() <= 2.).then_some(r)
+    });
+    let drawer = rect(&out["overlays"]["drawer"]);
+    let edge = drawer[0] - 56.;
+    assert!((edge - 64.).abs() <= 2., "an edge of the panes shows: {drawer:?} {window:?}");
+    assert_eq!(out["bounds"], before["bounds"], "a pane moved");
+    assert_eq!(out["state"]["talk_wide"], true);
+    assert!(out["counts"]["overlay_frames"].as_u64().unwrap() > frames, "eased, not cut");
+    // The user's ⌘⌥R: back to its width.
+    otto.user_key("cmd-alt-r");
+    let back = otto.wait_for("back", |o| {
+        let r = o.drawn();
+        ((rect(&r["overlays"]["drawer"])[2] - normal[2]).abs() <= 1.).then_some(r)
+    });
+    assert_eq!((back["state"]["talk_wide"].clone(), back["bounds"].clone()), (json!(false), before["bounds"].clone()));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A click outside an overlay (on a pane), Esc in its list, or a row that goes somewhere closes
 /// the sidebar; a click on a pane folds the drawer. A click inside either keeps it.
 #[test]
