@@ -319,6 +319,12 @@ today. Off: Elsewhere, unchanged.
    waits and offers "Go to the pane"; no answering from the card.
 6. **The city** (after #395): a card's glyph over its file, from `session_cards`.
 
+Opening in place (built after #488): with `terminal_tasks`, `SessionOpen` (its card, Elsewhere's
+row, or its agent's icon in a code city, the user's click) puts the session's conversation in the
+drawer over the space on show (`Model::glance`, `space_subject` gives it): no tab, no space on the
+row. Another space on show, it goes. Going on with it here (the banner's or card's Take over: a
+task, `SessionAdopt`; Resume: its own space, as before) is the step that gives it a place.
+
 Slice 1 as built (#425): as above, but for these, left for a later step: the Project view shows no
 cards (live sessions stay Elsewhere's rows there); opening an ended or idle card shows today's
 session drawer, not a read-only past; no `MAX_CARDS` and "N more"; ⌘↵ from the drawer header;

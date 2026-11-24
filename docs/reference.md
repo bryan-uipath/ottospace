@@ -322,10 +322,12 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    → (⌘⇧R) collapses the drawer into its rail and the agent goes on. ⌘L moves the keyboard in
    and out. At its foot, muted, the model in short, a permission mode that lets the agent
    act without asking (`auto`, `accept edits`; `bypass` in the warning colour), and, at the
-   right, the folder its process runs in: `haiku-5.5 · auto` and `~/code/app`. The folder is
-   from home (`~`), or a worktree's from its folder name (`fix-login/crates`); a long one has
-   `…` in its middle, and the hover has all of it; in a narrow drawer the model and mode are
-   cut first. Before the agent starts: where it would start (a session gone on with: where it
+   right, where its process runs: its listed repository's name, its worktree (by branch, also one
+   outside the repository's folder) and the folder, each said once: `app ~/code/app` at the
+   repository's root, `app crates/core` below it, `app fix-login src` in a worktree, `~/notes`
+   in no listed repository. The hover has each whole; in a narrow drawer the model and mode, then
+   the folder, are cut first, the repository and worktree stay. A session no task has: where it
+   started. Before the agent starts: where it would start (a session gone on with: where it
    started). A folder that is gone (a worktree removed) starts no agent: a toast says
    so. It stays once the agent ended. Under the header of a native conversation, its
    [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
@@ -1630,8 +1632,10 @@ then does nothing (a toast says so). A preference is a normal setting.
   panes, anywhere; elsewhere, in a listed repository while Tasks is open) is a card under Needs you
   or Running, after the tasks, and counts there (`needs you`, ⌘J, the status bar). Live: its pane
   runs it, or its runner's process record holds it (Claude Code), or its file changed in the last
-  30 s, or its record says busy (Claude Code: then never "your turn", however quiet its own file).
-  A click opens it read-only. Hide takes it out until it asks again in a new turn (answered or at
+  30 s, or its record says busy, or its sub-agents' files were written lately (Claude Code: then
+  never "your turn", however quiet its own file). A click (its card, or its agent in a code city)
+  opens it read-only in the drawer where you are: no tab of its own, the space on show stays, and
+  it goes when another space is on show. Take over (once idle) makes it a task and goes on with it. Hide takes it out until it asks again in a new turn (answered or at
   work since, then a wait), never within 5 minutes; activity or the wait it had never ends a hide
   (kept in `sessions-hidden.json`). "N hidden · Show" lists the hidden ones, dim, each with Unhide;
   "N hidden · Hide" folds them away again. Ended, it stays dim 5 minutes,

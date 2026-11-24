@@ -4461,6 +4461,10 @@ pub struct Model {
     /// The title of each session conversation opened this run, as it was when opened.
     #[serde(skip)]
     talk_titles: Vec<(String, String, String)>,
+    /// A terminal session opened in place (`terminal_tasks`): its read-only conversation in the
+    /// drawer over the space on show, no tab of its own. Gone when another space is on show.
+    #[serde(skip)]
+    pub(crate) glance: Option<(Owner, Subject)>,
     #[serde(skip)]
     models: agents::Models,
     /// What the user's shell runs in place of each runner's program (`agent_commands`): never in
@@ -4723,6 +4727,7 @@ impl Default for Model {
             ended: Vec::new(),
             left: (Vec::new(), None),
             talk_titles: Vec::new(),
+            glance: None,
             models: agents::Models::default(),
             agent_commands: Default::default(),
             default_agent: None,
@@ -8501,7 +8506,8 @@ impl Model {
                 if self.session(runner, id).is_some()
                     || self.agent_runs(&subject)
                     || self.drawn_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (runner, id))
-                    || (!self.tasks.adopted(runner, id) && self.spaces.iter().any(|s| s.of == Owner::of(&subject))) =>
+                    || (!self.tasks.adopted(runner, id) && self.spaces.iter().any(|s| s.of == Owner::of(&subject)))
+                    || self.glanced(&subject) =>
             {
                 None
             }
@@ -8531,8 +8537,19 @@ impl Model {
         // the keyboard in a tab out's window too.
         let card =
             *self.shown_space() == Owner::Decisions && self.space_subject(&Owner::Decisions).as_ref() == Some(&subject);
-        if !card {
+        // With `terminal_tasks`, a session no task has is looked at where the user is: its
+        // conversation over the space on show, no tab. Going on with it here gives it its own.
+        let own = self.spaces.iter().any(|space| space.of == Owner::of(&subject));
+        let glance = matches!(subject, Subject::Session { .. })
+            && self.features.on(Feature::TerminalTasks)
+            && start.is_none()
+            && !own
+            && !self.agent_runs(&subject);
+        if glance {
+            self.glance = Some((self.shown_space().clone(), subject.clone()));
+        } else if !card {
             self.open_space(self.subject_space(&subject), effects);
+            self.glance = None;
         }
         if let Subject::Task(id) = &subject {
             self.set_front(*id);
@@ -18232,11 +18249,13 @@ mod tests {
     fn an_opened_terminal_session_is_read_on_and_its_tab_is_its_checkouts_city() {
         let now = 100 * sessions::QUIET_MS;
         let mut m = cards_model(now);
-        m.update(Action::SetFeatures { features: Features::all() }.sent_by(Origin::System));
+        // Without `terminal_tasks` a session opens in a tab of its own (with it, in place: below).
+        let features = Features::all().with(Feature::TerminalTasks, false);
+        m.update(Action::SetFeatures { features }.sent_by(Origin::System));
         if m.sidebar != Some(Section::Tasks) {
             m.update(Action::ToggleSection { section: Section::Tasks });
         }
-        let held = Found { held: true, ..session("claude", "h", "/code/app", false, now - 60_000) };
+        let held = Found { held: true, ..session("claude", "h", "/code/app", true, now) };
         m.update(Action::SetSessions { found: vec![held.clone()], day: 0 }.sent_by(Origin::System));
         assert!(!m.shows_session());
         m.update(Action::SessionOpen { runner: "claude".into(), id: "h".into() });
@@ -18254,6 +18273,54 @@ mod tests {
         // Another space on show: nothing asks for the sessions.
         m.update(Action::SpaceOpen { space: Owner::Home });
         assert!(!m.shows_session());
+    }
+
+    /// The owner's case (`terminal_tasks`): opening a terminal session (its card, or its agent in
+    /// the city) shows its read-only conversation in the drawer where the user is: no tab, the
+    /// space on show stays (its city beside it). Another space on show, it goes. Going on with
+    /// it here (Take over: a task, or Resume) is the step that gives it a place of its own.
+    #[test]
+    fn a_terminal_session_opens_in_place_over_the_space_on_show() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let held = Found { held: true, active: true, ..session("claude", "h", "/code/app", false, now) };
+        m.update(Action::SetSessions { found: vec![held], day: 0 }.sent_by(Origin::System));
+        let (tabs, space) = (m.tabs.len(), m.shown_space().clone());
+        m.update(Action::SessionOpen { runner: "claude".into(), id: "h".into() });
+        let shown = Subject::Session { runner: "claude".into(), id: "h".into() };
+        assert_eq!((m.tabs.len(), m.shown_space()), (tabs, &space), "no tab, the same space");
+        assert_eq!(m.talk.as_ref().map(|t| (&t.task, t.open)), Some((&shown, true)));
+        assert!(m.watching(&shown) && m.shows_session());
+        assert!(!m.spaces.iter().any(|s| s.of == Owner::of(&shown)), "no space of its own on the row");
+        // Another space on show: it goes, and the drawer is that space's.
+        m.update(Action::SpaceOpen { space: Owner::Home });
+        assert!(m.glance.is_none() && m.talk.as_ref().is_none_or(|t| t.task != shown));
+        // Take over (once idle): a task, its conversation opened.
+        m.update(Action::SpaceOpen { space: space.clone() });
+        m.update(Action::SessionOpen { runner: "claude".into(), id: "h".into() });
+        let idle = Found { held: false, ..session("claude", "h", "/code/app", false, now - 60_000) };
+        m.update(Action::SetSessions { found: vec![idle], day: 0 }.sent_by(Origin::System));
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "h".into() });
+        assert!(m.glance.is_none() && m.tasks.adopted("claude", "h"));
+        assert!(m.talk.as_ref().is_some_and(|t| t.task.task().is_some()), "its task's conversation");
+    }
+
+    /// The drawer's place line reads Repos: a worktree outside its repository's folder is the
+    /// repository's, by its branch; a folder in no listed checkout is its path alone.
+    #[test]
+    fn a_folder_is_placed_by_its_listed_repository_and_worktree() {
+        let mut m = Model::default();
+        let tree = repos::Worktree { name: "app-wt".into(), path: "/tmp/wt/app-wt".into(), branch: Some("fix".into()) };
+        let repo = Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![tree] };
+        m.update(Action::SetRepos { repos: vec![repo] });
+        let at = |dir: &str| {
+            let w = m.where_at(dir, None);
+            (w.repo, w.worktree, w.path)
+        };
+        let s = |text: &str| Some(text.to_string());
+        assert_eq!(at("/tmp/wt/app-wt/src"), (s("app"), s("fix"), s("src")));
+        assert_eq!(at("/code/app"), (s("app"), None, s("/code/app")));
+        assert_eq!(at("/elsewhere"), (None, None, s("/elsewhere")));
     }
 
     /// The owner's case: a terminal session quiet past its turn while its sub-agents work is at

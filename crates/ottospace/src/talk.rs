@@ -665,16 +665,21 @@ impl Workspace {
         let ran = self.drawer.native.get(subject).and_then(|native| native.cwd.clone());
         let ran = ran.or_else(|| self.drawer.agents.get(subject).and_then(|agent| agent.cwd.clone()));
         let task = subject.task().and_then(|id| self.model.tasks.get(id));
-        let dir = task.and_then(|task| task.dir().cloned()).or_else(|| self.repo_of(subject));
+        // A session no task has: where it started, as read.
+        let started = match subject {
+            Subject::Session { runner, id } => self.model.session_dir(runner, id),
+            Subject::Task(_) => None,
+        };
+        let dir = task.and_then(|task| task.dir().cloned()).or(started).or_else(|| self.repo_of(subject));
         let home = || std::env::var("HOME").ok().filter(|home| !home.is_empty());
         // Nothing would start, its agent moved into another worktree: it works there now.
         let moved = subject.task().and_then(|id| self.model.task_moved(id)).map(String::from);
         ran.or_else(|| self.model.agent_dir(subject)).or(moved).or(dir).or_else(home)
     }
 
-    /// The drawer's foot: the agent's model, a mode that lets it act unasked, and the folder it
-    /// runs in (whole on hover). Muted; a mode that asks for nothing in the warning colour.
-    /// Stays once the agent ended.
+    /// The drawer's foot: the agent's model, a mode that lets it act unasked, and where it runs:
+    /// its repository, its worktree, its folder (`Model::where_at`; each whole on hover). Muted;
+    /// a mode that asks for nothing in the warning colour. Stays once the agent ended.
     fn agent_foot(&self, subject: &Subject, width: f32) -> Option<Div> {
         let line = self.agent_line(subject);
         let color = if line.bypass { theme::SNEAK } else { theme::MUTED };
@@ -682,20 +687,24 @@ impl Workspace {
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let worktree = dir.as_deref().and_then(|dir| self.model.worktree_at(dir));
         let short = dir.as_deref().map(|dir| talk::short_dir(dir, home.as_deref(), worktree));
-        let tip = dir.map(|dir| gpui::SharedString::from(format!("The agent runs in {dir}")));
+        let place = dir.as_deref().map(|dir| self.model.where_at(dir, home.as_deref()));
+        let tip = place.as_ref().map(|place| gpui::SharedString::from(place.full.clone()));
         // The drawer's width less the foot's padding: `cut_text` needs a width to cut in.
         let foot = div().id("talk-foot").flex_none().flex().gap_2().px_3().pb_1().w(px(width)).text_xs();
         let foot = foot
             .text_color(rgb(color))
             .when_some(tip, |foot, tip| foot.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))));
         let text = line.foot?;
-        // The folder whole, at the right: in a narrow drawer the model and mode are cut first.
-        let (rest, folder) = match short.filter(|short| text.ends_with(short.as_str())) {
-            Some(short) => (text[..text.len() - short.len()].trim_end_matches(" · ").to_string(), Some(short)),
-            None => (text, None),
+        // The model and mode, then where: the repository and worktree whole, the folder cut first.
+        let rest = match short.filter(|short| text.ends_with(short.as_str())) {
+            Some(short) => text[..text.len() - short.len()].trim_end_matches(" · ").to_string(),
+            None => text,
         };
-        let folder = folder.map(|folder| div().flex_none().child(folder));
-        Some(div().child(foot.child(crate::cut_text(rest).flex_1()).children(folder)))
+        let (names, path) = place.map_or((Vec::new(), None), |place| (vec![place.repo, place.worktree], place.path));
+        let names = names.into_iter().flatten().map(|name| div().flex_none().child(name));
+        let path = path.map(|path| div().min_w_0().flex_shrink().truncate().child(path));
+        let rest = (!rest.is_empty()).then(|| crate::cut_text(rest).flex_1());
+        Some(div().child(foot.children(rest).children(names).children(path)))
     }
 
     /// The conversation's header: state, title, Chat | Terminal, then what can be done.

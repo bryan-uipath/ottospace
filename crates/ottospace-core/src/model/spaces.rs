@@ -277,9 +277,18 @@ impl Model {
         }
     }
 
+    /// The session is looked at in place now (`glance`): it may be gone on with as an opened one.
+    pub(crate) fn glanced(&self, subject: &Subject) -> bool {
+        self.glance.as_ref().is_some_and(|(_, glanced)| glanced == subject)
+    }
+
     /// The conversation of a space: a session's own, a workspace's front task's. The drawer,
     /// the dial and the agent chip are on the selected space's.
     pub fn space_subject(&self, of: &Owner) -> Option<Subject> {
+        // A terminal session looked at in place, over this space.
+        if let Some((_, subject)) = self.glance.as_ref().filter(|(over, _)| over == of) {
+            return Some(subject.clone());
+        }
         match of {
             Owner::Session { runner, id } => Some(Subject::Session { runner: runner.clone(), id: id.clone() }),
             // Decisions: its card's task (`front`): the drawer talks it over, the right rail shows it.
@@ -349,7 +358,8 @@ impl Model {
     fn may_open(&self, of: &Owner) -> bool {
         let session = |runner: &str, id: &str| {
             let subject = Subject::Session { runner: runner.into(), id: id.into() };
-            self.session(runner, id).is_some() || self.agent_runs(&subject) || self.spaces.iter().any(|s| s.of == *of)
+            let open = self.session(runner, id).is_some() || self.agent_runs(&subject);
+            open || self.spaces.iter().any(|s| s.of == *of) || self.glanced(&subject)
         };
         match of {
             Owner::Session { runner, id } => session(runner, id),
@@ -734,6 +744,10 @@ impl Model {
     /// agent shows none. Changed, it opens as the drawer was (or as the new task in it was), the
     /// keyboard in it only if it was there, the change was the user's and its agent runs.
     pub(crate) fn follow_space(&mut self, origin: Origin, drawer_keys: bool) {
+        // A session looked at in place goes with the space it was opened over.
+        if self.glance.as_ref().is_some_and(|(over, _)| over != self.shown_space()) {
+            self.glance = None;
+        }
         if let Some(talk) = &self.talk {
             self.drawer_open = talk.open;
         }

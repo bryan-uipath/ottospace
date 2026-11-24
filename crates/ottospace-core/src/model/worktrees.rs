@@ -79,6 +79,21 @@ impl Model {
         all.filter(|path| sessions::below(dir, path)).max_by_key(|path| path.len())
     }
 
+    /// Where `dir` is, as the drawer says it (`talk::where_of`): the listed repository it is in,
+    /// and the worktree (a listed one, wherever its folder is: as Repos lists it), named by branch.
+    pub fn where_at(&self, dir: &str, home: Option<&str>) -> crate::talk::Where {
+        use crate::talk::Checkout;
+        let checkout = self.checkout_at(dir);
+        let repo = self.repos.iter().find(|repo| {
+            checkout.is_some_and(|at| repo.path == at || repo.worktrees.iter().any(|tree| tree.path == at))
+        });
+        let tree = repo.and_then(|repo| repo.worktrees.iter().find(|tree| Some(tree.path.as_str()) == checkout));
+        let worktree =
+            tree.map(|tree| Checkout { name: tree.branch.as_deref().unwrap_or(&tree.name), path: &tree.path });
+        let repo = repo.map(|repo| Checkout { name: &repo.name, path: &repo.path });
+        crate::talk::where_of(dir, home, repo, worktree)
+    }
+
     /// The worktree a task's agent works in: the one it moved into, while listed (`task_moved`),
     /// else the listed checkout of its folder. `None`: none (the home folder, or a folder outside
     /// the list).

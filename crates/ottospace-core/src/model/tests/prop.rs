@@ -3079,6 +3079,13 @@ fn check(m: &Model) -> Result<(), String> {
     }
     let selected: Vec<&Space> = m.spaces.iter().filter(|space| space.of == *m.shown_space()).collect();
     ensure!(selected.len() == 1 && !selected[0].hidden, "the selected space is hidden or not one: {selected:?}");
+    // A terminal session looked at in place is over the space on show, and is a session.
+    ensure!(
+        m.glance.as_ref().is_none_or(|(over, s)| over == m.shown_space() && matches!(s, Subject::Session { .. })),
+        "a session in place over {:?}, the selected space is {:?}",
+        m.glance,
+        m.shown_space()
+    );
     // One selection: the drawer is only ever on the selected space's conversation.
     ensure!(
         m.talk.as_ref().is_none_or(|talk| Some(&talk.task) == m.space_subject(m.shown_space()).as_ref()),

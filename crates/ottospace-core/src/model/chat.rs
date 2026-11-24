@@ -469,6 +469,11 @@ impl Model {
         matches!(start, agents::Start::Resume { .. }).then_some((subject, runner, id, cwd?))
     }
 
+    /// The folder a session no task has started in, as read (`Found::cwd`).
+    pub fn session_dir(&self, runner: &str, id: &str) -> Option<String> {
+        self.facts(runner, id).flatten().map(|found| found.cwd.clone())
+    }
+
     /// The space on show is a session's (no task's) that no agent of ours runs: the sessions are
     /// read while it shows, whatever section is open (an overlay sidebar closes as its row opens),
     /// so its watch, its city and the counts hold.
