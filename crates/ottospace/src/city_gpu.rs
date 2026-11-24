@@ -366,16 +366,23 @@ impl Gpu {
             // Farthest first: a distance's bits order as it does (never negative).
             std::cmp::Reverse((0..3).map(|k| (top[k] - camera.eye[k]).powi(2)).sum::<f32>().to_bits())
         };
-        let mut clear = boxes.glass.clone();
+        // Only the boxes drawn at this level of detail (`Scene::shown`).
+        let shown = |i: &&u32| scene.is_shown(**i as usize);
+        let mut clear: Vec<u32> = boxes.glass.iter().filter(shown).copied().collect();
         clear.sort_by_cached_key(far);
-        let solid_count = boxes.solid.len() as u32;
+        let solid: Vec<u32> = boxes.solid.iter().filter(shown).copied().collect();
+        let solid_count = solid.len() as u32;
         let placed = |i: &u32| {
             let (b, mut one) = (&scene.blocks[*i as usize], boxes.base[*i as usize]);
+            // A closed box standing for a lit file glows in its colour.
+            if matches!(b.kind, Kind::Lit(_)) && one[9] == 0. {
+                one = instance(b, one[13], None, one[15]);
+            }
             one[..3].copy_from_slice(&b.min);
             one[3..6].copy_from_slice(&b.max);
             one
         };
-        let data: Vec<f32> = boxes.solid.iter().chain(&clear).map(placed).flatten().collect();
+        let data: Vec<f32> = solid.iter().chain(&clear).map(placed).flatten().collect();
         let bytes_of = bytes(&data);
         let boxes_us = boxing.elapsed().as_micros() as u64;
         let allocating = std::time::Instant::now();
@@ -414,7 +421,7 @@ impl Gpu {
             pass.set_vertex_buffer(0, instances.slice(..bytes_of.len() as u64));
             pass.draw(0..36, 0..solid_count);
             pass.set_pipeline(&self.glass);
-            pass.draw(0..36, solid_count..scene.blocks.len() as u32);
+            pass.draw(0..36, solid_count..solid_count + clear.len() as u32);
         }
         encoder.copy_texture_to_buffer(
             t.resolved.as_image_copy(),
@@ -502,7 +509,7 @@ fn buffer(device: &wgpu::Device, values: &[f32], usage: wgpu::BufferUsages) -> w
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use ottospace_core::atlas;
     use ottospace_core::scene::View;
@@ -645,7 +652,7 @@ mod tests {
     }
 
     /// A 32-bit BMP, top row first: enough to look at a picture.
-    fn bmp(p: &Picture) -> Vec<u8> {
+    pub(crate) fn bmp(p: &Picture) -> Vec<u8> {
         let size = 54 + p.bgra.len() as u32;
         let mut out = b"BM".to_vec();
         for v in [size, 0, 54, 40, p.width, (-(p.height as i32)) as u32] {

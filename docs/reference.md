@@ -1772,6 +1772,10 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   the main thread with the status bar's hardened git, only in a checkout listed in Repos, when
   the tab comes on show and when the lit files change. No timer. Over 600,000 files, 64 MB of
   names or 60 seconds: no city, the lattice stays. A read of a tab that closes stops.
+- Level of detail: a folder whose files would be under about 2 px on screen stands as one block
+  (as tall as its files on average, lit if an agent is at one of them); its files grow out of it
+  as the camera nears (past about 3 px), at once under Reduce Motion. Turning the camera changes
+  none; nothing moves on the plan.
 - It takes no click and no key, and nothing in it moves: a still picture, made again when the
   files, the lit files or the tab's size change. Districts and files are named as a map is:
   each name centred on its plinth (a folder's, in capitals, once the plinth on screen is wider
