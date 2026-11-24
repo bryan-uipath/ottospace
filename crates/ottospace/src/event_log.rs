@@ -180,6 +180,8 @@ fn fields_of(event: &str) -> &'static [&'static str] {
             "steps", "done", "frames", "mean", "p50", "p95", "p99", "max", "over_16", "over_33", "repeats", "wait_p50",
             "wait_p95", "wait_max", "boxes",
         ],
+        // Why a waiting slot is offered nothing: counts by reason code, never a title or id.
+        "slot_miss" => &["pane", "bundle", "why"],
         // Where a new window of a hosted app went, and why: never its title.
         "place" => {
             &["bundle", "subrole", "modal", "sheet", "size", "pane", "min_width", "place", "why", "rule", "slot"]
@@ -404,6 +406,7 @@ mod tests {
                     "max": 50.1, "over_16": 9, "over_33": 2, "repeats": 4, "wait_p50": 5.2, "wait_p95": 12.0,
                     "wait_max": 20.4, "boxes": 10392 }),
             ),
+            ("slot_miss", json!({ "pane": 3, "bundle": "us.zoom.xos", "why": { "no_id": 1, "in_pane": 1 } })),
             ("panic", panic_fields(Some((&main, 12)), Some("main"))),
             ("panic", panic_fields(Some((&format!("{home}/src/app/target/debug/build/x-1/out/gen.rs"), 3)), None)),
             // The first line only.
@@ -428,7 +431,7 @@ mod tests {
             write(event, fields, Some(&*dir));
         }
         let text = fs::read_to_string(dir.join(NAME)).unwrap();
-        assert_eq!(text.lines().count(), 23, "{text}");
+        assert_eq!(text.lines().count(), 24, "{text}");
         // `at` is each line's time, never overwritten by a field.
         assert!(
             text.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["at"].as_str().unwrap().len() == 25)

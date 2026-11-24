@@ -17752,8 +17752,8 @@ fn slot_menu(otto: &Otto, pane: u64, item: &str) -> Value {
     otto.user_click(at(otto.control(&format!("row-menu:{index}")), 0.5, 0.5))
 }
 
-/// Slots on screen (`slots` flag): ⋯ on an app pane's header opens its menu, whose Keep opens the dialog, by the pane's
-/// window's id; Keep makes the pane a filled slot, marked `slot`. ⋯'s Give back the window
+/// Slots on screen (`slots` flag): ⋯ on an app pane's header opens its menu, whose Keep opens the dialog, on any
+/// window of the app (an id is the user's choice); Keep makes the pane a filled slot, marked `slot`. ⋯'s Give back the window
 /// leaves it waiting, saying what for; a window the slot selects is offered there, not in a
 /// chip, and only the user's Bring it here fills it. No title or id the looks carried is in the
 /// state while it waits. A test run hosts no window: the looks are fixtures (`slot_windows`).
@@ -17782,7 +17782,7 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
     assert_eq!((&items[0]["item"], &items[0]["label"]), (&json!("slot_keep"), &json!("Create slot…")), "{reply}");
     let reply = otto.user_click(at(otto.control("row-menu:0"), 0.5, 0.5));
     let dialog = &reply["state"]["slot_dialog"];
-    assert_eq!((&dialog["by"], &dialog["editing"]), (&json!("id"), &json!(false)), "{reply}");
+    assert_eq!((&dialog["by"], &dialog["editing"]), (&json!("any"), &json!(false)), "{reply}");
     assert!(!reply.to_string().contains("SECRET") && !reply.to_string().contains("zm.meeting"), "{reply}");
     let reply = otto.user_click(at(otto.control("slot-dialog:keep"), 0.5, 0.5));
     let slot = |reply: &Value| reply["state"]["slots"][pane.to_string()].clone();
@@ -17880,7 +17880,11 @@ fn two_slots_of_one_title_each_get_a_window_and_swap_exchanges_them() {
     otto.click(at(otto.control(&format!("row-menu:{swap}")), 0.5, 0.5), 1);
     let state = otto.call(json!({"cmd": "state"}));
     assert_eq!((window(&state, a), window(&state, b)), (json!(800_002), json!(800_001)), "a client's: {state}");
-    let reply = otto.user_click(at(otto.control(&format!("slot-dots:{a}")), 0.5, 0.5));
+    // The menu stays open after a client's click; else the user opens it again.
+    let mut reply = state.clone();
+    if reply["row_menu"].is_null() {
+        reply = otto.user_click(at(otto.control(&format!("slot-dots:{a}")), 0.5, 0.5));
+    }
     assert!(
         reply["row_menu"]["items"].as_array().is_some_and(|i| i.iter().any(|i| i["item"] == "slot_swap")),
         "{reply}"
