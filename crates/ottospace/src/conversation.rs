@@ -708,14 +708,16 @@ impl Workspace {
                 move |this, _, _, cx| this.toggle_context(&subject, cx)
             }));
         let list = open.then(|| {
-            let small = |text: String| div().text_xs().child(text);
+            // Whole widths, so a long value wraps under its label instead of running off the drawer.
+            let small = |text: String| div().w_full().min_w_0().text_xs().child(text);
             let via = match added.via {
                 agents::Via::Server => "the MCP server's instructions",
                 agents::Via::SystemPrompt => "its system prompt",
                 agents::Via::Nowhere => "nowhere",
             };
             let guidance = added.guidance.clone().map(|text| {
-                let said = div().flex().flex_col().child(small(format!("in {via}"))).child(muted(text));
+                let said = div().w_full().min_w_0().flex().flex_col().child(small(format!("in {via}")));
+                let said = said.child(muted(text).w_full().min_w_0());
                 crate::ui::dialog::row("Guidance", said)
             });
             let tools = (!added.tools.is_empty()).then(|| {
