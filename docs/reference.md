@@ -1712,7 +1712,10 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   files its result names stay lit a moment. Calls close together play as one; none under Reduce
   Motion. Codex's calls carry no result, so its searches light nothing after the sweep. The
   sub-agents a chat's agent runs (its `Agent` calls not ended) are small squares under its icon,
-  eight at most, then `+n`; a terminal session's are not shown yet. An icon with no room clear of the hints is not drawn.
+  eight at most, then `+n`; a terminal session's are not shown yet.
+  A `claude` or `codex` the user runs in one of ottospace's terminals, working in the checkout,
+  shows by its process alone (no setting, no session file read): its runner's glyph, hovering,
+  until its program ends or its pane closes. With `sessions` on, its session shows instead. An icon with no room clear of the hints is not drawn.
 - The files are what `git ls-files` lists there (tracked, and new ones not ignored), less the
   folders `city_exclude` leaves out and built-in ones (`node_modules`, `target`, `dist`, …):
   dropped before the layout, they take no room, move nothing and count toward no limit. Read off
