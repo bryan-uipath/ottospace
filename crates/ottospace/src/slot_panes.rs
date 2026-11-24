@@ -8,6 +8,7 @@ use gpui::{
     AnyElement, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window, div, img, prelude::FluentBuilder, px, rgb, svg,
 };
+use objc2_core_foundation::CGSize;
 use ottospace_core::features::Feature;
 use ottospace_core::marks::same_app;
 use ottospace_core::model::slots::{By, Choice};
@@ -136,6 +137,27 @@ impl Workspace {
             self.slot_seen.push(look.clone());
             self.dispatch(Action::SlotWindows { look }, Origin::System, window, cx);
         }
+        self.log_slot_misses();
+    }
+
+    /// One `slot_miss` line in the log when why a waiting slot is offered nothing changes: its
+    /// pane, its app's bundle and each reason's count (`Model::slot_misses`). Never a title or id.
+    fn log_slot_misses(&mut self) {
+        let panes: Vec<PaneId> = self.model.slots.keys().copied().collect();
+        self.slot_missed.retain(|pane, _| panes.contains(pane));
+        for pane in panes {
+            let misses = self.model.slot_misses(pane);
+            if self.slot_missed.get(&pane) == Some(&misses) {
+                continue;
+            }
+            if !misses.is_empty() {
+                let bundle = self.model.slots.get(&pane).and_then(|run| run.bundle.clone());
+                let why: serde_json::Map<String, serde_json::Value> =
+                    misses.iter().map(|(miss, n)| (miss.name().to_string(), (*n).into())).collect();
+                crate::event_log::event("slot_miss", serde_json::json!({ "pane": pane, "bundle": bundle, "why": why }));
+            }
+            self.slot_missed.insert(pane, misses);
+        }
     }
 
     /// `Effect::HostSlot`: window `id` of `pid` into slot `pane`, then `SlotHosted` says what came
@@ -173,6 +195,18 @@ impl Workspace {
     pub(crate) fn give_back_slot(&mut self, pane: PaneId) {
         if let Some(hosted) = self.hosted.remove(&pane) {
             hosted.release();
+        }
+    }
+
+    /// `Effect::SlotSwapped`: the hosted windows of slots `a` and `b` change panes (one may have
+    /// none); each takes its new pane's bounds and is parked there again at the next layout.
+    pub(crate) fn swap_hosted(&mut self, a: PaneId, b: PaneId) {
+        let (ha, hb) = (self.hosted.remove(&a), self.hosted.remove(&b));
+        for (to, hosted) in [(b, ha), (a, hb)] {
+            let Some(mut hosted) = hosted else { continue };
+            hosted.bounds = self.cells.entry(to).or_default().clone();
+            hosted.parked_size = CGSize::ZERO;
+            self.hosted.insert(to, hosted);
         }
     }
 
@@ -538,5 +572,6 @@ impl Workspace {
         self.slot_fixtures.retain(|old| !of(old));
         self.slot_fixtures.push(look.clone());
         self.dispatch(Action::SlotWindows { look }, Origin::System, window, cx);
+        self.log_slot_misses();
     }
 }

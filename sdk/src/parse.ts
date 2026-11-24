@@ -2096,7 +2096,7 @@ function rowMenu(value: unknown, at: string): RowMenu {
     const kind = i.item;
     const kinds = [
       "rename", "delete", "remove", "keep", "pause", "resume", "delete_worktree", "local_folder", "from_github",
-      "slot_keep", "slot_edit", "slot_look_again", "slot_give_back", "slot_clear",
+      "slot_keep", "slot_edit", "slot_look_again", "slot_give_back", "slot_swap", "slot_resort", "slot_clear",
     ] as const;
     const known = kinds.find((k) => k === kind);
     if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);

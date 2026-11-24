@@ -2224,6 +2224,8 @@ const MAKERS: &[Make] = &[
     SLOT_MAKERS[13],
     SLOT_MAKERS[14],
     SLOT_MAKERS[15],
+    SLOT_MAKERS[17],
+    SLOT_MAKERS[18],
     // A new window offered by its app's pane, the user's take or wave, and its close.
     // Its facts are a slot's look's: of a slot's app half the time (`Gen::adopt`), so a slot may take it.
     |g| {
@@ -2245,7 +2247,7 @@ const MAKERS: &[Make] = &[
 
 /// A slot's actions, also picked one time in 8 while there is a slot: among all the others, the
 /// chain from a look to an offer to a fill would hardly ever be met.
-const SLOT_MAKERS: [Make; 17] = [
+const SLOT_MAKERS: [Make; 19] = [
     |g| Action::SlotMake { pane: g.pane(), pid: g.rng.below(3) as i32, slot: g.slot() },
     |g| Action::SlotClear { pane: g.slot_pane() },
     |g| Action::SlotAccept { pane: g.slot_pane() },
@@ -2283,6 +2285,8 @@ const SLOT_MAKERS: [Make; 17] = [
     |_| Action::SlotDialogClose,
     |_| Action::SlotDialogKeep,
     |g| g.slot_pick(),
+    |g| Action::SlotSwap { pane: g.slot_pane(), with: g.slot_pane() },
+    |g| Action::SlotResort { pane: g.slot_pane() },
 ];
 
 /// Displays and folds, also picked now and then once there are displays.
@@ -3828,6 +3832,16 @@ fn check_slots(m: &Model) -> Result<(), String> {
             );
         }
         ensure!(run.offered.is_none() || run.offered != run.pending, "slot {id} offers what it asked for");
+        // No slot starves: one that waits on the tab on show (asking for none) offers nothing only
+        // while each window it could take is in a pane, asked for, passed over, or another's offer.
+        let look = m.slot_looks.iter().find(|look| run.of(look) && look.running);
+        let waits = run.status == crate::slot::Status::Empty && run.pending.is_none() && shown.contains(id);
+        if let Some(look) = look.filter(|_| waits) {
+            let asked: Vec<u32> = m.slots.values().filter_map(|other| other.pending.or(other.offered)).collect();
+            let free = |w: u32| !in_pane(w) && !asked.contains(&w) && !run.declined.contains(&w);
+            let found = look.candidates(&run.slot, &m.window_rules, |w| !free(w));
+            ensure!(found.is_empty(), "slot {id} waits while {:?} could be its", found.first().map(|s| s.window));
+        }
         ensure!(run.matching == run.slot.matching, "slot {id}'s matching");
     }
     Ok(())
@@ -4637,6 +4651,10 @@ impl Run {
             // Or the user's pick of its own app's window (⌘E into it), as the shell opens it.
             let hosted =
                 hosted || (users && own && matches!(action, Action::Open { .. } | Action::NewWindowCame { .. }));
+            // Or the user's Swap or Re-sort: a window moved from another slot of its app.
+            let moved = |a: Option<&Action>| matches!(a, Some(Action::SlotSwap { .. } | Action::SlotResort { .. }));
+            let swapped = users && (moved(Some(&action)) || moved(menu_chose.as_ref()));
+            let hosted = hosted || swapped;
             ensure!(!filled || hosted, "{origin:?}'s {action:?} filled slot {id}");
             // An adopted window goes straight in only as Away's return: a new one waits for a look.
             let adopted = matches!(action, Action::Adopt { .. });
@@ -4645,7 +4663,24 @@ impl Run {
             let window =
                 m.pane(*id).and_then(|p| if let Kind::App { window, .. } = p.kind { Some(window) } else { None });
             let twice = held_before.iter().any(|(pane, held)| pane != id && Some(*held) == window);
-            ensure!(!filled || !twice, "slot {id} filled with {window:?}, which another pane holds");
+            ensure!(!filled || !twice || swapped, "slot {id} filled with {window:?}, which another pane holds");
+        }
+        // Swap and Re-sort only move windows among panes: the same windows are held, none twice more.
+        let moves = matches!(action, Action::SlotSwap { .. } | Action::SlotResort { .. })
+            || matches!(menu_chose, Some(Action::SlotSwap { .. } | Action::SlotResort { .. }));
+        if moves {
+            let held = |list: Vec<u32>| {
+                let mut list = list;
+                list.sort_unstable();
+                list
+            };
+            let now: Vec<u32> = m
+                .panes
+                .iter()
+                .filter_map(|p| if let Kind::App { window, .. } = p.kind { Some(window) } else { None })
+                .collect();
+            let before = held(held_before.iter().map(|(_, window)| *window).collect());
+            ensure!(held(now) == before, "{action:?} changed which windows are held");
         }
         // Only the user starts a transcript: their click, their key, or their pick in its picker.
         let listen_now = m.listen.on.as_ref().map(|on| on.id.clone());
@@ -5619,6 +5654,13 @@ impl Run {
                     ensure!(origin == Origin::User, "{origin:?}'s {action:?} gave back {pane}'s window");
                     let waits = m.pane(*pane).is_some_and(|p| matches!(p.kind, Kind::Slot { .. }));
                     ensure!(waits, "{action:?} gave back the window of {pane}, which is no slot that waits");
+                }
+                Effect::SlotSwapped { a, b } => {
+                    ensure!(origin == Origin::User, "{origin:?}'s {action:?} swapped slots {a} and {b}");
+                    ensure!(
+                        m.slots.contains_key(a) && m.slots.contains_key(b),
+                        "{action:?} swapped {a}, {b}: no slots"
+                    );
                 }
                 Effect::WatchSlots { apps } => {
                     let mut names: Vec<&String> = apps.iter().map(|(_, name)| name).collect();

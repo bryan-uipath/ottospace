@@ -20,9 +20,8 @@ use crate::workbook::WorkbookId;
 /// Why a client's request that takes the keyboard waits: the user's keys are in a row's menu.
 pub const MENU_OPEN: &str = "a row's menu is open";
 
-/// What a row's menu offers.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
+/// What a row's menu offers. In the state by its name (`Item::name`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
     Rename,
     Delete,
@@ -37,7 +36,6 @@ pub enum Item {
     DeleteWorktree,
     /// The Repos section's +: the folder picker, as before; or a repository cloned from GitHub.
     LocalFolder,
-    #[serde(rename = "from_github")]
     FromGitHub,
     /// An app pane's ⋯: the slot dialog, to keep this place for its app's windows.
     SlotKeep,
@@ -46,10 +44,43 @@ pub enum Item {
     SlotEdit,
     SlotLookAgain,
     SlotGiveBack,
+    /// Swap with…: another slot of its app on the tab on show, by pane.
+    SlotSwap(crate::model::PaneId),
+    /// Re-sort by size: its app's slots there pair their windows again.
+    SlotResort,
     SlotClear,
 }
 
+impl Serialize for Item {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.name())
+    }
+}
+
 impl Item {
+    /// Its name in the state: `slot_swap`.
+    pub fn name(self) -> &'static str {
+        match self {
+            Item::Rename => "rename",
+            Item::Delete => "delete",
+            Item::Remove => "remove",
+            Item::Keep => "keep",
+            Item::Pause => "pause",
+            Item::Resume => "resume",
+            Item::DeleteWorktree => "delete_worktree",
+            Item::LocalFolder => "local_folder",
+            Item::FromGitHub => "from_github",
+            Item::SlotKeep => "slot_keep",
+            Item::SlotEdit => "slot_edit",
+            Item::SlotLookAgain => "slot_look_again",
+            Item::SlotGiveBack => "slot_give_back",
+            Item::SlotSwap(_) => "slot_swap",
+            Item::SlotResort => "slot_resort",
+            Item::SlotClear => "slot_clear",
+        }
+    }
+
+    /// Its words with no title: Swap's other slot by pane (`Model::menu_label` draws what it holds).
     pub fn label(self) -> &'static str {
         match self {
             Item::Rename => "Rename",
@@ -65,6 +96,8 @@ impl Item {
             Item::SlotEdit => "Edit slot…",
             Item::SlotLookAgain => "Offer again",
             Item::SlotGiveBack => "Give back the window",
+            Item::SlotSwap(_) => "Swap with…",
+            Item::SlotResort => "Re-sort by size",
             Item::SlotClear => "Clear slot",
         }
     }
@@ -98,7 +131,7 @@ pub struct RowMenu {
     pub dots: Option<Rect>,
     /// Its items when it opened: a change under it (a slot's Offer again going) closes it, so
     /// the keys' place never lands on another item.
-    pub items: &'static [Item],
+    pub items: Vec<Item>,
 }
 
 /// What a row's menu offers, in order. None: the row has no menu.
@@ -123,14 +156,14 @@ pub fn menu_key(key: &str) -> Action {
 
 impl Model {
     /// The open menu and its items.
-    pub fn row_menu(&self) -> Option<(&RowMenu, &'static [Item])> {
+    pub fn row_menu(&self) -> Option<(&RowMenu, Vec<Item>)> {
         self.row_menu.as_ref().map(|menu| (menu, self.menu_items(&menu.row)))
     }
 
     /// What a menu offers now: a row's by its kind; the transcript's Pause while it runs, Resume
     /// while paused, none while it starts or with none shown.
-    pub fn menu_items(&self, of: &MenuOf) -> &'static [Item] {
-        match of {
+    pub fn menu_items(&self, of: &MenuOf) -> Vec<Item> {
+        let items: &[Item] = match of {
             // A temporary workspace offers Keep.
             MenuOf::Row(ListRow::Workbook(id)) if !self.workbooks.is_kept(*id) => {
                 &[Item::Rename, Item::Keep, Item::Delete]
@@ -143,26 +176,56 @@ impl Model {
             MenuOf::Space(_) => &[],
             MenuOf::ReposAdd => &[Item::LocalFolder, Item::FromGitHub],
             MenuOf::Pane(_) if !self.features.on(Feature::Slots) => &[],
-            // A slot's acts; an app pane's: keep it as one.
-            MenuOf::Pane(id) => {
-                let passed = self.slots.get(id).is_some_and(|run| !run.declined.is_empty());
-                match (self.pane(*id).map(|pane| &pane.kind), self.slots.contains_key(id), passed) {
-                    (Some(Kind::App { .. }), false, _) => &[Item::SlotKeep],
-                    (Some(Kind::App { .. }), true, true) => {
-                        &[Item::SlotEdit, Item::SlotLookAgain, Item::SlotGiveBack, Item::SlotClear]
-                    }
-                    (Some(Kind::App { .. }), true, false) => &[Item::SlotEdit, Item::SlotGiveBack, Item::SlotClear],
-                    (Some(Kind::Slot { .. }), _, true) => &[Item::SlotEdit, Item::SlotLookAgain, Item::SlotClear],
-                    (Some(Kind::Slot { .. }), _, false) => &[Item::SlotEdit, Item::SlotClear],
-                    _ => &[],
-                }
-            }
+            // A slot's acts, with Swap and Re-sort among its app's; an app pane's: keep it as one.
+            MenuOf::Pane(id) if self.slots.contains_key(id) => return self.slot_items(*id),
+            MenuOf::Pane(id) => match self.pane(*id).map(|pane| &pane.kind) {
+                Some(Kind::App { .. }) => &[Item::SlotKeep],
+                _ => &[],
+            },
             // One decision with the palette's and the menu bar's (`listen_pause_action`).
             MenuOf::Transcript => match self.listen_pause_action(0).filter(|_| self.listen.shown) {
                 Some(Action::ListenPause { .. }) => &[Item::Pause],
                 Some(Action::ListenResume { .. }) => &[Item::Resume],
                 _ => &[],
             },
+        };
+        items.to_vec()
+    }
+
+    /// A slot's menu: Edit slot…, Offer again (while it passed over any), Give back the window
+    /// (while filled), Swap with… each other slot of its app on the tab on show (one of the two
+    /// holds a window), Re-sort by size (when it can: `Model::slot_resorts`), Clear slot.
+    fn slot_items(&self, id: crate::model::PaneId) -> Vec<Item> {
+        let filled = |id| matches!(self.pane(id).map(|pane| &pane.kind), Some(Kind::App { .. }));
+        let passed = self.slots.get(&id).is_some_and(|run| !run.declined.is_empty());
+        let group = self.slot_group(id);
+        let mut items = vec![Item::SlotEdit];
+        items.extend(passed.then_some(Item::SlotLookAgain));
+        items.extend(filled(id).then_some(Item::SlotGiveBack));
+        let others = group.iter().copied().filter(|other| *other != id && (filled(id) || filled(*other)));
+        items.extend(others.map(Item::SlotSwap));
+        items.extend(self.slot_resorts(id).then_some(Item::SlotResort));
+        items.push(Item::SlotClear);
+        items
+    }
+
+    /// An item's words as drawn. Swap names what the other slot holds (its window's title: drawn,
+    /// never in the state), or `Swap` alone with two slots of the app; Re-sort names the app.
+    pub fn menu_label(&self, item: Item) -> String {
+        let Some((menu, items)) = self.row_menu() else { return item.label().into() };
+        let swaps = items.iter().filter(|item| matches!(item, Item::SlotSwap(_))).count();
+        let app = match menu.row {
+            MenuOf::Pane(id) => self.slots.get(&id).map(|run| run.name.clone()).unwrap_or_default(),
+            _ => String::new(),
+        };
+        match item {
+            Item::SlotSwap(_) if swaps == 1 => "Swap".into(),
+            Item::SlotSwap(other) => match self.pane(other).map(|pane| &pane.kind) {
+                Some(Kind::App { title, .. }) => format!("Swap with “{title}”"),
+                _ => "Swap with the empty slot".into(),
+            },
+            Item::SlotResort => format!("Re-sort {app} windows by size"),
+            item => item.label().into(),
         }
     }
 
@@ -238,6 +301,8 @@ impl Model {
             (MenuOf::Pane(pane), Item::SlotClear) => return Some(Action::SlotClear { pane: *pane }),
             (MenuOf::Pane(pane), Item::SlotLookAgain) => return Some(Action::SlotLookAgain { pane: *pane }),
             (MenuOf::Pane(pane), Item::SlotGiveBack) => return Some(Action::SlotGiveBack { pane: *pane }),
+            (MenuOf::Pane(pane), Item::SlotSwap(with)) => return Some(Action::SlotSwap { pane: *pane, with: *with }),
+            (MenuOf::Pane(pane), Item::SlotResort) => return Some(Action::SlotResort { pane: *pane }),
             (MenuOf::Row(ListRow::Workbook(id)) | MenuOf::Space(id), _) => (*id, None),
             (MenuOf::Row(ListRow::WorkbookTab(id, at)), _) => (*id, Some(*at)),
             _ => return None,
@@ -269,9 +334,11 @@ impl Model {
             Action::CloneOpen => self.clone_open(effects),
             // The shell opens the dialog with its look; the core only closed the menu.
             Action::SlotDialogOpen { .. } => {}
-            action @ (Action::SlotClear { .. } | Action::SlotLookAgain { .. } | Action::SlotGiveBack { .. }) => {
-                self.slot_act(action, effects)
-            }
+            action @ (Action::SlotClear { .. }
+            | Action::SlotLookAgain { .. }
+            | Action::SlotGiveBack { .. }
+            | Action::SlotSwap { .. }
+            | Action::SlotResort { .. }) => self.slot_act(action, effects),
             _ => {}
         }
     }

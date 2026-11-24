@@ -170,7 +170,7 @@ mod tests {
         let mut m = repos();
         m.update(Action::RowMenu { row: MenuOf::ReposAdd, dots: None, keys: false });
         let (menu, items) = m.row_menu().unwrap();
-        assert_eq!((items, menu.selected), (&[Item::LocalFolder, Item::FromGitHub][..], Some(0)));
+        assert_eq!((&items[..], menu.selected), (&[Item::LocalFolder, Item::FromGitHub][..], Some(0)));
         // ↵ at once: the folder picker, as the + was.
         assert_eq!(m.update(Action::RowMenuChoose { index: None }), [Effect::PickRepoFolder]);
         m.update(Action::RowMenu { row: MenuOf::ReposAdd, dots: None, keys: false });

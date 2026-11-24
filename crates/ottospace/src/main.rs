@@ -1393,6 +1393,8 @@ struct Workspace {
     /// test run's fixture looks (`slot_windows`).
     slot_watch: Vec<(Option<String>, String)>,
     slot_seen: Vec<ottospace_core::slot::Look>,
+    /// Why each waiting slot was not offered a window, as last logged (`slot_miss`): one line a change.
+    slot_missed: HashMap<PaneId, Vec<(ottospace_core::model::slots::Miss, usize)>>,
     slot_fixtures: Vec<ottospace_core::slot::Look>,
     next_fixture_window: u32,
     /// The file of the transcript on, if one is kept.
@@ -2038,6 +2040,7 @@ impl Workspace {
             gone_since: HashMap::new(),
             slot_watch: Vec::new(),
             slot_seen: Vec::new(),
+            slot_missed: HashMap::new(),
             slot_fixtures: Vec::new(),
             next_fixture_window: 0,
             listen_file: None,
@@ -2292,6 +2295,7 @@ impl Workspace {
                     });
                 }
                 Effect::GiveBack { pane } => self.give_back_slot(*pane),
+                Effect::SlotSwapped { a, b } => self.swap_hosted(*a, *b),
                 // The log's line is written where the offer was sent (`offer_window`).
                 Effect::Placed { .. } => {}
                 Effect::HostOffer { pane, pid, window: id } => self.host_offer(*pane, *pid, *id, window, cx),
@@ -5175,6 +5179,13 @@ impl Workspace {
                 !running || now.saturating_sub(since) >= REMADE_MS
             })
             .collect();
+        // Each window's id as its app gives it now: Zoom moves its meeting window's id between its
+        // windows, and the slot its pane becomes waits for the id it had last. Kept on no answer.
+        for hosted in self.hosted.values_mut() {
+            if let Some(id) = hosted.window.quick(ax::Window::identifier_read) {
+                hosted.seen.identifier = id;
+            }
+        }
         for id in gone {
             self.gone_since.remove(&id);
             eprintln!("pane {id}: window gone");

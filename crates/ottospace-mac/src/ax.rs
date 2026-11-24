@@ -256,6 +256,19 @@ impl Window {
         (!id.is_empty()).then_some(id)
     }
 
+    /// `AXIdentifier` as read now: `Some(None)` when the window has none (no value, unsupported or
+    /// empty), `None` when the app gave no answer (a timeout, an error).
+    pub fn identifier_read(&self) -> Option<Option<String>> {
+        match copy_attr_or(&self.element, "AXIdentifier") {
+            Ok(value) => {
+                let id = value.and_then(|value| value.downcast::<CFString>().ok()).map(|id| id.to_string());
+                Some(id.filter(|id| !id.is_empty()))
+            }
+            Err(AXError::NoValue | AXError::AttributeUnsupported) => Some(None),
+            Err(_) => None,
+        }
+    }
+
     pub fn frame(&self) -> Option<CGRect> {
         frame_of(&self.element)
     }
@@ -318,13 +331,18 @@ fn frame_of(element: &AXUIElement) -> Option<CGRect> {
 }
 
 fn copy_attr(element: &AXUIElement, name: &str) -> Option<CFRetained<CFType>> {
+    copy_attr_or(element, name).ok().flatten()
+}
+
+/// `copy_attr`, with the app's error when it has no answer (`NoValue`: the attribute is empty).
+fn copy_attr_or(element: &AXUIElement, name: &str) -> Result<Option<CFRetained<CFType>>, AXError> {
     let attr = CFString::from_str(name);
     let mut out: *const CFType = std::ptr::null();
     let err = unsafe { element.copy_attribute_value(&attr, NonNull::from(&mut out)) };
     if err != AXError::Success {
-        return None;
+        return Err(err);
     }
-    NonNull::new(out.cast_mut()).map(|ptr| unsafe { CFRetained::from_raw(ptr) })
+    Ok(NonNull::new(out.cast_mut()).map(|ptr| unsafe { CFRetained::from_raw(ptr) }))
 }
 
 fn read_value<T>(element: &AXUIElement, name: &str, ty: AXValueType, out: &mut T) -> Option<()> {
