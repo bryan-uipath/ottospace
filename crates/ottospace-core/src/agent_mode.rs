@@ -21,9 +21,9 @@ pub const NO_OFFER: &str = "nothing to restore on this pane";
 /// What the menu says on a pane whose workspace no task works in: it grants nothing.
 pub const NO_TASK: &str = "No task works in this workspace";
 /// What a level picked there does: the next task that works there is offered it (`Ahead`).
-pub const AHEAD: &str = "For the next task here: offered, never given";
+pub const AHEAD: &str = "What you pick waits for the next task you start here, and applies only when you confirm";
 /// What See and act grants in this build: what See does. Presses come in stage (c).
-pub const ACT_LATER: &str = "Pressing arrives later: for now See and act lets the task see, as See does";
+pub const ACT_LATER: &str = "Pressing controls comes later: for now See and act only lets the task see";
 /// A request with no pass: no task asked.
 pub const NO_PASS: &str =
     "only a task's agent reads an app pane: run it from the agent ottospace started for the task (its pass)";
