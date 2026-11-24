@@ -51,7 +51,9 @@ impl Slot {
             let (test, words) = Test::read(t);
             format!("title {} “{words}”", test.label())
         }));
-        words.extend(select.subrole.as_ref().map(|subrole| format!("subrole {subrole}")));
+        // A standard window is what "window" says already.
+        let kind = select.subrole.as_ref().filter(|subrole| *subrole != "AXStandardWindow");
+        words.extend(kind.map(|subrole| format!("subrole {subrole}")));
         if words.len() == 1 {
             words.push("any window".into());
         }
@@ -191,9 +193,9 @@ pub struct Seen {
 }
 
 impl Seen {
-    /// Its shape for the window rules: a frame of no size is unread, never tiny.
+    /// Its shape for the window rules: a frame of 0x0 is unread, never tiny.
     pub fn shape(&self) -> rules::Shape {
-        let read = self.frame.w > 0. && self.frame.h > 0.;
+        let read = self.frame.w > 0. || self.frame.h > 0.;
         let size = read.then_some([self.frame.w, self.frame.h]);
         rules::Shape { sheet: self.sheet, size, ..rules::Shape::default() }
     }
@@ -353,6 +355,9 @@ mod tests {
         look.windows[4].sheet = true;
         assert!(look.candidates(&chat, &[], |_| false).is_empty());
         look.windows[4] = dialog(5, "Meeting chat", 60., 60.);
+        assert!(look.candidates(&chat, &[], |_| false).is_empty());
+        // A read of no width is tiny too; only 0x0 is a frame not read.
+        look.windows[4] = dialog(5, "Meeting chat", 0., 40.);
         assert!(look.candidates(&chat, &[], |_| false).is_empty());
     }
 

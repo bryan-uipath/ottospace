@@ -109,15 +109,16 @@ pub fn manages(user: &[Rule], window: &Facts) -> bool {
     }
 }
 
-/// Whether a slot may hold the window: one a new window's judgement would offer or split, so a
-/// dialog or panel too (Zoom's meeting chat, an `AXSystemDialog`). Never a sheet, a tiny window,
-/// another kind, or one a rule ignores or floats.
+/// Whether a slot may hold the window: one the picker lists and a new window's judgement would
+/// offer or split, so a dialog or panel too (Zoom's meeting chat, an `AXSystemDialog`). Never a
+/// sheet, a tiny window (a `split` rule's either), another kind, or one a rule ignores or floats.
 pub fn slot_holds(user: &[Rule], window: &Facts, shape: &Shape) -> bool {
-    matches!(judge(user, window, shape).place, Place::Split | Place::Float { offer: true })
+    let offered = matches!(judge(user, window, shape).place, Place::Split | Place::Float { offer: true });
+    offered && pickable(user, window, shape)
 }
 
-/// The kind a slot names for a window of `subrole`: none for a standard window (`manages` takes
-/// it), else that subrole, so a slot made from a dialog matches the next one of its kind.
+/// The kind the dialog names for a window of `subrole`: none for a standard window, else that
+/// subrole, so a slot made from a dialog matches the next one of its kind.
 pub fn slot_kind(subrole: &str) -> Option<String> {
     (!subrole.is_empty() && subrole != STANDARD).then(|| subrole.to_string())
 }
@@ -733,6 +734,9 @@ mod tests {
         assert!(!slot_holds(&[], &chat, &beside([40.0, 40.0])));
         let ignore = serde_json::from_str::<Rule>(r#"{"title": "Meeting chat", "do": "ignore"}"#).unwrap();
         assert!(!slot_holds(&[ignore], &chat, &shape));
+        // A `split` rule does not let a tiny helper in: the picker would not list it.
+        let split = serde_json::from_str::<Rule>(r#"{"app": "us.zoom.xos", "do": "split"}"#).unwrap();
+        assert!(!slot_holds(&[split], &chat, &beside([66.0, 20.0])));
     }
 
     /// One screen; ottospace's window over most of it, its app's pane in it.

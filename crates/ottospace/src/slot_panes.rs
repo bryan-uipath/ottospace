@@ -97,7 +97,8 @@ impl Workspace {
         // Dialogs and panels too: one in a pane (the user put it there) is the dialog's window.
         let windows = ax::Window::all_of(*pid)
             .iter()
-            .filter(|w| w.quick(ax::Window::judged))
+            // Not a minimised one, as the picker: its stream would draw nothing.
+            .filter(|w| w.quick(|w| w.judged() && !w.minimized()))
             .filter_map(|w| {
                 w.quick(|w| {
                     Some(Seen {

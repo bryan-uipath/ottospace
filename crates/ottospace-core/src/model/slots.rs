@@ -281,9 +281,11 @@ impl Model {
             Status::Offered | Status::Filled => return None,
         }
         let look = self.slot_looks.iter().find(|look| run.of(look))?;
-        let held = self.slot_claims(Some(pane), false);
-        let found = look.candidates(&run.slot, &self.window_rules, |window| run.declined.contains(&window));
-        let in_panes = !found.is_empty() && found.iter().all(|seen| held.contains(&seen.window));
+        let held =
+            |window: u32| self.panes.iter().any(|p| matches!(p.kind, Kind::App { window: w, .. } if w == window));
+        // Every window it selects, one it passed over too: held, not asked for.
+        let found = look.candidates(&run.slot, &self.window_rules, |_| false);
+        let in_panes = !found.is_empty() && found.iter().all(|seen| held(seen.window));
         in_panes.then(|| "Its window is already in another pane".to_string())
     }
 
@@ -520,7 +522,8 @@ impl Model {
         if unmanaged {
             return None;
         }
-        let subrole = was.as_ref().and_then(|seen| crate::rules::slot_kind(&seen.subrole));
+        // Its kind, a standard one too: a meeting's place is not offered the app's dialogs.
+        let subrole = was.as_ref().map(|seen| seen.subrole.clone()).filter(|subrole| !subrole.is_empty());
         let (pid, identifier) = was.map_or((0, None), |seen| (seen.pid, Some(seen.identifier.unwrap_or_default())));
         let select = crate::rules::Selector { identifier, subrole, ..Default::default() };
         // Of several that match, the largest: a meeting's main window over its pop-outs.
@@ -1178,8 +1181,10 @@ mod tests {
         m.update(system(Action::WindowGone { pane: 1, app_running: false, at: 1, was: Some(seen(7, 1, "Home")) }));
         assert_eq!(m.panes.len(), panes);
         assert_eq!((status(&m, 1), status(&m, 2)), (Some(Status::Absent), Some(Status::Absent)));
-        // It starts again, the new meeting in front: each place is offered its own kind.
-        m.update(system(look(vec![main(12, "Retro"), seen(8, 11, "Home")])));
+        // It starts again, the new meeting in front: each place is offered its own kind, never the
+        // app's chat (a dialog with no id, larger than Home): the home window was a standard one.
+        let chat = Seen { subrole: "AXSystemDialog".into(), ..seen(8, 20, "Meeting chat") };
+        m.update(system(look(vec![chat, main(12, "Retro"), seen(8, 11, "Home")])));
         assert_eq!(m.slot_offer(1).map(|s| s.window), Some(11));
         assert_eq!(m.slot_offer(2).map(|s| s.window), Some(12));
         // Only the user's Bring it here fills it.
@@ -1774,7 +1779,7 @@ mod tests {
         m.update(Action::SlotDialogOpen { pane: 2, look: found });
         m.update(Action::SlotDialogSet { choice: Choice::Matching(Matching::Automatic) });
         let words = m.slot_dialog.as_ref().map(|d| (d.test, d.slot().words("Meetings")));
-        let said = "Meetings · title contains “incident” · subrole AXStandardWindow";
+        let said = "Meetings · title contains “incident”";
         assert_eq!(words, Some((Test::Contains, said.to_string())));
         m.update(Action::SlotDialogKeep);
         let run = &m.slots[&2];
