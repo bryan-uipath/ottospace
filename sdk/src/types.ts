@@ -289,6 +289,12 @@ export type PaneKind =
 export type ViewerRead =
   | { status: "reading" }
   | { status: "shown"; lines: number }
+  /** A picture decoded and drawn: its size in pixels, its frames (one unless it plays), its file's bytes. */
+  | { status: "picture"; width: number; height: number; frames: number; bytes: number }
+  /** A picture past the viewer's cap of decoded pixels (every frame together): not decoded. */
+  | { status: "too_many_pixels"; width: number; height: number; frames: number }
+  /** A picture its decoder could not read. */
+  | { status: "broken" }
   | { status: "missing" }
   | { status: "too_large"; bytes: number }
   | { status: "not_file" }
@@ -311,6 +317,12 @@ export interface Viewer {
   opener?: PaneId;
   /** The lines it was opened at (`open_file`'s `line`, `last`), from 1, drawn marked. */
   marked?: { first: number; last: number };
+  /** A picture's zoom, in points a pixel; null: fitted to the pane. */
+  zoom: number | null;
+  /** How far a zoomed picture is moved from centred, in points. */
+  pan: [number, number];
+  /** An animation plays or stands on its first frame; null: as Reduce Motion says. */
+  playing: boolean | null;
 }
 
 /** A file viewer as drawn, by pane id: never its text. */
@@ -347,6 +359,9 @@ export interface ViewerDrawn {
     | null;
   /** A test run's: where the first marked line is drawn, while it shows. */
   marked_rect?: Rect | null;
+  /** A picture's frames, and the one on show (an animation's), never its pixels. */
+  frames?: number;
+  frame?: number;
 }
 
 export interface Pane {

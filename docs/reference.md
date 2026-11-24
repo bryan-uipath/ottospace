@@ -1203,7 +1203,7 @@ C, C++, Java, C#, Ruby, HTML (its `<script>` and `<style>` too), CSS, YAML, SQL,
 Makefiles and XML, functions and punctuation too; by a small lexer for Swift, Kotlin (no grammar:
 their size), diffs and the rest, and for a file of over 2 MB or one that takes over half a second to parse; markdown opened at
 a line shows its source, coloured with its fences and front matter), other
-text plain, a PNG, JPEG, GIF or WebP as a picture. Open one with ⌘E's **File…** (the open panel), a ⌘-click
+text plain, a PNG, JPEG, GIF, WebP, BMP or TIFF as a picture (see Pictures below). Open one with ⌘E's **File…** (the open panel), a ⌘-click
 on a path in a terminal (from the shell's folder, `~` too; `src/main.rs:12` opens `src/main.rs` at line 12)
 or on a file link in the conversation, or `ottospace ctl '{"cmd":"open_file","path":"/abs/a.md"}'`.
 A ⌘-click opens only markdown, code and text files there; any other file does what a click did
@@ -1228,6 +1228,13 @@ in the terminal.
   revealed in Finder, or with ⌘ opened in the viewer beside. A web picture is never fetched.
 - Restored after a restart with its file and line. The state has its path, kind, line and line
   count, never its text.
+- **Pictures**: fitted to the pane (never enlarged past its own size), over a checker where it is
+  transparent; its size in pixels, its file's size and the zoom in the pane's foot. ⌘= and ⌘- zoom
+  in steps, ⌘0 fits it again, a trackpad pinch zooms; zoomed, a drag or the wheel moves it. An
+  animated GIF or WebP plays while its pane is on show (Pause and Play in the foot); under Reduce
+  Motion it stands on its first frame until you press Play. Decoded off the main thread, at most
+  32 MB of file and 40 million pixels (every frame together): past that, or a file its decoder
+  cannot read, the pane says so. Never a picture from the web. SVG shows as its XML source.
 
 ## App panes
 

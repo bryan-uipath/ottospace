@@ -1,0 +1,9 @@
+# A picture in a file viewer: fitted over a checker where it is transparent, its size in the foot;
+# then zoomed with ⌘= (as the user's keys).
+{"cmd":"open_file","path":"{ROOT}/dot.png"}
+{"until":"state.viewers.1.read.status","is":"picture"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"fitted"}
+{"cmd":"key","keys":"cmd-= cmd-= cmd-=","as":"user"}
+{"until":"state.viewers.1.zoom","exists":true}
+{"shot":"zoomed"}

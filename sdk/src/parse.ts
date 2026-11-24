@@ -553,7 +553,12 @@ function viewerRead(value: unknown, at: string): ViewerRead {
   const o = fields(value, at);
   if (o.status === "shown") return { status: "shown", lines: num(o.lines, `${at}.lines`) };
   if (o.status === "too_large") return { status: "too_large", bytes: num(o.bytes, `${at}.bytes`) };
-  const bare = ["reading", "missing", "not_file", "binary", "unreadable"] as const;
+  const size = { width: num(o.width, `${at}.width`), height: num(o.height, `${at}.height`) };
+  if (o.status === "picture") {
+    return { status: "picture", ...size, frames: num(o.frames, `${at}.frames`), bytes: num(o.bytes, `${at}.bytes`) };
+  }
+  if (o.status === "too_many_pixels") return { status: "too_many_pixels", ...size, frames: num(o.frames, `${at}.frames`) };
+  const bare = ["reading", "missing", "not_file", "binary", "unreadable", "broken"] as const;
   return { status: oneOf(bare, "what the viewer read")(o.status, `${at}.status`) };
 }
 
@@ -566,6 +571,9 @@ function viewer(value: unknown, at: string): Viewer {
     most: orNull(num)(o.most, `${at}.most`),
     page: num(o.page, `${at}.page`),
     pending: orNull(str)(o.pending, `${at}.pending`),
+    zoom: orNull(num)(o.zoom, `${at}.zoom`),
+    pan: pair(o.pan, `${at}.pan`),
+    playing: orNull(bool)(o.playing, `${at}.playing`),
   };
   if (o.opener !== undefined) view.opener = num(o.opener, `${at}.opener`);
   if (o.marked !== undefined) {
@@ -589,6 +597,8 @@ function viewerDrawn(value: unknown, at: string): ViewerDrawn {
     };
   }
   if (o.lines !== undefined) drawn.lines = num(o.lines, `${at}.lines`);
+  if (o.frames !== undefined) drawn.frames = num(o.frames, `${at}.frames`);
+  if (o.frame !== undefined) drawn.frame = num(o.frame, `${at}.frame`);
   if (o.syntax !== undefined) {
     const langs = [
       "rust", "typescript", "tsx", "javascript", "json", "toml", "python", "bash", "go",

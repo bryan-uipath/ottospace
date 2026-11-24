@@ -1795,11 +1795,14 @@ const MAKERS: &[Make] = &[
     },
     |g| {
         use crate::viewer::Read;
-        let read = match g.rng.below(6) {
+        let read = match g.rng.below(9) {
             0 => Read::Missing,
             1 => Read::TooLarge { bytes: 6_000_000 },
             2 => Read::NotFile,
             3 => Read::Binary,
+            4 => Read::Picture { width: 640, height: 480, frames: 1 + g.rng.below(3) as u32, bytes: 1000 },
+            5 => Read::TooManyPixels { width: 9000, height: 9000, frames: 1 },
+            6 => Read::Broken,
             _ => Read::Shown { lines: g.rng.below(400) as u32 },
         };
         let path = g.file_path();
@@ -1810,6 +1813,23 @@ const MAKERS: &[Make] = &[
         Action::ViewerRead { pane: g.file_pane(), path, read }
     },
     |g| Action::ViewerEdit { pane: g.rng.coin().then(|| g.file_pane()) },
+    |g| {
+        use crate::viewer::ZoomStep;
+        let step = match g.rng.below(5) {
+            0 => ZoomStep::In,
+            1 => ZoomStep::Out,
+            2 => ZoomStep::Fit,
+            3 => ZoomStep::By { factor: [0.5, 2., f32::NAN, f32::INFINITY, -1., 0.][g.rng.below(6) as usize] },
+            _ => ZoomStep::By { factor: 1.1 },
+        };
+        let fit = [0.25, 1., 0., f32::NAN][g.rng.below(4) as usize];
+        Action::ViewerZoom { pane: g.rng.coin().then(|| g.file_pane()), step, fit }
+    },
+    |g| {
+        let by = [[12., -3.], [f32::NAN, 0.], [f32::MAX, f32::MAX], [-40., 0.]][g.rng.below(4) as usize];
+        Action::ViewerPan { pane: g.file_pane(), by }
+    },
+    |g| Action::ViewerPlay { pane: g.rng.coin().then(|| g.file_pane()), play: g.rng.coin() },
     |g| Action::SettingsRead {
         text: g
             .rng
@@ -3779,6 +3799,11 @@ fn check_viewers(m: &Model) -> Result<(), String> {
         }
         let typing = m.keyboard_viewer() == Some(*id);
         ensure!(typing || view.pending.pending().is_none(), "viewer {id} keeps a count it has no keys for");
+        // A zoom only of a picture, within its bounds; a pan only of a zoomed one, finite and bounded.
+        use crate::viewer::{MAX_PAN, MAX_ZOOM, MIN_ZOOM};
+        ensure!(view.zoom.is_none_or(|z| (MIN_ZOOM..=MAX_ZOOM).contains(&z)), "viewer {id} zoomed to {:?}", view.zoom);
+        let pan_ok = view.pan.iter().all(|d| d.is_finite() && d.abs() <= MAX_PAN);
+        ensure!(pan_ok && (view.zoom.is_some() || view.pan == [0., 0.]), "viewer {id} panned {:?}", view.pan);
     }
     Ok(())
 }

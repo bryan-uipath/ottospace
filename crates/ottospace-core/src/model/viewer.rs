@@ -170,7 +170,42 @@ impl Model {
             if let Read::Shown { lines } = read {
                 view.marked = view.marked.and_then(|at| at.within(lines));
             }
+            // A picture read again at another size: fitted again.
+            if view.read != read && !matches!(read, Read::Picture { .. }) {
+                (view.zoom, view.pan) = (None, [0., 0.]);
+            }
             view.read = read;
+        }
+    }
+
+    /// The picture in viewer `pane` (default: the focused pane) zoomed by `step` from its fit;
+    /// fitted again, it is centred.
+    pub(super) fn viewer_zoom(&mut self, pane: Option<PaneId>, step: viewer::ZoomStep, fit: f32) {
+        let Some(view) = pane.or(self.focused).and_then(|id| self.viewers.get_mut(&id)) else { return };
+        if !matches!(view.read, Read::Picture { .. }) {
+            return;
+        }
+        view.zoom = viewer::zoomed(view.zoom, fit, step);
+        if view.zoom.is_none() {
+            view.pan = [0., 0.];
+        }
+    }
+
+    /// A zoomed picture moved by `by` points. Fitted, it stays centred; never further than
+    /// `viewer::MAX_PAN` either way (the shell keeps it on screen as it draws).
+    pub(super) fn viewer_pan(&mut self, pane: PaneId, by: [f32; 2]) {
+        let Some(view) = self.viewers.get_mut(&pane).filter(|view| view.zoom.is_some()) else { return };
+        if by.iter().all(|d| d.is_finite()) {
+            let moved = |at: f32, d: f32| (at + d).clamp(-viewer::MAX_PAN, viewer::MAX_PAN);
+            view.pan = [moved(view.pan[0], by[0]), moved(view.pan[1], by[1])];
+        }
+    }
+
+    /// An animation's play or pause (default: the focused pane's).
+    pub(super) fn viewer_play(&mut self, pane: Option<PaneId>, play: bool) {
+        let Some(view) = pane.or(self.focused).and_then(|id| self.viewers.get_mut(&id)) else { return };
+        if matches!(view.read, Read::Picture { frames, .. } if frames > 1) {
+            view.playing = Some(play);
         }
     }
 
@@ -227,6 +262,7 @@ mod tests {
     use super::*;
     use crate::model::{Action, Origin};
     use crate::viewer::Shows;
+    use crate::viewer::ZoomStep;
 
     const DOC: &str = "/w/app/README.md";
 
@@ -443,5 +479,39 @@ mod tests {
         let pane = r.panes.first().map(|pane| pane.id).unwrap_or_default();
         assert_eq!((file(&r, pane).as_deref(), r.viewer(pane).map(|v| v.top)), (Some(DOC), Some(42)));
         assert!(effects.contains(&Effect::ViewFile { pane }), "{effects:?}");
+    }
+
+    #[test]
+    fn a_picture_zooms_pans_and_plays_and_text_does_none_of_it() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None });
+        open(&mut m, "/w/app/spin.gif", None, false);
+        let id = m.focused.unwrap_or_default();
+        let zoom = |m: &mut Model, step| m.update(Action::ViewerZoom { pane: None, step, fit: 0.5 });
+        // Not read yet: nothing.
+        zoom(&mut m, ZoomStep::In);
+        assert_eq!(m.viewer(id).map(|v| v.zoom), Some(None));
+        let picture = Read::Picture { width: 800, height: 600, frames: 12, bytes: 40_000 };
+        m.update(
+            Action::ViewerRead { pane: id, path: "/w/app/spin.gif".into(), read: picture }.sent_by(Origin::System),
+        );
+        // Fitted: a pan does nothing. Nearer: it moves. Fitted again: centred.
+        m.update(Action::ViewerPan { pane: id, by: [10., 0.] });
+        assert_eq!(m.viewer(id).map(|v| v.pan), Some([0., 0.]));
+        zoom(&mut m, ZoomStep::In);
+        m.update(Action::ViewerPan { pane: id, by: [10., -4.] });
+        assert_eq!(m.viewer(id).map(|v| (v.zoom, v.pan)), Some((Some(0.625), [10., -4.])));
+        zoom(&mut m, ZoomStep::Fit);
+        assert_eq!(m.viewer(id).map(|v| (v.zoom, v.pan)), Some((None, [0., 0.])));
+        // Its frames: paused, played.
+        m.update(Action::ViewerPlay { pane: None, play: false });
+        assert_eq!(m.viewer(id).and_then(|v| v.playing), Some(false));
+        // A text file: none of it.
+        open(&mut m, DOC, None, false);
+        let doc = m.focused.unwrap_or_default();
+        read(&mut m, doc, DOC, 10);
+        zoom(&mut m, ZoomStep::In);
+        m.update(Action::ViewerPlay { pane: None, play: true });
+        assert_eq!(m.viewer(doc).map(|v| (v.zoom, v.playing)), Some((None, None)));
     }
 }
