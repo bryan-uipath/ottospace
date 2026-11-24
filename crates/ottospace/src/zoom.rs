@@ -208,7 +208,8 @@ impl Workspace {
             .text_xs()
             .text_color(rgb(if from { theme::PRIMARY } else { theme::MUTED }))
             .child(cut_text(words));
-        div().child(label).child(tile).into_any_element()
+        // Narrow, the name is inside the tile: none above it, over the row before.
+        div().when(rect.w >= BLOCKS, |d| d.child(label)).child(tile).into_any_element()
     }
 
     /// One pane `rect` in its tile, `scale` of its size: a header with its name, and what it shows.
