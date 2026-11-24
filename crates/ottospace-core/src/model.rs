@@ -8373,7 +8373,7 @@ impl Model {
 
     /// What is known of a session: as listed, else as `SessionRead` said (`Some(None)`: read,
     /// and no listed checkout has it). `None`: not known.
-    fn facts(&self, runner: &str, id: &str) -> Option<Option<&Found>> {
+    pub(crate) fn facts(&self, runner: &str, id: &str) -> Option<Option<&Found>> {
         if let Some(found) = self.found.iter().find(|s| s.runner == runner && s.id == id) {
             return Some(Some(found));
         }
@@ -18190,6 +18190,37 @@ mod tests {
         m.update(Action::TaskGo { id: None });
         let shown = Subject::Session { runner: "claude".into(), id: "h".into() };
         assert_eq!(m.talk.as_ref().map(|t| &t.task), Some(&shown));
+    }
+
+    /// The owner's case: a terminal session opened from its card with `overlay_panels`. The
+    /// sidebar closes as the row opens; the space on show says the sessions are still to be read
+    /// (`shows_session`), so its watch, its city and the counts hold; its tab is its checkout's.
+    #[test]
+    fn an_opened_terminal_session_is_read_on_and_its_tab_is_its_checkouts_city() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        m.update(Action::SetFeatures { features: Features::all() }.sent_by(Origin::System));
+        if m.sidebar != Some(Section::Tasks) {
+            m.update(Action::ToggleSection { section: Section::Tasks });
+        }
+        let held = Found { held: true, ..session("claude", "h", "/code/app", false, now - 60_000) };
+        m.update(Action::SetSessions { found: vec![held.clone()], day: 0 }.sent_by(Origin::System));
+        assert!(!m.shows_session());
+        m.update(Action::SessionOpen { runner: "claude".into(), id: "h".into() });
+        let shown = Subject::Session { runner: "claude".into(), id: "h".into() };
+        assert_eq!((m.sidebar, m.shows_session(), m.watching(&shown)), (None, true, true));
+        // Read on, though no section that lists sessions is open: still watched, still counted.
+        m.update(Action::SetSessions { found: vec![held], day: 0 }.sent_by(Origin::System));
+        assert_eq!((m.watching(&shown), m.agents().in_terminal), (true, 1));
+        let at = m.empty_places()[0];
+        assert_eq!(m.empty_folder(at), Some("/code/app"));
+        assert!(m.city_at(at).is_some());
+        // Not known any more (nothing read it): not watched, and the header says so.
+        m.update(Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::System));
+        assert!(!m.watching(&shown));
+        // Another space on show: nothing asks for the sessions.
+        m.update(Action::SpaceOpen { space: Owner::Home });
+        assert!(!m.shows_session());
     }
 
     #[test]

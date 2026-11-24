@@ -15453,6 +15453,66 @@ fn a_watched_session_says_so_and_shows_its_edits_as_they_land() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The owner's case (`overlay_panels`, `terminal_tasks`): a session another terminal runs, opened
+/// from its card. The sidebar closes as the row opens, yet the session is still read: what lands
+/// in its file shows, the status bar still counts it, and its tab is its checkout's.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_watched_session_opened_from_an_overlay_goes_on_updating_and_counting() {
+    let root = support::temp(&format!("ottospace-e2e-watch-overlay-{}", std::process::id()));
+    let (repos, claude) = (root.join("repos"), root.join("sessions/claude"));
+    fake_repo(&repos.join("app"));
+    let repo = repos.join("app").canonicalize().unwrap();
+    let id = "44444444-4444-4444-8444-444444444444";
+    // Made-up: one prompt, and this test's own pid as the live process that holds it.
+    let file = claude.join("projects").join(ottospace_sessions::claude::slug(&repo)).join(format!("{id}.jsonl"));
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    let user = json!({"type": "user", "message": {"role": "user", "content": "made-up prompt"},
+        "timestamp": "2026-11-13T09:00:00.000Z", "cwd": repo, "sessionId": id});
+    std::fs::write(&file, format!("{user}\n")).unwrap();
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    let live = json!({"pid": std::process::id(), "sessionId": id, "status": "busy"});
+    std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
+    let settings = json!({"repos": repos_in(&repos), "session_dirs": {"claude": [claude]}});
+    let home = user_folder("watch-overlay", &settings.to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "overlay_panels,terminal_tasks"),
+        ("OTTOSPACE_REDUCE_MOTION", "1"),
+    ];
+    let otto = Otto::launch_with("watch-overlay", &env);
+    otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5));
+    let row = format!("session:claude:{id}");
+    otto.wait_for("its card", |o| o.controls().iter().any(|(control, _)| *control == row).then_some(()));
+    let working = |o: &Otto| o.call(json!({"cmd": "state"}))["status_bar"]["agents"]["in_terminal"].clone();
+    assert_eq!(working(&otto), 1);
+    let opened = otto.user_click(at(otto.control(&row), 0.3, 0.3));
+    assert!(opened["state"]["sidebar"].is_null(), "the overlay closed as the row opened");
+    let key = format!("claude:{id}");
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"][&key].clone();
+    otto.wait_for("the watched transcript", |o| (chat(o)["transcript"]["watched"] == true).then_some(()));
+    // Rounds go on with the section closed: a record lands and shows; still one in a terminal.
+    let edit = edit_call(&repo.join("src/auth.rs"));
+    let record = format!(
+        r#"{{"type":"assistant","message":{{"id":"msg_1","model":"claude-opus-5-5","content":[{edit}]}},"timestamp":"2026-11-13T09:00:01.000Z","sessionId":"{id}"}}"#
+    );
+    std::thread::sleep(Duration::from_secs(6));
+    let mut log = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+    std::io::Write::write_all(&mut log, format!("{record}\n").as_bytes()).unwrap();
+    otto.wait_for("the edit", |o| {
+        chat(o)["transcript"]["entries"].as_array()?.iter().any(|e| e["tool"] == "Edit").then_some(())
+    });
+    assert_eq!(working(&otto), 1, "opened, still counted");
+    // Its tab is its checkout's: a terminal opened there starts in it.
+    let state = otto.call(json!({"cmd": "split"}));
+    let cwd = state["state"]["panes"].as_array().and_then(|panes| panes.iter().find_map(|p| p["cwd"].as_str()));
+    let cwd = cwd.and_then(|cwd| std::path::Path::new(cwd).canonicalize().ok());
+    assert_eq!(cwd, Some(repo.clone()), "{}", state["state"]["panes"]);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The top row by real clicks: a task's × hides it and nothing in it closes; its row in Tasks
 /// brings it back where it was; ⌘⌃W hides the one on show. Home has no ×.
 #[test]

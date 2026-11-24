@@ -3932,7 +3932,8 @@ impl Workspace {
     fn poll_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = now_ms();
         // Read for the Repos section's dots and a code city's agents too; listed only while Tasks is open.
-        let tasks = self.model.sidebar == Some(Section::Tasks);
+        // A session's space on show lists them as Tasks does: its watch and the counts need them.
+        let tasks = self.model.sidebar == Some(Section::Tasks) || self.model.shows_session();
         let city = self.model.empty_places().into_iter().any(|at| self.model.city_at(at).is_some());
         let open = tasks || self.model.sidebar == Some(Section::Repos) || city;
         // The agent CLIs our panes run, by their processes alone: a city's agents, no setting
