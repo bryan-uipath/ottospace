@@ -351,8 +351,10 @@ struct Made {
     gpu_us: u64,
     /// When a place last painted it: the newest unused are kept (`KEPT_PICTURES`).
     used: Instant,
-    /// When it was made: its wait to be painted is timed (`Drawn::waits`).
+    /// When it was made, and whether it was painted yet: its wait to be painted is timed once
+    /// (`Drawn::waits`).
     made_at: Instant,
+    painted: bool,
 }
 
 /// One empty place's city, as the last frame drew it.
@@ -535,8 +537,8 @@ pub struct Drawn {
     glimmer_frames: u64,
     /// Pictures no place shows: GPUI keeps each in the window's atlas until it is dropped.
     retired: Vec<Arc<RenderImage>>,
-    /// While a spin runs: each new picture's wait from made to painted, in ms.
-    waits: Option<Vec<f32>>,
+    /// While a spin runs: its place, and each new picture's wait there from made to painted, in ms.
+    waits: Option<(Floor, Vec<f32>)>,
 }
 
 pub type Shared = Rc<RefCell<Drawn>>;
@@ -704,6 +706,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
         gpu_us,
         used,
         made_at: used,
+        painted: false,
     })
 }
 
@@ -1504,7 +1507,9 @@ impl Workspace {
         if origin != Origin::User || self.city_spin.is_some() || self.city_drag.is_some() {
             return;
         }
-        let first = self.model.empty_places().into_iter().map(|at| (self.floor_of(at), at)).find(|(floor, _)| {
+        // In the main window: its frames time the spin.
+        let places = self.model.empty_places().into_iter().map(|at| (self.floor_of(at), at));
+        let first = places.filter(|(floor, _)| !matches!(floor, Floor::Out(_))).find(|(floor, _)| {
             let drawn = self.city_drawn.borrow();
             drawn.places.get(floor).is_some_and(|place| drawn.picture(place).is_some())
         });
@@ -1513,7 +1518,7 @@ impl Workspace {
             return cx.notify();
         };
         self.dispatch(Action::CityCamera { at, step: CameraStep::Grab }, origin, window, cx);
-        self.city_drawn.borrow_mut().waits = Some(Vec::new());
+        self.city_drawn.borrow_mut().waits = Some((floor, Vec::new()));
         let spin =
             Spin { floor, at, origin, step: 0, asked: false, last: None, frames: Vec::new(), repeats: 0, shown: None };
         self.city_spin = Some(spin);
@@ -1543,6 +1548,10 @@ impl Workspace {
             spin.repeats += 1;
         }
         spin.shown = shown;
+        // Its city covered (a pane opened over it) or gone: stopped, not done.
+        if self.model.city_at(spin.at).is_none() {
+            return self.city_spin_end(spin, false, window, cx);
+        }
         if spin.step == SPIN_STEPS {
             return self.city_spin_end(spin, true, window, cx);
         }
@@ -1559,7 +1568,7 @@ impl Workspace {
         self.dispatch(Action::CityCamera { at: spin.at, step: CameraStep::Cancel }, spin.origin, window, cx);
         let mut frames = spin.frames;
         frames.sort_by(f32::total_cmp);
-        let mut waits = self.city_drawn.borrow_mut().waits.take().unwrap_or_default();
+        let mut waits = self.city_drawn.borrow_mut().waits.take().map(|(_, waits)| waits).unwrap_or_default();
         waits.sort_by(f32::total_cmp);
         let boxes = {
             let drawn = self.city_drawn.borrow();
@@ -1699,7 +1708,8 @@ fn paint(
         window.request_animation_frame();
     }
     let shown = made.key.clone();
-    let new = drawn.places.get(&floor).is_none_or(|place| place.shown.as_ref() != Some(&shown));
+    // Its first paint: a picture shown again (kept, a tab come back) is no new one.
+    let new = !made.painted;
     let wait = made.made_at.elapsed().as_secs_f32() * 1e3;
     let painted = Instant::now();
     let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
@@ -1836,7 +1846,7 @@ fn paint(
         window.request_animation_frame();
     }
     drawn.paints += 1;
-    if let (true, Some(waits)) = (new, drawn.waits.as_mut()) {
+    if let Some((_, waits)) = drawn.waits.as_mut().filter(|(of, _)| new && *of == floor) {
         waits.push(wait);
     }
     drawn.beam_frames += u64::from(fades);
@@ -1846,7 +1856,7 @@ fn paint(
     drawn.pulse_frames += u64::from(pulsing);
     drawn.glimmer_frames += u64::from(glimmering);
     if let Some(made) = drawn.pictures.get_mut(&shown) {
-        made.used = Instant::now();
+        (made.used, made.painted) = (Instant::now(), true);
     }
     if let Some(place) = drawn.places.get_mut(&floor) {
         (place.names, place.beacon, place.shown) = (names, beacon, Some(shown));

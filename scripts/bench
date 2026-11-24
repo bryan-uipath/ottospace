@@ -95,10 +95,13 @@ THRESHOLDS = [
     # A turn of 9,500 files: frames' p99 and those over two frames' time (a hitch).
     ("spin_9500_p99_ms", 0.25, 4.0, 0),
     ("spin_9500_over_33", None, 3, 3),
+    # Frames that showed the picture before (of 240): the turn standing still on screen.
+    ("spin_9500_repeats", None, 24, 24),
 ]
 LIMITS = ("startup median +20% and +50 ms; RSS +25% and +10 MB; idle CPU above 2% of a core and +1 point; "
           "code city +25% and +100 ms (20,000 files: +150 ms); "
-          "a spin of 9,500 files: frames' p99 +25% and +4 ms, frames over 33 ms above 3 and +3.")
+          "a spin of 9,500 files: frames' p99 +25% and +4 ms, frames over 33 ms and repeated frames above 3 and +3, 24 and +24; "
+          "a spin the base made and this side did not.")
 
 
 # proc_pid_rusage(2): CPU times, wakeups, resident size and phys_footprint of a pid we started.
@@ -571,6 +574,7 @@ def bench(sides, args, scratch):
         if spun.get(9500):
             result[name]["spin_9500_p99_ms"] = result[name]["spin"][9500]["p99"]
             result[name]["spin_9500_over_33"] = result[name]["spin"][9500]["over_33"]
+            result[name]["spin_9500_repeats"] = result[name]["spin"][9500]["repeats"]
     return result, sorted(held)
 
 
@@ -595,6 +599,7 @@ ROWS = [
     ("city_20000_ms", "code city, 20,000 files (ms)"),
     ("spin_9500_p99_ms", "code city spun, 9,500 files: frames' p99 (ms)"),
     ("spin_9500_over_33", "  frames over 33 ms"),
+    ("spin_9500_repeats", "  frames that repeated the picture before"),
 ]
 
 
@@ -627,7 +632,11 @@ def past(before, after):
 def regressions(before, after, held):
     """What fails: a startup past its threshold in every round (`held`), any other metric past its own."""
     keys = [k for k, *_ in THRESHOLDS if k in held or (not k.startswith("startup_") and k in past(before, after))]
-    return [f"{k}: {value(before, k):.1f} → {value(after, k):.1f}" for k in keys]
+    found = [f"{k}: {value(before, k):.1f} → {value(after, k):.1f}" for k in keys]
+    # A spin the base made and this side did not (no city, a failed spin): never a pass by absence.
+    if "spin_9500_p99_ms" in before and "spin_9500_p99_ms" not in after:
+        found.append("spin_9500: the base spun, this side did not")
+    return found
 
 
 def motion_table(result):
