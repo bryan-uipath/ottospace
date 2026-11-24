@@ -147,7 +147,9 @@ pub struct Gpu {
     pipeline: wgpu::RenderPipeline,
     /// For glass buildings: blended over what is drawn, writing no depth, drawn last, far first.
     glass: wgpu::RenderPipeline,
-    layout: wgpu::BindGroupLayout,
+    /// The frame's uniform (camera, eye, fog, background, light: 32 floats), bound once.
+    uniform: wgpu::Buffer,
+    group: wgpu::BindGroup,
     /// Kept from picture to picture: a camera move makes no texture or buffer.
     kept: std::cell::RefCell<Kept>,
 }
@@ -274,7 +276,13 @@ impl Gpu {
             })
         };
         let (glass, pipeline) = (pipeline(true), pipeline(false));
-        Ok(Self { device, queue, pipeline, glass, layout, kept: Default::default() })
+        let uniform = buffer(&device, &[0.; 32], wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
+        });
+        Ok(Self { device, queue, pipeline, glass, uniform, group, kept: Default::default() })
     }
 
     /// One draw of a one-box city at 16×16, its picture dropped: the first picture shown pays no
@@ -348,8 +356,7 @@ impl Gpu {
         frame.extend(reach);
         frame.extend([bg[0], bg[1], bg[2], 1.]);
         frame.extend([-0.45, 1., -0.3, rise.clamp(0., 1.)]);
-        let uniform = buffer(device, &frame, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
-        self.queue.write_buffer(&uniform, 0, &bytes(&frame));
+        self.queue.write_buffer(&self.uniform, 0, &bytes(&frame));
         // The solid boxes first; then the glass ones, the farthest first, each over what is behind
         // it. Each as made once (`Boxes`), standing where the scene has it (a lit one's line of
         // sight may cut others down).
@@ -379,11 +386,6 @@ impl Gpu {
         let (Some(t), Some(instances)) = (&kept.targets, &kept.instances) else { return Err("no targets".into()) };
         let (row, read) = (t.row, t.read.clone());
         self.queue.write_buffer(instances, 0, &bytes_of);
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
-        });
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let [r, g, b] = bg.map(f64::from);
@@ -408,7 +410,7 @@ impl Gpu {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &group, &[]);
+            pass.set_bind_group(0, &self.group, &[]);
             pass.set_vertex_buffer(0, instances.slice(..bytes_of.len() as u64));
             pass.draw(0..36, 0..solid_count);
             pass.set_pipeline(&self.glass);
@@ -622,6 +624,24 @@ mod tests {
                 assert!((1..=2).contains(&rows), "{scale}×: the {edge} edge is {rows} rows");
             }
         }
+    }
+
+    /// Kept targets and boxes draw what fresh ones do: a view, another size and view, then the
+    /// first again from the kept boxes, byte for byte. No GPU: nothing to check.
+    #[test]
+    fn kept_targets_and_boxes_draw_the_same_picture() {
+        let Ok(gpu) = Gpu::new() else { return eprintln!("no GPU: skipped") };
+        let files: Vec<(String, u64)> =
+            (0..300).map(|i| (format!("d{}/e{}/f{i}.rs", i % 5, i % 3), 300 + i * 97)).collect();
+        let plan = atlas::atlas(&atlas::repo(&files));
+        let turned = View::default().orbited(40., -10.);
+        let scene = ottospace_core::scene::scene(&plan, &[], 1.6, &turned);
+        let fresh = gpu.render(&scene, 320, 200, 1., true).unwrap();
+        let boxes = Boxes::new(&scene, true);
+        let other = ottospace_core::scene::scene(&plan, &[], 1.6, &View::default());
+        drop(gpu.render_boxes(&other, &boxes, 160, 100, 1.).unwrap());
+        let kept = gpu.render_boxes(&scene, &boxes, 320, 200, 1.).unwrap();
+        assert!(kept.bgra == fresh.bgra, "the kept picture differs");
     }
 
     /// A 32-bit BMP, top row first: enough to look at a picture.
