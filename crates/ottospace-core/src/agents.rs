@@ -1,7 +1,7 @@
 //! What an `@agent` tag names: a runner (`claude`), a runner and a model (`claude-opus-5-5`,
 //! `codex-gpt-6-astra`), or a saved agent. `read` is the one reading of a tag.
 
-use crate::runner::{Introduced, RunnerId, SessionId};
+use crate::runner::{Introduced, McpAttach, RunnerId, SessionId};
 use crate::settings::AgentModels;
 
 /// The longest model id, or what follows `claude-` in one typed outright.
@@ -161,9 +161,9 @@ impl Launch {
     /// What to run: `claude --model <id> --session-id <uuid> -- <prompt>`. The prompt (see
     /// `prompt`) is one element, after `--`: whatever it holds, it is never read as an option.
     /// `session`: a new UUID, passed if the runner takes one. `brief`: the path of the task's
-    /// brief, which the shell made. `see`: agent mode is on (`prompt`). `None`: `session` is not a
-    /// UUID, or the model is not a name.
-    pub fn command(&self, session: &str, brief: Option<&str>, see: bool) -> Option<Command> {
+    /// brief, which the shell made. `see`: agent mode is on (`prompt`). `mcp`: ottospace's MCP
+    /// server, given before `--` (`mcp_args`). `None`: `session` is not a UUID, or the model is not a name.
+    pub fn command(&self, session: &str, brief: Option<&str>, see: bool, mcp: Option<&McpServer>) -> Option<Command> {
         let cli = &self.runner.spec().terminal;
         if !is_uuid(session) || self.model.as_deref().is_some_and(|id| !is_name(id)) {
             return None;
@@ -174,17 +174,63 @@ impl Launch {
             SessionId::Found { .. } => None,
         };
         let session = flag.into_iter().flat_map(|flag| [flag.to_string(), session.to_string()]);
-        let args =
-            model.chain(session).chain(["--".to_string(), prompt(self.runner, &self.title, brief, see)]).collect();
+        let server = mcp.map(|server| mcp_args(self.runner, server)).unwrap_or_default();
+        let prompt = ["--".to_string(), prompt(self.runner, &self.title, brief, see)];
+        let args = model.chain(session).chain(server).chain(prompt).collect();
         Some(Command { program: cli.program, args })
     }
 }
 
-/// What goes on with a runner's session: `claude --resume <id>`, `codex resume <id>`.
-/// `None`: the id is not a UUID.
-pub fn resume(runner: RunnerId, session: &str) -> Option<Command> {
+/// What goes on with a runner's session: `claude --resume <id>`, `codex resume <id>`, then
+/// ottospace's MCP server if given. `None`: the id is not a UUID.
+pub fn resume(runner: RunnerId, session: &str, mcp: Option<&McpServer>) -> Option<Command> {
     let cli = &runner.spec().terminal;
-    is_uuid(session).then(|| Command { program: cli.program, args: vec![cli.resume.to_string(), session.to_string()] })
+    let server = mcp.map(|server| mcp_args(runner, server)).unwrap_or_default();
+    let args = [cli.resume.to_string(), session.to_string()].into_iter().chain(server).collect();
+    is_uuid(session).then(|| Command { program: cli.program, args })
+}
+
+/// ottospace's MCP server for one task's agent: this program, its socket and the agent's pass
+/// file. Facts of the shell's; `mcp_args` says how a runner takes them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpServer {
+    pub program: String,
+    pub socket: String,
+    pub pass_file: String,
+}
+
+/// The server's name in a runner's config: its tools are `mcp__ottospace__<tool>` to Claude Code.
+const MCP_NAME: &str = "ottospace";
+
+/// The arguments that give `runner` ottospace's MCP server for this run (`RunnerSpec::mcp`): its
+/// command, `ottospace mcp`, with the socket and the pass file in its environment (a runner may
+/// pass its own on filtered), and its read-only tools let run unasked. Nothing else is allowed.
+/// None for a runner that takes none. The user's config files are never touched.
+pub fn mcp_args(runner: RunnerId, server: &McpServer) -> Vec<String> {
+    let env = [("OTTOSPACE_SOCKET", &server.socket), ("OTTOSPACE_TASK_PASS_FILE", &server.pass_file)];
+    match runner.spec().mcp {
+        None => Vec::new(),
+        Some(McpAttach::ConfigJson) => {
+            let env: serde_json::Map<String, serde_json::Value> =
+                env.iter().map(|(name, value)| (name.to_string(), value.as_str().into())).collect();
+            let one = serde_json::json!({ "command": server.program, "args": ["mcp"], "env": env });
+            let config = serde_json::json!({ "mcpServers": { MCP_NAME: one } });
+            let allowed: Vec<String> = MCP_TOOLS.iter().map(|tool| format!("mcp__{MCP_NAME}__{tool}")).collect();
+            vec!["--mcp-config".into(), config.to_string(), "--allowedTools".into(), allowed.join(",")]
+        }
+        Some(McpAttach::Overrides) => {
+            // A TOML basic string is a JSON string: quoted, escaped.
+            let toml = |text: &str| serde_json::Value::from(text).to_string();
+            let key = |key: &str| format!("mcp_servers.{MCP_NAME}.{key}");
+            let mut set = vec![
+                format!("{}={}", key("command"), toml(&server.program)),
+                format!(r#"{}=["mcp"]"#, key("args")),
+                format!(r#"{}="writes""#, key("default_tools_approval_mode")),
+            ];
+            set.extend(env.iter().map(|(name, value)| format!("{}={}", key(&format!("env.{name}")), toml(value))));
+            set.into_iter().flat_map(|one| ["-c".to_string(), one]).collect()
+        }
+    }
 }
 
 /// What the user's login shell runs for an agent, and its positional parameters: `exec "$@"`
@@ -464,7 +510,8 @@ mod tests {
         let models = Models::default();
         let uuid = "8f14e45f-ceea-467f-a8d3-0242ac130003";
         let args = |tag: Option<&str>| {
-            let command = launch(tag, "claude", &models, "fix it".into()).and_then(|l| l.command(uuid, None, true));
+            let command =
+                launch(tag, "claude", &models, "fix it".into()).and_then(|l| l.command(uuid, None, true, None));
             command.map(|command| format!("{} {}", command.program, command.args.join(" ")))
         };
         let (claude, codex) =
@@ -483,12 +530,12 @@ mod tests {
         // A session id that is no UUID, or a model that is no name, starts nothing.
         let ask = Launch { runner: RunnerId::Claude, model: None, title: "x".into() };
         for id in ["", "--resume", "8f14e45f-ceea-467f-a8d3-0242ac13000", "8f14e45f-ceea-467f-a8d3-0242ac13000g"] {
-            assert_eq!((ask.command(id, None, true), resume(RunnerId::Claude, id)), (None, None), "{id}");
+            assert_eq!((ask.command(id, None, true, None), resume(RunnerId::Claude, id, None)), (None, None), "{id}");
         }
-        assert_eq!(Launch { model: Some("--yolo".into()), ..ask }.command(uuid, None, true), None);
+        assert_eq!(Launch { model: Some("--yolo".into()), ..ask }.command(uuid, None, true, None), None);
         // Going on with a session: its id and nothing of the task.
         let args = |runner: Option<RunnerId>| {
-            runner.and_then(|r| resume(r, uuid)).map(|command| (command.program, command.args.join(" ")))
+            runner.and_then(|r| resume(r, uuid, None)).map(|command| (command.program, command.args.join(" ")))
         };
         assert_eq!(args(RunnerId::named("claude")), Some(("claude", format!("--resume {uuid}"))));
         assert_eq!(
@@ -600,6 +647,55 @@ mod tests {
         }
     }
 
+    /// A task's agent is given ottospace's MCP server for its run in argv, before anything of its
+    /// own: Claude Code a JSON config and the read-only tools allowed, no other; Codex `-c`
+    /// overrides, only tools not marked read-only asked. Paths with quotes stay one value each.
+    #[test]
+    fn a_runner_takes_the_mcp_server_for_one_run_in_argv() {
+        let uuid = "8f14e45f-ceea-467f-a8d3-0242ac130003";
+        let server = McpServer {
+            program: "/Applications/otto space.app/ottospace".into(),
+            socket: "/tmp/a\"b/ottospace.sock".into(),
+            pass_file: "/tmp/ottospace.sock.passes/7".into(),
+        };
+        let claude = mcp_args(RunnerId::Claude, &server);
+        assert_eq!((claude.len(), claude[0].as_str(), claude[2].as_str()), (4, "--mcp-config", "--allowedTools"));
+        let config: serde_json::Value = serde_json::from_str(&claude[1]).unwrap();
+        let one = &config["mcpServers"]["ottospace"];
+        assert_eq!((&one["command"], &one["args"]), (&server.program.as_str().into(), &serde_json::json!(["mcp"])));
+        assert_eq!(
+            (&one["env"]["OTTOSPACE_SOCKET"], &one["env"]["OTTOSPACE_TASK_PASS_FILE"]),
+            (&server.socket.as_str().into(), &server.pass_file.as_str().into())
+        );
+        let allowed: Vec<&str> = claude[3].split(',').collect();
+        assert_eq!(allowed.len(), MCP_TOOLS.len());
+        assert!(allowed.iter().all(|tool| tool.starts_with("mcp__ottospace__") && !tool.contains('*')), "{allowed:?}");
+        let codex = mcp_args(RunnerId::Codex, &server);
+        let set: Vec<&str> = codex
+            .chunks(2)
+            .map(|pair| {
+                assert_eq!(pair[0], "-c");
+                pair[1].as_str()
+            })
+            .collect();
+        assert_eq!(
+            set,
+            [
+                r#"mcp_servers.ottospace.command="/Applications/otto space.app/ottospace""#,
+                r#"mcp_servers.ottospace.args=["mcp"]"#,
+                r#"mcp_servers.ottospace.default_tools_approval_mode="writes""#,
+                r#"mcp_servers.ottospace.env.OTTOSPACE_SOCKET="/tmp/a\"b/ottospace.sock""#,
+                r#"mcp_servers.ottospace.env.OTTOSPACE_TASK_PASS_FILE="/tmp/ottospace.sock.passes/7""#,
+            ]
+        );
+        // After the runner's own flags; the prompt still last, after `--`.
+        let launch = launch(Some("claude"), "claude", &Models::default(), "fix it".into()).unwrap();
+        let args = launch.command(uuid, None, false, Some(&server)).unwrap().args;
+        assert_eq!((&args[2..6], &args[6]), (&claude[..], &"--".to_string()));
+        let resumed = resume(RunnerId::Codex, uuid, Some(&server)).unwrap().args;
+        assert_eq!(resumed, [vec!["resume".into(), uuid.into()], codex].concat());
+    }
+
     /// The MCP server's instructions: short, its tools in the commands' place, the same rules. The
     /// first 512 characters (all Codex promises to keep in view) say what it is and where to start.
     #[test]
@@ -635,7 +731,7 @@ mod tests {
             let (_, after) = asked.split_once('\n').unwrap();
             let lines = brief.map(|b| format!("\nThe brief for this task is the file {b}\n{READ_BRIEF}\n"));
             assert_eq!(after, format!("{}\n{}", lines.unwrap_or_default(), preamble(see)), "{asked:?}");
-            let Command { program, args } = launch.command(uuid, brief, see).unwrap();
+            let Command { program, args } = launch.command(uuid, brief, see, None).unwrap();
             assert_eq!(program, launch.runner.name());
             let (flags, last) = args.split_at(args.len() - 2);
             assert_eq!(last, ["--".to_string(), asked]);

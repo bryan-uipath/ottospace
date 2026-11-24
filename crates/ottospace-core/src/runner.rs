@@ -65,6 +65,19 @@ pub struct RunnerSpec {
     pub disk: Disk,
     pub attach: Attach,
     pub introduced: Introduced,
+    /// How a task's agent is given ottospace's MCP server for its run, never through its config
+    /// files (`agents::mcp_args`). None: not given; the preamble's commands stand.
+    pub mcp: Option<McpAttach>,
+}
+
+/// How a runner takes an MCP server for one run, and lets its read-only tools run unasked.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum McpAttach {
+    /// A config as JSON in argv (`--mcp-config`); the tools named in `--allowedTools`.
+    ConfigJson,
+    /// `-c key=value` overrides of its config (`mcp_servers.<name>.*`); tools not marked read-only
+    /// still asked (`default_tools_approval_mode = "writes"`): all of ottospace's are read-only.
+    Overrides,
 }
 
 /// Where a task's agent is told of ottospace (`agents::preamble`).
@@ -219,6 +232,8 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         attach_live: AttachLive::ViaOwnTerminal,
     },
     introduced: Introduced::FirstMessage,
+    // Read from `claude --help` (2.1.331): `--mcp-config <configs...>` "JSON files or strings".
+    mcp: Some(McpAttach::ConfigJson),
 };
 
 const CODEX: RunnerSpec = RunnerSpec {
@@ -258,6 +273,9 @@ const CODEX: RunnerSpec = RunnerSpec {
         attach_live: AttachLive::ViaDaemon,
     },
     introduced: Introduced::FirstMessage,
+    // `-c` overrides any config key (`codex --help`); `codex -c 'mcp_servers.x.command=..' mcp
+    // list` lists it (0.171.0, 2026-11-23). A run with it is not probed.
+    mcp: Some(McpAttach::Overrides),
 };
 
 #[cfg(test)]
@@ -317,6 +335,7 @@ mod tests {
         table += &row("take over when idle", &|spec| format!("{:?}", spec.attach.take_over_when_idle));
         table += &row("attach live", &|spec| format!("{:?}", spec.attach.attach_live));
         table += &row("told of ottospace", &|spec| format!("{:?}", spec.introduced));
+        table += &row("ottospace's MCP server", &|spec| format!("{:?}", spec.mcp));
         let note = include_str!("../../../docs/ai/agent-runners.md");
         assert!(note.contains(&table), "docs/ai/agent-runners.md must hold:\n{table}");
     }

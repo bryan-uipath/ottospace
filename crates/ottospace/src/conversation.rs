@@ -303,6 +303,10 @@ impl Workspace {
         brief: Option<&str>,
         command_text: Option<&str>,
     ) -> Result<Option<String>, String> {
+        // Its own, for its tool shells' `ottospace ctl` and its MCP server: the user's shells in the
+        // task's tab have none.
+        let pass = subject.task().map(|_| crate::pass::Live::mint()).transpose()?;
+        let server = pass.as_ref().and_then(crate::talk::mcp_server);
         let (runner, begin, session, model, prompt) = match start {
             Start::New(launch) => {
                 let id = crate::talk::new_uuid().ok_or("no random bytes for a session id")?;
@@ -321,9 +325,14 @@ impl Workspace {
         };
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let dir = cwd.or(home.as_deref()).filter(|dir| Path::new(dir).is_dir());
-        let (argv, wire) =
-            ottospace_agents::structured(runner, Path::new(dir.unwrap_or("/")), model.as_deref(), &begin)
-                .ok_or("no structured command for this agent")?;
+        let (argv, wire) = ottospace_agents::structured(
+            runner,
+            Path::new(dir.unwrap_or("/")),
+            model.as_deref(),
+            &begin,
+            server.as_ref(),
+        )
+        .ok_or("no structured command for this agent")?;
         let (script, argv, path) = crate::talk::shell_run(argv.program, &argv.args, command_text)?;
         // As the terminal runs it: the user's login shell finds the program, which gets its
         // arguments as positional parameters. The script is fixed text.
@@ -338,11 +347,9 @@ impl Workspace {
         if let Some(dir) = dir {
             command.current_dir(dir);
         }
-        let pass = subject.task().map(|_| crate::pass::Live::mint()).transpose()?;
         if let Some(task) = subject.task() {
             command.env("OTTOSPACE_TASK", task.to_string());
         }
-        // Its own, for its tool shells' `ottospace ctl`: the user's shells in the task's tab have none.
         if let Some(pass) = &pass {
             command.env(crate::pass::VAR, pass.file());
         }

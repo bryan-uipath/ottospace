@@ -110,6 +110,15 @@ pub(crate) fn shell_run(
     Ok((script, argv, path))
 }
 
+/// ottospace's MCP server for the task's agent whose pass is `pass`: this program, its socket and
+/// the pass's file (`agents::mcp_args`). None: a path that is not text.
+pub(crate) fn mcp_server(pass: &crate::pass::Live) -> Option<agents::McpServer> {
+    let program = std::env::current_exe().ok()?.to_str()?.to_string();
+    let socket = crate::control::path().to_str()?.to_string();
+    let pass_file = pass.file().to_str()?.to_string();
+    Some(agents::McpServer { program, socket, pass_file })
+}
+
 /// How a conversation is named in the state reply: a task's id,
 /// or `<runner>:<session id>`.
 pub fn key(subject: &Subject) -> String {
@@ -148,10 +157,15 @@ impl Workspace {
         if self.model.talk_view(subject) == ottospace_core::transcript::View::Native {
             return self.start_native(subject, start, cwd, brief, command_text);
         }
+        // The agent can ask for its task's brief over the socket, as in a task's own terminals; its
+        // pass says the request is the agent's own. Its MCP server carries the same pass.
+        let pass = task.map(|_| crate::pass::Live::mint()).transpose()?;
+        let server = pass.as_ref().and_then(mcp_server);
         let (command, session, model) = match start {
             Start::New(launch) => {
                 let session = new_uuid().ok_or("no random bytes for a session id")?;
-                let command = launch.command(&session, brief, self.see_apps()).ok_or("no command for this agent")?;
+                let command = launch.command(&session, brief, self.see_apps(), server.as_ref());
+                let command = command.ok_or("no command for this agent")?;
                 let model = launch.model.clone().unwrap_or_else(|| launch.runner.name().to_string());
                 (command, launch.runner.spec().chooses_session().then_some((launch.runner, session)), model)
             }
@@ -162,16 +176,13 @@ impl Workspace {
                     self.in_checkout(dir)?;
                 }
                 (
-                    agents::resume(*runner, session).ok_or("no command for this session")?,
+                    agents::resume(*runner, session, server.as_ref()).ok_or("no command for this session")?,
                     None,
                     runner.name().to_string(),
                 )
             }
         };
         let Command { program: name, args } = command;
-        // The agent can ask for its task's brief over the socket, as in a task's own terminals; its
-        // pass says the request is the agent's own.
-        let pass = task.map(|_| crate::pass::Live::mint()).transpose()?;
         let mut vars: Vec<(&str, String)> = task.map(|id| ("OTTOSPACE_TASK", id.to_string())).into_iter().collect();
         vars.extend(pass.as_ref().map(|pass| (crate::pass::VAR, pass.file().to_string_lossy().into_owned())));
         let (script, argv, path) = shell_run(name, &args, command_text)?;
