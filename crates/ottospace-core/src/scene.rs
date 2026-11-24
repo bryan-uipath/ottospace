@@ -113,6 +113,8 @@ pub struct Scene {
     pub tints: Vec<Option<(u32, u32)>>,
     /// Which blocks are drawn (`lod::Tree::apply`): a box inside a closed one is not. Empty: all.
     pub shown: Vec<bool>,
+    /// The colour a closed box glows in for a lit file it hides (`lod::Tree::apply`). Empty: none.
+    pub glow: Vec<Option<u32>>,
 }
 
 /// Where the user has turned, moved and zoomed the camera, from the fitted view: degrees round
@@ -418,13 +420,13 @@ impl Layout {
     pub fn scene(&self, view: &View) -> Scene {
         let mut blocks = self.blocks.clone();
         let Some(fit) = self.fit else {
-            return Scene { blocks, camera: None, fit: None, tints: Vec::new(), shown: Vec::new() };
+            return Scene { blocks, camera: None, fit: None, tints: Vec::new(), shown: Vec::new(), glow: Vec::new() };
         };
         let camera = fit.camera(view, self.aspect);
         if *view == View::default() {
             clear_sight(&mut blocks, camera.eye, self.lit_floor);
         }
-        Scene { blocks, camera: Some(camera), fit: Some(fit), tints: Vec::new(), shown: Vec::new() }
+        Scene { blocks, camera: Some(camera), fit: Some(fit), tints: Vec::new(), shown: Vec::new(), glow: Vec::new() }
     }
 }
 
@@ -532,6 +534,11 @@ impl Scene {
     /// Whether block `i` is drawn (`shown`; all when it is empty).
     pub fn is_shown(&self, i: usize) -> bool {
         self.shown.get(i).is_none_or(|shown| *shown)
+    }
+
+    /// The colour block `i` glows in, closed over a lit file (`glow`), if it does.
+    pub fn glows(&self, i: usize) -> Option<u32> {
+        self.glow.get(i).copied().flatten()
     }
 
     /// The box under a point of the picture (shares of it, 0,0 top left), by its index: the

@@ -142,39 +142,44 @@ impl Tree {
         if detail.open[i] { t } else { 1. - t }
     }
 
-    /// Whether any box still changes at `now_ms` (more pictures to make).
+    /// Whether any box still changes at `now_ms` (more pictures to make): from the moment it
+    /// changed (openness still 0 or 1 then) until its fade is over.
     pub fn changing(&self, detail: &Detail, now_ms: u64, fade_ms: u64) -> bool {
-        (0..self.parent.len()).any(|i| {
-            let o = self.openness(detail, i, now_ms, fade_ms);
-            o > 0. && o < 1.
-        })
+        detail.since.iter().flatten().any(|at| now_ms.saturating_sub(*at) < fade_ms)
     }
 
-    /// `blocks` as `detail` shows them at `now_ms`: which are drawn, a closed box raised to stand
-    /// for what it hides (in a lit leaf's colour if it hides one), its children grown out of it
-    /// as it opens. Only heights change: every box keeps its outline on the plan.
-    pub fn apply(&self, blocks: &mut [Block], detail: &Detail, now_ms: u64, fade_ms: u64) -> Vec<bool> {
+    /// `blocks` as `detail` shows them at `now_ms`: which are drawn, and the colour a closed box
+    /// glows in for a lit leaf it hides; a closed box raised to stand for what it hides, its
+    /// children grown out of it as it opens. Only heights change: every box keeps its outline on
+    /// the plan, and its kind.
+    pub fn apply(
+        &self,
+        blocks: &mut [Block],
+        detail: &Detail,
+        now_ms: u64,
+        fade_ms: u64,
+    ) -> (Vec<bool>, Vec<Option<u32>>) {
         let n = blocks.len().min(self.parent.len());
-        let mut shown = vec![true; n];
+        let (mut shown, mut glow) = (vec![true; n], vec![None; n]);
         let open: Vec<f32> = (0..n).map(|i| self.openness(detail, i, now_ms, fade_ms)).collect();
-        // Parents come before their children (the layout's order): each sees its parent done.
         let tops: Vec<f32> = blocks.iter().map(|b| b.max[1]).collect();
+        // Each box's own height first: a closed one raised to stand for what it hides.
+        let own: Vec<f32> = (0..n).map(|i| tops[i] + self.merged[i] * (1. - open[i])).collect();
+        // Parents come before their children (the layout's order): each sees its parent done.
         for i in 0..n {
+            let mut top = own[i];
             if let Some(p) = self.parent[i] {
                 shown[i] = shown[p] && open[p] > 0.;
                 // Grown out of the parent's closed top as it opens: inside it until then.
-                let closed_top = tops[p] + self.merged[p];
-                let low = tops[i].min(closed_top);
-                blocks[i].max[1] = low + (tops[i] - low) * open[p];
+                let low = top.min(tops[p] + self.merged[p]);
+                top = low + (top - low) * open[p];
             }
-            if self.child_side[i] > 0. && open[i] < 1. {
-                blocks[i].max[1] = tops[i] + self.merged[i] * (1. - open[i]);
-                if let Some(colour) = self.lit[i] {
-                    blocks[i].kind = Kind::Lit(colour);
-                }
+            blocks[i].max[1] = top;
+            if open[i] < 1. {
+                glow[i] = self.lit[i];
             }
         }
-        shown
+        (shown, glow)
     }
 }
 
@@ -235,7 +240,7 @@ mod tests {
         let drawn = |zoom: f32| {
             let view = View { zoom, ..View::default() };
             let (detail, _) = tree.select(&camera(&layout, view), 200., 0, None);
-            tree.apply(&mut layout.blocks.clone(), &detail, 0, 0).iter().filter(|s| **s).count()
+            tree.apply(&mut layout.blocks.clone(), &detail, 0, 0).0.iter().filter(|s| **s).count()
         };
         let (far, near) = (drawn(1.), drawn(0.05));
         assert!(far < layout.blocks.len() && near > far, "far {far}, near {near} of {}", layout.blocks.len());
@@ -308,8 +313,15 @@ mod tests {
         tree.apply(&mut end, &near, 1000 + FADE_MS, FADE_MS);
         let mut calm = layout.blocks.clone();
         tree.apply(&mut calm, &near, 1000, 0);
+        // Still changing at the moment it changed (openness 0 then): more pictures are asked.
+        assert!(tree.changing(&near, 1000, FADE_MS) && !tree.changing(&near, 1000 + FADE_MS, FADE_MS));
+        // A few ms in, nothing pops out: each child, a closed folder in it too, barely above it.
+        let mut soon = layout.blocks.clone();
+        tree.apply(&mut soon, &near, 1005, FADE_MS);
+        let tallest = layout.blocks.iter().map(|b| b.max[1]).fold(0., f32::max);
         for &p in &opened {
             for i in (0..start.len()).filter(|i| tree.parent(*i) == Some(p)) {
+                assert!(soon[i].max[1] <= start[p].max[1] + 0.03 * tallest, "child {i} popped out of {p}");
                 assert!(start[i].max[1] <= start[p].max[1] + 1e-6, "child {i} above its closed box {p}");
                 assert_eq!(end[i].max[1], layout.blocks[i].max[1]);
                 assert_eq!(calm[i].max[1], layout.blocks[i].max[1]);
@@ -326,8 +338,10 @@ mod tests {
         let tree = Tree::new(&plan, &layout.blocks);
         let closed = Detail { open: vec![false; layout.blocks.len()], since: vec![None; layout.blocks.len()] };
         let mut blocks = layout.blocks.clone();
-        let shown = tree.apply(&mut blocks, &closed, 0, 0);
-        let lit = (0..blocks.len()).filter(|i| shown[*i] && matches!(blocks[*i].kind, Kind::Lit(0xff6467)));
+        let (shown, glow) = tree.apply(&mut blocks, &closed, 0, 0);
+        let lit = (0..blocks.len()).filter(|i| shown[*i] && glow[*i] == Some(0xff6467));
         assert!(lit.count() >= 1);
+        // Still a folder: its label and hover are a folder's.
+        assert!((0..blocks.len()).all(|i| blocks[i].kind == layout.blocks[i].kind));
     }
 }

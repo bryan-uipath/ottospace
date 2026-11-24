@@ -375,8 +375,8 @@ impl Gpu {
         let placed = |i: &u32| {
             let (b, mut one) = (&scene.blocks[*i as usize], boxes.base[*i as usize]);
             // A closed box standing for a lit file glows in its colour.
-            if matches!(b.kind, Kind::Lit(_)) && one[9] == 0. {
-                one = instance(b, one[13], None, one[15]);
+            if let Some(colour) = scene.glows(*i as usize) {
+                one = instance(&Block { kind: Kind::Lit(colour), ..*b }, one[13], None, one[15]);
             }
             one[..3].copy_from_slice(&b.min);
             one[3..6].copy_from_slice(&b.max);
