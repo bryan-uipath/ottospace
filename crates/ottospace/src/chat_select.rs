@@ -84,9 +84,22 @@ impl Workspace {
         text: String,
         styles: Vec<(Range<usize>, HighlightStyle)>,
     ) -> (StyledText, Option<AnyElement>) {
-        let Some(subject) = of else { return (StyledText::new(text).with_highlights(styles), None) };
-        let selected = self.drawer.looks.get(subject).and_then(|look| look.select.selection.range_of(key, &text));
+        let (styled, _, styles, note) = self.picked_parts(of, key, text, styles);
+        (styled.with_highlights(styles), note)
+    }
+
+    /// As `picked`, its styles not yet on it: the text, its styles with the selected part over
+    /// them, for runs made at layout (`text_runs`).
+    pub(crate) fn picked_parts(
+        &self,
+        of: Option<&Subject>,
+        key: &str,
+        text: String,
+        styles: Vec<(Range<usize>, HighlightStyle)>,
+    ) -> (StyledText, SharedString, Vec<(Range<usize>, HighlightStyle)>, Option<AnyElement>) {
         let text = SharedString::from(text);
+        let Some(subject) = of else { return (StyledText::new(text.clone()), text, styles, None) };
+        let selected = self.drawer.looks.get(subject).and_then(|look| look.select.selection.range_of(key, &text));
         let styles = match selected {
             Some(range) => selection::overlay(styles, range, |style| HighlightStyle {
                 background_color: Some(rgb(theme::SELECTION).into()),
@@ -94,13 +107,14 @@ impl Workspace {
             }),
             None => styles,
         };
-        let styled = StyledText::new(text.clone()).with_highlights(styles);
-        let (texts, layout, key) = (self.drawer.texts.clone(), styled.layout().clone(), key.to_string());
+        let styled = StyledText::new(text.clone());
+        let (texts, layout, key, laid) =
+            (self.drawer.texts.clone(), styled.layout().clone(), key.to_string(), text.clone());
         // After the text beside it: its layout is laid out by then.
         let note = move |_, _: &mut Window, _: &mut gpui::App| {
-            texts.0.borrow_mut().laid.push(Laid { key, text, layout });
+            texts.0.borrow_mut().laid.push(Laid { key, text: laid, layout });
         };
-        (styled, Some(canvas(note, |_, _, _, _| {}).absolute().size_0().into_any_element()))
+        (styled, text, styles, Some(canvas(note, |_, _, _, _| {}).absolute().size_0().into_any_element()))
     }
 
     /// `text` selectable in `subject`'s transcript, cleaned as drawn (`transcript::clean`), in a
