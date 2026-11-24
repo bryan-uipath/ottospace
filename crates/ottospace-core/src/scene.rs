@@ -564,13 +564,13 @@ impl Scene {
     /// At none (most of an agent's work is shell lines): hovering over the buildings, above the
     /// point the camera looks at (the city's middle, moved by a pan), as high as a beam rises. Several at one place are fanned in the order given.
     pub fn marks(&self, at: &[Option<usize>]) -> Vec<Mark> {
-        let hover = self.camera.map(|camera| {
+        let over: Vec<Option<usize>> = at.iter().map(|i| i.filter(|i| self.beam(*i).is_some())).collect();
+        let hover = self.camera.filter(|_| over.contains(&None)).map(|camera| {
             let m = camera.target;
             let up = |h: f32| [m[0], m[1] + h, m[2]];
             let inside = |h: f32| camera.project(up(h)).is_some_and(|(_, y)| y >= MARGIN);
             up(highest_inside(&inside, self.beam_height()))
         });
-        let over: Vec<Option<usize>> = at.iter().map(|i| i.filter(|i| self.beam(*i).is_some())).collect();
         (over.iter().enumerate())
             .map(|(n, here)| {
                 let point = here.and_then(|i| self.beam(i)).map(|(_, end)| end).or(hover).unwrap_or_default();
