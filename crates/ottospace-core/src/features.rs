@@ -460,7 +460,8 @@ mod tests {
                     ("session_waits", false),
                     ("projects", false),
                     ("terminal_tasks", false),
-                    ("zoom_out", false)
+                    ("zoom_out", false),
+                    ("decision_sources", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -485,7 +486,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out, decision_sources"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

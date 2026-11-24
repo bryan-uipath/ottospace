@@ -887,7 +887,7 @@ pub(crate) mod tests {
         let mut filed = Filed::default();
         let slack_id = filed.file(&slack("a"), &ctx(&[], &[])).unwrap();
         let mut asked = slack("b");
-        (asked.source, asked.task, asked.options) = (Source::AgentSession, Some(4), Vec::new());
+        (asked.source, asked.task, asked.options, asked.recommend) = (Source::AgentSession, Some(4), Vec::new(), None);
         let asked_id = filed.file(&asked, &ctx(&[4], &[])).unwrap();
         assert_eq!(filed.get(asked_id).unwrap().triage, Triage::Skipped, "an agent's own question skips triage");
         assert_eq!(filed.settle(NOW + 1, &[4]), (vec![], vec![]));

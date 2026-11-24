@@ -6469,6 +6469,22 @@ fn code(sent: &Envelope) -> String {
             (serde_json::to_string(marks).unwrap_or_default(), serde_json::to_string(extra).unwrap_or_default());
         return format!("restore_marks({marks:?}, {extra:?}).sent_by(Origin::{:?})", sent.origin);
     }
+    // A filed decision is JSON on the socket and on disk: given as its JSON.
+    if let Action::DecisionFile { filing, now } = &sent.action {
+        let filing = serde_json::to_string(filing).unwrap_or_default();
+        return format!("decision_file({filing:?}, {now}).sent_by(Origin::{:?})", sent.origin);
+    }
+    if let Action::RestoreDecisions { kept } = &sent.action {
+        let kept = serde_json::to_string(kept).unwrap_or_default();
+        return format!("restore_decisions({kept:?}).sent_by(Origin::{:?})", sent.origin);
+    }
+    // Its source is a decision's, not a capture's (`source` names `ax::Source` elsewhere).
+    if let Action::DecisionWithdraw { source, key, now } = &sent.action {
+        return format!(
+            "Action::DecisionWithdraw {{ source: crate::filed::Source::{source:?}, key: {key:?}.into(), now: {now} }}.sent_by(Origin::{:?})",
+            sent.origin
+        );
+    }
     // So are kept tasks, and a session's work: both are read from files.
     if let Action::RestoreTasks { tasks, floor } = &sent.action {
         let tasks = serde_json::to_string(tasks).unwrap_or_default();
@@ -6732,6 +6748,17 @@ fn set_features(on: &[&str]) -> Action {
 }
 
 /// `RestoreMarks` from the JSON of its marks and of the file's own keys, as `code` writes it.
+/// `DecisionFile` from its filing's JSON, and `RestoreDecisions` from the decisions', as `code` writes them.
+#[allow(dead_code)] // for a regression `code` writes; none is pasted yet
+fn decision_file(filing: &str, now: u64) -> Action {
+    Action::DecisionFile { filing: Box::new(serde_json::from_str(filing).expect("a filing is JSON")), now }
+}
+
+#[allow(dead_code)] // for a regression `code` writes; none is pasted yet
+fn restore_decisions(kept: &str) -> Action {
+    Action::RestoreDecisions { kept: serde_json::from_str(kept).expect("decisions are JSON") }
+}
+
 fn restore_marks(marks: &str, extra: &str) -> Action {
     let read = "a regression's marks are JSON";
     Action::RestoreMarks {
