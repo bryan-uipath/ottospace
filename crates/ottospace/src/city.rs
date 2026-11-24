@@ -1539,7 +1539,7 @@ fn name_agent(
 
 /// Each agent's icon (`Scene::marks`): over the building it is at, at its beam's end, a cone of
 /// its colour from the icon down onto the building's top; fanned beside others there; at no file,
-/// over the city's edge (under the hints if they cover it) with no cone. Lowered along the beam
+/// hovering over the city's middle (above the hints if they cover it, else under) with no cone. Lowered along the beam
 /// until clear of the hints and inside the picture, else not drawn. One that moves glides there (at once under Reduce Motion).
 /// Returns the icons drawn, and whether one still glides.
 fn agents(
@@ -1576,12 +1576,14 @@ fn agents(
             (!rect.intersects(&clear) && bounds.contains(&rect.origin) && bounds.contains(&rect.bottom_right()))
                 .then_some(at)
         };
-        // At no file: under the hints if they cover the city's corner (a workspace's empty tab
-        // keeps 560 points clear for them).
-        let under = point(end.x, end.y.max(clear.bottom() + px(ICON / 2. + 1.)));
+        // At no file: whole inside the picture's top, then above the hints if they cover it, else
+        // under (a workspace's empty tab keeps 560 points clear for them).
+        let hover = point(end.x, end.y.max(bounds.top() + px(ICON / 2. + 1.)));
+        let above = point(hover.x, hover.y.min(clear.top() - px(ICON / 2. + 1.)));
+        let under = point(hover.x, hover.y.max(clear.bottom() + px(ICON / 2. + 1.)));
         let to = match foot {
             Some(f) => [1., 0.75, 0.5, 0.25].into_iter().find_map(|t: f32| fits(f + (end - f) * t + offset)),
-            None => [end, under].into_iter().find_map(|at| fits(at + offset)),
+            None => [hover, above, under].into_iter().find_map(|at| fits(at + offset)),
         };
         let Some(to) = to else { continue };
         let before = was.iter().find(|icon| icon.key == agent.key);

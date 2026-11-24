@@ -1696,8 +1696,8 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   its file (so `sessions` must be on and `session_dirs` must hold its config folder). The icon
   stands over the file the agent reads or edits now, a cone of its colour on it (in a chat, the
   last file it read or edited until its next call); at a shell line, or when the file is unknown
-  or its name matches two buildings, over the city's left corner (under the hints if they cover
-  it). An icon with no room clear of the hints is not drawn.
+  or its name matches two buildings, hovering over the city's middle as high as a beam (above
+  the hints if they cover it, else under). An icon with no room clear of the hints is not drawn.
 - The files are what `git ls-files` lists there (tracked, and new ones not ignored), less the
   folders `city_exclude` leaves out and built-in ones (`node_modules`, `target`, `dist`, …):
   dropped before the layout, they take no room, move nothing and count toward no limit. Read off

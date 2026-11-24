@@ -103,9 +103,6 @@ pub struct Mark {
     pub fan: (usize, usize),
 }
 
-/// An agent at no file floats this high over the city's leftmost corner (plan units).
-const EDGE_RISE: f32 = 0.05;
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Scene {
     pub blocks: Vec<Block>,
@@ -559,38 +556,24 @@ impl Scene {
             }
             beam = high;
         }
-        if inside(beam) {
-            return Some((foot, up(beam)));
-        }
-        // The highest end still inside: none higher than the top itself.
-        let (mut low, mut high) = (0f32, beam);
-        for _ in 0..24 {
-            let mid = (low + high) / 2.;
-            if inside(mid) { low = mid } else { high = mid }
-        }
-        Some((foot, up(low)))
+        Some((foot, up(highest_inside(&inside, beam))))
     }
 
     /// Each agent's mark, given the box it is at (none: no file known, or a file not in the
     /// city). Over a box: at its beam's end (`beam`), where a lit building's beam has its dot.
-    /// At none: over the ground's corner leftmost in the picture. Several at one place are
-    /// fanned in the order given.
+    /// At none (most of an agent's work is shell lines): hovering over the buildings, above the
+    /// point the camera looks at (the city's middle, moved by a pan), as high as a beam rises. Several at one place are fanned in the order given.
     pub fn marks(&self, at: &[Option<usize>]) -> Vec<Mark> {
-        let camera = self.camera;
-        let edge = (self.blocks.iter().find(|b| b.kind == Kind::Ground)).and_then(|ground| {
-            let corners = [[ground.min[0], 0., ground.min[2]], [ground.min[0], 0., ground.max[2]]];
-            let corners =
-                corners.into_iter().chain([[ground.max[0], 0., ground.min[2]], [ground.max[0], 0., ground.max[2]]]);
-            let left = corners.min_by(|a, b| {
-                let x = |p: &[f32; 3]| camera.and_then(|c| c.project(*p)).map_or(f32::MAX, |(x, _)| x);
-                x(a).total_cmp(&x(b))
-            })?;
-            Some([left[0], EDGE_RISE, left[2]])
-        });
         let over: Vec<Option<usize>> = at.iter().map(|i| i.filter(|i| self.beam(*i).is_some())).collect();
+        let hover = self.camera.filter(|_| over.contains(&None)).map(|camera| {
+            let m = camera.target;
+            let up = |h: f32| [m[0], m[1] + h, m[2]];
+            let inside = |h: f32| camera.project(up(h)).is_some_and(|(_, y)| y >= MARGIN);
+            up(highest_inside(&inside, self.beam_height()))
+        });
         (over.iter().enumerate())
             .map(|(n, here)| {
-                let point = here.and_then(|i| self.beam(i)).map(|(_, end)| end).or(edge).unwrap_or_default();
+                let point = here.and_then(|i| self.beam(i)).map(|(_, end)| end).or(hover).unwrap_or_default();
                 let k = over[..n].iter().filter(|other| *other == here).count();
                 Mark { over: *here, at: point, fan: (k, over.iter().filter(|other| *other == here).count()) }
             })
@@ -630,6 +613,19 @@ impl Scene {
     fn beam_height(&self) -> f32 {
         self.blocks.iter().map(|b| b.max[1]).fold(BEAM, f32::max)
     }
+}
+
+/// `h` if `inside(h)`, else the highest rise below it still inside (none: 0).
+fn highest_inside(inside: &dyn Fn(f32) -> bool, h: f32) -> f32 {
+    if inside(h) {
+        return h;
+    }
+    let (mut low, mut high) = (0f32, h);
+    for _ in 0..24 {
+        let mid = (low + high) / 2.;
+        if inside(mid) { low = mid } else { high = mid }
+    }
+    low
 }
 
 /// The share of a city's rise by which its last district's buildings start: the largest
@@ -982,7 +978,7 @@ mod tests {
     /// An agent at a box floats at its beam's end; two at one box share it, fanned; one at
     /// none floats over the ground's leftmost corner in the picture, inside it.
     #[test]
-    fn an_agent_floats_at_its_boxes_beam_and_one_at_none_at_the_edge() {
+    fn an_agent_floats_at_its_boxes_beam_and_one_at_none_hovers_over_the_city() {
         let s = scene(&many(), &[], 1.6, &View::default());
         let (a, b) = (s.blocks.len() - 1, s.blocks.len() - 5);
         let marks = s.marks(&[Some(a), None, Some(b), Some(a), None, Some(0)]);
@@ -990,16 +986,28 @@ mod tests {
         assert_eq!((marks[0].over, marks[0].at, marks[0].fan), (Some(a), end(a), (0, 2)));
         assert_eq!((marks[3].over, marks[3].at, marks[3].fan), (Some(a), end(a), (1, 2)));
         assert_eq!((marks[2].at, marks[2].fan), (end(b), (0, 1)));
-        // At none, and at the ground (no box of a file): the edge, three of them.
-        let edge = marks[1].at;
+        // At none, and at the ground (no box of a file): hovering, three of them.
+        let hover = marks[1].at;
         for (i, k) in [(1, 0), (4, 1), (5, 2)] {
-            assert_eq!((marks[i].over, marks[i].at, marks[i].fan), (None, edge, (k, 3)), "{i}");
+            assert_eq!((marks[i].over, marks[i].at, marks[i].fan), (None, hover, (k, 3)), "{i}");
         }
+        // Over the city's middle, as high as a beam, inside the picture.
         let camera = s.camera.unwrap();
-        let (x, y) = camera.project(edge).unwrap();
-        assert!((0. ..=1.).contains(&x) && (0. ..=1.).contains(&y), "{x} {y}");
-        let left = s.blocks.iter().flat_map(|b| camera.bounds(b)).map(|[x, ..]| x).fold(f32::MAX, f32::min);
-        assert!((x - left).abs() < 0.02, "the leftmost corner: {x} {left}");
+        let (x, y) = camera.project(hover).unwrap();
+        let (_, middle_y) = camera.project(camera.target).unwrap();
+        assert!((x - 0.5).abs() < 0.01 && (MARGIN..middle_y).contains(&y), "{x} {y} {middle_y}");
+        assert_eq!((hover[0], hover[2]), (camera.target[0], camera.target[2]));
+    }
+
+    #[test]
+    fn a_hovering_agent_stays_in_the_picture_under_any_camera() {
+        let views = [View { zoom: 0.3, ..View::default() }, View { pitch: 80., ..View::default() }];
+        let panned = View { pan: [3., -2.], yaw: 70., ..View::default() };
+        for view in [View::default(), panned].into_iter().chain(views) {
+            let s = scene(&many(), &[], 1.6, &view);
+            let (x, y) = s.camera.unwrap().project(s.marks(&[None])[0].at).unwrap();
+            assert!((x - 0.5).abs() < 0.01 && (MARGIN - 1e-3..=1.).contains(&y), "{view:?}: {x} {y}");
+        }
     }
 
     #[test]

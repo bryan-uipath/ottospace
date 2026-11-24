@@ -306,7 +306,7 @@ they are working on"): each agent working now in the city's checkout floats as i
 (`Activity::at`: its newest call's file, else its newest running call on one), at that
 building's beam's end, a translucent cone of its colour from the icon down onto the building's
 top, its top washed in it. Several on one file fan out side by side; one at no file (a shell
-line, between calls) floats over the city's corner leftmost in the picture, with no cone
+line, between calls) hovers over the buildings, above the camera's middle as high as a beam, with no cone
 (`Scene::marks`, tested). A session no task has, at work in the checkout (a `claude` the user
 runs in a terminal: the Repos dot's `SessionsAtWork`), floats too, as its runner's glyph in the
 colour of work going on, its file lit; its title on hover. Moving to another file, an icon
