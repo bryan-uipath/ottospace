@@ -6097,6 +6097,10 @@ impl Model {
             Action::Tick { now } => {
                 let kept = self.list_row();
                 self.now = now;
+                // A hide past its least time that a new ask ends: ended now, kept no more.
+                if !self.hidden.is_empty() {
+                    self.note_cards(effects);
+                }
                 self.left.1.get_or_insert(now);
                 self.tasks.tick(now);
                 self.workbooks.tick(now);
@@ -6681,6 +6685,8 @@ impl Model {
                 let cards = self.features.on(Feature::TerminalTasks);
                 let card = cards && self.session_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (&runner, &id));
                 if self.session(&runner, &id).is_some() || card {
+                    // A hide while looking at the hidden ones folds them away: the card leaves at once.
+                    self.hidden_peek = false;
                     self.hidden.retain(|h| (&h.runner, &h.id) != (&runner, &id));
                     self.cards_gone.retain(|(card, _)| (&card.row.runner, &card.row.id) != (&runner, &id));
                     // Until it asks again in a new turn (`Hidden::holds`): not for the wait it has now.
@@ -6694,10 +6700,11 @@ impl Model {
                     effects.push(Effect::Notice { text: "Not hidden: this session is no longer listed".into() });
                 }
             }
-            Action::HiddenPeek { on } => self.hidden_peek = on,
+            Action::HiddenPeek { on } => self.hidden_peek = on && !self.hidden_live().is_empty(),
             Action::SessionUnhide { runner, id } => {
                 let before = self.hidden.len();
                 self.hidden.retain(|h| (&h.runner, &h.id) != (&runner, &id));
+                self.hidden_peek &= !self.hidden_live().is_empty();
                 if self.hidden.len() != before {
                     effects.push(Effect::SaveHiddenSessions { hidden: self.hidden.clone() });
                 }
@@ -8283,7 +8290,7 @@ impl Model {
             Subject::Session { runner, id }
                 if self.session(runner, id).is_some()
                     || self.agent_runs(&subject)
-                    || self.session_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (runner, id))
+                    || self.drawn_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (runner, id))
                     || (!self.tasks.adopted(runner, id) && self.spaces.iter().any(|s| s.of == Owner::of(&subject))) =>
             {
                 None
@@ -9943,7 +9950,7 @@ impl Model {
                 continue;
             }
             let mut card = card.clone();
-            card.state = sessions::CardState::Ended;
+            (card.state, card.hidden) = (sessions::CardState::Ended, false);
             (card.row.active, card.row.doing, card.row.waits_for, card.row.pane) = (false, None, None, None);
             card.row.age = Some(tasks::age(*at, self.now));
             let can = RunnerId::named(runner).is_some_and(|r| r.spec().attach.take_over_when_idle == Support::Yes);
@@ -9981,10 +9988,17 @@ impl Model {
         let mut changed = false;
         for at in 0..self.hidden.len() {
             let (runner, id) = (self.hidden[at].runner.clone(), self.hidden[at].id.clone());
-            let listed =
-                self.found.iter().find(|s| (s.runner.as_str(), s.id.as_str()) == (runner.as_str(), id.as_str()));
-            let runs = listed.is_some_and(Self::found_runs) || self.pane_runs(&runner, &id);
-            if runs && !self.hidden[at].worked && self.needs_now(&runner, &id).0.is_none() {
+            // A hide kept from before `since` was: its time starts at this read.
+            let fresh = self.hidden[at].since.is_none();
+            let since = *self.hidden[at].since.get_or_insert(self.now);
+            changed |= fresh;
+            // Work seen since the hide: its record busy, or its file written after it. Idle (a turn
+            // just ended), a dialog, or a read that misses it are no work.
+            let (needs, last) = self.needs_now(&runner, &id);
+            let busy = self.in_panes.iter().any(|p| (&p.runner, &p.id) == (&runner, &id) && p.busy)
+                || self.listed(&runner, &id).is_some_and(|s| s.held && s.active);
+            let wrote = last.is_some_and(|last| last > since);
+            if self.hidden_runs(&runner, &id) && !self.hidden[at].worked && needs.is_none() && (busy || wrote) {
                 self.hidden[at].worked = true;
                 changed = true;
             }
@@ -10034,13 +10048,21 @@ impl Model {
     /// The hidden sessions that run now (`terminal_tasks`): what the Tasks section's "N hidden"
     /// line brings back.
     pub fn hidden_live(&self) -> Vec<(String, String)> {
-        let runs = |h: &sessions::Hidden| {
-            let listed = self.found.iter().find(|s| (&s.runner, &s.id) == (&h.runner, &h.id));
-            listed.is_some_and(Self::found_runs) || self.pane_runs(&h.runner, &h.id)
-        };
         let on = self.features.on(Feature::TerminalTasks);
+        let runs = |h: &&sessions::Hidden| self.hidden_runs(&h.runner, &h.id);
         let hidden = self.hidden.iter().filter(|h| on && runs(h) && self.is_hidden(&h.runner, &h.id));
         hidden.map(|h| (h.runner.clone(), h.id.clone())).collect()
+    }
+
+    /// A session as last read, listed or at work (with the Repos section open only those at work are kept).
+    fn listed(&self, runner: &str, id: &str) -> Option<&Found> {
+        let same = |s: &&Found| (s.runner.as_str(), s.id.as_str()) == (runner, id);
+        self.found.iter().find(same).or_else(|| self.at_work.iter().find(same))
+    }
+
+    /// A session runs now, as last read: listed and live by its runner, or in one of our panes.
+    fn hidden_runs(&self, runner: &str, id: &str) -> bool {
+        self.listed(runner, id).is_some_and(Self::found_runs) || self.pane_runs(runner, id)
     }
 
     /// How many things need the user: the tasks, and with `terminal_tasks` the terminal sessions.
@@ -17977,8 +17999,10 @@ mod tests {
         read(&mut m, waits(now + 4_000));
         assert_eq!(m.needs_you(), 0, "never back within MIN_HIDE_MS");
         // Later, a new ask: back, and that hide is over (kept no more).
-        m.update(Action::Tick { now: now + sessions::MIN_HIDE_MS }.sent_by(Origin::System));
-        let effects = read(&mut m, waits(now + sessions::MIN_HIDE_MS));
+        read(&mut m, waits(now + sessions::MIN_HIDE_MS - 1));
+        assert_eq!(m.needs_you(), 0);
+        // The least time passes (a tick, no read): back at once, that hide over and kept no more.
+        let effects = m.update(Action::Tick { now: now + sessions::MIN_HIDE_MS }.sent_by(Origin::System));
         assert_eq!((m.needs_you(), effects), (1, vec![Effect::SaveHiddenSessions { hidden: Vec::new() }]));
         // Unhide: the user's, or a client's.
         m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() });
@@ -18012,6 +18036,37 @@ mod tests {
         // The user's hide of a session no longer read: said, not silently nothing.
         let effects = m.update(Action::SessionHide { runner: "claude".into(), id: "gone".into() });
         assert!(matches!(&effects[..], [Effect::Notice { text }] if text.contains("no longer listed")), "{effects:?}");
+    }
+
+    #[test]
+    fn an_idle_session_hidden_does_not_come_back_for_the_turn_it_ended_and_a_hide_folds_the_look() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        // Its turn ended a minute ago: idle, not yet quiet, not busy. Hidden now.
+        let idle = |m: &mut Model| {
+            let at = in_pane(1, "claude", "c", now - 60_000, None);
+            m.update(Action::SessionsInPanes { found: vec![at] }.sent_by(Origin::System))
+        };
+        idle(&mut m);
+        m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() });
+        idle(&mut m);
+        assert!(!m.hidden[0].worked, "idle is no work");
+        // Quiet later: its turn, the one it had when hidden. Still hidden past the least time.
+        m.update(Action::Tick { now: now + sessions::MIN_HIDE_MS + 1 }.sent_by(Origin::System));
+        idle(&mut m);
+        assert_eq!((m.needs_you(), m.hidden_live().len()), (0, 1));
+        // A hide while looking at the hidden ones folds the look: the card leaves at once.
+        let other = in_pane(2, "codex", "x", now + sessions::MIN_HIDE_MS, None);
+        let found = vec![in_pane(1, "claude", "c", now - 60_000, None), other];
+        m.update(Action::SessionsInPanes { found }.sent_by(Origin::System));
+        m.update(Action::HiddenPeek { on: true });
+        m.update(Action::SessionHide { runner: "codex".into(), id: "x".into() });
+        assert!(!m.hidden_peek && m.drawn_cards().is_empty());
+        // Nothing hidden left: no look to keep on.
+        m.update(Action::SessionUnhide { runner: "codex".into(), id: "x".into() });
+        m.update(Action::SessionUnhide { runner: "claude".into(), id: "c".into() });
+        m.update(Action::HiddenPeek { on: true });
+        assert!(!m.hidden_peek);
     }
 
     #[test]

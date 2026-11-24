@@ -369,13 +369,20 @@ fn as_found(session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
         started: session.started,
         last_activity: session.last_activity,
         // Or its runner's live record says it is at work (a sub-agent writes its own file).
-        active: session.last_activity.is_some_and(|at| recent(at, now)) || (held && session.busy == Some(true)),
+        active: session.last_activity.is_some_and(|at| recent(at, now)) || busy(session),
         station: None,
         label: None,
         title: None,
         model: None,
         held,
     }
+}
+
+/// The runner's newest record says busy, and its own process is the one that wrote it: a dead
+/// process's record says nothing of a live one.
+fn busy(session: &SessionRef) -> bool {
+    let newest = session.holders.iter().filter(|h| Some(h.pid) == session.pid).max_by_key(|h| h.recorded);
+    session.busy == Some(true) && newest.is_some_and(holds)
 }
 
 /// A runner's process in front of a terminal pane's shell: the pane, the runner, its pid, and

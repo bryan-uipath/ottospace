@@ -6823,12 +6823,16 @@ impl Workspace {
             .child(format!("{} hidden · {}", hidden.len(), if peek { "Hide" } else { "Show" }))
             .relative()
             .child(self.controls.mark("sessions-hidden"))
-            // A look, not an un-hide: Show lists them, marked; Hide folds them away again.
-            .on_click(cx.listener(move |this, _, window, cx| {
-                this.dispatch(Action::HiddenPeek { on: !peek }, this.input, window, cx);
-                cx.notify();
-            }));
-        (!hidden.is_empty()).then(|| line.into_any_element())
+            .on_click(cx.listener(|this, _, window, cx| this.click_hidden_line(window, cx)));
+        // Cards are drawn in the State view alone: a look elsewhere would show nothing.
+        let state = self.model.tasks_view == ottospace_core::model::TasksView::State;
+        (state && !hidden.is_empty()).then(|| line.into_any_element())
+    }
+
+    /// The "N hidden" line: a look, not an un-hide. Show lists them, marked; Hide folds them away.
+    pub(crate) fn click_hidden_line(&mut self, window: &Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::HiddenPeek { on: !self.model.hidden_peek }, self.input, window, cx);
+        cx.notify();
     }
 
     /// A session's row, one line: a dot (lit while it is active), its title (`Row::title`) and its

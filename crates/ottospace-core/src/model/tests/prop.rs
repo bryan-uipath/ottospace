@@ -5699,7 +5699,10 @@ impl Run {
                     let asked = matches!(action, Action::SessionHide { .. } | Action::SessionUnhide { .. });
                     let read = matches!(
                         action,
-                        Action::SetSessions { .. } | Action::SessionsAtWork { .. } | Action::SessionsInPanes { .. }
+                        Action::SetSessions { .. }
+                            | Action::SessionsAtWork { .. }
+                            | Action::SessionsInPanes { .. }
+                            | Action::Tick { .. }
                     );
                     ensure!(
                         (asked || read) && m.features.on(Feature::TerminalTasks),
@@ -5708,7 +5711,7 @@ impl Run {
                     ensure!(hidden.len() <= sessions::MAX_HIDDEN, "{} hidden sessions kept", hidden.len());
                     // A hide takes the card off the list in that step.
                     if let Action::SessionHide { runner, id } = &action {
-                        let shown = m.session_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (runner, id));
+                        let shown = m.drawn_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (runner, id));
                         ensure!(!shown, "{action:?} left its card on the list");
                     }
                 }
@@ -9826,8 +9829,8 @@ fn seed_42535_a_drafts_task_starts_where_the_user_is() {
     .unwrap();
 }
 
-/// A hide that is over (its session waits in a pane, past the hide's file time) is dropped and
-/// written by the next read of sessions, whoever sent that read: the read decides, not its sender.
+/// A read of sessions may write the hidden list, whoever sent that read: the read decides, not its
+/// sender.
 #[test]
 fn seed_2522_a_read_of_sessions_writes_a_hide_that_is_over() {
     let waits = InPane {
@@ -9856,7 +9859,10 @@ fn seed_2522_a_read_of_sessions_writes_a_hide_that_is_over() {
     for step in steps {
         effects = m.update(step);
     }
-    assert_eq!(effects, [Effect::SaveHiddenSessions { hidden: vec![s2] }]);
+    // Today (the owner's "hide doesn't work"): a hide kept from before its time was known starts
+    // its least time at this read, written with the other one.
+    let s1 = Hidden { runner: "claude".into(), id: "s1".into(), since: Some(1_000_000), worked: true };
+    assert_eq!(effects, [Effect::SaveHiddenSessions { hidden: vec![s1, s2] }]);
 }
 
 /// Go to's ↵ on a checkout: its Repos row's click selects the space made for it.

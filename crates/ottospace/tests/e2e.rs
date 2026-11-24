@@ -3291,7 +3291,8 @@ fn terminal_sessions_are_listed_with_the_tasks_a_hide_holds_while_they_write_and
     let script = "cd \"$2\" || exit 1\n[ -n \"$3\" ] && printf '%s' \"$3\" | sed \"s/PID/$$/; s/NOW/$(date +%s)000/\" > \"$RECORDS/$$.json\"\nexec -a \"$1\" sleep 300\n";
     std::fs::write(&stand_in, script).unwrap();
     let dirs = json!({"claude": [claude], "codex": codex});
-    let settings = json!({"repos": [], "sessions": true, "session_dirs": dirs, "restore_layout": false});
+    // Quiet for an hour before a turn is the user's: the idle Codex never needs you in this test.
+    let settings = json!({"repos": [], "sessions": true, "session_dirs": dirs, "restore_layout": false, "session_quiet_minutes": 60});
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "session_waits,terminal_tasks")];
     let otto = Otto::launch_with("terminal-tasks", &env);
@@ -3340,18 +3341,20 @@ fn terminal_sessions_are_listed_with_the_tasks_a_hide_holds_while_they_write_and
     assert_eq!(state["sessions_bar"]["total"], 0, "a card is not also an Elsewhere row");
     // Hidden: counted nowhere, and it stays hidden while its file keeps changing in the same wait
     // (the owner's "hide doesn't work": it came back at the next read).
+    // With Tasks open, reads come every 5 s: each write below is read before the next check.
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.call(json!({"cmd": "session_hide", "runner": "claude", "id": id}));
     assert_eq!(otto.call(json!({"cmd": "state"}))["needs_you"], 0);
     let only_codex = vec![pair("running", "codex", "running")];
-    for _ in 0..6 {
-        std::thread::sleep(Duration::from_secs(2));
+    for _ in 0..4 {
+        std::thread::sleep(Duration::from_secs(1));
         let line = format!("{}\n", std::fs::read_to_string(&transcript).unwrap().lines().last().unwrap());
         std::fs::OpenOptions::new().append(true).open(&transcript).unwrap().write_all(line.as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_secs(6));
         assert_eq!(cards(&otto), only_codex, "a hide holds while the session writes");
     }
     assert_eq!(otto.call(json!({"cmd": "state"}))["needs_you"], 0);
     // Show is a look: the hidden card drawn, marked, counted nowhere. Hide folds it away again.
-    otto.call(json!({"cmd": "section", "section": "tasks"}));
     let line = otto.wait_for("the hidden line", |o| o.control_opt("sessions-hidden"));
     otto.user_click(at(line, 0.5, 0.5));
     let hidden = |o: &Otto| {
