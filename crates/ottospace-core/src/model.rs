@@ -13890,6 +13890,8 @@ mod tests {
         m.update(Action::CloseCompose.sent_by(Origin::Socket));
         assert_eq!(m.agent.offers.get(&mail), None, "a client's task: {:?}", grant(&m, mail));
         assert!(grant(&m, mail).is_some_and(|(level, _)| level == Level::Off));
+        // Nor does it take the pick: that still waits for the user's own task here.
+        assert_eq!(ahead(&m, mail), Some(Level::See));
         // Picked in one workspace, moved to a task's: forgotten, nothing offered there.
         m.update(Action::WorkbookNew { uid: "00000000000000ee".into() });
         m.update(Action::Open { kind: app(2), axis: Right, beside: None });
