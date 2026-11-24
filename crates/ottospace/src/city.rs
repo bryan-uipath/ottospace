@@ -781,6 +781,15 @@ impl Drawn {
 }
 
 impl Workspace {
+    /// The empty place drawn on `floor`: a pane's, or a tab's (the main window's, or one out).
+    pub(crate) fn at_of(&self, floor: Floor) -> At {
+        match floor {
+            Floor::Pane(id) => At::Pane(id),
+            Floor::Out(tab) => At::Tab(tab),
+            Floor::Main => At::Tab(self.model.tabs[self.model.main_at()].id),
+        }
+    }
+
     /// Where an empty place is drawn.
     fn floor_of(&self, at: At) -> Floor {
         match at {
@@ -1301,11 +1310,7 @@ impl Workspace {
         let Some(floor) = found.filter(|floor| self.input == Origin::User && !self.over_hints(*floor, position)) else {
             return;
         };
-        let at = match floor {
-            Floor::Pane(id) => At::Pane(id),
-            Floor::Out(tab) => At::Tab(tab),
-            Floor::Main => At::Tab(self.model.tabs[self.model.main_at()].id),
-        };
+        let at = self.at_of(floor);
         // The city's zoom is a share of the distance: under 1, nearer.
         if let Some(about) = self.city_about(floor, at, position) {
             self.city_stepped(at, CameraStep::Zoom { factor: nearer.recip(), about }, window, cx);

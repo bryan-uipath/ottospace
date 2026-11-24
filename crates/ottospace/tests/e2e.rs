@@ -18119,7 +18119,13 @@ fn the_users_pointer_moves_the_citys_camera() {
     pinch(false);
     assert_eq!(view(&otto), fitted, "a client's pinch");
     pinch(true);
-    assert!(num(&view(&otto), "zoom") < num(&fitted, "zoom"), "{}", view(&otto));
+    let pinched = view(&otto);
+    assert!(num(&pinched, "zoom") < num(&fitted, "zoom"), "{pinched}");
+    // Under the key reference the city is covered: a pinch there moves nothing.
+    otto.user_key("cmd-/");
+    pinch(true);
+    assert_eq!(view(&otto), pinched, "a pinch under the key reference");
+    otto.user_key("escape");
     // At rest: no frame asked for.
     std::thread::sleep(Duration::from_millis(600));
     let frames = otto.call(json!({"cmd": "state"}))["counts"]["city_frames"].clone();

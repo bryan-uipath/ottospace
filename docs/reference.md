@@ -1733,7 +1733,8 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   wheel, pressed) to pan; the mouse wheel zooms about the point under the pointer; a left drag
   (past a click: under 4 points is still a click, which focuses the pane) turns it round the
   point it looks at. On a trackpad, two-finger scroll pans, ⌥ with it turns, ⌘ with it zooms, and a pinch
-  zooms about the pointer (ottospace hears it itself: GPUI 0.2.2 delivers none). Esc during a drag puts it back where the drag began; a
+  zooms about the pointer (ottospace hears it itself: GPUI 0.2.2 delivers none; not yet in a tab
+  folded out to another display, nor under the key reference, a box or a side overlay). Esc during a drag puts it back where the drag began; a
   moved camera shows Reset view at the place's corner, which brings back the fitted view (from
   above a corner, 38° down, the city's middle 0.6 of the way down the place, the room over it for
   beams, names and agents), eased (at once under Reduce Motion). Pitch stays between 12° and 80°, zoom between a building filling the tab and
