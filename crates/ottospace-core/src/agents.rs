@@ -374,6 +374,63 @@ fn guidance_args(runner: RunnerId, see: bool, tools: bool) -> Vec<String> {
     }
 }
 
+/// Where ottospace's guidance went for a run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Via {
+    /// The MCP server's instructions.
+    Server,
+    /// Appended to the runner's system prompt.
+    SystemPrompt,
+    /// Nowhere: a runner with no place for it and no server.
+    Nowhere,
+}
+
+/// What ottospace added to a task's agent's run, beside the user's words: the conversation's
+/// context dot lists it. The guidance is ottospace's fixed words; the folder is the task's.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Added {
+    pub guidance: Option<String>,
+    pub via: Via,
+    /// The MCP server's tools, or none without it.
+    pub tools: &'static [&'static str],
+    /// The task's brief was named in the first message.
+    pub briefed: bool,
+    /// The skills its `$skill` tags asked for, in the first message.
+    pub skills: Vec<String>,
+    pub folder: Option<String>,
+}
+
+impl Added {
+    /// How many rows the dot's list has: the guidance, the server, the brief, the folder.
+    pub fn count(&self) -> usize {
+        [self.guidance.is_some(), !self.tools.is_empty(), self.briefed, !self.skills.is_empty(), self.folder.is_some()]
+            .into_iter()
+            .filter(|row| *row)
+            .count()
+    }
+}
+
+/// What `run_args` and `prompt` add for `launch`'s run: `served`, its MCP server was given
+/// (`has_tools`); `briefed`, the first message names a brief; `folder`, where it runs. The
+/// guidance is the text that went: the server's instructions are the same whatever the flag.
+pub fn added(launch: &Launch, see: bool, served: bool, briefed: bool, folder: Option<String>) -> Added {
+    let runner = launch.runner;
+    let tools = has_tools(runner, served);
+    let via = match (tools, runner.spec().introduced) {
+        (true, _) => Via::Server,
+        (false, Introduced::SystemPrompt { .. }) => Via::SystemPrompt,
+        (false, Introduced::ServerOnly) => Via::Nowhere,
+    };
+    let guidance = match via {
+        Via::Server => Some(mcp_instructions()),
+        Via::SystemPrompt => Some(guidance(see, false)),
+        Via::Nowhere => None,
+    };
+    let (tools, skills): (&'static [&'static str], _) = (if tools { &MCP_TOOLS } else { &[] }, launch.skills.clone());
+    Added { guidance, via, tools, briefed, skills, folder }
+}
+
 /// What ottospace adds to a task's agent's run (`Launch::command`, a native start): its guidance
 /// where its runner takes it, and the MCP server (`mcp_args`).
 pub fn run_args(runner: RunnerId, see: bool, mcp: Option<&McpServer>) -> Vec<String> {

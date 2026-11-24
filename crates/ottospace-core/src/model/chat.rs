@@ -43,6 +43,10 @@ pub struct Chat {
     pub btw: Option<super::btw::Btw>,
     /// The draft holds a btw answer ("Use as my answer"): the model's words, never in the state.
     pub untrusted: bool,
+    /// What ottospace added to its agent's run beside the user's words: its context dot.
+    pub added: Option<agents::Added>,
+    /// The first message's entry, and the user's line as text and tag pills (`compose::parts`).
+    pub asked: Option<(u64, Vec<crate::compose::Part>)>,
 }
 
 impl Chat {
@@ -78,7 +82,8 @@ impl Chat {
 
     fn new(subject: Subject) -> Self {
         let (transcript, draft) = (Transcript::default(), Field::lines(MAX_DRAFT));
-        Self { subject, transcript, draft, deny: false, armed: false, queued: None, btw: None, untrusted: false }
+        let (queued, btw, added, asked) = (None, None, None, None);
+        Self { subject, transcript, draft, deny: false, armed: false, queued, btw, untrusted: false, added, asked }
     }
 }
 
@@ -331,15 +336,21 @@ impl Model {
             }
             self.chats.push(Chat::new(subject.clone()));
         }
-        // A new session is asked its task first: shown as the user's message, the brief's path aside.
+        // A new session is asked its task first: shown as the user's own line, its tags as pills
+        // (`compose::parts`); what ottospace adds (`Task: `, the brief, the skills asked, its
+        // guidance) is behind the context dot, as the start recorded it (`Model::adding`).
         let task = subject.task().and_then(|id| self.tasks.get(id));
-        let (title, skills) = (task.map(|task| task.title.clone()), task.map(|t| t.skills.clone()).unwrap_or_default());
+        let line = task.map(|task| task.line.clone().unwrap_or_else(|| task.title.clone()));
+        let parts = task.zip(line.as_deref()).map(|(task, line)| crate::compose::parts(line, task));
+        let added = self.adding.iter().position(|(of, _)| of == subject).map(|at| self.adding.remove(at).1);
         let now = self.now;
         if let Some(chat) = self.chat_mut(subject) {
             chat.transcript.started(resumed);
             (chat.deny, chat.armed, chat.btw) = (false, false, None);
-            if let Some(title) = title.filter(|_| !resumed) {
-                chat.transcript.send(&agents::prompt(&title, None, &skills), now);
+            if let Some(line) = line.filter(|_| !resumed) {
+                chat.transcript.send(&line, now);
+                chat.asked = chat.transcript.items().last().map(|item| item.id).zip(parts);
+                chat.added = added;
             }
             if let Some(text) = chat.queued.take() {
                 chat.transcript.send(&text, now);
@@ -1564,7 +1575,10 @@ mod tests {
             crate::transcript::Entry::User { text } => Some(text.text().to_string()),
             _ => None,
         });
-        assert_eq!(asked.as_deref(), Some("Task: plan my week ~/notes folder"));
+        assert_eq!(asked.as_deref(), Some("plan my week ~/notes folder"), "the user's own words");
+        let added = m.chat(&Subject::Task(task)).and_then(|chat| chat.added.clone()).expect("what ottospace added");
+        assert_eq!((added.via, added.tools.len(), added.briefed), (crate::agents::Via::Server, 7, false));
+        assert!(added.guidance.is_some_and(|text| text.starts_with("You run inside ottospace")));
     }
 
     /// The bug of 0.1.0: each click on an ended task started it again, its prompt and "ended"

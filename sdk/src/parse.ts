@@ -677,6 +677,7 @@ function task(value: unknown, at: string): Task {
     paths: list(str)(o.paths, `${at}.paths`),
     resolved: list(str)(o.resolved, `${at}.resolved`),
     skills: list(str)(o.skills, `${at}.skills`),
+    ...(o.line === undefined ? {} : { line: str(o.line, `${at}.line`) }),
     created: orNull(num)(o.created, `${at}.created`),
     session: orNull(sessionLink)(o.session, `${at}.session`),
     refs: list(ref)(o.refs, `${at}.refs`),
@@ -1350,6 +1351,18 @@ function nativeChat(value: unknown, at: string): NativeChat {
     working: orNull(chatWorking)(o.working, `${at}.working`),
     selection: chatSelection(o.selection, `${at}.selection`),
     btw: btw(o.btw, `${at}.btw`),
+    asked_tags: num(o.asked_tags, `${at}.asked_tags`),
+    context: orNull((value: unknown, at: string) => {
+      const c = fields(value, at);
+      return {
+        items: num(c.items, `${at}.items`),
+        via: oneOf(["server", "system_prompt", "nowhere"] as const, "where the guidance went")(c.via, `${at}.via`),
+        tools: num(c.tools, `${at}.tools`),
+        briefed: bool(c.briefed, `${at}.briefed`),
+        folder: bool(c.folder, `${at}.folder`),
+        open: bool(c.open, `${at}.open`),
+      };
+    })(o.context, `${at}.context`),
   };
 }
 

@@ -124,10 +124,12 @@ pub(crate) fn resumed(
 /// ottospace's MCP server for the task's agent whose pass is `pass`: this program, its socket and
 /// the pass's file (`agents::mcp_args`). None: a path that is not text.
 pub(crate) fn mcp_server(pass: &crate::pass::Live) -> Option<agents::McpServer> {
-    let program = std::env::current_exe().ok()?.to_str()?.to_string();
-    // Whole: a relative one would be read from the agent's folder, not ottospace's.
-    let socket = std::path::absolute(crate::control::path()).ok()?.to_str()?.to_string();
-    let pass_file = std::path::absolute(pass.file()).ok()?.to_str()?.to_string();
+    let program = std::env::current_exe().ok()?.to_string_lossy().into_owned();
+    // Whole: a relative one would be read from the agent's folder, not ottospace's. Always given,
+    // a path that is not text as near as text goes: what the context dot says was sent.
+    let whole = |path: &std::path::Path| std::path::absolute(path).unwrap_or_else(|_| path.to_path_buf());
+    let socket = whole(&crate::control::path()).to_string_lossy().into_owned();
+    let pass_file = whole(pass.file()).to_string_lossy().into_owned();
     Some(agents::McpServer { program, socket, pass_file })
 }
 
@@ -380,6 +382,13 @@ impl Workspace {
         let shown = self.model.talk.as_ref().map(|talk| talk.task.clone());
         let task = shown.as_ref().and_then(Subject::task);
         // A chat row's label, as its click: opens or closes it. `name`: `<subject's key>:<row id>`.
+        // The context dot's label, as its click: its list opens or shuts.
+        if kind == "chat-context" {
+            if let Some(subject) = shown.as_ref().filter(|subject| self::key(subject) == name) {
+                self.toggle_context(subject, cx);
+            }
+            return true;
+        }
         if kind == "chat-row" {
             let row = name.rsplit_once(':').and_then(|(key, id)| Some((key, id.parse::<u64>().ok()?)));
             if let (Some(subject), Some((key, id))) = (&shown, row)

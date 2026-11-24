@@ -14684,6 +14684,62 @@ fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The first message is the user's own words; what ottospace added to the run (its guidance, by
+/// the MCP server's instructions; the server's tools; the folder) is behind the dot before it, by
+/// count in the state, its words never there.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_first_message_is_the_users_words_and_the_dot_holds_what_ottospace_added() {
+    let (root, _record, env) =
+        native_setup("context-dot", &[("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))], &[]);
+    let otto = launch_env("context-dot", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        (chat(o)["transcript"]["turn"].is_null() && chat(o)["replies"].as_array()?.len() == 1).then_some(())
+    });
+    let context = json!({"items": 3, "via": "server", "tools": 7, "briefed": false, "folder": true, "open": false});
+    assert_eq!((&chat(&otto)["context"], &chat(&otto)["asked_tags"]), (&context, &json!(1)), "`>app`: one pill");
+    assert!(!chat(&otto).to_string().contains("You run inside ottospace"), "never its words in the state");
+    // The top of the transcript in view: the dot, then the first message.
+    let body = rect(&otto.drawn()["drawer"]["body"]);
+    // The dot on screen: the transcript wheeled back until it shows (what comes in may move it).
+    let to_dot = || {
+        for _ in 0..30 {
+            if let Some((_, at)) = otto.controls().into_iter().find(|(id, _)| id == "chat-context:1") {
+                return at;
+            }
+            otto.wheel([body[0] + body[2] / 2., body[1] + body[3] / 2.], 5., false);
+        }
+        panic!("the context dot never came into view");
+    };
+    to_dot();
+    // The bubble is the line as typed, its tag a pill: no `Task: `, nothing of ottospace's.
+    let first = |controls: Vec<(String, [f64; 4])>| {
+        let copies = controls
+            .into_iter()
+            .filter_map(|(id, at)| Some((id.strip_prefix("chat-copy:1:")?.parse::<u64>().ok()?, at)));
+        copies.min_by_key(|(id, _)| *id).map(|(_, at)| at)
+    };
+    let copy = first(otto.controls()).expect("the first message's Copy");
+    // Its words show while the pointer is on the message (inside it, under them), then a click.
+    let inside = [copy[0] - 20., copy[1] + copy[3] + 6.];
+    otto.call(json!({"cmd": "mouse", "action": "move", "x": inside[0], "y": inside[1], "as": "user"}));
+    let copy = first(otto.controls()).expect("the first message's Copy, shown");
+    otto.call(json!({"cmd": "mouse", "action": "move", "x": inside[0], "y": inside[1], "as": "user"}));
+    assert_eq!(otto.user_click(at(copy, 0.5, 0.5))["copied"], "plan the week >app");
+    // The dot's list opens on a click, and shuts again.
+    otto.user_click(at(to_dot(), 0.5, 0.5));
+    assert_eq!(chat(&otto)["context"]["open"], true);
+    otto.user_click(at(to_dot(), 0.5, 0.5));
+    assert_eq!(chat(&otto)["context"]["open"], false);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The user's "Stop the Agent", from the palette: a native drawer has no Stop for the agent.
 fn stop_the_agent(otto: &Otto) {
     otto.user_key("cmd-shift-p");

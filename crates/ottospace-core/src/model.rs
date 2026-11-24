@@ -4346,6 +4346,10 @@ pub struct Model {
     /// Those asked for and not yet started, each with the runner of a new session.
     #[serde(skip)]
     starting: Vec<(Subject, Option<RunnerId>)>,
+    /// What each new start added beside the user's words, as it was sent: the conversation's
+    /// context dot takes it once its agent started (`chat_started`).
+    #[serde(skip)]
+    pub(crate) adding: Vec<(Subject, agents::Added)>,
     /// Conversations the user asked to go on with whose session is not listed (the Tasks section
     /// is closed): waiting on `SessionRead`, which says where it started and if it is in use.
     #[serde(skip)]
@@ -4608,6 +4612,7 @@ impl Default for Model {
             opened: Vec::new(),
             seeking: Vec::new(),
             starting: Vec::new(),
+            adding: Vec::new(),
             awaiting: Vec::new(),
             read_sessions: Vec::new(),
             ended: Vec::new(),
@@ -8422,6 +8427,16 @@ impl Model {
             agents::Start::Resume { .. } => None,
         };
         let brief = brief.filter(|_| runner.is_some());
+        // A task's new session gets ottospace's MCP server (the shell gives every task's agent one).
+        let see = self.features.on(crate::features::Feature::AgentMode);
+        let added = match &start {
+            agents::Start::New(launch) if subject.task().is_some() => {
+                Some(agents::added(launch, see, true, brief.is_some(), cwd.clone()))
+            }
+            _ => None,
+        };
+        self.adding.retain(|(of, _)| *of != subject);
+        self.adding.extend(added.map(|added| (subject.clone(), added)));
         self.starting.push((subject.clone(), runner));
         effects.push(self.start_effect(subject, start, cwd, brief));
     }
@@ -9204,6 +9219,10 @@ impl Model {
         let own = known.is_none() && self.compose_line().map(String::as_str) == Some(line);
         let folder = self.compose_taken().filter(|_| own).map(|taken| taken.place.clone());
         let id = self.file(draft.title, draft.priority.unwrap_or(3), State::Captured);
+        // The line as typed, for the first message's bubble; not a title made up for it.
+        if !made_up {
+            self.tasks.set_line(id, line);
+        }
         self.tasks.tag(id, draft.project, path);
         self.tasks.set_folder(id, folder);
         let Draft { agent, paths, resolved, skills, refs, .. } = draft;

@@ -295,6 +295,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
             },
             working: { verb: "Pondering…", shimmer: false },
             btw: { offered: true, open: true, keys: false, asked: 2, answered: 1, synthetic: 0, failed: 0, waiting: true },
+            asked_tags: 1,
+            context: { items: 3, via: "server", tools: 7, briefed: false, folder: true, open: false },
           },
         },
         opened: ["web"],

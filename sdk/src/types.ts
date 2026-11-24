@@ -62,6 +62,10 @@ export interface NativeChat {
   /** The user's selection in the transcript, never its text. */
   selection: ChatSelection;
   btw: Btw;
+  /** How many of the first message's words are tag pills (`$skill`, `@agent`, `#project`, `>repo`, a priority). */
+  asked_tags: number;
+  /** What ottospace added to the agent's run beside the user's words (its context dot): kinds and counts, never the words or paths. */
+  context: { items: number; via: "server" | "system_prompt" | "nowhere"; tools: number; briefed: boolean; folder: boolean; open: boolean } | null;
 }
 
 /** The working line: the verb it shows (null: it shows the call the turn waits on), and whether it sweeps (not under Reduce Motion, nor while the agent waits on the user). */
@@ -434,8 +438,10 @@ export interface Task {
   paths: string[];
   /** Where each of `paths` was found when the task was filed, in the same order; or empty. */
   resolved: string[];
-  /** Skills to load for it. */
+  /** Skills to load for it: its first message asks for them. */
   skills: string[];
+  /** The line it was filed from, as typed (its tags in place); left out for one filed otherwise. */
+  line?: string;
   /** When it was filed, in milliseconds since 1970. Null: filed before this was kept. */
   created: number | null;
   /** The session it was adopted from, or null. */
