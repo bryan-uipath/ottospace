@@ -110,6 +110,17 @@ pub(crate) fn shell_run(
     Ok((script, argv, path))
 }
 
+/// What a resume adds: a task's `run_args` (its server, or with none its guidance again), nothing
+/// for a session that is no task's.
+pub(crate) fn resumed(
+    task: bool,
+    runner: ottospace_core::runner::RunnerId,
+    see: bool,
+    server: Option<&agents::McpServer>,
+) -> Vec<String> {
+    if task { agents::run_args(runner, see, server) } else { Vec::new() }
+}
+
 /// ottospace's MCP server for the task's agent whose pass is `pass`: this program, its socket and
 /// the pass's file (`agents::mcp_args`). None: a path that is not text.
 pub(crate) fn mcp_server(pass: &crate::pass::Live) -> Option<agents::McpServer> {
@@ -177,7 +188,12 @@ impl Workspace {
                     self.in_checkout(dir)?;
                 }
                 (
-                    agents::resume(*runner, session, server.as_ref()).ok_or("no command for this session")?,
+                    agents::resume(
+                        *runner,
+                        session,
+                        resumed(task.is_some(), *runner, self.see_apps(), server.as_ref()),
+                    )
+                    .ok_or("no command for this session")?,
                     None,
                     runner.name().to_string(),
                 )

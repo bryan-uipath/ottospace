@@ -5625,7 +5625,7 @@ impl Run {
                     let uuid = "8f14e45f-ceea-467f-a8d3-0242ac130003";
                     let command = match start {
                         agents::Start::New(launch) => launch.command(uuid, None, true, None),
-                        agents::Start::Resume { runner, session } => agents::resume(*runner, session, None),
+                        agents::Start::Resume { runner, session } => agents::resume(*runner, session, Vec::new()),
                     };
                     ensure!(command.is_some(), "an agent that cannot be started is asked for: {start:?}");
                     // Its prompt is the task's title alone: nothing captured from a pane or an app

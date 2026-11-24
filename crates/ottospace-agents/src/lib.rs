@@ -437,20 +437,20 @@ pub struct Argv {
 }
 
 /// A runner's structured mode: what to run, and the wire to speak to it. `None`: the model is
-/// not a name, the id not a UUID, or `cwd` not a plain absolute path (Codex). `mcp`: ottospace's
-/// MCP server, given after its own flags (`agents::mcp_args`).
+/// not a name, the id not a UUID, or `cwd` not a plain absolute path (Codex). `added`: what
+/// ottospace adds to the run (`agents::run_args`), after its own flags.
 pub fn structured(
     runner: RunnerId,
     cwd: &Path,
     model: Option<&str>,
     start: &Start,
-    mcp: Option<&ottospace_core::agents::McpServer>,
+    added: Vec<String>,
 ) -> Option<(Argv, Box<dyn Wire>)> {
     let (mut argv, wire): (Argv, Box<dyn Wire>) = match runner {
         RunnerId::Claude => (claude::argv(model, start)?, Box::new(claude::Claude::new())),
         RunnerId::Codex => (codex::argv(), Box::new(codex::Codex::new(cwd, model, start)?)),
     };
-    argv.args.extend(mcp.map(|server| ottospace_core::agents::mcp_args(runner, server)).unwrap_or_default());
+    argv.args.extend(added);
     Some((argv, wire))
 }
 
@@ -567,7 +567,7 @@ mod tests {
     fn every_runner_with_a_structured_mode_has_a_wire_and_its_program() {
         let start = Start::New { id: "8f14e45f-ceea-467f-a8d3-0242ac130003".into() };
         for id in RunnerId::ALL {
-            let found = structured(id, Path::new("/code/app"), Some("m-1"), &start, None);
+            let found = structured(id, Path::new("/code/app"), Some("m-1"), &start, Vec::new());
             assert_eq!(found.is_some(), id.spec().structured.status != Status::None, "{id:?}");
             let program = found.map(|(argv, _)| argv.program);
             assert!(program.is_none_or(|program| program == id.spec().terminal.program), "{id:?}");

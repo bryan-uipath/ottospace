@@ -2,6 +2,9 @@
 
 A design. 2026-11-23. Built since: the guide's fixes, the preamble (#436), See before a task (#438),
 the MCP server (#442). The owner chose not to close the screenshot bypass (section 4): the wording stays.
+After use (owner, 2026-11-23: "we show too much data in the initial prompt"), the guidance left the
+first message: the MCP server's instructions, or Claude Code's `--append-system-prompt` without one
+(Codex: the server only; `-c developer_instructions` would replace the user's own). Shorter too.
 
 The owner's report: an agent of a task, beside a hosted Slack pane, was asked "can you see what's on
 my screen / what I'm working on in this workspace?". It ran `screencapture -x /tmp/shot/screen.png`,
