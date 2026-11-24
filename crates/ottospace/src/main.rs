@@ -10187,9 +10187,10 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 23] = [
+        const TESTS_ONLY: [&str; 24] = [
             "capture_start",
             "bug_start",
+            "city_spin",
             "repo_add",
             "inspector_fixture",
             "sneak_app_tree",
