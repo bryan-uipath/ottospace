@@ -2689,7 +2689,8 @@ export function snapshot(value: unknown): Snapshot {
     repos_bar: list(reposGroup)(o.repos_bar, "repos_bar"),
     projects_bar: projectsBar(o.projects_bar, "projects_bar"),
     filed: orNull(filed)(o.filed, "filed"),
-    week_focus: orNull(weekFocusState)(o.week_focus, "week_focus"),
+    // Absent from an older build's reply: no focus.
+    week_focus: o.week_focus === undefined ? null : orNull(weekFocusState)(o.week_focus, "week_focus"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     city: orNull(cityDrawn)(o.city, "city"),

@@ -1652,8 +1652,8 @@ provisional. Only you sort.
 
 The week's focus (`decision_sources`): Tasks ▸ This Week's Focus… (the palette too) lists the
 Projects entries; tick up to four (↑↓ move, space ticks, ↵ sets, Esc closes, setting nothing).
-Each is an area of the week, named by the project's title; what is of that project comes first in
-Decisions. Kept in `~/.ottospace/focus.json` by ISO week (the last twelve); a new week starts with
+Each is an area of the week, named by the project's title (an area set before keeps its own name
+and links). Kept in `~/.ottospace/focus.json` by ISO week (the last twelve); a new week starts with
 none. Only you set it; agents read it with `week_focus`.
 
 ### Projects

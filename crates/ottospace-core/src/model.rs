@@ -4826,7 +4826,8 @@ impl Model {
     }
 
     pub fn keyboard_terminal(&self) -> Option<PaneId> {
-        let id = self.focused.filter(|_| self.mode() == Mode::Normal && !self.keys)?;
+        // The week's focus editor over it has the keys: ⌘V types into no terminal under it.
+        let id = self.focused.filter(|_| self.mode() == Mode::Normal && !self.keys && self.focus_edit.is_none())?;
         self.pane(id).filter(|p| p.kind == Kind::Terminal).map(|p| p.id)
     }
 

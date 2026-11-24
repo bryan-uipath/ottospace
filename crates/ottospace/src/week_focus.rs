@@ -51,7 +51,9 @@ impl Workspace {
         let empty = rows.is_empty().then(|| {
             div().text_xs().text_color(gpui::rgb(ottospace_core::theme::MUTED)).child("No projects: set projects_dir")
         });
-        let body = div().flex().flex_col().gap_0p5().children(rows).children(empty);
+        // A long list scrolls; the buttons stay in view.
+        let list = div().id("week-focus-rows").max_h(gpui::px(320.)).overflow_y_scroll().flex().flex_col().gap_0p5();
+        let body = div().child(list.children(rows)).children(empty);
         let set =
             ui::dialog::action("week-focus-set", ui::Button::Primary("Set focus".into()), &["↵"], ui::State::Rest)
                 .child(self.controls.mark("week-focus:set"))
@@ -67,7 +69,7 @@ impl Workspace {
         let panel = ui::dialog::frame(
             ui::dialog::QUESTION,
             "This week's focus",
-            Some("Up to four. What is theirs comes first in Decisions.".into()),
+            Some("Up to four areas for the week.".into()),
             close,
             Some(body),
             ui::dialog::actions(None, Some(status.into()), vec![set.into_any_element()]),

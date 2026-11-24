@@ -73,6 +73,10 @@ impl Model {
     /// After every step, while the editor is open: its rows follow the Projects list as it is read
     /// (the folder is read while the editor is open), the user's ticks kept on the rows they ticked.
     pub(super) fn settle_focus_edit(&mut self) {
+        // The palette or the picker over it takes the keys: the editor closes, setting nothing.
+        if self.picker.is_some() || self.palette.is_some() {
+            self.focus_edit = None;
+        }
         let Some(edit) = self.focus_edit.as_ref() else { return };
         let fresh = self.focus_editor();
         if fresh.rows == edit.rows {
@@ -88,10 +92,15 @@ impl Model {
                     Row::Project(path) => area.projects.iter().any(|q| q.eq_ignore_ascii_case(project_name(path))),
                     Row::Kept(_) => false,
                 }),
-                Row::Project(_) => None,
+                // An entry gone from the folder: the area kept as is that it stood for.
+                Row::Project(path) => fresh.rows.iter().position(|r| match r {
+                    Row::Kept(area) => area.projects.iter().any(|q| q.eq_ignore_ascii_case(project_name(path))),
+                    Row::Project(_) => false,
+                }),
             })
         };
         let mut ticked: Vec<usize> = ticked.iter().filter_map(at).collect();
+        ticked.sort_unstable();
         ticked.dedup();
         let cursor = cursor.as_ref().and_then(at).unwrap_or(0);
         self.focus_edit = Some(Edit { ticked, cursor, ..fresh });
@@ -109,16 +118,24 @@ impl Model {
         let first = kept.len();
         let mut ticked: Vec<usize> = (0..first).collect();
         ticked.extend(self.focus.areas().iter().filter_map(|a| entry(a).map(|at| first + at)));
+        ticked.sort_unstable();
         ticked.dedup();
+        ticked.truncate(MAX_AREAS);
         let rows: Vec<Row> = kept.into_iter().chain(ordered.iter().map(|p| Row::Project(p.path.clone()))).collect();
         Edit { count: rows.len(), rows, ticked, cursor: 0 }
     }
 
-    /// The area a ticked row sets: an entry's, named by its title and linked by its name.
+    /// The area a ticked row sets: the week's own area that links the entry, as it is (its name and
+    /// repositories kept); else a new one, named by the entry's title and linked by its name.
     fn edit_area(&self, row: &Row) -> Option<Area> {
         match row {
             Row::Kept(area) => Some(area.clone()),
             Row::Project(path) => {
+                let name = project_name(path);
+                let own = self.focus.areas().iter().find(|a| a.projects.iter().any(|q| q.eq_ignore_ascii_case(name)));
+                if let Some(own) = own {
+                    return Some(own.clone());
+                }
                 let project = self.projects.listed.iter().find(|p| &p.path == path)?;
                 let name = project_name(&project.path).to_string();
                 Some(Area { name: project.title.clone(), projects: vec![name], repos: Vec::new() })
@@ -221,6 +238,24 @@ mod tests {
         assert_eq!(m.focus_edit.as_ref().map(|e| (e.count, e.ticked.clone())), Some((1, vec![0])));
         projects(&mut m, &["atlas", "beacon", "cobalt"]);
         assert_eq!(m.focus_edit.as_ref().map(|e| (e.count, e.ticked.clone())), Some((3, vec![1])));
+    }
+
+    #[test]
+    fn a_save_keeps_an_areas_own_name_and_links_and_ticks_a_row_once() {
+        let mut m = Model::default();
+        projects(&mut m, &["atlas", "beacon"]);
+        m.update(Action::SetWeek { week: "2026-W48".into() }.sent_by(Origin::System));
+        let area = |name: &str, project: &str, repos: Vec<String>| Area { name: name.into(), projects: vec![project.into()], repos };
+        let own = area("Hiring push", "atlas", vec!["/code/ats".into()]);
+        m.focus.set(&[own.clone(), area("B", "beacon", vec![]), area("C", "atlas", vec![])], SetBy::Proposal, 1);
+        m.update(Action::FocusEditOpen);
+        assert_eq!(m.focus_edit.as_ref().map(|e| e.ticked.clone()), Some(vec![0, 1]), "atlas once");
+        m.update(Action::FocusEditSave { at: 2 });
+        assert_eq!(m.focus.areas()[0], own, "its own name and repositories, unchanged");
+        // The palette over it closes it, setting nothing.
+        m.update(Action::FocusEditOpen);
+        m.update(Action::PaletteOpen);
+        assert!(m.focus_edit.is_none());
     }
 
     #[test]

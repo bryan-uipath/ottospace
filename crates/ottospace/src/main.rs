@@ -8817,18 +8817,15 @@ fn pane_runners(terminals: &HashMap<PaneId, Terminal>) -> Vec<sessions::PaneProc
     found
 }
 
+/// The local date of `now` (ms), as days since 1970-01-01, by the system's time zone now: what
+/// the week's focus counts weeks by.
+fn local_days(now: u64) -> i64 {
+    ((now / 1_000) as i64 + crate::calendar::zone_offset(now)).div_euclid(86_400)
+}
+
 /// The time now, in milliseconds since 1970. The core has no clock: actions carry this.
 /// When the local day of `now` began (milliseconds since 1970), by the system's time zone: with
 /// the offset at that midnight, not now's, so a clock change during the day does not move it.
-fn local_days(now: u64) -> i64 {
-    use core_foundation::date::CFDate;
-    use core_foundation::timezone::CFTimeZone;
-    const SINCE_2001: f64 = 978_307_200.;
-    let offset = (CFTimeZone::system().seconds_from_gmt(CFDate::new(now as f64 / 1000. - SINCE_2001)) * 1000.) as i64;
-    (now as i64 + offset).div_euclid(86_400_000)
-}
-
-/// When the local day of `now` began (as `day_start`), whose date `local_days` gives.
 fn day_start(now: u64) -> u64 {
     use core_foundation::date::CFDate;
     use core_foundation::timezone::CFTimeZone;
@@ -9398,13 +9395,14 @@ impl Workspace {
                 }
                 false => cx.propagate(),
             }))
-            // Tasks ▸ Decisions and the palette: the cards waiting, else the next task, at the time now.
+            // Tasks ▸ This Week's Focus… and the palette: its editor.
             .on_action(cx.listener(|this, _: &crate::week_focus::WeekFocus, window, cx| {
                 match this.on(Feature::DecisionSources) {
                     true => drop(this.dispatch(Action::FocusEditOpen, this.input, window, cx)),
                     false => cx.propagate(),
                 }
             }))
+            // Tasks ▸ Decisions and the palette: the cards waiting, else the next task, at the time now.
             .on_action(cx.listener(|this, _: &OpenDecisions, window, cx| match this.on(Feature::Decisions) {
                 true => {
                     this.dispatch(Action::Tick { now: now_ms() }, this.input, window, cx);

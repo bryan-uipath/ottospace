@@ -41,7 +41,7 @@ impl Area {
             }
             out
         };
-        Area { name: plain(&self.name, MAX_NAME), projects: links(&self.projects), repos: links(&self.repos) }
+        Area { name: plain(&self.name, MAX_NAME - 1), projects: links(&self.projects), repos: links(&self.repos) }
     }
 
     /// Whether a task or decision of `project` (a `#tag` or a project's name) or in `repo` is the area's.
@@ -87,19 +87,19 @@ pub struct Kept {
 pub struct Focus {
     /// This week (`SetWeek`, the shell's): empty until told.
     pub week: String,
-    /// The weeks set, the newest last; this week's is the last if its `week` is this one.
+    /// The weeks set, by week, oldest first.
     pub weeks: Vec<Week>,
 }
 
 impl Focus {
     /// This week's focus, if it was set.
     pub fn current(&self) -> Option<&Week> {
-        self.weeks.last().filter(|w| !self.week.is_empty() && w.week == self.week)
+        self.weeks.iter().find(|w| !self.week.is_empty() && w.week == self.week)
     }
 
     /// The last week set before this one: what a new week offers to keep.
     pub fn last(&self) -> Option<&Week> {
-        self.weeks.iter().rev().find(|w| w.week != self.week)
+        self.weeks.iter().rev().find(|w| w.week < self.week)
     }
 
     /// This week's areas: none until set.
@@ -112,19 +112,15 @@ impl Focus {
         self.areas().iter().position(|a| a.holds(project, repo))
     }
 
-    /// Sets this week's focus. `false`: no week yet, or nothing to set (no area has a name).
+    /// Sets this week's focus, in place of what it had. `false`: no week told yet.
     pub fn set(&mut self, areas: &[Area], set_by: SetBy, at: u64) -> bool {
-        let areas: Vec<Area> = areas.iter().map(Area::kept).filter(|a| !a.name.is_empty()).take(MAX_AREAS).collect();
         if self.week.is_empty() {
             return false;
         }
-        let week = Week { week: self.week.clone(), areas, set_by, at };
-        if self.current().is_some() {
-            self.weeks.pop();
-        }
+        let week = Week { week: self.week.clone(), areas: kept_areas(areas), set_by, at };
+        self.weeks.retain(|w| w.week != week.week);
         self.weeks.push(week);
-        let over = self.weeks.len().saturating_sub(KEPT_WEEKS);
-        self.weeks.drain(..over);
+        self.weeks = by_week(std::mem::take(&mut self.weeks));
         true
     }
 
@@ -132,30 +128,43 @@ impl Focus {
         Kept { weeks: self.weeks.clone() }
     }
 
-    /// `focus.json` read at start: each week as a set would keep it, by week, oldest first.
+    /// `focus.json` read at start: each week as a set would keep it, by week, the last of each.
     pub fn restore(&mut self, kept: Kept) {
-        let mut weeks: Vec<Week> = kept
-            .weeks
-            .into_iter()
-            .filter(|w| valid_week(&w.week))
-            .map(|w| {
-                let areas = w.areas.iter().map(Area::kept).filter(|a| !a.name.is_empty()).take(MAX_AREAS).collect();
-                Week { areas, ..w }
-            })
-            .collect();
-        weeks.sort_by(|a, b| a.week.cmp(&b.week));
-        weeks.dedup_by(|b, a| a.week == b.week);
-        let over = weeks.len().saturating_sub(KEPT_WEEKS);
-        weeks.drain(..over);
-        self.weeks = weeks;
+        let weeks = kept.weeks.into_iter().filter(|w| valid_week(&w.week));
+        self.weeks = by_week(weeks.map(|w| Week { areas: kept_areas(&w.areas), ..w }).collect());
     }
 }
 
-/// `2026-W48`: four digits, `-W`, two digits 01 to 53.
+/// Areas as a week keeps them: as `Area::kept`, named, four at most.
+fn kept_areas(areas: &[Area]) -> Vec<Area> {
+    areas.iter().map(Area::kept).filter(|a| !a.name.is_empty()).take(MAX_AREAS).collect()
+}
+
+/// Weeks by week, oldest first, one each (the later of two), the last `KEPT_WEEKS`.
+fn by_week(weeks: Vec<Week>) -> Vec<Week> {
+    let mut out: Vec<Week> = Vec::new();
+    for week in weeks {
+        out.retain(|w| w.week != week.week);
+        out.push(week);
+    }
+    out.sort_by(|a, b| a.week.cmp(&b.week));
+    let over = out.len().saturating_sub(KEPT_WEEKS);
+    out.drain(..over);
+    out
+}
+
+/// `2026-W48`: a year, `-W`, two digits, a week that year has (52, or 53 in a long ISO year).
 pub fn valid_week(week: &str) -> bool {
     let Some((year, number)) = week.split_once("-W") else { return false };
-    let number_ok = number.len() == 2 && number.parse::<u32>().is_ok_and(|n| (1..=53).contains(&n));
-    year.len() == 4 && year.chars().all(|c| c.is_ascii_digit()) && number_ok
+    let digits = |s: &str, n: usize| s.len() == n && s.bytes().all(|b| b.is_ascii_digit());
+    if !digits(year, 4) || !digits(number, 2) {
+        return false;
+    }
+    let (year, number) = (year.parse::<i64>().unwrap_or(0), number.parse::<i64>().unwrap_or(0));
+    // The ISO week of December 28th is the year's last.
+    let last = iso_week(crate::ics::days_from_civil(year, 12, 28));
+    let weeks = last.rsplit('W').next().and_then(|n| n.parse::<i64>().ok()).unwrap_or(52);
+    (1..=weeks).contains(&number)
 }
 
 /// The ISO week of a local date, given as days since 1970-01-01: `2026-W48`.
@@ -163,35 +172,10 @@ pub fn iso_week(days: i64) -> String {
     // 1970-01-01 was a Thursday; ISO weeks start on Monday, and a week is its Thursday's year's.
     let weekday = (days + 3).rem_euclid(7); // 0 = Monday
     let thursday = days - weekday + 3;
-    let (year, _, _) = civil(thursday);
-    let first = days_from_civil(year, 1, 1);
+    let (year, _, _) = crate::ics::civil(thursday);
+    let first = crate::ics::days_from_civil(year, 1, 1);
     let number = (thursday - first) / 7 + 1;
     format!("{year:04}-W{number:02}")
-}
-
-/// A date from days since 1970-01-01 (Howard Hinnant's algorithm).
-fn civil(days: i64) -> (i64, u32, u32) {
-    let z = days + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z.rem_euclid(146_097);
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = (doy - (153 * mp + 2) / 5 + 1) as u32;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 } as u32;
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    (year, month, day)
-}
-
-/// Days since 1970-01-01 of a date.
-fn days_from_civil(year: i64, month: u32, day: u32) -> i64 {
-    let y = if month <= 2 { year - 1 } else { year };
-    let era = y.div_euclid(400);
-    let yoe = y.rem_euclid(400);
-    let m = i64::from(month);
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i64::from(day) - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
 }
 
 /// A Projects entry's name, the key areas link by: its folder's, or its file's without `.md`.
@@ -204,8 +188,8 @@ pub fn project_name(path: &str) -> &str {
 mod tests {
     use super::*;
 
-    fn days(year: i64, month: u32, day: u32) -> i64 {
-        days_from_civil(year, month, day)
+    fn days(year: i64, month: i64, day: i64) -> i64 {
+        crate::ics::days_from_civil(year, month, day)
     }
 
     #[test]
@@ -215,8 +199,11 @@ mod tests {
         assert_eq!(iso_week(days(2026, 11, 30)), "2026-W49");
         assert_eq!(iso_week(days(2021, 1, 3)), "2020-W53", "a January Sunday of last year's week");
         assert_eq!(iso_week(days(2024, 12, 30)), "2025-W01", "a December Monday of next year's week");
-        assert_eq!(civil(days(2000, 2, 29)), (2000, 2, 29));
         assert!(valid_week("2026-W48") && !valid_week("2026-W54") && !valid_week("../x") && !valid_week("2026-48"));
+        assert!(
+            !valid_week("2026-W+1") && valid_week("2026-W53") && !valid_week("2025-W53"),
+            "2026 is a long ISO year"
+        );
     }
 
     #[test]
@@ -240,6 +227,14 @@ mod tests {
         assert_eq!(focus.area_of(None, Some("/code/beacon/.claude/worktrees/w")), Some(0));
         assert_eq!(focus.area_of(None, Some("/code/beacon-2")), None);
         assert_eq!(project_name("/notes/projects/hiring.md"), "hiring");
+        // A name cut to 40 with its ellipsis; a week set again after another keeps its place.
+        focus.set(&[area(&"x".repeat(41), "x")], SetBy::User, 4);
+        assert_eq!(focus.areas()[0].name.chars().count(), MAX_NAME);
+        focus.week = "2026-W47".into();
+        focus.set(&[area("Back", "x")], SetBy::User, 5);
+        focus.week = "2026-W48".into();
+        assert_eq!(focus.areas().len(), 1, "W48 is found though W47 was set after it");
+        assert_eq!(focus.last().map(|w| w.week.as_str()), Some("2026-W47"));
     }
 
     #[test]
@@ -254,6 +249,8 @@ mod tests {
         focus.restore(Kept { weeks: vec![week("2026-W48"), week("../x"), week("2026-W47"), week("2026-W48")] });
         let weeks: Vec<&str> = focus.weeks.iter().map(|w| w.week.as_str()).collect();
         assert_eq!(weeks, ["2026-W47", "2026-W48"]);
+        focus.restore(Kept { weeks: vec![week("2026-W48"), Week { at: 9, ..week("2026-W48") }] });
+        assert_eq!(focus.weeks[0].at, 9, "the later of two");
         assert_eq!(focus.weeks[0].areas[0].name, "a b");
     }
 }

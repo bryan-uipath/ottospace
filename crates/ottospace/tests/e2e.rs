@@ -19356,8 +19356,11 @@ fn zoomed_out_a_dragged_tile_stays_placed_and_tidy_puts_it_back() {
 fn week_focus_is_set_by_hand_from_the_projects_and_kept() {
     let dir = support::temp(&format!("ottospace-e2e-week-focus-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    for name in ["atlas", "beacon", "cobalt"] {
+    // Newest first in Projects: atlas, beacon, cobalt, a day apart.
+    for (days, name) in ["atlas", "beacon", "cobalt"].into_iter().enumerate() {
         std::fs::write(dir.join(format!("{name}.md")), format!("# The {name} project\n")).unwrap();
+        let file = std::fs::File::options().write(true).open(dir.join(format!("{name}.md"))).unwrap();
+        file.set_modified(std::time::SystemTime::now() - Duration::from_secs(days as u64 * 86_400)).unwrap();
     }
     let settings = json!({"projects_dir": dir, "repos": [], "restore_layout": false, "sessions": false});
     let home = user_folder("week-focus", &settings.to_string());
