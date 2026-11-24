@@ -63,6 +63,9 @@ impl Workspace {
             .map(|(place, (id, cell))| {
                 let rect = if *id == grows { between(whole, cell, t) } else { cell };
                 let alpha = if *id == grows { 1. } else { t };
+                // Where it is drawn, its border included: a probe inside it would sit inside the border.
+                let at = area.origin + gpui::point(px(rect.x), px(rect.y));
+                self.zooming.tiles.borrow_mut().insert(*id, Bounds::new(at, gpui::size(px(rect.w), px(rect.h))));
                 self.render_tile(place, *id, rect, whole, (alpha, t), cx)
             })
             .collect();
@@ -111,14 +114,6 @@ impl Workspace {
         let out = self.model.is_out(id);
         let title = at.map(|at| self.model.tabs[at].title.clone()).unwrap_or_default();
         let ring = if selected { theme::PRIMARY } else { theme::BORDER_STRONG };
-        let probe = {
-            let tiles = self.zooming.tiles.clone();
-            canvas(move |bounds, _, _| _ = tiles.borrow_mut().insert(id, bounds), |_, _, _, _| {})
-                .absolute()
-                .top_0()
-                .left_0()
-                .size_full()
-        };
         let tile = div()
             .id(("zoom-tile", id))
             .absolute()
@@ -150,7 +145,6 @@ impl Workspace {
             .children(panes)
             // Out on another display: its window shows it; the tile says so.
             .when(out, |tile| tile.child(div().absolute().inset_0().bg(black().opacity(0.45))))
-            .child(probe)
             .child(self.controls.mark(format!("zoom-tile:{id}")));
         // Its place on the tab row and its name, above it; where it opened, in the accent.
         let words = match title.is_empty() {
