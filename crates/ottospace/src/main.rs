@@ -3308,8 +3308,8 @@ impl Workspace {
                 }
                 Request::TaskPop => {
                     self.dispatch(Action::Tick { now: now_ms() }, Origin::Socket, window, cx);
-                    let next = self.model.tasks.next().map(|task| task.id);
-                    let task = serde_json::json!(self.model.tasks.next());
+                    let next = self.model.next_task();
+                    let task = serde_json::json!(next.and_then(|id| self.model.tasks.get(id)));
                     self.dispatch(Action::TaskGo { id: None }, Origin::Socket, window, cx);
                     // False: it has no tab, or the picker or the key reference is in the way.
                     let opened = next.is_some() && self.model.tab_task() == next;
@@ -3870,7 +3870,7 @@ impl Workspace {
             row["group"] = serde_json::json!(group);
             row
         };
-        self.model.tasks.inbox().into_iter().map(row).collect()
+        self.model.task_inbox().into_iter().map(row).collect()
     }
 
     /// The Repos section as laid out: each repository's `name` and `path` with its `header`,

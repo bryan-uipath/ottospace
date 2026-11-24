@@ -2583,6 +2583,21 @@ fn check_cards(m: &Model) -> Result<(), String> {
 /// Decisions: none with the flag off; while open, its card is the queue's first, the queue not
 /// empty, its one card pane in its one tab, "at of of" its title; closed, nothing of it is left.
 fn check_decisions(m: &Model) -> Result<(), String> {
+    // The rank: every open, sorted (or trusted) decision once and no triage item, with the flag;
+    // the focus tier never inverted.
+    {
+        use crate::filed::Triage;
+        use crate::rank::Card;
+        let ranked = m.ranked();
+        let mut filed: Vec<u64> =
+            ranked.iter().filter_map(|e| if let Card::Filed(id) = e.card { Some(id) } else { None }).collect();
+        filed.sort_unstable();
+        let on = m.features.on(Feature::DecisionSources);
+        let want: Vec<u64> =
+            m.filed.list.iter().filter(|d| on && d.open() && d.triage != Triage::Pending).map(|d| d.id).collect();
+        ensure!(filed == want, "ranked filed {filed:?}, open and sorted {want:?}");
+        ensure!(ranked.windows(2).all(|w| w[0].why.tier() <= w[1].why.tier()), "a focus tier inverted");
+    }
     let cards: Vec<PaneId> = m.panes.iter().filter(|p| p.kind == Kind::Decision).map(|p| p.id).collect();
     let tabs: Vec<&crate::model::Tab> = m.tabs.iter().filter(|tab| tab.space == Owner::Decisions).collect();
     let Some(run) = &m.decisions else {
@@ -2627,8 +2642,8 @@ fn check_decisions(m: &Model) -> Result<(), String> {
     ensure!(m.tab_of(run.pane) == Some(run.tab), "its card is in tab {:?}", m.tab_of(run.pane));
     let triage = usize::from(run.sort.is_some() || (!run.sorted && m.sortable()));
     let week = usize::from(run.week.is_some() || (!run.weeked && m.week_card().is_some()));
-    // The week's card answered this run counts as one done.
-    let done = run.done.len() + usize::from(run.weeked);
+    // The week's card and triage, dealt with in this run, count as one done each.
+    let done = run.done.len() + usize::from(run.weeked) + usize::from(run.sorted);
     let of = done + queue.len() + triage + week;
     ensure!(run.at == done + 1 && run.of == of, "{} of {}, not of {of}", run.at, run.of);
     ensure!(tabs[0].title == format!("Decisions · {} of {}", run.at, run.of), "its tab reads {:?}", tabs[0].title);

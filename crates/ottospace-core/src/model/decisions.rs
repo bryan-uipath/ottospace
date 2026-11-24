@@ -37,6 +37,11 @@ pub struct Waiting {
     pub ticket: u64,
     pub priority: u8,
     pub since: u64,
+    /// This week's area it is in, by place (`decision_sources`); never its name.
+    pub area: Option<usize>,
+    /// What placed it: its line and the line's hover.
+    #[serde(skip)]
+    pub why: crate::rank::Why,
 }
 
 /// Triage on show (`decision_sources`): the card "Sort 6 new items" (`item` null), or the item
@@ -163,24 +168,117 @@ impl Model {
     }
 
     /// The queue, in order: the card on show first while it waits (nothing moves under the
-    /// person); then the rest by priority (P1 first), then the one waiting longest, then by
-    /// task. Each dealt with in this run is left out. Every card is an agent stopped on the person.
+    /// person); then the rest as `ranked` puts them (this week's focus first, then priority,
+    /// then the one waiting longest). Each dealt with in this run is left out. Every card is an
+    /// agent stopped on the person.
     pub fn decision_queue(&self) -> Vec<Waiting> {
         let done = self.decisions.as_ref().map(|run| run.done.clone()).unwrap_or_default();
         let shown = self.decision_card();
+        let mut queue: Vec<Waiting> = (self.ranked().into_iter())
+            .filter_map(|e| match e.card {
+                crate::rank::Card::Ask { task, ticket } if !done.contains(&(task, ticket)) => {
+                    Some(Waiting { task, ticket, priority: e.priority, since: e.since, area: e.why.area, why: e.why })
+                }
+                _ => None,
+            })
+            .collect();
+        // Stable: the card on show first, the rest in rank.
+        queue.sort_by_key(|w| shown != Some((w.task, w.ticket)));
+        queue
+    }
+
+    /// The Tasks inbox (`Tasks::inbox`), Needs you in this week's focus first (`decision_sources`),
+    /// then as before: P1 first, then the oldest.
+    pub fn task_inbox(&self) -> Vec<(crate::tasks::Group, &crate::tasks::Task)> {
+        let mut rows = self.tasks.inbox();
+        if self.features.on(Feature::DecisionSources) && !self.focus.areas().is_empty() {
+            let out = |task: &crate::tasks::Task| self.task_area(task).is_none();
+            // Stable: within each tier the inbox's own order.
+            rows.sort_by_key(|(group, task)| (*group, *group == crate::tasks::Group::NeedsYou && out(task)));
+        }
+        rows
+    }
+
+    /// This week's area task `task` is in: by its `#project`, or its repository (a worktree counts
+    /// as the repository it is of).
+    fn task_area(&self, task: &crate::tasks::Task) -> Option<usize> {
+        let repo = task.repo.as_deref().map(|path| {
+            let at = |p: &str| std::path::Path::new(path).starts_with(p);
+            let owner = self.repos.iter().find(|r| at(&r.path) || r.worktrees.iter().any(|w| at(&w.path)));
+            owner.map_or(path, |r| r.path.as_str())
+        });
+        self.focus.area_of(task.project.as_deref(), repo)
+    }
+
+    /// The task ⌘J opens: the first under Needs you, in focus first.
+    pub fn next_task(&self) -> Option<TaskId> {
+        let rows = self.task_inbox().into_iter();
+        rows.into_iter().find(|(group, _)| *group == crate::tasks::Group::NeedsYou).map(|(_, task)| task.id)
+    }
+
+    /// Every card that needs the person, in order (`rank::order`): the agents' questions and,
+    /// with `decision_sources`, the filed decisions sorted or trusted. Focus counts only with
+    /// that flag on.
+    pub fn ranked(&self) -> Vec<crate::rank::Entry> {
+        use crate::filed::{Role, Triage};
+        use crate::rank::{Card, Entry, Why};
+        let on = self.features.on(Feature::DecisionSources);
+        let focus_set = on && !self.focus.areas().is_empty();
+        let area = |project: Option<&str>, repo: Option<&str>| {
+            if on { self.focus.area_of(project, repo) } else { None }
+        };
+        let task_area = |id: TaskId| self.tasks.get(id).filter(|_| on).and_then(|task| self.task_area(task));
         let since = |task, ticket| {
             let seen = self.waiting.iter().find(|seen| seen.task == task && seen.ticket == ticket);
             seen.map_or(self.now, |seen| seen.since)
         };
-        let mut queue: Vec<Waiting> = (self.asking().into_iter())
-            .filter(|card| !done.contains(card))
-            .map(|(task, ticket)| {
+        let asking = self.asking();
+        let mut entries: Vec<Entry> = asking
+            .iter()
+            .map(|&(task, ticket)| {
+                // An agent's question: core, nothing claimed (C × U = 2).
+                let why = Why {
+                    area: task_area(task),
+                    focus_set,
+                    agent_waits: true,
+                    role: Some(Role::Core),
+                    ..Why::default()
+                };
                 let priority = self.tasks.get(task).map_or(u8::MAX, |task| task.priority);
-                Waiting { task, ticket, priority, since: since(task, ticket) }
+                let since = since(task, ticket);
+                Entry {
+                    card: Card::Ask { task, ticket },
+                    source: crate::filed::Source::AgentSession,
+                    why,
+                    priority,
+                    since,
+                    id: u64::from(task),
+                }
             })
             .collect();
-        queue.sort_by_key(|w| (shown != Some((w.task, w.ticket)), w.priority, w.since, w.task));
-        queue
+        let ready = self.filed.list.iter().filter(|d| on && d.open() && d.triage != Triage::Pending);
+        entries.extend(ready.map(|d| {
+            // Sorted: what the user accepted. Trusted: the filer's word, as filed.
+            let trusted = d.triage == Triage::Skipped;
+            let project = if trusted { d.suggest.projects.first().cloned() } else { d.accepted.project.clone() };
+            let role = if trusted { d.suggest.role } else { d.accepted.role };
+            let counted = trusted || d.accepted.claims;
+            let in_area = area(project.as_deref(), None).or_else(|| d.task.and_then(task_area));
+            // An agent waits on it only when a task it blocks asks now: the core's check, never the claim's.
+            let agent_waits = d.claims.blocks.iter().any(|t| asking.iter().any(|(task, _)| task == t));
+            let why = Why {
+                area: in_area,
+                focus_set,
+                taken_now: d.accepted.now_until.is_some_and(|until| until > self.now),
+                agent_waits,
+                role,
+                person_waits: counted && d.claims.person_waits,
+                due: d.claims.due.filter(|_| counted),
+            };
+            let priority = d.task.and_then(|t| self.tasks.get(t)).map_or(u8::MAX, |t| t.priority);
+            Entry { card: Card::Filed(d.id), source: d.source, why, priority, since: d.filed, id: d.id }
+        }));
+        crate::rank::order(entries, self.now)
     }
 
     /// A key on the card pane, while it has the keyboard: 1 to 9 pick, ↑↓ j k move, space picks,
@@ -470,10 +568,13 @@ impl Model {
         let pane = self.add(Kind::Decision, None, Axis::Right);
         effects.push(Effect::Opened(pane));
         let tab = self.tabs[self.active].id;
-        // The agents' questions first; then the week's card; triage after them, as one card.
-        let (task, ticket) = queue.first().map(|first| (first.task, first.ticket)).unzip();
-        let week = week.filter(|_| task.is_none());
-        let sort = (task.is_none() && week.is_none()).then(|| self.sorting_at(None, 0, Vec::new()));
+        // The agents' questions in focus first (all, with no focus set); then the week's card;
+        // triage as one card; then the questions out of focus.
+        let asks_first = queue.first().is_some_and(|w| w.why.tier() == 0);
+        let week = week.filter(|_| !asks_first);
+        let sort = (!asks_first && week.is_none() && sortable).then(|| self.sorting_at(None, 0, Vec::new()));
+        let first = queue.first().filter(|_| week.is_none() && sort.is_none());
+        let (task, ticket) = first.map(|first| (first.task, first.ticket)).unzip();
         let of = queue.len() + usize::from(sortable) + usize::from(self.week_card().is_some());
         let done = Vec::new();
         let (held, sorted, weeked, changed, seen) = (false, false, false, false, None);
@@ -588,7 +689,8 @@ impl Model {
                 run.week = card;
                 run.weeked |= card.is_none();
                 if card.is_some() {
-                    (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len() + 1 + sorts);
+                    let done = run.done.len() + usize::from(run.sorted);
+                    (run.at, run.of) = (done + 1, done + queue.len() + 1 + sorts);
                     run.queue = queue;
                     return self.title_decisions();
                 }
@@ -600,7 +702,7 @@ impl Model {
             let weeks =
                 usize::from(self.decisions.as_ref().is_some_and(|run| !run.weeked) && self.week_card().is_some());
             if let Some(run) = self.decisions.as_mut() {
-                let done = run.done.len() + usize::from(run.weeked);
+                let done = run.done.len() + usize::from(run.weeked) + usize::from(run.sorted);
                 (run.at, run.of) = (done + 1, done + queue.len() + 1 + weeks);
                 run.queue = queue;
             }
@@ -635,10 +737,12 @@ impl Model {
             }
         }
         let queue = self.decision_queue();
-        // After the agents' questions, the week's card, then triage as one card, each once a run.
+        // After the agents' questions in focus (all of them, with no focus set; and the one on
+        // show stays), the week's card, then triage as one card, each once a run.
         let (weeked, sorted) = self.decisions.as_ref().map_or((true, true), |run| (run.weeked, run.sorted));
-        let week = self.week_card().filter(|_| queue.is_empty() && !weeked);
-        let sort = queue.is_empty() && week.is_none() && self.sortable() && !sorted;
+        let asks_first = queue.first().is_some_and(|w| w.why.tier() == 0 || shown == Some((w.task, w.ticket)));
+        let week = self.week_card().filter(|_| !asks_first && !weeked);
+        let sort = !asks_first && week.is_none() && self.sortable() && !sorted;
         let sorting = sort.then(|| self.sorting_at(None, 0, Vec::new()));
         if queue.is_empty() && sorting.is_none() && week.is_none() {
             return self.end_decisions(effects);
@@ -646,10 +750,12 @@ impl Model {
         let weeks = usize::from(!weeked && self.week_card().is_some());
         let sorts = usize::from(sorting.is_some() || (!sorted && self.sortable()));
         if let Some(run) = self.decisions.as_mut() {
-            (run.task, run.ticket) = queue.first().map(|first| (first.task, first.ticket)).unzip();
+            // The week's card or triage on show: no question is.
+            let first = queue.first().filter(|_| week.is_none() && sorting.is_none());
+            (run.task, run.ticket) = first.map(|first| (first.task, first.ticket)).unzip();
             (run.sort, run.week) = (sorting, week);
-            // The week's card answered this run counts as one done.
-            let done = run.done.len() + usize::from(run.weeked);
+            // The week's card and triage, dealt with in this run, count as one done each.
+            let done = run.done.len() + usize::from(run.weeked) + usize::from(run.sorted);
             (run.at, run.of) = (done + 1, done + queue.len() + weeks + sorts);
             run.queue = queue;
         }
@@ -951,5 +1057,130 @@ mod tests {
         assert!(m.decisions.is_none() && !m.tabs.iter().any(|t| t.space == Owner::Decisions));
         m.update(Action::DecisionsOpen);
         assert!(m.decisions.is_none(), "off: nothing opens");
+    }
+
+    /// Task `id` is of project `project`; this week's focus is that project.
+    fn in_focus(m: &mut Model, id: TaskId, project: &str) {
+        if let Some(task) = m.tasks.list.iter_mut().find(|t| t.id == id) {
+            task.project = Some(project.into());
+        }
+        m.update(Action::SetWeek { week: "2026-W48".into() }.sent_by(Origin::System));
+        let area = crate::focus::Area { name: "Login rewrite".into(), projects: vec![project.into()], repos: vec![] };
+        m.focus.set(&[area], crate::focus::SetBy::User, 1);
+    }
+
+    #[test]
+    fn this_weeks_focus_puts_its_questions_first_then_triage_then_the_rest() {
+        let (mut m, a, b) = two();
+        assert_eq!(queue(&m), [b, a], "no focus: P1 first");
+        in_focus(&mut m, a, "atlas");
+        assert_eq!(queue(&m), [a, b], "login is in focus: before the P1 out of it");
+        assert_eq!(m.decision_queue()[0].area, Some(0));
+        m.update(
+            Action::DecisionFile { filing: Box::new(crate::filed::tests::filing()), now: 2_500 }
+                .sent_by(Origin::Socket),
+        );
+        m.update(Action::DecisionsOpen);
+        assert_eq!(m.decision_card(), Some((a, 1)));
+        let at = |m: &Model| m.decisions.as_ref().map(|run| (run.at, run.of));
+        assert_eq!(at(&m), Some((1, 3)));
+        // Skipped: the sort card comes before the question out of focus.
+        let press = |m: &mut Model, key: &str| {
+            let Key::Act(action) = m.decision_key(key, Mods::default(), 3_000) else { panic!("{key}") };
+            m.update(action);
+        };
+        press(&mut m, "s");
+        assert!(m.decisions.as_ref().is_some_and(|run| run.sort.is_some() && run.task.is_none()));
+        assert_eq!(at(&m), Some((2, 3)));
+        // Sorted: "All sorted", and ↵ goes on to the question left, the third of three.
+        press(&mut m, "enter");
+        press(&mut m, "enter");
+        assert!(m.decisions.as_ref().is_some_and(|run| run.sort.as_ref().is_some_and(|s| s.item.is_none())));
+        press(&mut m, "enter");
+        assert_eq!((m.decision_card(), at(&m)), (Some((b, 1)), Some((3, 3))));
+        // ⌘J's task and the Tasks list: in focus first.
+        assert_eq!(m.next_task(), Some(a));
+        let rows = m.task_list_rows(crate::model::TasksView::State, true);
+        let place = |id| rows.iter().position(|r| *r == crate::list::ListRow::Task(id));
+        assert!(place(a) < place(b), "{rows:?}");
+    }
+
+    #[test]
+    fn with_every_question_out_of_focus_triage_comes_first() {
+        let (mut m, a, b) = two();
+        in_focus(&mut m, 99, "dune");
+        m.update(
+            Action::DecisionFile { filing: Box::new(crate::filed::tests::filing()), now: 2_500 }
+                .sent_by(Origin::Socket),
+        );
+        m.update(Action::DecisionsOpen);
+        assert!(m.decisions.as_ref().is_some_and(|run| run.sort.is_some() && run.task.is_none()));
+        let Key::Act(skip) = m.decision_key("s", Mods::default(), 3_000) else { panic!() };
+        m.update(skip);
+        assert_eq!(queue(&m), [b, a], "then the rest by priority");
+    }
+
+    #[test]
+    fn a_task_in_a_worktree_is_in_its_repositorys_area() {
+        let (mut m, a, b) = two();
+        m.repos = vec![crate::repos::Repo {
+            name: "app".into(),
+            path: "/code/app".into(),
+            branch: None,
+            worktrees: vec![crate::repos::Worktree { name: "w".into(), path: "/wt/app/w".into(), branch: None }],
+        }];
+        if let Some(task) = m.tasks.list.iter_mut().find(|t| t.id == a) {
+            task.repo = Some("/wt/app/w".into());
+        }
+        m.update(Action::SetWeek { week: "2026-W48".into() }.sent_by(Origin::System));
+        let area = crate::focus::Area { name: "App".into(), projects: vec![], repos: vec!["/code/app".into()] };
+        m.focus.set(&[area], crate::focus::SetBy::User, 1);
+        assert_eq!(queue(&m), [a, b]);
+    }
+
+    #[test]
+    fn a_sorted_decision_ranks_in_its_areas_tier_and_counts_only_what_was_accepted() {
+        use crate::filed::{Role, Triage};
+        use crate::rank::Card;
+        let (mut m, a, _) = two();
+        in_focus(&mut m, a, "atlas");
+        let mut f = crate::filed::tests::filing();
+        (f.suggest.projects, f.suggest.role) = (vec!["atlas".into()], Some(Role::Core));
+        (f.claims.person_waits, f.claims.due) = (true, Some(2_000 + 5 * 3_600_000));
+        m.update(Action::DecisionFile { filing: Box::new(f), now: 2_000 }.sent_by(Origin::Socket));
+        let id = m.filed.list[0].id;
+        let filed = |m: &Model| m.ranked().into_iter().find(|e| e.card == Card::Filed(id));
+        assert!(filed(&m).is_none(), "in triage: in no ranked queue");
+        // Sorted under atlas, core, its claims not counted: in focus, C × U = 2.
+        let d = &mut m.filed.list[0];
+        (d.triage, d.accepted.project, d.accepted.role) = (Triage::Sorted, Some("atlas".into()), Some(Role::Core));
+        let why = filed(&m).map(|e| e.why).unwrap_or_default();
+        assert_eq!((why.area, why.person_waits, why.due, why.score(2_000)), (Some(0), false, None, 2));
+        // Counted (u): someone waits, due within the day: 2 × 3.
+        m.filed.list[0].accepted.claims = true;
+        assert_eq!(filed(&m).map(|e| e.why.score(2_000)), Some(6));
+        // Still after the question in its tier: an agent waits there.
+        let order: Vec<Card> = m.ranked().into_iter().map(|e| e.card).collect();
+        assert_eq!(&order[..2], &[Card::Ask { task: a, ticket: 1 }, Card::Filed(id)]);
+        // Taken now: first of its tier, before the question.
+        m.filed.list[0].accepted.now_until = Some(u64::MAX);
+        assert_eq!(m.ranked()[0].card, Card::Filed(id));
+    }
+
+    #[test]
+    fn a_blocked_task_counts_only_while_its_agent_asks() {
+        use crate::filed::Triage;
+        use crate::rank::Card;
+        let (mut m, a, _) = two();
+        let idle = live(&mut m, "idle", 5);
+        let mut f = crate::filed::tests::filing();
+        f.claims.blocks = vec![idle];
+        m.update(Action::DecisionFile { filing: Box::new(f), now: 2_000 }.sent_by(Origin::Socket));
+        m.filed.list[0].triage = Triage::Skipped;
+        let waits =
+            |m: &Model| m.ranked().into_iter().find(|e| matches!(e.card, Card::Filed(_))).map(|e| e.why.agent_waits);
+        assert_eq!(waits(&m), Some(false), "its agent asks nothing");
+        m.filed.list[0].claims.blocks = vec![a];
+        assert_eq!(waits(&m), Some(true));
     }
 }

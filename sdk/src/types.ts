@@ -1604,7 +1604,8 @@ export interface Decisions {
   changed: boolean;
   at: number;
   of: number;
-  queue: { task: TaskId; ticket: number; priority: number; since: number }[];
+  /** The cards left, in rank (`decision_sources`: this week's focus first); `area`: the focus area's place (0 to 3) it is in, never its name. */
+  queue: { task: TaskId; ticket: number; priority: number; since: number; area: number | null }[];
 }
 
 /** Triage in Decisions: the item on show (an id of `filed`), and what the user left on it. */

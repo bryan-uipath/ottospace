@@ -6282,7 +6282,7 @@ impl Model {
             }
             // ⌘J: the next task's conversation; the tab stays.
             Action::TaskGo { id: None } if self.by_user => {
-                if let Some(id) = self.tasks.next().map(|task| task.id) {
+                if let Some(id) = self.next_task() {
                     self.talk_to(Subject::Task(id), false, effects);
                 } else if self.features.on(Feature::TerminalTasks) {
                     // No task needs you: the first terminal session that does, in its pane, else its conversation.
@@ -6299,7 +6299,7 @@ impl Model {
                 }
             }
             Action::TaskGo { id } => {
-                let task = id.map_or_else(|| self.tasks.next(), |id| self.tasks.get(id)).map(|task| task.id);
+                let task = id.map_or_else(|| self.next_task(), |id| self.tasks.get(id).map(|task| task.id));
                 if let Some(id) = task {
                     self.open_space(self.task_space(id), effects);
                     // Only the user says which conversation is in front there.
@@ -9767,14 +9767,15 @@ impl Model {
         // Done since the local day began, as the shell says it.
         let day = self.local_day;
         let today = |task: &Task| day > 0 && task.finished_at.is_some_and(|at| at >= day);
-        for (group, task) in self.tasks.inbox() {
+        for (group, task) in self.task_inbox() {
             let heading = match group.into() {
                 Heading::Done if today(task) => Heading::DoneToday,
                 heading => heading,
             };
             places.push(TaskPlace { heading, group, task });
         }
-        places.sort_by_key(|place| (place.heading, place.task.priority, place.task.id));
+        // Stable: within a heading the inbox's order (this week's focus first under Needs you).
+        places.sort_by_key(|place| place.heading);
         places
     }
 
@@ -10891,7 +10892,7 @@ impl Model {
     pub fn home(&self, keep_out: &[Rect]) -> Option<Home<'_>> {
         // A task's empty tab is its own, not the home screen: the shell says what goes in it.
         let workspace = *self.shown_space() == Owner::Home;
-        (self.tree_at(self.main_at()).is_none() && workspace).then(|| home::home(&self.tasks, keep_out))
+        (self.tree_at(self.main_at()).is_none() && workspace).then(|| home::home(self.task_inbox(), keep_out))
     }
 
     /// Pane ids of each tab, in tab order. The state dump uses it to show which tab holds a pane.

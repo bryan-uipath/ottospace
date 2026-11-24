@@ -4,7 +4,7 @@
 use serde::Serialize;
 
 use crate::layout::Rect;
-use crate::tasks::{Group, Task, TaskId, Tasks};
+use crate::tasks::{Group, Task, TaskId};
 
 /// Most tasks shown as nodes: the first rows of the inbox.
 pub const MAX_NODES: usize = 12;
@@ -162,10 +162,9 @@ fn place(shown: &[(Group, &Task)], spots: &[Spot]) -> Vec<Node> {
     nodes
 }
 
-/// What the home screen shows for these tasks. `keep_out`: where its text is drawn, in fractions
-/// of the drawn area; no node sits there.
-pub fn home<'a>(tasks: &'a Tasks, keep_out: &[Rect]) -> Home<'a> {
-    let inbox = tasks.inbox();
+/// What the home screen shows for the inbox (`Model::task_inbox`: this week's focus first under
+/// Needs you). `keep_out`: where its text is drawn, in fractions of the drawn area; no node sits there.
+pub fn home<'a>(inbox: Vec<(Group, &'a Task)>, keep_out: &[Rect]) -> Home<'a> {
     let mut counts = Counts::default();
     for (group, _) in &inbox {
         *match group {
@@ -184,7 +183,7 @@ pub fn home<'a>(tasks: &'a Tasks, keep_out: &[Rect]) -> Home<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::tasks::State;
+    use crate::tasks::{State, Tasks};
 
     fn filed(list: &[(&str, State, Option<&str>)]) -> Tasks {
         let mut tasks = Tasks::default();
@@ -233,7 +232,7 @@ mod tests {
     #[test]
     fn no_tasks_no_nodes() {
         let tasks = Tasks::default();
-        let home = home(&tasks, &text(1384., 832.));
+        let home = home(tasks.inbox(), &text(1384., 832.));
         assert!(home.nodes.is_empty() && home.needs_you.is_empty());
         assert_eq!((home.counts, home.counts.total()), (Counts::default(), 0));
     }
@@ -246,7 +245,7 @@ mod tests {
             ("loose", State::Running, None),
             ("new", State::Done, Some("minter")),
         ]);
-        let home = home(&tasks, &text(1384., 832.));
+        let home = home(tasks.inbox(), &text(1384., 832.));
         let facts = |id| {
             let n = node(&home, id);
             (n.lane, n.depth, n.group)
@@ -276,7 +275,7 @@ mod tests {
                     let list: Vec<_> =
                         (0..count).map(|i| ("task", State::Captured, projects[i % projects.len()])).collect();
                     let tasks = filed(&list);
-                    let (first, again) = (home(&tasks, &keep_out).nodes, home(&tasks, &keep_out).nodes);
+                    let (first, again) = (home(tasks.inbox(), &keep_out).nodes, home(tasks.inbox(), &keep_out).nodes);
                     assert_eq!(first, again, "the same tasks get the same places");
                     check(&first, &keep_out);
                     // The large window has a crossing for every task.
@@ -286,7 +285,7 @@ mod tests {
         }
         // The small window still shows some of twelve tasks, clear of the text.
         let tasks = filed(&[("task", State::Captured, None); MAX_NODES]);
-        assert!(!home(&tasks, &text(620., 440.)).nodes.is_empty());
+        assert!(!home(tasks.inbox(), &text(620., 440.)).nodes.is_empty());
     }
 
     #[test]
@@ -294,7 +293,7 @@ mod tests {
         let mut list = vec![("idea", State::Captured, None); MAX_NODES + 3];
         list.push(("question", State::NeedsYou, Some("support")));
         let tasks = filed(&list);
-        let home = home(&tasks, &text(1384., 832.));
+        let home = home(tasks.inbox(), &text(1384., 832.));
         assert_eq!(home.nodes.len(), MAX_NODES);
         // The task that needs the user is first in the inbox, so it is shown, filed last or not.
         assert_eq!(node(&home, MAX_NODES as TaskId + 4).group, Group::NeedsYou);
@@ -320,7 +319,7 @@ mod tests {
         ]);
         tasks.snooze(1, 1_000);
         tasks.dismiss(2);
-        let home = home(&tasks, &[]);
+        let home = home(tasks.inbox(), &[]);
         let mut shown: Vec<TaskId> = home.nodes.iter().map(|n| n.task).collect();
         shown.sort_unstable();
         assert_eq!(shown, [4, 5, 6, 7]);

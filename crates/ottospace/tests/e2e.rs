@@ -12772,6 +12772,45 @@ fn decisions_answers_card_by_card_and_closes_after_the_last() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// This week's focus ranks Decisions (`decision_sources`): the question of a task in focus comes
+/// first though asked later, the state says its area by place (never its name), and the other
+/// says none.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn decisions_put_this_weeks_focus_first() {
+    let questions = json!([{"question": "Which colour?", "header": "Colour", "multiSelect": false,
+        "options": [{"label": "Red", "description": "warm"}, {"label": "Blue", "description": "cool"}]}]);
+    let features = [("OTTOSPACE_FEATURES", "decisions,decision_sources")];
+    let (root, _, env) = native_setup("decisions-focus", &ask_fixtures(questions), &features);
+    // This week's id, then its focus kept as the user set it: the atlas project.
+    let otto = launch_env("decisions-focus-0", &env);
+    let week = otto.call(json!({"cmd": "state"}))["week_focus"]["week"].as_str().unwrap().to_string();
+    drop(otto);
+    let focus = json!({"weeks": [{"week": week, "set_by": "user", "at": 1,
+        "areas": [{"name": "Made-up sizes", "projects": ["atlas"], "repos": []}]}]});
+    std::fs::write(root.join("home/focus.json"), focus.to_string()).unwrap();
+    let otto = launch_env("decisions-focus", &env);
+    assert_eq!(otto.call(json!({"cmd": "state"}))["week_focus"]["areas"], 1);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "pick a colour >app"}));
+    otto.call(json!({"cmd": "task_new", "line": "pick a size #atlas >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.start_task(2);
+    let asks = |o: &Otto, id: &str| {
+        o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"][id]["transcript"]["cards"][0]["ask"].is_object()
+    };
+    otto.wait_for("two question cards", |o| (asks(o, "1") && asks(o, "2")).then_some(()));
+    otto.user_key("cmd-j");
+    let open = otto.wait_for("Decisions", |o| Some(decisions(o)).filter(|d| d.is_object()));
+    assert_eq!(open["task"], 2, "in focus first: {open}");
+    let areas: Vec<&Value> = open["queue"].as_array().unwrap().iter().map(|w| &w["area"]).collect();
+    assert_eq!(areas, [&json!(0), &Value::Null], "{open}");
+    assert!(!open.to_string().contains("Made-up sizes"), "never an area's name in the state");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// S skips a card (left for next time) and L puts its task off (snoozed): both send nothing, and
 /// Decisions closes after the last.
 #[test]
