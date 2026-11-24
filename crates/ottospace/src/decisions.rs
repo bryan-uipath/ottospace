@@ -49,17 +49,18 @@ impl Workspace {
                     .children(why.map(|why| div().text_xs().text_color(rgb(theme::MUTED)).child(why))),
             )
             .child(div().text_xs().text_color(rgb(theme::MUTED)).child(format!("{} of {}", run.at, run.of)));
-        let skip = ui::button("decision-skip", Button::Ghost(Face::Label("Skip (s)".into())), State::Rest)
+        let skip = ui::dialog::action("decision-skip", Button::Ghost(Face::Label("Skip".into())), &["S"], State::Rest)
             .child(self.controls.mark("decision:skip"))
             .on_click(cx.listener(move |this, _, window, cx| {
                 drop(this.dispatch(Action::DecisionsSkip { task, ticket }, this.input, window, cx))
             }));
-        let later = ui::button("decision-later", Button::Ghost(Face::Label("Later (l)".into())), State::Rest)
-            .child(self.controls.mark("decision:later"))
-            .on_click(cx.listener(move |this, _, window, cx| {
-                let until = crate::now_ms().saturating_add(LATER_MS);
-                drop(this.dispatch(Action::DecisionsLater { task, ticket, until }, this.input, window, cx))
-            }));
+        let later =
+            ui::dialog::action("decision-later", Button::Ghost(Face::Label("Later".into())), &["L"], State::Rest)
+                .child(self.controls.mark("decision:later"))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    let until = crate::now_ms().saturating_add(LATER_MS);
+                    drop(this.dispatch(Action::DecisionsLater { task, ticket, until }, this.input, window, cx))
+                }));
         // Skip and Later first: in a narrow pane the hint wraps under them, never pushes them out.
         let foot =
             div().flex_none().flex().flex_wrap().items_center().gap_1().px_3().pb_3().child(skip).child(later).child(

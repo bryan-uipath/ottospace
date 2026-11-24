@@ -11,8 +11,9 @@ use super::{Button, State, states};
 /// Widths: a question, a form.
 pub(crate) const QUESTION: f32 = 360.;
 pub(crate) const FORM: f32 = 520.;
-/// The one dim behind every centred dialog.
+/// The one dim behind every centred dialog, and the lighter one behind a list anchored to its place (⌘E).
 pub(crate) const DIM: f32 = 0.45;
+pub(crate) const DIM_ANCHORED: f32 = 0.2;
 /// A control's height in a dialog (22 elsewhere).
 const CONTROL: f32 = 26.;
 /// A form's label column.
