@@ -1,10 +1,12 @@
-//! Developer ▸ "Time Typing in This Terminal": made-up keys typed into a throwaway `cat` in a new
-//! pane, never the user's shell, each timed from its key event to the frame that paints its echo
-//! (`ottospace_core::typing`). A test run also times a full-screen program, and a busy pane beside.
+//! Developer ▸ "Time Typing in This Terminal": made-up keys written to a throwaway `cat` in a new
+//! pane, never the user's shell or anything else, each timed from the key to the frame that paints
+//! its echo (`ottospace_core::typing`). A test run also times a full-screen program, and a busy pane
+//! beside. The keys are written to that terminal as its key handler writes a key's bytes; GPUI's
+//! dispatch of a real key to that handler (one call on the main thread) is not in the times.
 
 use std::time::{Duration, Instant};
 
-use gpui::{Context, Keystroke, Window};
+use gpui::{Context, Window};
 use ottospace_core::layout::Axis;
 use ottospace_core::model::{Action, Kind, Origin, PaneId};
 use ottospace_core::typing::{self, APP_BUDGET_MS, Key, Typed, key_char};
@@ -17,8 +19,10 @@ pub(crate) const KEYS: usize = 250;
 const GAP: Duration = Duration::from_millis(60);
 /// The program's start, before the first key.
 const START: Duration = Duration::from_millis(800);
-/// An Enter after this many keys keeps `cat`'s line short; it is not timed.
+/// An Enter to `cat` after this many keys keeps its line short; it is not timed.
 const LINE: usize = 40;
+/// A run this old is over, its task gone (its window closed): a new one replaces it.
+const STALE: Duration = Duration::from_secs(60);
 
 /// What a run's pane runs: `cat` (its echo is the tty's, as at a shell's prompt), a full-screen
 /// program that draws every row again for each key (`ottospace typing-echo`), or made-up output
@@ -49,6 +53,7 @@ pub(crate) struct Typing {
     busy: Option<PaneId>,
     back: Option<PaneId>,
     full: bool,
+    started: Instant,
     keys: Vec<Key>,
 }
 
@@ -74,40 +79,38 @@ impl Workspace {
         window: &Window,
         cx: &mut Context<Self>,
     ) {
-        if origin != Origin::User || self.typing.is_some() {
+        if origin != Origin::User || self.typing.as_ref().is_some_and(|t| t.started.elapsed() < STALE) {
             return;
         }
-        let back = self.model.focused;
-        let pane = self.typing_pane(if full { Program::Full } else { Program::Cat }, Axis::Right, origin, window, cx);
-        let Some(pane) = pane else {
-            self.told = Some(("No room for a pane to time typing in".into(), Instant::now()));
+        if let Some(stale) = self.typing.take() {
+            self.typing_close(&stale, window, cx);
+        }
+        // Split from a pane that holds something: an empty one would be filled in place.
+        let back = self.model.focused.filter(|pane| self.model.pane(*pane).is_some_and(|p| p.kind != Kind::Empty));
+        let program = if full { Program::Full } else { Program::Cat };
+        let Some(pane) = back.and_then(|_| self.typing_pane(program, Axis::Right, origin, window, cx)) else {
+            self.told = Some(("Focus a terminal or an app pane to time typing beside it".into(), Instant::now()));
             return cx.notify();
         };
         let busy = busy.then(|| self.typing_pane(Program::Busy, Axis::Down, origin, window, cx)).flatten();
-        if busy.is_some() {
-            self.dispatch(Action::Focus { pane }, origin, window, cx);
-        }
-        self.typing = Some(Typing { pane, busy, back, full, keys: Vec::new() });
+        let started = Instant::now();
+        self.typing = Some(Typing { pane, busy, back, full, started, keys: Vec::new() });
         cx.spawn_in(window, async move |this, cx| {
             cx.background_executor().timer(START).await;
             for i in 0..KEYS {
-                // Only into its own pane, focused, with no mode over it: never anywhere else.
-                let Ok(Some(key)) = this.update(cx, |this, _| this.typing_key(pane, &key_char(i).to_string(), true))
-                else {
+                if !this.update(cx, |this, _| this.typing_key(pane, i)).unwrap_or(false) {
                     break;
-                };
-                let _ = cx.update(|window, cx| window.dispatch_keystroke(key, cx));
+                }
                 cx.background_executor().timer(GAP).await;
-                let Ok(Some(())) = this.update(cx, |this, _| this.typing_took(pane)) else { break };
-                if (i + 1) % LINE == 0 {
-                    let Ok(Some(enter)) = this.update(cx, |this, _| this.typing_key(pane, "enter", false)) else {
-                        break;
-                    };
-                    let _ = cx.update(|window, cx| window.dispatch_keystroke(enter, cx));
+                if !this.update(cx, |this, _| this.typing_took(pane)).unwrap_or(false) {
+                    break;
+                }
+                if !full && (i + 1) % LINE == 0 {
+                    let _ = this.update(cx, |this, _| this.terminals.get(&pane).map(|t| t.write(b"\r".to_vec())));
                     cx.background_executor().timer(GAP).await;
                 }
             }
-            let _ = this.update_in(cx, |this, window, cx| this.typing_end(window, cx));
+            let _ = this.update_in(cx, |this, window, cx| this.typing_end(pane, window, cx));
         })
         .detach();
         cx.notify();
@@ -129,40 +132,29 @@ impl Workspace {
         self.model.focused.filter(|pane| Some(*pane) != was && self.terminals.contains_key(pane))
     }
 
-    /// The keystroke `key`, its timing begun if `timed`; none once the run's pane is not the one
-    /// keys go to.
-    fn typing_key(&mut self, pane: PaneId, key: &str, timed: bool) -> Option<Keystroke> {
-        let mode = self.model.mode();
-        let typing = self.typing.as_ref().filter(|t| t.pane == pane)?;
-        let ours = self.model.focused == Some(typing.pane) && matches!(mode, ottospace_core::model::Mode::Normal);
-        let terminal = self.terminals.get(&pane).filter(|_| ours && !self.model.keys)?;
-        let key = Keystroke::parse(key).ok()?;
-        if timed {
-            terminal.time_key(Instant::now());
-        }
-        Some(key)
+    /// The `i`th key written to the run's own terminal, its timing begun; false once the run is not
+    /// this one or its pane is gone.
+    fn typing_key(&mut self, pane: PaneId, i: usize) -> bool {
+        let ours = self.typing.as_ref().is_some_and(|t| t.pane == pane);
+        let Some(terminal) = self.terminals.get(&pane).filter(|_| ours) else { return false };
+        terminal.time_key(Instant::now());
+        terminal.write(key_char(i).to_string().into_bytes());
+        true
     }
 
-    /// The timed key's stages; none once its key went nowhere (the run stops).
-    fn typing_took(&mut self, pane: PaneId) -> Option<()> {
-        let stamps = self.terminals.get(&pane)?.stamps();
-        let typing = self.typing.as_mut().filter(|t| t.pane == pane)?;
-        typing.keys.push(key_of(&stamps)?);
-        Some(())
+    /// The timed key's stages; false once the run is not this one.
+    fn typing_took(&mut self, pane: PaneId) -> bool {
+        let Some(stamps) = self.terminals.get(&pane).map(Terminal::stamps) else { return false };
+        let Some(typing) = self.typing.as_mut().filter(|t| t.pane == pane) else { return false };
+        typing.keys.extend(key_of(&stamps));
+        true
     }
 
-    /// A run ends (its keys, Esc, or its pane gone): its panes closed, the focus back, its numbers
-    /// in a toast, the event log and a test run's state.
-    fn typing_end(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(typing) = self.typing.take() else { return };
-        for pane in [Some(typing.pane), typing.busy].into_iter().flatten() {
-            if self.model.pane(pane).is_some() {
-                self.dispatch(Action::Close { pane: Some(pane) }, Origin::User, window, cx);
-            }
-        }
-        if let Some(back) = typing.back.filter(|back| self.model.pane(*back).is_some()) {
-            self.dispatch(Action::Focus { pane: back }, Origin::User, window, cx);
-        }
+    /// The run of `pane` ends (its keys, Esc, or its pane gone): its panes closed, the focus back,
+    /// its numbers in a toast, the event log and a test run's state.
+    fn typing_end(&mut self, pane: PaneId, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(typing) = self.typing.take_if(|t| t.pane == pane) else { return };
+        self.typing_close(&typing, window, cx);
         let hz = window.display(cx).map_or(0., |display| ottospace_mac::display::refresh_hz(display.id().into()));
         let typed = typing::summary(&typing.keys);
         let done = typing.keys.len() == KEYS;
@@ -183,12 +175,34 @@ impl Workspace {
         cx.notify();
     }
 
+    /// A run's panes closed, the focus back if one of them still has it. A pane the core will not
+    /// close now (the key reference is over it): its program ends, and an ended terminal's pane
+    /// closes at the tick once it may.
+    fn typing_close(&mut self, typing: &Typing, window: &Window, cx: &mut Context<Self>) {
+        let ours = [Some(typing.pane), typing.busy];
+        let had_focus = ours.contains(&self.model.focused);
+        for pane in ours.into_iter().flatten() {
+            if self.model.pane(pane).is_none() {
+                continue;
+            }
+            self.dispatch(Action::Close { pane: Some(pane) }, Origin::User, window, cx);
+            if self.model.pane(pane).is_some()
+                && let Some(terminal) = self.terminals.get(&pane)
+            {
+                terminal.signal(libc::SIGTERM);
+            }
+        }
+        if let Some(back) = typing.back.filter(|back| had_focus && self.model.pane(*back).is_some()) {
+            self.dispatch(Action::Focus { pane: back }, Origin::User, window, cx);
+        }
+    }
+
     /// Esc during a run stops it.
     pub(crate) fn typing_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        if self.typing.is_none() || self.input != Origin::User {
+        let Some(pane) = self.typing.as_ref().map(|t| t.pane).filter(|_| self.input == Origin::User) else {
             return false;
-        }
-        self.typing_end(window, cx);
+        };
+        self.typing_end(pane, window, cx);
         true
     }
 
@@ -198,7 +212,7 @@ impl Workspace {
     }
 }
 
-/// A key's stages in µs from its event; none when its bytes were never written (it went elsewhere).
+/// A key's stages in µs from its event; none for a key never written.
 fn key_of(s: &Stamps) -> Option<Key> {
     let key = s.key?;
     let us = |at: Option<Instant>| at.map(|at| at.saturating_duration_since(key).as_micros() as u64);
@@ -229,15 +243,16 @@ pub(crate) fn echo_main() -> ! {
     let (mut typed, mut byte) = (String::new(), [0u8]);
     loop {
         let (rows, cols) = size();
-        let mut screen = String::from("\x1b[H");
+        // The typed row first: the batch that brings a key's echo holds it; then every other row.
+        let tail: String =
+            typed.chars().rev().take(cols.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
+        let mut screen = format!("\x1b[{rows};1H\x1b[2K{tail}\x1b[H");
         for row in 0..rows.saturating_sub(1) {
             let line: String = (0..cols).map(|c| key_char(row * 7 + c)).collect();
             screen.push_str(&line);
             screen.push_str("\r\n");
         }
-        let tail: String =
-            typed.chars().rev().take(cols.saturating_sub(1)).collect::<Vec<_>>().into_iter().rev().collect();
-        screen.push_str(&format!("\x1b[2K{tail}"));
+        screen.push_str(&format!("\x1b[{rows};{}H", tail.chars().count() + 1));
         let _ = out.write_all(screen.as_bytes());
         let _ = out.flush();
         match input.read(&mut byte) {

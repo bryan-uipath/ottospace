@@ -107,8 +107,10 @@ THRESHOLDS = [
     ("spin_9500_over_33", None, 3, 3),
     # Frames that showed the picture before (of 240): the turn standing still on screen.
     ("spin_9500_repeats", None, 24, 24),
-    # Key to painted echo at a prompt: the display's frame is most of it, so a frame's rise.
+    # Key to painted echo: the display's frame is most of it, so a frame's rise.
     ("typing_total_p99_ms", 0.25, 4.0, 0),
+    ("typing_busy_total_p99_ms", 0.25, 4.0, 0),
+    ("typing_full_total_p99_ms", 0.25, 4.0, 0),
 ]
 # Past these, whatever the base: the app's own share of a key's latency (p99, ms) stays under one
 # 120 Hz frame (`ottospace_core::typing::APP_BUDGET_MS`).
@@ -116,7 +118,7 @@ CEILINGS = [("typing_app_p99_ms", 8.3), ("typing_busy_app_p99_ms", 8.3), ("typin
 LIMITS = ("startup median +20% and +50 ms; RSS +25% and +10 MB; idle CPU above 2% of a core and +1 point; "
           "code city +25% and +100 ms (20,000 files: +150 ms); "
           "a spin of 9,500 files: frames' p99 +25% and +4 ms, frames over 33 ms and repeated frames above 3 and +3, 24 and +24; "
-          "a spin the base made and this side did not; typing's key to screen p99 +25% and +4 ms; "
+          "a spin the base made and this side did not; typing's key to screen p99 +25% and +4 ms (each run); "
           "the app's own share of a key (p99) above 8.3 ms on this side; typing the base timed and this side did not.")
 
 
@@ -509,7 +511,9 @@ def typing(binary, full, busy):
         time.sleep(17)
         inst.poll = 0.5
         inst.wait("the run", lambda: shot.path_get(inst.state(), "typing.result") is not None, timeout=60)
-        return shot.path_get(inst.state(), "typing.result")
+        typed = shot.path_get(inst.state(), "typing.result")
+        # A run cut short, or one whose echoes were mostly never painted, measures nothing.
+        return typed if typed["done"] and typed["total"]["n"] >= 200 else None
     finally:
         inst.close()
 
@@ -706,8 +710,9 @@ def regressions(before, after, held):
     # A spin the base made and this side did not (no city, a failed spin): never a pass by absence.
     if "spin_9500_p99_ms" in before and "spin_9500_p99_ms" not in after:
         found.append("spin_9500: the base spun, this side did not")
-    if "typing_total_p99_ms" in before and "typing_total_p99_ms" not in after:
-        found.append("typing: the base timed typing, this side did not")
+    for kind in ("typing", "typing_busy", "typing_full"):
+        if f"{kind}_total_p99_ms" in before and f"{kind}_total_p99_ms" not in after:
+            found.append(f"{kind}: the base timed it, this side did not (or its run failed)")
     return found
 
 

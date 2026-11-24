@@ -188,7 +188,8 @@ Design note: `docs/ai/attention/plan.md`.
   - `typing_time` (`"full"`, `"busy"`, both optional): the Developer command "Time Typing in This
     Terminal", as the user's: made-up keys into a throwaway `cat` in a new pane (`full`: the made-up
     full-screen `ottospace typing-echo`; `busy`: a pane printing without end beside it), each timed
-    from its key event to the frame that paints its echo, by stage; the panes then closed. The
+    from its key (written to that terminal as its key handler writes one) to the frame that paints
+    its echo, by stage; the panes then closed. The
     numbers in the state's `typing` (`running`, `result`: `keys`, `missed`, and per stage `n`,
     `p50`, `p95`, `p99`, `max` in ms: `key_write`, `write_echo`, `echo_taken`, `taken_painted`,
     `app` (the app's own share), `total`; `hz` the display's refresh). Null outside a test run.

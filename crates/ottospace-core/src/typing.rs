@@ -27,11 +27,11 @@ pub struct Dist {
 }
 
 impl Dist {
-    fn of(mut us: Vec<u64>) -> Self {
-        us.sort_unstable();
-        let n = us.len();
-        let at = |p: usize| if n == 0 { 0. } else { us[(n * p).div_ceil(100).clamp(1, n) - 1] as f32 / 1e3 };
-        Dist { n, p50: at(50), p95: at(95), p99: at(99), max: at(100) }
+    fn of(us: Vec<u64>) -> Self {
+        let mut ms: Vec<f32> = us.into_iter().map(|us| us as f32 / 1e3).collect();
+        ms.sort_by(f32::total_cmp);
+        let at = |p| crate::stats::rank(&ms, p);
+        Dist { n: ms.len(), p50: at(50), p95: at(95), p99: at(99), max: at(100) }
     }
 }
 
@@ -112,7 +112,7 @@ mod tests {
     }
 
     #[test]
-    fn percentiles_are_nearest_rank() {
+    fn a_stage_is_its_percentiles_in_ms() {
         let d = Dist::of((1..=100).map(|ms| ms * 1_000).collect());
         assert_eq!((d.n, d.p50, d.p95, d.p99, d.max), (100, 50., 95., 99., 100.));
         assert_eq!(Dist::of(Vec::new()), Dist::default());

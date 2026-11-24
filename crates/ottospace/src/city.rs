@@ -27,6 +27,7 @@ use ottospace_core::model::Origin;
 use ottospace_core::model::city::{At, CameraStep, Glimpse, SPIN_STEPS, Who};
 use ottospace_core::scene::{self, Camera, Kind, Layout, Scene, View};
 use ottospace_core::settings::expand_home;
+use ottospace_core::stats::rank;
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{status_bar, theme};
 
@@ -1559,12 +1560,6 @@ pub(crate) struct Spun {
     pub(crate) wait_p95: f32,
     pub(crate) wait_max: f32,
     pub(crate) boxes: usize,
-}
-
-/// The nearest-rank percentile `p` (0 to 100) of `sorted`; none: 0.
-fn rank(sorted: &[f32], p: usize) -> f32 {
-    let n = sorted.len();
-    if n == 0 { 0. } else { sorted[(n * p).div_ceil(100).clamp(1, n) - 1] }
 }
 
 impl Workspace {

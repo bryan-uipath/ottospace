@@ -516,10 +516,11 @@ impl Terminal {
         self.offered.take();
         self.touched.set(true);
         self.scroll(Scroll::Bottom);
-        let _ = self.input.send(Msg::Input(bytes.into()));
+        // Before the send: the pty's thread may write and read the echo back before this one runs on.
         self.shared.stamp(|s| {
             s.write.get_or_insert_with(Instant::now);
         });
+        let _ = self.input.send(Msg::Input(bytes.into()));
     }
 
     /// Moves the view through the scrollback.
