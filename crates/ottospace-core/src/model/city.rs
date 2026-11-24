@@ -260,6 +260,9 @@ impl Model {
         // A task whose agent runs in a terminal (Codex, or `conversation_view: terminal`) has no
         // live chat: its session at work (its file read, as a terminal's is) stands for it. A live
         // chat decides for its own task (idle or asking: no badge, though its file was just written).
+        // The sessions drawn here (by a task, or as one no task has): a pane's agent that is one of
+        // them shows by it, not twice.
+        let mut drawn: Vec<&crate::sessions::Found> = Vec::new();
         let in_terminal = (self.at_work.iter()).filter_map(|s| {
             let task = self.tasks.adopter(&s.runner, &s.id)?;
             let works = own.map_or(self.task_worktree(task.id) == Some(dir), |own| own == task.id);
@@ -272,29 +275,38 @@ impl Model {
                 busy: s.station.is_some(),
                 subagents: 0,
             };
-            (works && !chatted).then_some((task.id, agent))
+            (works && !chatted).then_some((task.id, agent, s))
         });
-        let in_terminal: Vec<(TaskId, Agent)> = in_terminal.collect();
+        let in_terminal: Vec<(TaskId, Agent)> = (in_terminal.collect::<Vec<_>>().into_iter())
+            .map(|(task, agent, s)| {
+                drawn.push(s);
+                (task, agent)
+            })
+            .collect();
         tasks.extend(in_terminal);
         tasks.sort_by_key(|(task, _)| *task);
         // A session no task has, at work in this checkout (as its Repos dot says): not in a task's space.
-        let sessions = (self.at_work.iter())
+        let free: Vec<&crate::sessions::Found> = (self.at_work.iter())
             .filter(|s| own.is_none() && s.repo == dir && !self.tasks.adopted(&s.runner, &s.id))
-            .map(|s| Agent {
-                who: Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() },
-                colour: None,
-                at: file_of(s),
-                near: Vec::new(),
-                busy: s.station.is_some(),
-                subagents: 0,
-            });
+            .collect();
+        drawn.extend(free.iter().copied());
+        let sessions = free.into_iter().map(|s| Agent {
+            who: Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() },
+            colour: None,
+            at: file_of(s),
+            near: Vec::new(),
+            busy: s.station.is_some(),
+            subagents: 0,
+        });
         // An agent CLI in one of our panes, working in this checkout, no session of it on show
         // here: by its process alone (no setting needed), hovering. A task's space: its own panes.
-        let shown = |pane: PaneId| {
-            let at = self.in_panes.iter().find(|at| at.pane == pane);
-            at.is_some_and(|at| self.tasks.adopted(&at.runner, &at.id) || self.at_work.iter().any(|s| s.id == at.id))
+        // Drawn: the session its pane runs (`in_panes`), or one of its runner in its folder.
+        let shown = |p: &crate::sessions::PaneAgent| {
+            let at = self.in_panes.iter().find(|at| at.pane == p.pane);
+            (drawn.iter()).any(|s| at.is_some_and(|at| at.id == s.id) || (s.runner == p.runner && s.cwd == p.cwd))
         };
-        let inside = |cwd: &str| cwd.strip_prefix(dir).is_some_and(|rest| rest.is_empty() || rest.starts_with('/'));
+        // In this checkout, not one listed below it (a worktree inside it).
+        let inside = |cwd: &str| self.checkout_at(cwd) == Some(dir);
         let mine = |pane: PaneId| match own {
             None => true,
             Some(task) => self
@@ -303,7 +315,7 @@ impl Model {
                 .is_some_and(|tab| tab.space == Owner::Task { id: task }),
         };
         let in_panes = (self.pane_agents.iter())
-            .filter(|p| inside(&p.cwd) && mine(p.pane) && !shown(p.pane) && self.pane(p.pane).is_some())
+            .filter(|p| inside(&p.cwd) && mine(p.pane) && !shown(p) && self.pane(p.pane).is_some())
             .map(|p| Agent {
                 who: Who::Pane { pane: p.pane, runner: &p.runner },
                 colour: None,
@@ -749,6 +761,26 @@ mod tests {
         assert_eq!(who(&m), Some(vec![want]));
         m.update(Action::PaneAgents { found: vec![found("/code/application")] }.sent_by(Origin::System));
         assert_eq!(who(&m), Some(vec![]), "another checkout's");
+        // Its session read too (`sessions` on): shown by the session, not twice.
+        let session = crate::sessions::Found {
+            runner: "claude".into(),
+            id: "s1".into(),
+            cwd: "/code/app/src".into(),
+            repo: "/code/app".into(),
+            started: Some(1),
+            last_activity: Some(2),
+            active: true,
+            station: None,
+            label: None,
+            title: None,
+            model: None,
+            held: true,
+        };
+        m.update(Action::PaneAgents { found: vec![found("/code/app/src")] }.sent_by(Origin::System));
+        m.update(Action::SessionsAtWork { found: vec![session] });
+        assert_eq!(who(&m).map(|w| w.len()), Some(1));
+        assert!(who(&m).is_some_and(|w| w[0].starts_with("Session")), "{:?}", who(&m));
+        m.update(Action::SessionsAtWork { found: vec![] });
         m.update(Action::PaneAgents { found: vec![found("/code/app")] }.sent_by(Origin::System));
         m.update(Action::Close { pane: Some(pane) });
         assert_eq!(who(&m).map(|w| w.len()), Some(0), "its pane closed");
