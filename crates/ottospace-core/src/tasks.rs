@@ -368,6 +368,10 @@ pub struct Task {
     /// The lines after its title's in the box, as typed: its agent is asked them after the title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Messages the user queued in its conversation while its agent worked, oldest first: kept
+    /// over a restart. Only their count is in the state (`Tasks`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub queued: Vec<String>,
     /// When it was filed (milliseconds since 1970). `None`: filed before this was kept.
     #[serde(default)]
     pub created: Option<u64>,
@@ -569,9 +573,24 @@ enum Undo {
     Dismiss { id: TaskId },
 }
 
+/// The list as the state shows it: a task's queued messages by their count, never their words.
+fn counted<S: serde::Serializer>(list: &[Task], serializer: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::{Error, SerializeSeq};
+    let mut seq = serializer.serialize_seq(Some(list.len()))?;
+    for task in list {
+        let mut value = serde_json::to_value(task).map_err(S::Error::custom)?;
+        if let Some(fields) = value.as_object_mut().filter(|_| !task.queued.is_empty()) {
+            fields.insert("queued".into(), task.queued.len().into());
+        }
+        seq.serialize_element(&value)?;
+    }
+    seq.end()
+}
+
 /// The task list, and the one step that `undo` takes back.
 #[derive(Debug, Default, Serialize)]
 pub struct Tasks {
+    #[serde(serialize_with = "counted")]
     pub list: Vec<Task>,
     /// The last snooze, hold or dismiss, until it is taken back or the task's state changes.
     #[serde(skip)]
@@ -658,6 +677,7 @@ impl Tasks {
             skills,
             line: None,
             body: None,
+            queued: Vec::new(),
             created: None,
             session: None,
             refs: Vec::new(),
@@ -672,6 +692,13 @@ impl Tasks {
             extra: Default::default(),
         });
         self.next_id
+    }
+
+    /// The messages queued in its conversation, kept with it.
+    pub fn set_queued(&mut self, id: TaskId, queued: Vec<String>) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.queued = queued;
+        }
     }
 
     /// What its agent is asked after the title: the box's lines after the title's.
@@ -1116,6 +1143,7 @@ mod tests {
             skills: Vec::new(),
             line: None,
             body: None,
+            queued: Vec::new(),
             created: None,
             session: None,
             refs: Vec::new(),

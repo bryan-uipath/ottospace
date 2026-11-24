@@ -1845,8 +1845,24 @@ pub enum Action {
         at: u64,
     },
     /// ↵ in the shown conversation's composer: its draft to the agent, if no turn runs and no
-    /// card waits. Only the user's.
+    /// card waits; while one runs (or a card waits), the draft is queued, sent on its own once the
+    /// conversation is idle. Only the user's.
     TalkSend,
+    /// ⌘↵ in the shown conversation's composer while a turn runs: its draft now. A runner that
+    /// takes a message mid-turn (`Structured::mid_turn`) gets it in the turn; another's turn is
+    /// stopped and the message goes first. Only the user's.
+    TalkSendNow,
+    /// The shown conversation's queued message `index`, by the user: removed; back in the composer
+    /// to edit (`QueueEdit`); or sent now, as `TalkSendNow` sends a draft.
+    QueueRemove {
+        index: usize,
+    },
+    QueueEdit {
+        index: usize,
+    },
+    QueueSendNow {
+        index: usize,
+    },
     /// Allow or Deny the shown conversation's first card. Allow only once a cut card was opened
     /// in full (`TalkExpand`). Deny carries the draft when the user wrote one for it
     /// (`TalkDenyNote`). `ticket`: the card the user saw; another card first (the CLI withdrew
@@ -2987,6 +3003,10 @@ impl Action {
             | Action::CopyPath { .. }
             | Action::AgentEvents { .. }
             | Action::TalkSend
+            | Action::TalkSendNow
+            | Action::QueueRemove { .. }
+            | Action::QueueEdit { .. }
+            | Action::QueueSendNow { .. }
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
             | Action::TalkAsk { .. }
@@ -3440,6 +3460,10 @@ impl Action {
             | Action::SetAgents { .. }
             | Action::AgentEvents { .. }
             | Action::TalkSend
+            | Action::TalkSendNow
+            | Action::QueueRemove { .. }
+            | Action::QueueEdit { .. }
+            | Action::QueueSendNow { .. }
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
             | Action::TalkAsk { .. }
@@ -5352,6 +5376,10 @@ impl Model {
             // What reaches a native agent, or stops its turn, is the user's: a message is as
             // strong as typing into it, an answer grants a tool call.
             Action::TalkSend
+            | Action::TalkSendNow
+            | Action::QueueRemove { .. }
+            | Action::QueueEdit { .. }
+            | Action::QueueSendNow { .. }
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
             | Action::TalkAsk { .. }
@@ -7831,6 +7859,10 @@ impl Model {
             }
             action @ (Action::AgentEvents { .. }
             | Action::TalkSend
+            | Action::TalkSendNow
+            | Action::QueueRemove { .. }
+            | Action::QueueEdit { .. }
+            | Action::QueueSendNow { .. }
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
             | Action::TalkAsk { .. }
@@ -12066,6 +12098,10 @@ mod tests {
         Action::CopyPath { .. },
         Action::AgentEvents { .. },
         Action::TalkSend,
+        Action::TalkSendNow,
+        Action::QueueRemove { .. },
+        Action::QueueEdit { .. },
+        Action::QueueSendNow { .. },
         Action::TalkAnswer { .. },
         Action::TalkExpand { .. },
         Action::DecisionsOpen,
@@ -12506,6 +12542,10 @@ mod tests {
             Action::CopyPath { path: "/code/app".into() },
             Action::AgentEvents { task: Subject::Task(1), events: Vec::new(), at: 0 },
             Action::TalkSend,
+            Action::TalkSendNow,
+            Action::QueueRemove { index: 0 },
+            Action::QueueEdit { index: 0 },
+            Action::QueueSendNow { index: 0 },
             Action::TalkAnswer { allow: false, ticket: 1 },
             Action::TalkExpand { ticket: 1 },
             Action::DecisionsOpen,
@@ -12622,6 +12662,10 @@ mod tests {
         matches!(
             action,
             Action::TalkSend
+                | Action::TalkSendNow
+                | Action::QueueRemove { .. }
+                | Action::QueueEdit { .. }
+                | Action::QueueSendNow { .. }
                 | Action::TalkAnswer { .. }
                 | Action::TalkExpand { .. }
                 | Action::TalkAsk { .. }

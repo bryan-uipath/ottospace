@@ -169,11 +169,18 @@ impl Codex {
         json!({"id": id, "method": method, "params": params}).to_string()
     }
 
+    /// A message: a new turn; while one runs, into it (`turn/steer`, for the turn it names).
     fn turn_start(&mut self, thread: &str, text: String, images: Vec<crate::Image>) -> String {
         let text = (!text.is_empty()).then(|| json!({"type": "text", "text": text, "text_elements": []}));
         let images = images.into_iter().map(|image| json!({"type": "localImage", "path": image.path}));
         let input: Vec<Value> = text.into_iter().chain(images).collect();
-        self.request("turn/start", json!({"threadId": thread, "input": input}), Asked::Turn)
+        match self.turn.clone() {
+            Some(turn) => {
+                let params = json!({"threadId": thread, "input": input, "expectedTurnId": turn});
+                self.request("turn/steer", params, Asked::Other)
+            }
+            None => self.request("turn/start", json!({"threadId": thread, "input": input}), Asked::Turn),
+        }
     }
 
     fn response(&mut self, id: i64, message: &Value, out: &mut Output) {
@@ -794,6 +801,20 @@ mod tests {
         idle.thread = Some(UUID.into());
         assert_eq!(idle.write(Input::Interrupt), Ok(vec![]));
         assert!(!idle.interrupt_pending);
+    }
+
+    /// A message while a turn runs goes into that turn (`turn/steer`), not a second one.
+    #[test]
+    fn a_message_mid_turn_steers_it() {
+        let mut codex = codex();
+        codex.thread = Some(UUID.into());
+        let start = codex.write(Input::Send { text: "go".into(), images: vec![] }).unwrap();
+        let id = sent(&start[0])["id"].clone();
+        codex.read(&json!({"id": id, "result": {"turn": {"id": "t9", "status": "inProgress"}}}).to_string());
+        let more = codex.write(Input::Send { text: "and the docs".into(), images: vec![] }).unwrap();
+        let steer = sent(&more[0]);
+        assert_eq!((steer["method"].as_str(), &steer["params"]["expectedTurnId"]), (Some("turn/steer"), &json!("t9")));
+        assert_eq!(steer["params"]["input"][0]["text"], "and the docs");
     }
 
     /// A thread that cannot start ends the messages waiting for it as a failed turn.

@@ -425,7 +425,21 @@ each held by code named here:
   blocks with Copy; Copy and Copy as Markdown per message; a working row; the card; a multi-line
   composer (`field.rs`, up to 8 lines). Keys (`chat::key`): on a card ↵ does nothing, `a` `d`
   `s` `m`; in the composer ↵ sends (or denies with the message), ⇧↵ a new line, Esc leaves, Esc
-  Esc interrupts. While a turn runs ↵ sends nothing (the draft waits).
+  Esc interrupts. While a turn runs (or a card waits) ↵ queues the draft (`Chat.queue`, kept
+  with its task as `Task.queued`, a count in the state): each goes alone, in order, once the
+  conversation is idle (`Model::send_queued`); the user's Stop holds them until their ↵. ⌘↵
+  (`TalkSendNow`) sends now: into the turn where `Structured::mid_turn` (Codex: `turn/steer`
+  with `expectedTurnId`), else the turn is stopped and it goes first.
+- **Mid-turn messages, Claude Code (unconfirmed, so `mid_turn: false`).** The 2.1.331 binary
+  names a headless message queue: a stream-json user line may carry `priority`
+  (`now` / `next` / `later`), and queued ones reach the model as `queued_command` attachments
+  at a tool boundary. Never probed here (tests run no real CLI). To confirm by hand: run
+  `claude -p --input-format stream-json --output-format stream-json --verbose` in a scratch
+  folder, send `{"type":"user","message":{"role":"user","content":"count slowly to 30 with a
+  bash sleep 1 between numbers"}}`, then while it works send
+  `{"type":"user","priority":"next","message":{"role":"user","content":"stop at 5 and say MID"}}`;
+  if the same turn's reply shows MID before its `result`, the message reached it mid-turn: set
+  `mid_turn: true` and send that `priority` from the wire.
 - **Switch.** Chat → Terminal is refused while a turn runs or a card waits; Terminal → Chat at
   any time (the TUI is hung up on, as Stop). The core marks the switch and stops the agent; the
   shell kills the native group or hangs up on the TUI (SIGKILL after 3 s) and says

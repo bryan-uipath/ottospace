@@ -132,6 +132,9 @@ pub struct Structured {
     /// A side question ("btw") to the running agent: answered from its context, with no tools,
     /// never written to the session and never in the main conversation.
     pub side_question: bool,
+    /// A message sent while a turn runs reaches the agent in that turn. False: "send now" stops
+    /// the turn first (`Action::TalkSendNow`).
+    pub mid_turn: bool,
 }
 
 /// How far a structured mode is known to work.
@@ -225,6 +228,9 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         // Probe 2026-11-18 (2.1.327): `control_request` `side_question`, mid-turn and while a
         // `can_use_tool` waits; no tools, nothing written to the session. Undocumented.
         side_question: true,
+        // Unconfirmed: 2.1.331's binary names a message queue (`priority` now / next / later,
+        // `queued_command`), never probed here. Off until a probe pins it (docs/ai/agent-runners.md).
+        mid_turn: false,
     },
     // `sessions/<pid>.json` names the process; each record carries the `cwd` the agent is in.
     disk: Disk { held: true, cwd: true, cwd_moves: true, waits: true },
@@ -263,6 +269,8 @@ const CODEX: RunnerSpec = RunnerSpec {
         asks: None,
         // None yet: `thread/fork`, read-only and ephemeral, is the possible route.
         side_question: false,
+        // `turn/steer` (`threadId`, `input`, `expectedTurnId`) in the app-server's protocol.
+        mid_turn: true,
     },
     // No process is recorded; `session_meta` carries `cwd`. A `turn_context`'s `cwd` is the
     // client's choice for the turn, never the agent's: ottospace sets none, so it never moves.

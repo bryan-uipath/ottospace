@@ -2306,9 +2306,19 @@ impl Workspace {
             _ if ending => ("Stopping…", ""),
             _ if card && chat.deny => ("Why deny it?", "↵ denies with this message · esc back to the request"),
             _ if card => ("", ""),
-            _ if chat.transcript.turn.is_some() => {
-                ("Write the next message", if chat.armed { "esc again stops" } else { "esc esc stops" })
-            }
+            // ↵ queues; ⌘↵ sends now: into the turn, or after stopping it (the runner's capability).
+            _ if chat.transcript.turn.is_some() && self.model.send_now_stops(subject) => (
+                "Write the next message",
+                if chat.armed {
+                    "esc again stops"
+                } else {
+                    "↵ queues · ⌘↵ stops the turn and sends · esc esc stops"
+                },
+            ),
+            _ if chat.transcript.turn.is_some() => (
+                "Write the next message",
+                if chat.armed { "esc again stops" } else { "↵ queues · ⌘↵ sends now · esc esc stops" },
+            ),
             _ if chat.queued.is_some() => ("Starting the agent…", "your message goes once it runs"),
             // Another terminal writes it: nothing is typed here.
             _ if chat.transcript.watched && !chat.transcript.live => ("", "Read-only: another terminal runs it"),
@@ -2359,6 +2369,7 @@ impl Workspace {
                     }),
                 )
             })
+            .children(self.queue_rows(chat, cx))
             .child(
                 div()
                     .flex()
@@ -2368,6 +2379,57 @@ impl Workspace {
                     .children(button.map(|button| button.flex_none())),
             )
             .children(foot)
+    }
+
+    /// The messages queued while the agent works, above the composer: each on one line, with Send
+    /// now, Edit (back to the composer) and ×; and a line that says when they go.
+    fn queue_rows(&self, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
+        if chat.queue.is_empty() {
+            return None;
+        }
+        let n = chat.queue.len();
+        let when = match () {
+            _ if !chat.transcript.cards.is_empty() => "after you answer",
+            _ if chat.held => "you stopped the turn: ↵ sends the next",
+            _ if !chat.transcript.live => "once the agent runs again",
+            _ => "each on its own, when the agent is done",
+        };
+        let head = format!("{n} queued · {when}");
+        let stops = self.model.send_now_stops(&chat.subject);
+        let now_tip = if stops { "Stop this turn, then send this" } else { "Send this into the turn now" };
+        let button = |kind: &'static str, at: usize, label: &'static str, tip: &'static str, action: Action| {
+            crate::ui::button(
+                (kind, at),
+                crate::ui::Button::Ghost(crate::ui::Face::Label(label.into())),
+                crate::ui::State::Rest,
+            )
+            .child(self.controls.mark(format!("talk:{kind}:{at}")))
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(
+                cx.listener(move |this, _, window, cx| drop(this.dispatch(action.clone(), this.input, window, cx))),
+            )
+        };
+        let rows = chat.queue.iter().enumerate().map(|(at, text)| {
+            // One line of it: the first, cut.
+            let line = text.lines().next().unwrap_or_default().to_string();
+            div()
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().flex_1().min_w_0().truncate().text_xs().text_color(rgb(theme::MUTED)).child(line))
+                .child(button("queue-now", at, "Send now", now_tip, Action::QueueSendNow { index: at }))
+                .child(button(
+                    "queue-edit",
+                    at,
+                    "Edit",
+                    "Back in the composer, unsent",
+                    Action::QueueEdit { index: at },
+                ))
+                .child(button("queue-remove", at, "×", "Remove it, unsent", Action::QueueRemove { index: at }))
+        });
+        let head = div().text_xs().text_color(rgb(theme::MUTED)).child(head);
+        Some(div().flex().flex_col().gap_0p5().child(head).children(rows))
     }
 
     /// The header's Chat | Terminal switch, for a Claude Code
@@ -2434,6 +2496,9 @@ impl Workspace {
                     "transcript": transcript,
                     "replies": blocks,
                     "draft_chars": chat.draft.text().chars().count(),
+                    // Messages queued while the agent works: how many, never their words; and whether the user's stop holds them.
+                    "queued": chat.queue.len(),
+                    "held": chat.held,
                     // The user's editor has its draft (⌃G).
                     "editing": self.model.edits(&subject),
                     "deny": chat.deny,

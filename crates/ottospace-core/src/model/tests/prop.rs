@@ -783,6 +783,7 @@ impl Gen<'_> {
             skills: self.names(SKILLS, 2),
             line: None,
             body: None,
+            queued: Vec::new(),
             created: self.rng.coin().then(|| self.time()),
             session: self.rng.one_in(4).then(|| self.link()),
             refs: Vec::new(),
@@ -1853,6 +1854,10 @@ const MAKERS: &[Make] = &[
         Action::AgentEvents { task, events, at: g.rng.pick(&[0, 1, 5_000]) }
     },
     |_| Action::TalkSend,
+    |_| Action::TalkSendNow,
+    |g| Action::QueueRemove { index: g.rng.below(3) },
+    |g| Action::QueueEdit { index: g.rng.below(3) },
+    |g| Action::QueueSendNow { index: g.rng.below(3) },
     |g| Action::TalkAnswer { allow: g.rng.coin(), ticket: g.card() },
     |g| Action::TalkExpand { ticket: g.card() },
     |g| Action::TalkAsk { ticket: g.card(), act: g.ask_act() },
@@ -3330,6 +3335,16 @@ fn check(m: &Model) -> Result<(), String> {
     // A picker's list and the tag's dropdown never both; a list only of a picker the box shows.
     ensure!(m.picker_menu().is_none() || m.dropdown().is_none(), "a picker's list and the dropdown at once");
     ensure!(m.picker_menu().is_none_or(|menu| m.compose_pickers().contains(&menu.mark)), "a list of no picker");
+    // A queued message is never empty, and a task keeps its conversation's queue (over a restart).
+    for chat in &m.chats {
+        ensure!(chat.queue.iter().all(|text| !text.trim().is_empty()), "an empty message queued in {:?}", chat.subject);
+        let task = chat.subject.task().and_then(|id| m.tasks.get(id));
+        ensure!(
+            task.is_none_or(|task| task.queued == chat.queue),
+            "{:?}'s queue is not kept with its task",
+            chat.subject
+        );
+    }
     if let Some((of, field)) = m.open_field() {
         let most = match of {
             "compose" if m.bar_draft().is_some() => MAX_TITLE,
@@ -4862,6 +4877,8 @@ impl Run {
             Action::AgentEvents { .. }
                 | Action::AppUsed { .. }
                 | Action::TalkSend
+                | Action::TalkSendNow
+                | Action::QueueSendNow { .. }
                 | Action::AgentStarted { .. }
                 | Action::AgentExited { .. }
         );

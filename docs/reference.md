@@ -448,7 +448,11 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    text. Nothing is fetched: an image on the web is a link, a local image in the repository a
    thumbnail. The composer at the bottom: ↵ sends, ⇧↵ or ⌥↵ starts a new line (long lines wrap; it grows
    to 8 rows, then scrolls, and ↑ ↓ move a row), Esc leaves; while a
-   turn runs ↵ sends nothing (write the next message meanwhile), and Stop sits at the composer's
+   turn runs (or a card waits) ↵ queues the message: queued ones show above the composer (Send
+   now, Edit, ×) and each goes on its own, in order, once the agent is done; a question it asks
+   comes first, and after your Stop they wait for your ↵. ⌘↵ sends now: into the turn where the
+   runner takes that, else (Claude Code, for now) the turn stops and it goes first. They are kept
+   with the task over a restart. Stop sits at the composer's
    right: it, or Esc Esc, ends the turn and the session goes on. No turn, no Stop. Once the agent
    ended (or was stopped: nothing starts on its session until its process is gone), Resume
    session (or Start agent) takes that place. A stop and the resume after it are one thin

@@ -273,6 +273,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
             },
             replies: [{ blocks: { para: 2, code: 1 }, links: { web: 1, file: 0 } }],
             draft_chars: 0,
+            queued: 0,
+            held: false,
             editing: false,
             deny: false,
             armed: false,
