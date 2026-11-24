@@ -499,6 +499,8 @@ function sessionCard(value: unknown, at: string): SessionCard {
     ...sessionRow(value, at),
     state: oneOf(["needs_you", "running", "ended"] as const, "a card's state")(o.state, `${at}.state`),
     take_over: bool(o.take_over, `${at}.take_over`),
+    // An older app's card has none.
+    hidden: o.hidden === undefined ? false : bool(o.hidden, `${at}.hidden`),
   };
 }
 
@@ -1243,7 +1245,8 @@ function spaceRow(value: unknown, at: string): SpaceRow {
   const o = fields(value, at);
   return {
     of: owner(o.of, `${at}.of`),
-    hidden: bool(o.hidden, `${at}.hidden`),
+    // An older app's card has none.
+    hidden: o.hidden === undefined ? false : bool(o.hidden, `${at}.hidden`),
     selected: bool(o.selected, `${at}.selected`),
     tabs: list(num)(o.tabs, `${at}.tabs`),
     tasks: list(num)(o.tasks, `${at}.tasks`),

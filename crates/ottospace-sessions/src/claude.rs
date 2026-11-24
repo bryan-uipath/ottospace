@@ -181,7 +181,8 @@ impl SessionReader for Claude {
         let mut mine: Vec<_> = records.by_ref().filter(|(_, holder, _)| holder.pid == pid).collect();
         mine.sort_by_key(|(_, holder, _)| holder.recorded);
         let (id, holder, record) = mine.pop()?;
-        Some(crate::Process { waits_for: waits_for(&record), id, recorded: holder.recorded })
+        let busy = record["status"] == "busy";
+        Some(crate::Process { waits_for: waits_for(&record), id, recorded: holder.recorded, busy })
     }
 
     /// The name the user gave the session (`custom-title`), else the one Claude Code's own model

@@ -151,6 +151,10 @@ pub struct InPane {
     /// The folder its program runs in, as the shell read it: a card's name when no listing has it.
     #[serde(default)]
     pub cwd: Option<String>,
+    /// Its runner's record says it is at work (Claude Code's `status: busy`): not its turn,
+    /// however long its own file has been quiet (a sub-agent writes its own).
+    #[serde(default)]
+    pub busy: bool,
 }
 
 impl InPane {
@@ -158,6 +162,7 @@ impl InPane {
     /// quiet `quiet_ms` (the rule adopted tasks follow). `quiet_ms` 0: only a runner's reason.
     pub fn needs(&self, now: u64, quiet_ms: u64) -> Option<WaitsFor> {
         let quiet = quiet_ms > 0 && self.last_activity.is_some_and(|at| now.saturating_sub(at) >= quiet_ms);
+        let quiet = quiet && !self.busy;
         self.waits_for.filter(|w| *w != WaitsFor::Turn).or(quiet.then_some(WaitsFor::Turn))
     }
 }
@@ -204,20 +209,28 @@ pub fn live(runner: RunnerId, in_pane: bool, held: bool, active: bool) -> bool {
     in_pane || if runner.spec().disk.held { held } else { active }
 }
 
-/// A session the user hid, and when its file had last changed then.
+/// A hide holds at least this long, whatever the session does.
+pub const MIN_HIDE_MS: u64 = 300_000;
+
+/// A session the user hid: "I do not want this card". When (`since`), and whether a read has
+/// seen it not need the user since (`worked`: it went on working, or was answered).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hidden {
     pub runner: String,
     pub id: String,
     #[serde(default)]
-    pub at: Option<u64>,
+    pub since: Option<u64>,
+    #[serde(default)]
+    pub worked: bool,
 }
 
 impl Hidden {
-    /// Still hidden, with `terminal_tasks` on: until it needs the user (`needs`) and its file
-    /// changed after the hide (`last`). The same wait, read again after a restart, stays hidden.
-    pub fn holds(&self, needs: bool, last: Option<u64>) -> bool {
-        !(needs && last.is_some_and(|last| self.at.is_none_or(|at| last > at)))
+    /// Still hidden at `now`, with `terminal_tasks` on: until it asks again in a new turn (it
+    /// needs the user, after a read saw it not need them since the hide), and never within
+    /// `MIN_HIDE_MS`. Activity alone, or the wait it had when hidden, never ends a hide.
+    pub fn holds(&self, needs: bool, now: u64) -> bool {
+        let young = self.since.is_some_and(|since| now.saturating_sub(since) < MIN_HIDE_MS);
+        young || !(needs && self.worked)
     }
 }
 
@@ -265,6 +278,9 @@ pub struct Card {
     /// The user may take it over here: no program has it, it is listed, and its runner goes on
     /// with an idle session. Only an ended card.
     pub take_over: bool,
+    /// Hidden by the user, drawn only while they look at the hidden ones (`HiddenPeek`): dim,
+    /// counted nowhere, with Unhide.
+    pub hidden: bool,
 }
 
 /// A session as the shell read it.
@@ -635,6 +651,7 @@ mod tests {
             last_activity: last,
             waits_for,
             cwd: None,
+            busy: false,
         };
         let now = 10 * QUIET_MS;
         // No reason from its runner: its turn, once quiet, for any runner alike.
@@ -657,6 +674,7 @@ mod tests {
             last_activity: None,
             waits_for: None,
             cwd: None,
+            busy: false,
         };
         let kept = in_panes_kept(vec![
             at(1, "claude", "a"),

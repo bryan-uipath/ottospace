@@ -447,6 +447,16 @@ impl Workspace {
                 }
                 None
             }
+            ("sessions-hidden", _) => {
+                self.click_hidden_line(window, cx);
+                None
+            }
+            ("session-unhide", _) => {
+                if let Some((runner, id)) = name.split_once(':') {
+                    self.click_session_control(kind, runner.into(), id.into(), window, cx);
+                }
+                None
+            }
             ("task-undo", _) => {
                 self.click_undo(window, cx);
                 None

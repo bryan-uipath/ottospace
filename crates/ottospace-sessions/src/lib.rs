@@ -258,6 +258,8 @@ pub struct Process {
     /// When the record was last written (Unix milliseconds): a process started later only has
     /// the pid of the one that wrote it (`ottospace_core::sessions::holds`).
     pub recorded: Option<u64>,
+    /// The record says it is at work (Claude Code's `status: busy`).
+    pub busy: bool,
 }
 
 /// The reader of `runner`'s sessions under `dirs`. `None`: the runner has no folder there.

@@ -1266,6 +1266,11 @@ pub enum Action {
         runner: String,
         id: String,
     },
+    /// Show (`on`) or fold away again the hidden terminal sessions among the cards: a look, no
+    /// hide changes (`terminal_tasks`).
+    HiddenPeek {
+        on: bool,
+    },
     /// The sessions hidden in an earlier run, as the shell read them from its file (`terminal_tasks`).
     SetHiddenSessions {
         hidden: Vec<sessions::Hidden>,
@@ -2754,6 +2759,7 @@ impl Action {
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
             | Action::SessionUnhide { .. }
+            | Action::HiddenPeek { .. }
             | Action::SetHiddenSessions { .. }
             | Action::SessionClick { .. }
             | Action::TerminalAgentGo
@@ -3026,7 +3032,7 @@ impl Action {
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo => Some(Feature::DecisionSources),
-            Action::SessionUnhide { .. } => Some(Feature::TerminalTasks),
+            Action::SessionUnhide { .. } | Action::HiddenPeek { .. } => Some(Feature::TerminalTasks),
             Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. } => Some(Feature::ZoomOut),
             Action::ListenStart { .. }
             | Action::ListenToggle { .. }
@@ -4192,6 +4198,9 @@ pub struct Model {
     /// read that no longer has one compares with.
     #[serde(skip)]
     cards_live: Vec<sessions::Card>,
+    /// The user looks at the hidden terminal sessions ("N hidden · Show"): not kept.
+    #[serde(skip)]
+    pub hidden_peek: bool,
     /// Cards a read showed ended, each as last seen and when: shown for `CARD_GRACE_MS`.
     #[serde(skip)]
     cards_gone: Vec<(sessions::Card, u64)>,
@@ -4508,6 +4517,7 @@ impl Default for Model {
             session_quiet_ms: sessions::QUIET_MS,
             hidden: Vec::new(),
             cards_live: Vec::new(),
+            hidden_peek: false,
             cards_gone: Vec::new(),
             sessions_range: sessions::Range::default(),
             session_day: 0,
@@ -6087,6 +6097,10 @@ impl Model {
             Action::Tick { now } => {
                 let kept = self.list_row();
                 self.now = now;
+                // A hide past its least time that a new ask ends: ended now, kept no more.
+                if !self.hidden.is_empty() {
+                    self.note_cards(effects);
+                }
                 self.left.1.get_or_insert(now);
                 self.tasks.tick(now);
                 self.workbooks.tick(now);
@@ -6670,21 +6684,27 @@ impl Model {
             Action::SessionHide { runner, id } => {
                 let cards = self.features.on(Feature::TerminalTasks);
                 let card = cards && self.session_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (&runner, &id));
-                // The newest file time read: the one `is_hidden` compares with.
-                let at = (self.session(&runner, &id).is_some() || card).then(|| self.needs_now(&runner, &id).1);
-                if let Some(at) = at {
+                if self.session(&runner, &id).is_some() || card {
+                    // A hide while looking at the hidden ones folds them away: the card leaves at once.
+                    self.hidden_peek = false;
                     self.hidden.retain(|h| (&h.runner, &h.id) != (&runner, &id));
                     self.cards_gone.retain(|(card, _)| (&card.row.runner, &card.row.id) != (&runner, &id));
-                    self.hidden.push(sessions::Hidden { runner, id, at });
+                    // Until it asks again in a new turn (`Hidden::holds`): not for the wait it has now.
+                    self.hidden.push(sessions::Hidden { runner, id, since: Some(self.now), worked: false });
                     self.hidden = sessions::hidden_kept(std::mem::take(&mut self.hidden));
                     if cards {
                         effects.push(Effect::SaveHiddenSessions { hidden: self.hidden.clone() });
                     }
+                } else if self.by_user {
+                    // Never a silent no: the row the user hid is gone from what was last read.
+                    effects.push(Effect::Notice { text: "Not hidden: this session is no longer listed".into() });
                 }
             }
+            Action::HiddenPeek { on } => self.hidden_peek = on && !self.hidden_live().is_empty(),
             Action::SessionUnhide { runner, id } => {
                 let before = self.hidden.len();
                 self.hidden.retain(|h| (&h.runner, &h.id) != (&runner, &id));
+                self.hidden_peek &= !self.hidden_live().is_empty();
                 if self.hidden.len() != before {
                     effects.push(Effect::SaveHiddenSessions { hidden: self.hidden.clone() });
                 }
@@ -8106,12 +8126,12 @@ impl Model {
             }
         };
         if live {
-            return Some("its session is live in another terminal: go on with it there".into());
+            return Some("This session is running in another terminal. Continue it there.".into());
         }
         let why = self.session_of(subject).and_then(|(runner, id)| self.resume_refusal(&runner, &id));
         Some(why.unwrap_or_else(|| match subject {
-            Subject::Task(_) => "this task's session cannot be gone on with from here".into(),
-            Subject::Session { .. } => "this session cannot be gone on with from here".into(),
+            Subject::Task(_) => "Read-only here: this task's session can't be continued from ottospace".into(),
+            Subject::Session { .. } => "Read-only here: this session can't be continued from ottospace".into(),
         }))
     }
 
@@ -8270,7 +8290,7 @@ impl Model {
             Subject::Session { runner, id }
                 if self.session(runner, id).is_some()
                     || self.agent_runs(&subject)
-                    || self.session_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (runner, id))
+                    || self.drawn_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (runner, id))
                     || (!self.tasks.adopted(runner, id) && self.spaces.iter().any(|s| s.of == Owner::of(&subject))) =>
             {
                 None
@@ -9604,7 +9624,7 @@ impl Model {
             }
         }
         // The terminal sessions, after the tasks of their heading; an ended one counts nowhere.
-        for card in self.session_cards() {
+        for card in self.drawn_cards() {
             let heading = Self::card_heading(&card);
             let at = match sections.iter().position(|s| s.heading >= heading) {
                 Some(at) if sections[at].heading == heading => at,
@@ -9617,7 +9637,7 @@ impl Model {
                 }
             };
             let section = &mut sections[at];
-            section.count += usize::from(card.state != sessions::CardState::Ended);
+            section.count += usize::from(card.state != sessions::CardState::Ended && !card.hidden);
             if !section.collapsed {
                 section.cards.push(card);
             }
@@ -9814,8 +9834,8 @@ impl Model {
         Some((at, at.needs(self.now, self.session_quiet_ms)?)).filter(|(at, _)| self.in_pane_live(at))
     }
 
-    /// True if the user hid the session and it stays hidden. With `terminal_tasks`, until its file
-    /// changed after the hide and it needs the user (`Hidden::holds`).
+    /// True if the user hid the session and it stays hidden. With `terminal_tasks`, until it asks
+    /// again in a new turn, never within `MIN_HIDE_MS` (`Hidden::holds`).
     fn is_hidden(&self, runner: &str, id: &str) -> bool {
         let Some(entry) = self.hidden.iter().find(|h| (h.runner.as_str(), h.id.as_str()) == (runner, id)) else {
             return false;
@@ -9823,8 +9843,7 @@ impl Model {
         if !self.features.on(Feature::TerminalTasks) {
             return true;
         }
-        let (needs, last) = self.needs_now(runner, id);
-        entry.holds(needs.is_some(), last)
+        entry.holds(self.needs_now(runner, id).0.is_some(), self.now)
     }
 
     /// Why a terminal session needs the user now, and when its file last changed. In one of our
@@ -9836,7 +9855,9 @@ impl Model {
         if let Some((_, why)) = self.waiting(runner, id) {
             return (Some(why), last);
         }
-        let held = RunnerId::named(runner).is_some_and(|r| r.spec().disk.held) && listed.is_some_and(Self::found_runs);
+        // Held, and not at work: its file quiet and its runner's record not busy (`Found::active`).
+        let held = RunnerId::named(runner).is_some_and(|r| r.spec().disk.held)
+            && listed.is_some_and(|s| Self::found_runs(s) && !s.active);
         let quiet =
             self.session_quiet_ms > 0 && last.is_some_and(|at| self.now.saturating_sub(at) >= self.session_quiet_ms);
         let on = self.features.on(Feature::TerminalTasks);
@@ -9862,7 +9883,7 @@ impl Model {
             };
             let again = cards.iter().any(|c| (&c.row.runner, &c.row.id) == (&runner, &id));
             let (needs, last) = self.needs_now(&runner, &id);
-            if again || ours(last) || self.tasks.adopted(&runner, &id) || self.is_hidden(&runner, &id) {
+            if again || ours(last) || self.tasks.adopted(&runner, &id) {
                 continue;
             }
             let listed = self.found.iter().find(|s| (&s.runner, &s.id) == (&runner, &id));
@@ -9886,7 +9907,8 @@ impl Model {
             };
             let state = if needs.is_some() { sessions::CardState::NeedsYou } else { sessions::CardState::Running };
             let started = listed.and_then(|s| s.started);
-            cards.push(sessions::Card { row, state, started, last_activity: last, take_over: false });
+            let hidden = self.is_hidden(&runner, &id);
+            cards.push(sessions::Card { row, state, started, last_activity: last, take_over: false, hidden });
         }
         cards.sort_by(|a, b| (a.started, &a.row.runner, &a.row.id).cmp(&(b.started, &b.row.runner, &b.row.id)));
         cards
@@ -9902,13 +9924,23 @@ impl Model {
         RunnerId::named(&s.runner).is_some_and(|r| sessions::live(r, false, s.held, s.active))
     }
 
+    /// The cards as drawn: `session_cards`, and while the user looks at the hidden ones
+    /// (`HiddenPeek`), each hidden one that runs, marked hidden and counted nowhere.
+    pub fn drawn_cards(&self) -> Vec<sessions::Card> {
+        let mut cards = self.session_cards();
+        if self.hidden_peek && self.features.on(Feature::TerminalTasks) {
+            cards.extend(self.live_cards().into_iter().filter(|c| c.hidden));
+        }
+        cards
+    }
+
     /// The terminal sessions listed with the tasks (`terminal_tasks`): those that run, then those a
     /// read showed ended in the last `CARD_GRACE_MS`, dim and counted nowhere.
     pub fn session_cards(&self) -> Vec<sessions::Card> {
         if !self.features.on(Feature::TerminalTasks) {
             return Vec::new();
         }
-        let mut cards = self.live_cards();
+        let mut cards: Vec<sessions::Card> = self.live_cards().into_iter().filter(|c| !c.hidden).collect();
         let live = cards.len();
         for (card, at) in &self.cards_gone {
             let (runner, id) = (&card.row.runner, &card.row.id);
@@ -9918,7 +9950,7 @@ impl Model {
                 continue;
             }
             let mut card = card.clone();
-            card.state = sessions::CardState::Ended;
+            (card.state, card.hidden) = (sessions::CardState::Ended, false);
             (card.row.active, card.row.doing, card.row.waits_for, card.row.pane) = (false, None, None, None);
             card.row.age = Some(tasks::age(*at, self.now));
             let can = RunnerId::named(runner).is_some_and(|r| r.spec().attach.take_over_when_idle == Support::Yes);
@@ -9951,16 +9983,36 @@ impl Model {
             (self.cards_live, self.cards_gone) = (Vec::new(), Vec::new());
             return;
         }
-        // A hide that no longer holds (it worked and asked again) is over: answered, it does not
-        // hide the session again.
+        // A hidden session read running and not needing the user has worked since its hide: its
+        // next ask is a new one (`Hidden::holds`).
+        let mut changed = false;
+        for at in 0..self.hidden.len() {
+            let (runner, id) = (self.hidden[at].runner.clone(), self.hidden[at].id.clone());
+            // A hide kept from before `since` was: its time starts at this read.
+            let fresh = self.hidden[at].since.is_none();
+            let since = *self.hidden[at].since.get_or_insert(self.now);
+            changed |= fresh;
+            // Work seen since the hide: its record busy, or its file written after it. Idle (a turn
+            // just ended), a dialog, or a read that misses it are no work.
+            let (needs, last) = self.needs_now(&runner, &id);
+            let busy = self.in_panes.iter().any(|p| (&p.runner, &p.id) == (&runner, &id) && p.busy)
+                || self.listed(&runner, &id).is_some_and(|s| s.held && s.active);
+            let wrote = last.is_some_and(|last| last > since);
+            if self.hidden_runs(&runner, &id) && !self.hidden[at].worked && needs.is_none() && (busy || wrote) {
+                self.hidden[at].worked = true;
+                changed = true;
+            }
+        }
+        // A hide that no longer holds (it asked again in a new turn) is over: answered, it does
+        // not hide the session again.
         let over: Vec<(String, String)> = self
             .hidden
             .iter()
             .filter(|h| !self.is_hidden(&h.runner, &h.id))
             .map(|h| (h.runner.clone(), h.id.clone()))
             .collect();
-        if !over.is_empty() {
-            self.hidden.retain(|h| !over.contains(&(h.runner.clone(), h.id.clone())));
+        self.hidden.retain(|h| !over.contains(&(h.runner.clone(), h.id.clone())));
+        if changed || !over.is_empty() {
             effects.push(Effect::SaveHiddenSessions { hidden: self.hidden.clone() });
         }
         let live = self.live_cards();
@@ -9996,13 +10048,21 @@ impl Model {
     /// The hidden sessions that run now (`terminal_tasks`): what the Tasks section's "N hidden"
     /// line brings back.
     pub fn hidden_live(&self) -> Vec<(String, String)> {
-        let runs = |h: &sessions::Hidden| {
-            let listed = self.found.iter().find(|s| (&s.runner, &s.id) == (&h.runner, &h.id));
-            listed.is_some_and(Self::found_runs) || self.pane_runs(&h.runner, &h.id)
-        };
         let on = self.features.on(Feature::TerminalTasks);
+        let runs = |h: &&sessions::Hidden| self.hidden_runs(&h.runner, &h.id);
         let hidden = self.hidden.iter().filter(|h| on && runs(h) && self.is_hidden(&h.runner, &h.id));
         hidden.map(|h| (h.runner.clone(), h.id.clone())).collect()
+    }
+
+    /// A session as last read, listed or at work (with the Repos section open only those at work are kept).
+    fn listed(&self, runner: &str, id: &str) -> Option<&Found> {
+        let same = |s: &&Found| (s.runner.as_str(), s.id.as_str()) == (runner, id);
+        self.found.iter().find(same).or_else(|| self.at_work.iter().find(same))
+    }
+
+    /// A session runs now, as last read: listed and live by its runner, or in one of our panes.
+    fn hidden_runs(&self, runner: &str, id: &str) -> bool {
+        self.listed(runner, id).is_some_and(Self::found_runs) || self.pane_runs(runner, id)
     }
 
     /// How many things need the user: the tasks, and with `terminal_tasks` the terminal sessions.
@@ -10271,7 +10331,7 @@ impl Model {
                     }
                 }
                 // Each terminal session after the tasks of its heading, as `task_sections` draws it.
-                for card in self.session_cards() {
+                for card in self.drawn_cards() {
                     let heading = Self::card_heading(&card);
                     let head = rows.iter().position(|row| *row == ListRow::Heading(heading));
                     let head = head.unwrap_or_else(|| {
@@ -11502,6 +11562,7 @@ mod tests {
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
         Action::SessionUnhide { .. },
+        Action::HiddenPeek { .. },
         Action::SetHiddenSessions { .. },
         Action::SessionClick { .. },
         Action::TerminalAgentGo,
@@ -11897,6 +11958,7 @@ mod tests {
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
             Action::SessionUnhide { runner: text(), id: text() },
+            Action::HiddenPeek { on: true },
             Action::SetHiddenSessions { hidden: Vec::new() },
             Action::SessionClick { runner: text(), id: text() },
             Action::TerminalAgentGo,
@@ -17101,7 +17163,7 @@ mod tests {
             assert_eq!(open(&mut m, runner, id), [], "{id}");
             assert_eq!(m.talk.as_ref().map(|talk| (&talk.task, talk.keys)), Some((&of_session(runner, id), false)));
             let note = m.talk_note().unwrap_or_default();
-            assert_eq!(note, "its session is live in another terminal: go on with it there");
+            assert_eq!(note, "This session is running in another terminal. Continue it there.");
         }
         // Out of the listed checkout, or an id no command is built from: nothing started, and the
         // drawer says why.
@@ -17147,7 +17209,7 @@ mod tests {
         // Held by a live process as it is read: live there.
         let mut m = closed();
         assert_eq!(m.update(read(Some(Found { held: true, ..below })).sent_by(Origin::System)), []);
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
         // Never opened: a session not listed still opens nothing.
         let mut m = conversations();
         m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
@@ -17212,7 +17274,7 @@ mod tests {
         // Written to since it ended, by another terminal: live there.
         listed(&mut m, now + 30_000, true);
         assert_eq!(m.update(open.clone()), []);
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
 
         // A task's the same: its agent stopped, the stale record of its process is ours.
         let stopped = || {
@@ -17243,7 +17305,7 @@ mod tests {
         let held = Found { held: true, repo: "/code/app".into(), ..session("claude", IDLE, "/code/app", false, now) };
         let read = Action::SessionRead { runner: "claude".into(), id: IDLE.into(), found: Some(held) };
         assert_eq!(system(&mut m, read), []);
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
     }
 
     /// An adopted session gone on with in the drawer: its task runs at once, as on a new start.
@@ -17358,7 +17420,7 @@ mod tests {
         let mut m = conversations();
         assert_eq!(adopt(&mut m, "codex", BUSY), []);
         assert_eq!(m.talk.as_ref().map(|talk| &talk.task), Some(&Subject::Task(1)));
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
     }
 
     /// A task kept on disk before conversations were gone on with in the drawer: a click on it
@@ -17396,7 +17458,7 @@ mod tests {
         // Held by a live process: not gone on with, and the drawer says why.
         let mut m = closed();
         assert_eq!(m.update(read(Some(Found { held: true, ..below.clone() })).sent_by(Origin::System)), []);
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
         assert_eq!(m.mode(), Mode::Normal);
         // No listed checkout has it: in the task's repository. Asked once: a second read starts nothing.
         let mut m = closed();
@@ -17407,7 +17469,7 @@ mod tests {
         let mut m = closed();
         let busy = Found { active: true, last_activity: Some(9_000_000), ..below.clone() };
         assert_eq!(m.update(read(Some(busy)).sent_by(Origin::System)), []);
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
         // Stopped while it is read: the resume is asked for no more.
         let mut m = closed();
         assert_eq!(m.update(Action::TaskStop { id: Subject::Task(7) }), []);
@@ -17422,7 +17484,7 @@ mod tests {
         m.update(Action::SetSessions { found, day: 0 });
         m.update(Action::RestoreTasks { tasks: vec![serde_json::from_str(&kept).expect("a task as kept")], floor: 7 });
         assert_eq!(started(&mut m, Action::TaskTalk { id: 7 }), []);
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
         // Read, and where it started is no longer listed: not gone on with in the repository instead.
         let mut m = conversations();
         m.update(Action::SetRepos { repos: Vec::new() });
@@ -17492,11 +17554,11 @@ mod tests {
         // Written since: another terminal is on it. The task follows it, and nothing starts.
         let mut m = restored("needs_you", Found { last_activity: Some(NOW + 1), ..ours.clone() });
         assert_eq!(states(&m), Some((State::Running, Some(State::Running))));
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
         assert_eq!(m.update(Action::TalkStart), []);
         // A live process holds it (an agent left over, another terminal): not gone on with.
         let mut m = restored("needs_you", Found { held: true, ..ours });
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
         assert_eq!(m.update(Action::TalkStart), []);
         // A dismissed task stays dismissed and running; its link is no longer the last run's word.
         let kept = format!(
@@ -17687,6 +17749,7 @@ mod tests {
             last_activity: Some(now - ago),
             waits_for,
             cwd: None,
+            busy: false,
         };
         let found = |m: &mut Model, found| m.update(Action::SessionsInPanes { found }.sent_by(Origin::System));
         // A Codex at work and a Claude Code at work: nothing needs you.
@@ -17743,6 +17806,7 @@ mod tests {
             last_activity: Some(now),
             waits_for,
             cwd: None,
+            busy: false,
         };
         m.update(
             Action::SessionsInPanes { found: vec![at(Some(sessions::WaitsFor::Question))] }.sent_by(Origin::System),
@@ -17770,7 +17834,7 @@ mod tests {
     /// A session in a pane of ours, last written `ago` before `now`.
     fn in_pane(pane: PaneId, runner: &str, id: &str, last: u64, waits_for: Option<WaitsFor>) -> sessions::InPane {
         let (runner, id, cwd) = (runner.into(), id.into(), Some("/code/app/crates".into()));
-        sessions::InPane { pane, runner, id, last_activity: Some(last), waits_for, cwd }
+        sessions::InPane { pane, runner, id, last_activity: Some(last), waits_for, cwd, busy: false }
     }
 
     /// The cards as (id, state).
@@ -17901,35 +17965,45 @@ mod tests {
         assert_eq!(cards(&m), [("x".into(), Running)]);
     }
 
+    /// The owner: "I keep trying to hide this convo but hide doesn't work". A session that waits
+    /// while its file keeps changing came back at the next read; now a hide is "I do not want
+    /// this card" until it asks again in a new turn, never within `MIN_HIDE_MS`.
     #[test]
-    fn a_hidden_card_comes_back_when_its_file_changes_and_it_needs_you_again() {
+    fn a_hidden_card_holds_through_its_activity_and_its_wait_until_a_new_ask() {
         let now = 100 * sessions::QUIET_MS;
         let mut m = cards_model(now);
         let waits = |last| in_pane(1, "claude", "c", last, Some(WaitsFor::Permission));
+        let works = |last| in_pane(1, "claude", "c", last, None);
         let read = |m: &mut Model, at| m.update(Action::SessionsInPanes { found: vec![at] }.sent_by(Origin::System));
         read(&mut m, waits(now));
         assert_eq!(m.needs_you(), 1);
-        // Hidden: counted nowhere, kept on disk. A client may hide too, as Elsewhere's rows.
+        // Hidden: gone from the list in that step, counted nowhere, kept on disk. A client may hide too.
         let effects = m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() }.sent_by(Origin::Socket));
-        let kept = vec![sessions::Hidden { runner: "claude".into(), id: "c".into(), at: Some(now) }];
+        let kept = vec![sessions::Hidden { runner: "claude".into(), id: "c".into(), since: Some(now), worked: false }];
         assert_eq!(effects, [Effect::SaveHiddenSessions { hidden: kept.clone() }]);
         assert_eq!((m.needs_you(), m.session_cards().len()), (0, 0));
         assert_eq!(m.hidden_live(), [("claude".to_string(), "c".to_string())], "the section's \"1 hidden\"");
+        // Its file keeps changing while the same wait is on: still hidden (it came back here before).
+        read(&mut m, waits(now + 1_000));
+        read(&mut m, waits(now + 2_000));
+        assert_eq!(m.session_cards().len(), 0);
         // The same wait after a restart: still hidden.
         let mut again = cards_model(now + 5_000);
         again.update(Action::SetHiddenSessions { hidden: kept }.sent_by(Origin::System));
-        read(&mut again, waits(now));
+        read(&mut again, waits(now + 5_000));
         assert_eq!(again.needs_you(), 0);
-        // It works (answered), then asks again: its file changed since the hide. Back.
-        read(&mut m, in_pane(1, "claude", "c", now + 1_000, None));
-        assert_eq!(m.session_cards().len(), 0, "at work: still hidden");
-        let effects = read(&mut m, waits(now + 2_000));
-        assert_eq!(m.needs_you(), 1);
-        // That hide is over, and kept no more: answered, it does not hide the card again.
-        assert_eq!(effects, [Effect::SaveHiddenSessions { hidden: Vec::new() }]);
-        read(&mut m, in_pane(1, "claude", "c", now + 3_000, None));
-        assert_eq!(m.session_cards().len(), 1);
-        read(&mut m, waits(now + 3_000));
+        // Answered, it works (a new turn begins), and asks again at once: within the least time, hidden.
+        let effects = read(&mut m, works(now + 3_000));
+        let worked = vec![sessions::Hidden { runner: "claude".into(), id: "c".into(), since: Some(now), worked: true }];
+        assert_eq!(effects, [Effect::SaveHiddenSessions { hidden: worked }]);
+        read(&mut m, waits(now + 4_000));
+        assert_eq!(m.needs_you(), 0, "never back within MIN_HIDE_MS");
+        // Later, a new ask: back, and that hide is over (kept no more).
+        read(&mut m, waits(now + sessions::MIN_HIDE_MS - 1));
+        assert_eq!(m.needs_you(), 0);
+        // The least time passes (a tick, no read): back at once, that hide over and kept no more.
+        let effects = m.update(Action::Tick { now: now + sessions::MIN_HIDE_MS }.sent_by(Origin::System));
+        assert_eq!((m.needs_you(), effects), (1, vec![Effect::SaveHiddenSessions { hidden: Vec::new() }]));
         // Unhide: the user's, or a client's.
         m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() });
         assert_eq!(m.needs_you(), 0);
@@ -17939,6 +18013,101 @@ mod tests {
         // Only ottospace says what its file held.
         let file = Action::SetHiddenSessions { hidden: Vec::new() }.sent_by(Origin::Socket);
         assert!(m.update(file).is_empty());
+    }
+
+    #[test]
+    fn a_hide_during_activity_holds_and_an_ended_cards_hide_takes_it_off() {
+        use sessions::CardState::Ended;
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let read = |m: &mut Model, found| m.update(Action::SessionsInPanes { found }.sent_by(Origin::System));
+        read(&mut m, vec![in_pane(1, "codex", "x", now, None), in_pane(2, "claude", "c", now, None)]);
+        m.update(Action::SessionHide { runner: "codex".into(), id: "x".into() });
+        // At work, its file changing every read: hidden.
+        for t in 1..5 {
+            read(&mut m, vec![in_pane(1, "codex", "x", now + t * 1_000, None), in_pane(2, "claude", "c", now, None)]);
+        }
+        assert_eq!(cards(&m), [("c".into(), sessions::CardState::Running)]);
+        // An ended card, hidden: off the list at once.
+        read(&mut m, vec![in_pane(1, "codex", "x", now, None)]);
+        assert!(m.session_cards().iter().any(|c| c.row.id == "c" && c.state == Ended));
+        m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() });
+        assert!(m.session_cards().is_empty());
+        // The user's hide of a session no longer read: said, not silently nothing.
+        let effects = m.update(Action::SessionHide { runner: "claude".into(), id: "gone".into() });
+        assert!(matches!(&effects[..], [Effect::Notice { text }] if text.contains("no longer listed")), "{effects:?}");
+    }
+
+    #[test]
+    fn an_idle_session_hidden_does_not_come_back_for_the_turn_it_ended_and_a_hide_folds_the_look() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        // Its turn ended a minute ago: idle, not yet quiet, not busy. Hidden now.
+        let idle = |m: &mut Model| {
+            let at = in_pane(1, "claude", "c", now - 60_000, None);
+            m.update(Action::SessionsInPanes { found: vec![at] }.sent_by(Origin::System))
+        };
+        idle(&mut m);
+        m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() });
+        idle(&mut m);
+        assert!(!m.hidden[0].worked, "idle is no work");
+        // Quiet later: its turn, the one it had when hidden. Still hidden past the least time.
+        m.update(Action::Tick { now: now + sessions::MIN_HIDE_MS + 1 }.sent_by(Origin::System));
+        idle(&mut m);
+        assert_eq!((m.needs_you(), m.hidden_live().len()), (0, 1));
+        // A hide while looking at the hidden ones folds the look: the card leaves at once.
+        let other = in_pane(2, "codex", "x", now + sessions::MIN_HIDE_MS, None);
+        let found = vec![in_pane(1, "claude", "c", now - 60_000, None), other];
+        m.update(Action::SessionsInPanes { found }.sent_by(Origin::System));
+        m.update(Action::HiddenPeek { on: true });
+        m.update(Action::SessionHide { runner: "codex".into(), id: "x".into() });
+        assert!(!m.hidden_peek && m.drawn_cards().is_empty());
+        // Nothing hidden left: no look to keep on.
+        m.update(Action::SessionUnhide { runner: "codex".into(), id: "x".into() });
+        m.update(Action::SessionUnhide { runner: "claude".into(), id: "c".into() });
+        m.update(Action::HiddenPeek { on: true });
+        assert!(!m.hidden_peek);
+    }
+
+    #[test]
+    fn show_is_a_look_at_the_hidden_cards_and_hide_folds_them_away_again() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let found = vec![in_pane(1, "codex", "x", now, None), in_pane(2, "claude", "c", now, Some(WaitsFor::Question))];
+        m.update(Action::SessionsInPanes { found }.sent_by(Origin::System));
+        m.update(Action::SessionHide { runner: "codex".into(), id: "x".into() });
+        m.update(Action::SessionHide { runner: "claude".into(), id: "c".into() });
+        let hidden = m.hidden.clone();
+        // Show: both drawn, marked hidden, counted nowhere; nothing un-hidden.
+        assert!(m.update(Action::HiddenPeek { on: true }).is_empty());
+        let drawn: Vec<(String, bool)> = m.drawn_cards().into_iter().map(|c| (c.row.id, c.hidden)).collect();
+        assert_eq!(drawn, [("c".to_string(), true), ("x".to_string(), true)]);
+        assert_eq!((m.needs_you(), m.agents().in_terminal, m.session_cards().len()), (0, 0, 0));
+        assert!(m.task_sections(now).iter().all(|s| s.count == 0));
+        // Hide (the footer): the same hidden set, the cards folded away.
+        m.update(Action::HiddenPeek { on: false });
+        assert_eq!((&m.hidden, m.drawn_cards().len()), (&hidden, 0));
+        // Unhide on one: that one alone comes back.
+        m.update(Action::HiddenPeek { on: true });
+        m.update(Action::SessionUnhide { runner: "codex".into(), id: "x".into() });
+        let drawn: Vec<(String, bool)> = m.drawn_cards().into_iter().map(|c| (c.row.id, c.hidden)).collect();
+        assert_eq!(drawn, [("x".to_string(), false), ("c".to_string(), true)]);
+    }
+
+    #[test]
+    fn a_session_at_work_never_counts_as_needing_you_however_quiet_its_file() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        // A sub-agent writes its own file: the session's is quiet past the threshold, its record busy.
+        let busy = sessions::InPane { busy: true, ..in_pane(1, "claude", "c", now - sessions::QUIET_MS, None) };
+        m.update(Action::SessionsInPanes { found: vec![busy] }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("c".into(), sessions::CardState::Running)]);
+        // Held elsewhere, at work by its record (`Found::active`): not its turn either.
+        m.update(Action::SessionsInPanes { found: Vec::new() }.sent_by(Origin::System));
+        let held = Found { held: true, ..session("claude", "h", "/code/app", true, now - sessions::QUIET_MS) };
+        m.update(Action::SetSessions { found: vec![held], day: 0 }.sent_by(Origin::System));
+        assert!(cards(&m).contains(&("h".into(), sessions::CardState::Running)));
+        assert_eq!((m.needs_you(), m.agents().needs_you), (0, 0));
     }
 
     #[test]
@@ -18012,6 +18181,7 @@ mod tests {
             last_activity: Some(now),
             waits_for,
             cwd: None,
+            busy: false,
         };
         m.update(Action::SessionsInPanes { found: vec![at(None)] }.sent_by(Origin::System));
         m.update(Action::TerminalAgentGo);
@@ -18045,6 +18215,7 @@ mod tests {
             last_activity: Some(now),
             waits_for: Some(sessions::WaitsFor::Permission),
             cwd: None,
+            busy: false,
         };
         m.update(Action::SessionsInPanes { found: vec![waits] }.sent_by(Origin::System));
         assert_eq!(m.agents().needs_you, 1);
@@ -18494,7 +18665,7 @@ mod tests {
         let link = sessions::Link { runner: "claude".into(), id: UUID.into(), state: Some(State::Running) };
         m.tasks.link(1, link);
         assert_eq!(started(&mut m, Action::TaskTalk { id: 1 }), []);
-        assert!(m.talk_note().is_some_and(|note| note.contains("live in another terminal")));
+        assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
         // Ours: started, then gone. Its session never written: the next click starts a new one.
         m.tasks.unlink(1);
         assert!(matches!(started(&mut m, Action::TaskTalk { id: 1 })[..], [Effect::StartAgent { .. }]));

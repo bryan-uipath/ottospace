@@ -181,7 +181,7 @@ Key Counts forgets it.
 | A task's tabs | Its space, behind its badge on the bar. Starting a task (↵) in a workspace (one you made, or a task's) puts it there, tabs and all untouched: a workspace may hold several, sharing its folder. From Home it opens its own, with one empty tab; ⌘T joins the space on show; drag a tab onto another space; palette: Move Tab to… |
 | The next task that needs me | ⌘J: its space and chat |
 | A `claude` or `codex` I typed in a terminal waits on me (`session_waits` flag) | Counted in `needs you`; ⌘J with no task waiting focuses its pane |
-| See terminal agents with my tasks (`terminal_tasks` flag) | Each live one is a card under Needs you or Running, read-only; Hide until it asks again; ended ones stay dim a few minutes |
+| See terminal agents with my tasks (`terminal_tasks` flag) | Each live one is a card under Needs you or Running, read-only; Hide until it asks again in a new turn (Show peeks, Unhide brings one back); ended ones stay dim a few minutes |
 | Jot a note for later, with the meeting and transcript (`overlay_panels`) | ⌘⇧N, type, ↵ (⌘↵ starts it now). It is filed under the project in front; × on its #project leaves it untagged |
 | Go through what waits on me (`decisions` flag) | ⌘J: one card per question; 1–9 pick, ↵ send, S skip, L later, Esc close. Nothing waiting: the next task, as with the flag off |
 | Sort what agents filed (`decision_sources` flag) | ⌘J, then ↵ on "Sort n new items": ↵ keep, T now, L later, N not mine, D dismiss, U count its claims, C core/ancillary, P skip triage for its source, Z undo |

@@ -3276,7 +3276,7 @@ fn a_session_in_a_terminal_needs_you_the_same_way_for_every_runner() {
 
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn terminal_sessions_are_listed_with_the_tasks_hidden_until_they_ask_again_and_dim_once_ended() {
+fn terminal_sessions_are_listed_with_the_tasks_a_hide_holds_while_they_write_and_dim_once_ended() {
     // Made-up Claude Code and Codex folders, and a stand-in for each CLI (`sleep` under its name).
     let home = user_folder("terminal-tasks", "").canonicalize().unwrap();
     let (claude, codex, work) = (home.join("claude"), home.join("codex"), home.join("work"));
@@ -3291,7 +3291,8 @@ fn terminal_sessions_are_listed_with_the_tasks_hidden_until_they_ask_again_and_d
     let script = "cd \"$2\" || exit 1\n[ -n \"$3\" ] && printf '%s' \"$3\" | sed \"s/PID/$$/; s/NOW/$(date +%s)000/\" > \"$RECORDS/$$.json\"\nexec -a \"$1\" sleep 300\n";
     std::fs::write(&stand_in, script).unwrap();
     let dirs = json!({"claude": [claude], "codex": codex});
-    let settings = json!({"repos": [], "sessions": true, "session_dirs": dirs, "restore_layout": false});
+    // Quiet for an hour before a turn is the user's: the idle Codex never needs you in this test.
+    let settings = json!({"repos": [], "sessions": true, "session_dirs": dirs, "restore_layout": false, "session_quiet_minutes": 60});
     std::fs::write(home.join("settings.json"), settings.to_string()).unwrap();
     let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "session_waits,terminal_tasks")];
     let otto = Otto::launch_with("terminal-tasks", &env);
@@ -3338,28 +3339,41 @@ fn terminal_sessions_are_listed_with_the_tasks_hidden_until_they_ask_again_and_d
     let state = otto.call(json!({"cmd": "state"}));
     assert_eq!((&state["needs_you"], &state["status_bar"]["agents"]["in_terminal"]), (&json!(1), &json!(1)));
     assert_eq!(state["sessions_bar"]["total"], 0, "a card is not also an Elsewhere row");
-    // Hidden: counted nowhere. The Tasks section's "1 hidden" brings it back.
+    // Hidden: counted nowhere, and it stays hidden while its file keeps changing in the same wait
+    // (the owner's "hide doesn't work": it came back at the next read).
+    // With Tasks open, reads come every 5 s: each write below is read before the next check.
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.call(json!({"cmd": "session_hide", "runner": "claude", "id": id}));
     assert_eq!(otto.call(json!({"cmd": "state"}))["needs_you"], 0);
-    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let only_codex = vec![pair("running", "codex", "running")];
+    for _ in 0..4 {
+        std::thread::sleep(Duration::from_secs(1));
+        let line = format!("{}\n", std::fs::read_to_string(&transcript).unwrap().lines().last().unwrap());
+        std::fs::OpenOptions::new().append(true).open(&transcript).unwrap().write_all(line.as_bytes()).unwrap();
+        std::thread::sleep(Duration::from_secs(6));
+        assert_eq!(cards(&otto), only_codex, "a hide holds while the session writes");
+    }
+    assert_eq!(otto.call(json!({"cmd": "state"}))["needs_you"], 0);
+    // Show is a look: the hidden card drawn, marked, counted nowhere. Hide folds it away again.
     let line = otto.wait_for("the hidden line", |o| o.control_opt("sessions-hidden"));
     otto.user_click(at(line, 0.5, 0.5));
-    otto.wait_for("shown again", |o| Some(cards(o)).filter(|c| *c == both));
-    // Hidden again, it comes back by itself once it works and asks again: not for the same wait.
-    otto.call(json!({"cmd": "session_hide", "runner": "claude", "id": id}));
-    let file = std::fs::read_dir(&records).unwrap().flatten().next().unwrap().path();
-    let text = std::fs::read_to_string(&file).unwrap();
-    std::fs::write(&file, text.replace(r#""status":"waiting","waitingFor":"permission prompt""#, r#""status":"busy""#))
-        .unwrap();
-    otto.wait_for("at work, still hidden", |o| Some(cards(o)).filter(|c| *c == [pair("running", "codex", "running")]));
-    std::thread::sleep(Duration::from_millis(1_100)); // a file time later than the hide's
-    let line = format!("{}\n", std::fs::read_to_string(&transcript).unwrap().lines().last().unwrap());
-    std::fs::OpenOptions::new().append(true).open(&transcript).unwrap().write_all(line.as_bytes()).unwrap();
-    std::fs::write(&file, text).unwrap();
-    otto.wait_for("it asks again", |o| Some(cards(o)).filter(|c| *c == both));
+    let hidden = |o: &Otto| {
+        let state = o.call(json!({"cmd": "state"}));
+        let sections = state["tasks_bar"]["sections"].as_array().cloned().unwrap_or_default();
+        sections
+            .iter()
+            .flat_map(|s| s["cards"].as_array().cloned().unwrap_or_default())
+            .filter(|c| c["hidden"] == true)
+            .count()
+    };
+    otto.wait_for("the hidden card shown", |o| Some(hidden(o)).filter(|n| *n == 1));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["needs_you"], 0);
+    let line = otto.wait_for("the hidden line", |o| o.control_opt("sessions-hidden"));
+    otto.user_click(at(line, 0.5, 0.5));
+    otto.wait_for("folded away again", |o| Some(cards(o)).filter(|c| *c == only_codex));
     // Codex ends: its card stays, dim, counted nowhere.
     otto.call(json!({"cmd": "type", "pane": 2, "text": "\u{3}"}));
-    let ended = vec![pair("needs_you", "claude", "needs_you"), pair("running", "codex", "ended")];
+    let ended = vec![pair("running", "codex", "ended")];
     otto.wait_for("codex ended", |o| Some(cards(o)).filter(|c| *c == ended));
     assert_eq!(otto.call(json!({"cmd": "state"}))["status_bar"]["agents"]["in_terminal"], 0);
 }
@@ -10227,7 +10241,7 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     for id in [busy, held] {
         let reply = otto.user_click(row(id));
         assert_eq!(reply["state"]["talk"]["task"]["id"], id, "{reply}");
-        assert_eq!(reply["drawer"]["note"], "its session is live in another terminal: go on with it there");
+        assert_eq!(reply["drawer"]["note"], "This session is running in another terminal. Continue it there.");
     }
     std::thread::sleep(Duration::from_millis(500));
     assert!(agent_argv(&bin, "claude").is_none() && !codex_argv.exists(), "nothing more was started");
