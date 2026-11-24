@@ -10,10 +10,10 @@ use gpui::{
 };
 use ottospace_core::features::Feature;
 use ottospace_core::marks::same_app;
-use ottospace_core::model::slots::{By, Choice, Test};
+use ottospace_core::model::slots::{By, Choice};
 use ottospace_core::model::{Action, Kind, Origin, PaneId};
 use ottospace_core::row_menu::MenuOf;
-use ottospace_core::slot::{Look, Matching, Pick, Seen, Status};
+use ottospace_core::slot::{Look, Matching, Pick, Seen, Status, Test};
 use ottospace_core::theme;
 use ottospace_mac::{ax, display, recovery};
 
@@ -202,11 +202,10 @@ impl Workspace {
         match name {
             "by-any" => set(Choice::By(By::Any)),
             "by-id" => set(Choice::By(By::Id)),
-            "by-title" => set(Choice::By(By::Title)),
+            "by-title" | "words" => set(Choice::By(By::Title)),
             "is" => set(Choice::Test(Test::Is)),
             "contains" => set(Choice::Test(Test::Contains)),
             "starts-with" => set(Choice::Test(Test::StartsWith)),
-            "kind" => set(Choice::Kind(!self.model.slot_dialog.as_ref()?.by_kind)),
             "manual" => set(Choice::Matching(Matching::Manual)),
             "automatic" => set(Choice::Matching(Matching::Automatic)),
             "largest" => set(Choice::Pick(Pick::Largest)),
@@ -221,9 +220,9 @@ impl Workspace {
         }
     }
 
-    /// The user's key while the dialog is open: ↵ keeps, Esc closes; O and T choose, while the
-    /// title words do not have the keys; they edit those. `None`: not the dialog's. `Some(false)`:
-    /// text, for the input method to type into the words.
+    /// The user's key while the dialog is open (no ⌘: those go to their bindings): ↵ keeps, Esc
+    /// closes; O and T choose, while the title words do not have the keys; they edit those, ⌥ and
+    /// ⌃ keys too. `None`: not the dialog's. `Some(false)`: text, for the input method to type.
     pub(crate) fn slot_dialog_key(
         &mut self,
         event: &gpui::KeyDownEvent,
@@ -234,12 +233,16 @@ impl Workspace {
             return None;
         }
         let typing = self.model.field().is_some_and(|(of, _)| of == "slot");
+        let m = event.keystroke.modifiers;
+        let plain = !(m.platform || m.control || m.alt);
         let action = match event.keystroke.key.as_str() {
+            _ if m.platform => return None,
+            "enter" | "escape" if !plain => None,
             "enter" => Some(Action::SlotDialogKeep),
             "escape" => Some(Action::SlotDialogClose),
             _ if typing => return Some(self.field_key(event, window, cx)),
-            "o" => self.dialog_action("manual"),
-            "t" => self.dialog_action("automatic"),
+            "o" if plain => self.dialog_action("manual"),
+            "t" if plain => self.dialog_action("automatic"),
             _ => None,
         };
         if let Some(action) = action {
@@ -313,10 +316,8 @@ impl Workspace {
         let field = ui::dialog::text_box(typing).child(words);
         let field = match titled {
             true => field.into_any_element(),
-            false => {
-                live(div().id("slot-dialog-words").flex_1().min_w_0().cursor_pointer().child(field), "by-title", cx)
-                    .into_any_element()
-            }
+            false => live(div().id("slot-dialog-words").flex_1().min_w_0().cursor_pointer().child(field), "words", cx)
+                .into_any_element(),
         };
         let title_row = div()
             .flex_1()
@@ -345,12 +346,22 @@ impl Workspace {
                 "Moves it in at once, on the tab on show. A window you are in is still only offered."
             }
         };
-        let listed: Vec<ui::dialog::Listed> = dialog
-            .listed(rules)
+        // The one it takes first, then the rest front to back, at most `LISTED`, then how many more.
+        let mut all = dialog.listed(rules);
+        all.sort_by_key(|l| !l.taken);
+        let more = all.len().saturating_sub(LISTED);
+        let mut listed: Vec<ui::dialog::Listed> = all
             .into_iter()
             .take(LISTED)
             .map(|l| ui::dialog::Listed { taken: l.taken, title: l.seen.title.clone().into(), detail: l.detail.into() })
             .collect();
+        if more > 0 {
+            listed.push(ui::dialog::Listed {
+                taken: false,
+                title: format!("and {more} more").into(),
+                detail: "".into(),
+            });
+        }
         let mut body = div()
             .child(ui::dialog::summary(dialog.headline(&app)))
             .child(
@@ -362,11 +373,10 @@ impl Workspace {
                     .child(ui::dialog::consequence(said)),
             )
             .child(ui::dialog::row("Title", title_row));
-        if dialog.has_kind {
-            let role = dialog.kind.as_deref().map(|kind| ottospace_core::same_title::role(kind).unwrap_or(kind));
-            let only = format!("Only a {}", role.unwrap_or("window of this kind"));
-            let check = ui::dialog::choice_row("slot-dialog-kind", false, dialog.by_kind, only, None, ui::State::Rest);
-            body = body.child(ui::dialog::row("Kind", live(check, "kind", cx)));
+        // A dialog's or panel's slot holds its kind only: said, not a choice (another kind needs the core's rules).
+        if let Some(role) = dialog.kind_word() {
+            let only = div().text_size(px(theme::TEXT_XS)).child(format!("Only a {role}, as this one"));
+            body = body.child(ui::dialog::row("Kind", only));
         }
         body = body
             .child(ui::dialog::row("Several", ui::dialog::segments(picks, false)))

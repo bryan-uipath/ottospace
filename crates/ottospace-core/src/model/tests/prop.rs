@@ -2133,11 +2133,11 @@ const SLOT_MAKERS: [Make; 17] = [
         Action::SlotDialogOpen { pane: g.pane(), look }
     },
     |g| {
-        use crate::model::slots::{By, Choice, Test};
+        use crate::model::slots::{By, Choice};
+        use crate::slot::Test;
         let choice = match g.rng.below(4) {
             0 => Choice::By([By::Any, By::Id, By::Title][g.rng.below(3)]),
             1 => Choice::Test([Test::Is, Test::Contains, Test::StartsWith, Test::Pattern][g.rng.below(4)]),
-            2 if g.rng.coin() => Choice::Kind(g.rng.coin()),
             2 => Choice::Pick(g.slot().pick),
             _ => Choice::Matching(g.slot().matching),
         };
@@ -3565,7 +3565,6 @@ fn check_slots(m: &Model) -> Result<(), String> {
         let kind = m.pane(dialog.pane).map(|p| &p.kind);
         ensure!(matches!(kind, Some(Kind::App { .. } | Kind::Slot { .. })), "the dialog on {kind:?}");
         ensure!(dialog.by != crate::model::slots::By::Id || dialog.has_id, "by id with no id");
-        ensure!(!dialog.by_kind || dialog.has_kind, "by kind with no kind");
     }
     let in_pane = |w: u32| m.panes.iter().any(|p| matches!(p.kind, Kind::App { window, .. } if window == w));
     let shown = m.layout.as_ref().map(Node::leaves).unwrap_or_default();
@@ -6581,8 +6580,7 @@ fn code(sent: &Envelope) -> String {
         use crate::model::slots::Choice;
         let choice = match choice {
             Choice::By(by) => format!("By(crate::model::slots::By::{by:?})"),
-            Choice::Test(test) => format!("Test(crate::model::slots::Test::{test:?})"),
-            Choice::Kind(on) => format!("Kind({on})"),
+            Choice::Test(test) => format!("Test(crate::slot::Test::{test:?})"),
             Choice::Pick(crate::slot::Pick::Display(n)) => format!("Pick(crate::slot::Pick::Display({n}))"),
             Choice::Pick(pick) => format!("Pick(crate::slot::Pick::{pick:?})"),
             Choice::Matching(matching) => format!("Matching(crate::slot::Matching::{matching:?})"),

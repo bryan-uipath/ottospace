@@ -158,8 +158,8 @@ whose every choice shows how many of the app's windows open now it takes (`Dialo
 | Row | Choices |
 |---|---|
 | Window | Any window · the window id (when the window or the slot has one) · the title |
-| Title | is · contains · starts with, and the words (the window's whole title to begin with). Dimmed while the rule is another; a click there chooses it |
-| Kind | for a dialog or panel only: only that kind (ticked) |
+| Title | is · contains · starts with, and the words (the window's whole title to begin with). Dimmed while the rule is another; a click on a test or the words chooses it |
+| Kind | for a dialog or panel only: said, not a choice (only that kind; another needs core work) |
 | Several | the largest · the smallest · the frontmost · display N |
 | When it opens | Offer it (O) · Take it (T), and a line saying what that does |
 
@@ -170,7 +170,7 @@ a meeting's title changes); with one, the id. A title rule is written as the glo
 reads (`Test::glob`: `Weekly`, `*Weekly*`, `Weekly*`) and read back as a test and words
 (`Test::read`); a pattern written by hand stays as it is (`Test::Pattern`). The words are a text
 field (`"slot"`) that has the keys while the rule is by title; O and T choose only while it does
-not. The state has what is chosen (`by`, `test`, `by_kind`, ...), never a title, an id or the
+not. The state has what is chosen (`by`, `test`, `pick`, ...), never a title, an id or the
 words. Offer again, Give back the window and Clear slot are in ⋯'s menu, not the dialog.
 
 `pick` in the record: `"largest"`, `"smallest"`, `{ "display": 2 }`, `"any"` (unset). Displays

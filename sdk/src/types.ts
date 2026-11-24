@@ -1065,7 +1065,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, a note on a capture, or a native conversation's composer (`talk`). */
-  of: "compose" | "picker" | "palette" | "clone" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk" | "btw" | "bug";
+  of: "compose" | "picker" | "palette" | "clone" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk" | "btw" | "bug" | "slot";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -1329,7 +1329,7 @@ export interface RowMenu {
   /** `why`: the item does nothing now, and why (drawn dimmed). */
   items: {
     item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree" | "local_folder" | "from_github"
-      | "slot_keep" | "slot_edit" | "slot_clear";
+      | "slot_keep" | "slot_edit" | "slot_look_again" | "slot_give_back" | "slot_clear";
     label: string;
     why: string | null;
     rect: Rect | null;
@@ -1557,8 +1557,8 @@ export interface SlotDialog {
   has_id: boolean;
   by: "any" | "id" | "title";
   test: "is" | "contains" | "starts_with" | "pattern";
+  /** The window is a dialog or panel: the slot holds that kind only. */
   has_kind: boolean;
-  by_kind: boolean;
   pick: "largest" | "smallest" | "any" | { display: number };
   matching: "manual" | "automatic";
   /** A slot already: the dialog edits it. */

@@ -1606,7 +1606,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "palette", "clone", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk", "btw", "bug"];
+  const owners = ["compose", "picker", "palette", "clone", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk", "btw", "bug", "slot"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook, note or talk", o.of);
   }
@@ -1961,7 +1961,7 @@ function rowMenu(value: unknown, at: string): RowMenu {
     const kind = i.item;
     const kinds = [
       "rename", "delete", "remove", "keep", "pause", "resume", "delete_worktree", "local_folder", "from_github",
-      "slot_keep", "slot_edit", "slot_clear",
+      "slot_keep", "slot_edit", "slot_look_again", "slot_give_back", "slot_clear",
     ] as const;
     const known = kinds.find((k) => k === kind);
     if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
@@ -2093,7 +2093,6 @@ function slotDialog(value: unknown, at: string): SlotDialog {
     by: oneOf(["any", "id", "title"] as const, "a slot rule's window")(o.by, `${at}.by`),
     test: oneOf(["is", "contains", "starts_with", "pattern"] as const, "a title test")(o.test, `${at}.test`),
     has_kind: bool(o.has_kind, `${at}.has_kind`),
-    by_kind: bool(o.by_kind, `${at}.by_kind`),
     pick: pick(o.pick, `${at}.pick`),
     matching: oneOf(["manual", "automatic"] as const, "a slot's matching")(o.matching, `${at}.matching`),
     editing: bool(o.editing, `${at}.editing`),

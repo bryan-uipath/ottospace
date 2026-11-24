@@ -9,10 +9,7 @@ use serde::Serialize;
 use super::{Action, Effect, Kind, Model, PaneId};
 use crate::features::Feature;
 use crate::marks::{Extra, PaneRecord, RecordKind, Unfilled, same_app};
-use crate::slot::{self, Look, Matching, Seen, Slot, Status};
-
-/// The most a title rule's words hold.
-const WORDS: usize = 200;
+use crate::slot::{self, Look, Matching, Seen, Slot, Status, Test};
 
 /// A slot as the model runs it. In the state: its status, how many windows match and its
 /// matching. What it selects, the windows it offers and passes over: never.
@@ -99,13 +96,14 @@ impl Run {
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Dialog {
     pub pane: PaneId,
-    /// The app's windows as a look found them when it opened: the pane's own first, if it has one.
+    /// The app's windows as a look found them when it opened, front to back.
     #[serde(skip)]
     pub look: Look,
     /// The pane's window: its process, title and identifier.
     #[serde(skip)]
     pub window: Option<Seen>,
-    /// The slot's own selector when the dialog edits one: its id stays the one it waits for.
+    /// The slot's own selector when the dialog edits one: its id stays the one it waits for, and
+    /// a title it has beside its id (an older slot's) stays while the rule is by id.
     #[serde(skip)]
     pub kept: Option<crate::rules::Selector>,
     /// "Window id" is a choice: the window, or the slot, has one.
@@ -117,12 +115,11 @@ pub struct Dialog {
     /// A title rule's words: the window's whole title to begin with, for the user to cut down.
     #[serde(skip)]
     pub words: crate::edit::Field,
-    /// The window's kind when it is a dialog or panel (`AXDialog`), or the slot's; `by_kind`: the
-    /// rule names it.
+    /// The window's kind when it is a dialog or panel (`AXDialog`), or the slot's: the rule names
+    /// it, or the slot would hold standard windows only (`rules::slot_holds`).
     #[serde(skip)]
     pub kind: Option<String>,
     pub has_kind: bool,
-    pub by_kind: bool,
     pub pick: crate::slot::Pick,
     pub matching: Matching,
     /// A slot already: the dialog edits it.
@@ -141,57 +138,11 @@ pub enum By {
     Title,
 }
 
-/// A title rule's test: written as the glob the selector reads (`rules::glob`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Test {
-    Is,
-    Contains,
-    StartsWith,
-    /// A pattern written by hand in `layout.json`, kept as it is: `*Q? review*2026`.
-    Pattern,
-}
-
-impl Test {
-    /// The glob of `words` under this test: `Weekly`, `*Weekly*`, `Weekly*`.
-    pub fn glob(self, words: &str) -> String {
-        match self {
-            Test::Is | Test::Pattern => words.to_string(),
-            Test::Contains => format!("*{words}*"),
-            Test::StartsWith => format!("{words}*"),
-        }
-    }
-
-    /// A glob read back as a test and its words: `*Incident*` contains `Incident`.
-    pub fn read(glob: &str) -> (Test, String) {
-        let inner = |s: &str| !s.contains('*');
-        match glob.strip_prefix('*').and_then(|g| g.strip_suffix('*')) {
-            Some(words) if inner(words) && !words.is_empty() => return (Test::Contains, words.into()),
-            _ => {}
-        }
-        match glob.strip_suffix('*') {
-            Some(words) if inner(words) && !words.is_empty() => (Test::StartsWith, words.into()),
-            _ if inner(glob) => (Test::Is, glob.into()),
-            _ => (Test::Pattern, glob.into()),
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Test::Is => "is",
-            Test::Contains => "contains",
-            Test::StartsWith => "starts with",
-            Test::Pattern => "matches",
-        }
-    }
-}
-
-/// A choice in the dialog.
+/// A choice in the dialog. A title test chooses the rule by title too.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Choice {
     By(By),
     Test(Test),
-    Kind(bool),
     Pick(crate::slot::Pick),
     Matching(Matching),
 }
@@ -210,16 +161,23 @@ impl Dialog {
         kept.or_else(|| self.window.as_ref().and_then(|seen| seen.identifier.clone()))
     }
 
+    /// An older slot's title beside its id: kept while the rule stays by id.
+    fn kept_title(&self, by: By) -> Option<String> {
+        let kept = self.kept.as_ref().filter(|kept| kept.identifier.is_some() && by == By::Id)?;
+        kept.title.clone()
+    }
+
     /// The slot of what is chosen.
     pub fn slot(&self) -> Slot {
         self.slot_by(self.by)
     }
 
     fn slot_by(&self, by: By) -> Slot {
+        let title = (by == By::Title).then(|| self.test.glob(self.words.text()));
         let select = crate::rules::Selector {
             identifier: self.id().filter(|_| by == By::Id),
-            title: (by == By::Title).then(|| self.test.glob(self.words.text())),
-            subrole: self.kind.clone().filter(|_| self.by_kind),
+            title: title.or_else(|| self.kept_title(by)),
+            subrole: self.kind.clone(),
             app: None,
         };
         Slot { select, pick: self.pick, matching: self.matching, ..Default::default() }
@@ -232,9 +190,9 @@ impl Dialog {
         self.look.candidates(&slot, rules, |_| false).len()
     }
 
-    /// How many the chosen rule selects now.
+    /// How many the chosen rule and pick select now (on display 2: those there).
     pub fn matches(&self, rules: &[crate::rules::Rule]) -> usize {
-        self.count(self.by, rules)
+        self.look.candidates(&self.slot(), rules, |_| false).len()
     }
 
     /// The app's windows open now, front to back, each ticked if the rule takes it (of several,
@@ -267,43 +225,47 @@ impl Dialog {
             .collect()
     }
 
+    /// The kind the rule names, in words: `panel`, `dialog`, else as macOS says it.
+    pub fn kind_word(&self) -> Option<&str> {
+        self.kind.as_deref().map(|kind| crate::same_title::role(kind).unwrap_or(kind))
+    }
+
     /// The rule in one sentence, the dialog's headline: `Waits for any Meetings window, the
     /// largest, and offers it here.`
     pub fn headline(&self, app: &str) -> String {
         let words = self.words.text();
+        let titled = |test: Test, words: &str| match test {
+            Test::Is => format!("titled “{words}”"),
+            test => format!("whose title {} “{words}”", test.label()),
+        };
         let which = match self.by {
             By::Any => format!("any {app} window"),
-            By::Id => match self.id().unwrap_or_default() {
-                id if id.is_empty() => format!("a {app} window with no window id"),
-                id => format!("the {app} window with id {id}"),
+            By::Id => match (self.id().unwrap_or_default(), self.kept_title(By::Id)) {
+                (id, _) if id.is_empty() => format!("a {app} window with no window id"),
+                (id, None) => format!("the {app} window with id {id}"),
+                (id, Some(title)) => {
+                    let (test, words) = Test::read(&title);
+                    format!("the {app} window with id {id}, {}", titled(test, &words))
+                }
             },
-            By::Title => match self.test {
-                Test::Is => format!("a {app} window titled “{words}”"),
-                test => format!("a {app} window whose title {} “{words}”", test.label()),
-            },
+            By::Title => format!("a {app} window {}", titled(self.test, words)),
         };
-        let kind = self.kind.as_deref().filter(|_| self.by_kind).map(|kind| {
-            let role = crate::same_title::role(kind).unwrap_or(kind);
-            format!(" (a {role})")
-        });
-        let pick = match self.pick {
-            crate::slot::Pick::Largest => Some(", the largest".to_string()),
-            crate::slot::Pick::Smallest => Some(", the smallest".to_string()),
-            crate::slot::Pick::Display(n) => Some(format!(", on display {n}")),
-            crate::slot::Pick::Any => None,
-        };
+        let kind = self.kind_word().map(|role| format!(" (a {role})")).unwrap_or_default();
+        let pick = self.pick.words().map(|pick| format!(", {pick}")).unwrap_or_default();
         let does = match self.matching {
             Matching::Manual => "offers it here",
             Matching::Automatic => "takes it here",
         };
-        format!("Waits for {which}{}{}, and {does}.", kind.unwrap_or_default(), pick.unwrap_or_default())
+        format!("Waits for {which}{kind}{pick}, and {does}.")
     }
 }
 
 impl Model {
     /// The slot dialog's title words, while its rule is by title and the picker is not over it.
     pub(crate) fn slot_words(&self) -> Option<&crate::edit::Field> {
-        let dialog = self.slot_dialog.as_ref().filter(|d| d.by == By::Title && self.picker.is_none())?;
+        // A bug report over the dialog has its own field.
+        let open = |d: &&Dialog| d.by == By::Title && self.picker.is_none() && self.bug.is_none();
+        let dialog = self.slot_dialog.as_ref().filter(open)?;
         Some(&dialog.words)
     }
 
@@ -412,11 +374,10 @@ impl Model {
                         Choice::Test(test) => {
                             // Its words as they read under the test it had: `*a*` stays `a`.
                             if dialog.test == Test::Pattern {
-                                dialog.words = crate::edit::Field::new(&Test::read(dialog.words.text()).1, WORDS);
+                                dialog.words = crate::edit::Field::new(&Test::read(dialog.words.text()).1, 0);
                             }
-                            dialog.test = test;
+                            (dialog.test, dialog.by) = (test, By::Title);
                         }
-                        Choice::Kind(on) => dialog.by_kind = on && dialog.has_kind,
                         Choice::Pick(pick) => dialog.pick = pick,
                         Choice::Matching(matching) => dialog.matching = matching,
                     }
@@ -646,7 +607,7 @@ impl Model {
 
     /// The dialog on app pane or slot `id`, as the slot is, else from the pane's window: by its id
     /// if it has one, else any window of the app, the largest (a meeting's title changes).
-    fn slot_dialog_open(&mut self, id: PaneId, mut look: Look) {
+    fn slot_dialog_open(&mut self, id: PaneId, look: Look) {
         let window = match self.pane(id).map(|pane| &pane.kind) {
             Some(Kind::App { window, bundle, name, .. }) => {
                 if !same_app((look.bundle.as_deref(), &look.name), (bundle.as_deref(), name)) {
@@ -679,14 +640,10 @@ impl Model {
         };
         let (pick, matching) =
             run.map_or((crate::slot::Pick::Largest, Matching::Manual), |run| (run.slot.pick, run.slot.matching));
-        // The pane's own window first.
-        if let Some(seen) = &window {
-            look.windows.retain(|other| other.window != seen.window);
-            look.windows.insert(0, seen.clone());
-        }
         let editing = run.is_some();
-        let (has_kind, by_kind) = (kind.is_some(), kind.is_some());
-        let words = crate::edit::Field::new(&words, WORDS);
+        let has_kind = kind.is_some();
+        // No limit: a kept pattern is saved again whole.
+        let words = crate::edit::Field::new(&words, 0);
         self.slot_dialog = Some(Dialog {
             pane: id,
             look,
@@ -698,7 +655,6 @@ impl Model {
             words,
             kind,
             has_kind,
-            by_kind,
             pick,
             matching,
             editing,
@@ -1248,7 +1204,7 @@ mod tests {
         let found =
             Look { bundle: Some(BUNDLE.into()), name: "Meetings".into(), running: true, windows, ..Look::default() };
         m.update(Action::SlotDialogOpen { pane: 2, look: found });
-        assert_eq!(m.slot_dialog.as_ref().map(|d| (d.by, d.by_kind)), Some((By::Any, true)));
+        assert_eq!(m.slot_dialog.as_ref().map(|d| (d.by, d.kind_word())), Some((By::Any, Some("dialog"))));
         m.update(Action::SlotDialogKeep);
         let words = m.slots.get(&2).map(|run| run.slot.words("Meetings"));
         assert_eq!(words.as_deref(), Some("Meetings · subrole AXSystemDialog · the largest"));
@@ -1669,9 +1625,9 @@ mod tests {
         assert_eq!(m.refusal(&open, Origin::Socket), Some(slot::USERS_ALONE));
         m.update(open);
         let dialog = m.slot_dialog.clone().unwrap_or_else(|| panic!("open"));
-        // With an id: by id; the pane's own window first; the largest of several.
+        // With an id: by id; the largest of several; the look in its own order, front to back.
         assert_eq!((dialog.has_id, dialog.by, dialog.pick), (true, By::Id, Pick::Largest));
-        assert_eq!(dialog.look.windows[0].window, 1);
+        assert_eq!(dialog.look.windows.iter().map(|s| s.window).collect::<Vec<_>>(), [2, 1, 3]);
         assert_eq!(
             dialog.headline("Meetings"),
             "Waits for the Meetings window with id zm.meeting.window.main, the largest, and offers it here."
@@ -1680,9 +1636,14 @@ mod tests {
         let counts = [By::Any, By::Id, By::Title].map(|by| dialog.count(by, &[]));
         assert_eq!(counts, [3, 1, 2]);
         let taken: Vec<(u32, bool)> = dialog.listed(&[]).iter().map(|l| (l.seen.window, l.taken)).collect();
-        assert_eq!(taken, [(1, true), (2, false), (3, false)]);
-        // By title, starting with “Weekly”: written as the glob the selector reads.
-        m.update(Action::SlotDialogSet { choice: Choice::By(By::Title) });
+        assert_eq!(taken, [(2, false), (1, true), (3, false)]);
+        // On display 2: none there; the status counts what the pick leaves.
+        m.update(Action::SlotDialogSet { choice: Choice::Pick(Pick::Display(2)) });
+        assert_eq!(m.slot_dialog.as_ref().map(|d| (d.count(By::Id, &[]), d.matches(&[]))), Some((1, 0)));
+        m.update(Action::SlotDialogSet { choice: Choice::Pick(Pick::Largest) });
+        // A title test chooses the rule by title: starting with “Weekly”, the selector's glob.
+        m.update(Action::SlotDialogSet { choice: Choice::Test(Test::Is) });
+        assert_eq!(m.slot_dialog.as_ref().map(|d| d.by), Some(By::Title));
         assert_eq!(m.field().map(|(of, f)| (of, f.text().to_string())), Some(("slot", "Weekly sync".into())));
         let typed = Action::FieldEdit { edit: crate::edit::Edit::SelectAll };
         assert_eq!(m.refusal(&typed, Origin::Socket), Some(slot::USERS_ALONE));
@@ -1714,6 +1675,22 @@ mod tests {
             (dialog.editing, dialog.by, dialog.test, dialog.words.text()),
             (true, By::Title, Test::StartsWith, "Weekly")
         );
+        // An older slot with an id and a title beside it keeps both while its rule stays by id.
+        let both = crate::rules::Selector {
+            identifier: Some("main".into()),
+            title: Some("*sync*".into()),
+            ..Default::default()
+        };
+        m.update(Action::SlotMake { pane: 1, pid: 7, slot: Slot { select: both.clone(), ..Slot::default() } });
+        let Action::SlotWindows { look: again } = look(vec![seen(7, 1, "Weekly sync")]) else { return };
+        m.update(Action::SlotDialogOpen { pane: 1, look: again });
+        let headline = m.slot_dialog.as_ref().map(|d| d.headline("Meetings"));
+        assert_eq!(
+            headline.as_deref(),
+            Some("Waits for the Meetings window with id main, whose title contains “sync”, and offers it here.")
+        );
+        m.update(Action::SlotDialogKeep);
+        assert_eq!(m.slots.get(&1).map(|run| run.slot.select.clone()), Some(both));
         // A window with no id: any window of the app, the largest; Window id is no choice.
         let mut m = Model::default();
         m.update(Action::Open { kind: meetings(1, "Pane title"), axis: Right, beside: None });
@@ -1754,7 +1731,7 @@ mod tests {
         m.update(Action::SlotDialogOpen { pane: 2, look: found });
         m.update(Action::SlotDialogSet { choice: Choice::Matching(Matching::Automatic) });
         let words = m.slot_dialog.as_ref().map(|d| (d.test, d.slot().words("Meetings")));
-        let said = "Meetings · title matching “*incident*” · subrole AXStandardWindow";
+        let said = "Meetings · title contains “incident” · subrole AXStandardWindow";
         assert_eq!(words, Some((Test::Contains, said.to_string())));
         m.update(Action::SlotDialogKeep);
         let run = &m.slots[&2];

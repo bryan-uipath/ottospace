@@ -77,7 +77,7 @@ fn group_words(group: &[&Listed], displays: &[Frame]) -> Vec<String> {
 }
 
 /// A subrole that reads well: a standard window, a floating panel, a dialog. Others say nothing.
-pub fn role(subrole: &str) -> Option<&'static str> {
+pub(crate) fn role(subrole: &str) -> Option<&'static str> {
     match subrole {
         "AXStandardWindow" => Some("window"),
         "AXFloatingWindow" | "AXSystemFloatingWindow" => Some("panel"),

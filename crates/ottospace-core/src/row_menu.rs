@@ -96,6 +96,9 @@ pub struct RowMenu {
     pub row: MenuOf,
     pub selected: Option<usize>,
     pub dots: Option<Rect>,
+    /// Its items when it opened: a change under it (a slot's Offer again going) closes it, so
+    /// the keys' place never lands on another item.
+    pub items: &'static [Item],
 }
 
 /// What a row's menu offers, in order. None: the row has no menu.
@@ -183,7 +186,8 @@ impl Model {
         let open = self.row_menu.take().is_some_and(|menu| menu.row == row);
         let listed = self.menu_there(&row);
         let selected = (keys || row == MenuOf::ReposAdd).then_some(0);
-        self.row_menu = (!open && listed).then_some(RowMenu { row, selected, dots });
+        let items = self.menu_items(&row);
+        self.row_menu = (!open && listed).then_some(RowMenu { row, selected, dots, items });
     }
 
     /// The … of the open menu as last drawn. Elsewhere than when it opened (a row above came or
@@ -275,7 +279,11 @@ impl Model {
     /// After every step: the menu is of a row the open section lists, or of the transcript shown,
     /// and offers something.
     pub(crate) fn settle_row_menu(&mut self) {
-        if self.row_menu.as_ref().is_some_and(|menu| !self.menu_there(&menu.row)) {
+        if self
+            .row_menu
+            .as_ref()
+            .is_some_and(|menu| !self.menu_there(&menu.row) || self.menu_items(&menu.row) != menu.items)
+        {
             self.row_menu = None;
         }
     }
@@ -578,7 +586,15 @@ mod tests {
         assert_eq!(m.row_menu_action(None), Some(dialog));
         m.update(Action::RowMenuChoose { index: Some(1) });
         assert_eq!(m.pane(1).map(|p| matches!(p.kind, Kind::Slot { .. })), Some(true), "given back");
-        // Waiting, its window passed over: Offer again forgets that, and leaves the menu.
+        // Waiting, its window passed over: Offer again forgets that, and leaves the menu. Its
+        // items changing under it (the window closed: passed over no more) close it.
+        assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotLookAgain, Item::SlotClear]);
+        m.slots.get_mut(&1).map(|run| run.declined.clear());
+        m.update(Action::RowMenuMove { delta: 1 });
+        assert!(m.row_menu.is_none(), "closed, not on Clear slot");
+        assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotClear]);
+        m.slots.get_mut(&1).map(|run| run.declined.insert(1));
+        m.update(Action::RowMenuMove { delta: 1 });
         assert_eq!(menu(&mut m, Origin::User), [Item::SlotEdit, Item::SlotLookAgain, Item::SlotClear]);
         m.update(Action::RowMenuChoose { index: Some(1) });
         assert!(m.slots[&1].declined.is_empty());

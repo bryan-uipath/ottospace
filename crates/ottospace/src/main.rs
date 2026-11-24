@@ -5276,8 +5276,9 @@ impl Workspace {
         }
         // A row's open menu takes the user's plain keys: its own, and any other closes it.
         let plain = !(key.modifiers.platform || key.modifiers.control || key.modifiers.alt);
-        // The slot dialog: ↵ keeps, Esc closes, its letters choose, its title words type; other keys wait.
-        if plain && self.model.sneak.is_none() {
+        // The slot dialog: ↵ keeps, Esc closes, its letters choose, its title words type (⌥ and ⌃ edit
+        // them); other keys wait. ⌘ shortcuts go to their bindings.
+        if !key.modifiers.platform && self.model.sneak.is_none() {
             match self.slot_dialog_key(event, window, cx) {
                 Some(true) => return cx.stop_propagation(),
                 // Text: the input method types it into the title words.

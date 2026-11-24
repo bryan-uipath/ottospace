@@ -1299,8 +1299,8 @@ pane as a slot: a pane that keeps its place and waits for a window you name. The
 rule in one line on top (`Waits for any Zoom window, the largest, and offers it here.`) and sets it
 in a form under it, each choice with how many of the app's windows open now it takes: Window (any
 window; the window id, the app's own name for it, when it has one; or the title), Title (is,
-contains or starts with, and the words: the window's whole title to begin with), Kind (for a
-dialog or panel: only that kind), Several (the largest, the smallest, the frontmost, display N),
+contains or starts with, and the words: the window's whole title to begin with), Kind (said for a
+dialog or panel: it holds only that kind), Several (the largest, the smallest, the frontmost, display N),
 and When it opens: Offer it (O, the default) or Take it (T: a window that opens while it waits, on
 the tab on show, never the one you are in). Under them, the app's windows open now, those the rule
 takes ticked; the action row says how many match, and Keep slot (↵) makes it. × or Esc closes it.
