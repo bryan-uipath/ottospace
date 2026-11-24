@@ -3271,6 +3271,7 @@ impl Action {
             | Action::TalkStart
             | Action::SetProjects { .. }
             | Action::RestoreProjects { .. }
+            | Action::RestoreDecisions { .. }
             | Action::SetCalendar { .. }
             | Action::CalendarRead { .. }
             | Action::CallSeen { .. }

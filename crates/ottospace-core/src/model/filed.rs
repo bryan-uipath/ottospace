@@ -53,7 +53,13 @@ impl Model {
         self.save_filed(changed, removed, effects);
     }
 
+    /// One write per decision a step: the last. A step that files and then expires one writes it once.
     fn save_filed(&self, changed: Vec<u64>, removed: Vec<u64>, effects: &mut Vec<Effect>) {
+        let again = |e: &Effect| match e {
+            Effect::SaveDecision { decision } => changed.contains(&decision.id) || removed.contains(&decision.id),
+            _ => false,
+        };
+        effects.retain(|e| !again(e));
         for id in changed {
             if let Some(decision) = self.filed.get(id) {
                 effects.push(Effect::SaveDecision { decision: Box::new(decision.clone()) });
@@ -90,8 +96,8 @@ mod tests {
         m.update(Action::SetFeatures {
             features: crate::features::Features::all().with(crate::features::Feature::DecisionSources, false),
         });
-        let filing = Box::new(filing());
-        assert!(m.update(Action::DecisionFile { filing, now: 10 }.sent_by(Origin::Socket)).is_empty());
+        let filed = Box::new(filing());
+        assert!(m.update(Action::DecisionFile { filing: filed, now: 10 }.sent_by(Origin::Socket)).is_empty());
         assert!(m.filed.list.is_empty());
         let mut kept = crate::filed::Filed::default();
         let ctx = crate::filed::Ctx { now: 10, live: &[], tasks: &[], checkouts: &[] };

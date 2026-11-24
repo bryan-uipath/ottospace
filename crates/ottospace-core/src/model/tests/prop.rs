@@ -5646,6 +5646,17 @@ impl Run {
                 Effect::CloneCancel { id } => {
                     ensure!(user && matches!(action, Action::CloneClose { cancel: true }), "{origin:?} cancelled {id}");
                 }
+                // What is written is what the model holds; a decision's file goes only once closed two weeks.
+                Effect::SaveDecision { decision } => {
+                    ensure!(
+                        m.filed.get(decision.id) == Some(&**decision),
+                        "{action:?} wrote {decision:?}, not what is held"
+                    );
+                }
+                Effect::RemoveDecision { id } => {
+                    let held = m.filed.get(*id).is_some();
+                    ensure!(!held, "{action:?} removed decision {id}, still held");
+                }
                 Effect::SaveProjects { kept } => {
                     // What the model holds, after the user's drop or an open.
                     let acts =
