@@ -5,6 +5,7 @@
 use gpui::{AnyElement, Context, Div, FontWeight, KeyDownEvent, Window, div, prelude::*, px, rgb};
 use ottospace_core::model::chat::Key;
 use ottospace_core::model::decisions::{LATER_MS, Sorting};
+use ottospace_core::model::focus::WeekCard;
 use ottospace_core::talk::Subject;
 use ottospace_core::{Action, theme};
 
@@ -18,6 +19,9 @@ impl Workspace {
     /// The card pane's body: its header, the ask card, its foot.
     pub(crate) fn decision_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(run) = self.model.decisions.as_ref() else { return div().into_any_element() };
+        if let Some(card) = run.week {
+            return self.week_body(card, (run.at, run.of), cx);
+        }
         if let Some(sort) = &run.sort {
             return self.sort_body(sort, (run.at, run.of), cx);
         }
@@ -97,15 +101,17 @@ impl Workspace {
     fn sort_body(&self, sort: &Sorting, (at, of): (usize, usize), cx: &mut Context<Self>) -> AnyElement {
         let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
         let now = crate::now_ms();
-        let (head, body, keys): (String, Vec<AnyElement>, Vec<(&str, &str, &str)>) = match sort.item {
+        // Each button: its id, its label, the key it is (its cap), and the key the core reads.
+        type Keyed = (&'static str, &'static str, &'static str, &'static str);
+        let (head, body, keys): (String, Vec<AnyElement>, Vec<Keyed>) = match sort.item {
             None if sort.left == 0 => {
                 let line = muted(format!("{} sorted in this run.", sort.done)).into_any_element();
-                ("All sorted".into(), vec![line], vec![("sort-undo", "Undo (z)", "z")])
+                ("All sorted".into(), vec![line], vec![("sort-undo", "Undo", "Z", "z")])
             }
             None => {
                 let n = sort.left;
                 let line = muted(format!("Each takes one key. {} sorted in this run.", sort.done)).into_any_element();
-                let keys = vec![("sort-start", "Sort (↵)", "enter"), ("sort-skip", "Not now (s)", "s")];
+                let keys = vec![("sort-start", "Sort", "↵", "enter"), ("sort-skip", "Not now", "S", "s")];
                 (format!("Sort {n} new item{}", if n == 1 { "" } else { "s" }), vec![line], keys)
             }
             Some(id) => {
@@ -148,19 +154,19 @@ impl Workspace {
                     evidence.map(|line| muted(line).into_any_element()),
                 ];
                 let keys = vec![
-                    ("sort-keep", "Keep (↵)", "enter"),
-                    ("sort-now", "Now (t)", "t"),
-                    ("sort-later", "Later (l)", "l"),
-                    ("sort-not-mine", "Not mine (n)", "n"),
-                    ("sort-dismiss", "Dismiss (d)", "d"),
+                    ("sort-keep", "Keep", "↵", "enter"),
+                    ("sort-now", "Now", "T", "t"),
+                    ("sort-later", "Later", "L", "l"),
+                    ("sort-not-mine", "Not mine", "N", "n"),
+                    ("sort-dismiss", "Dismiss", "D", "d"),
                 ];
                 ("Is this a priority, and where does it slot in?".into(), body.into_iter().flatten().collect(), keys)
             }
         };
         // A click is its key: the core says what the key does.
-        let buttons = keys.into_iter().enumerate().map(|(n, (id, label, key))| {
+        let buttons = keys.into_iter().enumerate().map(|(n, (id, label, cap, key))| {
             let kind = if n == 0 { Button::Primary(label.into()) } else { Button::Ghost(Face::Label(label.into())) };
-            ui::button(id, kind, State::Rest).on_click(cx.listener(move |this, _, window, cx| {
+            ui::dialog::keyed(id, kind, &[cap], State::Rest).on_click(cx.listener(move |this, _, window, cx| {
                 let mods = ottospace_core::keys::Mods::default();
                 if let Key::Act(action) = this.model.sort_click(key, mods, crate::now_ms()) {
                     drop(this.dispatch(action, this.input, window, cx));
@@ -198,6 +204,110 @@ impl Workspace {
             .child(div().flex().flex_wrap().items_center().gap_1().pt_2().children(buttons))
             .child(muted(hint));
         div().size_full().flex().justify_center().child(column).into_any_element()
+    }
+
+    /// The week's focus card (`decision_sources`): an agent's proposal, shown exactly as it would
+    /// be set (each area's name and links) beside the focus now, and where the agent read it; or
+    /// "Keep last week's focus?". The words are drawn as they are: data, never followed.
+    fn week_body(&self, card: WeekCard, (at, of): (usize, usize), cx: &mut Context<Self>) -> AnyElement {
+        let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
+        let focus = &self.model.focus;
+        let names =
+            |areas: &[ottospace_core::focus::Area]| areas.iter().map(|a| a.name.clone()).collect::<Vec<_>>().join(", ");
+        let (title, purpose, areas, lines, keys): (&str, &str, Vec<_>, Vec<String>, [_; 3]) = match card {
+            WeekCard::Proposal(_) => {
+                let Some(p) = focus.pending.as_ref() else { return div().into_any_element() };
+                let now = focus.areas();
+                let gone: Vec<String> =
+                    now.iter().filter(|a| !p.areas.contains(a)).map(|a| format!("− {}", a.name)).collect();
+                let new: Vec<String> =
+                    p.areas.iter().filter(|a| !now.contains(a)).map(|a| format!("+ {}", a.name)).collect();
+                let mut lines = vec![match now.is_empty() {
+                    true => "Now: nothing in focus this week".to_string(),
+                    false => format!("Now: {}", names(now)),
+                }];
+                if !gone.is_empty() || !new.is_empty() {
+                    lines.push(format!("Changes: {}", gone.into_iter().chain(new).collect::<Vec<_>>().join("  ")));
+                }
+                if let Some(from) = &p.provenance {
+                    let at = from.lines.map(|(a, b)| format!(", lines {a}–{b}")).unwrap_or_default();
+                    lines.push(format!("Read from {}{at}", from.path));
+                    let quote = from.quote.lines().take(3).collect::<Vec<_>>().join(" / ");
+                    if !quote.is_empty() {
+                        lines.push(format!("“{quote}”"));
+                    }
+                }
+                let keys = [
+                    ("week-set", "Set it", "↵", "enter"),
+                    ("week-edit", "Edit", "E", "e"),
+                    ("week-keep", "Keep the focus now", "N", "n"),
+                ];
+                (
+                    "This week's focus, proposed by an agent",
+                    "Nothing changes until you set it.",
+                    p.areas.clone(),
+                    lines,
+                    keys,
+                )
+            }
+            WeekCard::Carry => {
+                let last = focus.last().map(|w| w.areas.clone()).unwrap_or_default();
+                let keys = [
+                    ("week-carry", "Keep", "↵", "enter"),
+                    ("week-edit", "Edit", "E", "e"),
+                    ("week-none", "None", "N", "n"),
+                ];
+                ("Keep last week's focus?", "A new week: nothing is in focus until you say.", last, Vec::new(), keys)
+            }
+        };
+        let rows = areas.iter().enumerate().map(|(n, a)| {
+            let links: Vec<String> = a.projects.iter().chain(a.repos.iter()).cloned().collect();
+            let links = if links.is_empty() { "(no link)".to_string() } else { format!("→ {}", links.join(", ")) };
+            div()
+                .flex()
+                .gap_2()
+                .text_sm()
+                .child(muted(format!("{}", n + 1)))
+                .child(crate::cut_text(a.name.clone()))
+                .child(muted(links))
+                .into_any_element()
+        });
+        let body = div()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .children(rows)
+            .children(lines.into_iter().map(|l| muted(l).into_any_element()));
+        // A click is its key: the core says what the key does.
+        let buttons: Vec<AnyElement> = keys
+            .into_iter()
+            .rev()
+            .enumerate()
+            .map(|(n, (id, label, cap, key))| {
+                let kind =
+                    if n == 2 { Button::Primary(label.into()) } else { Button::Ghost(Face::Label(label.into())) };
+                ui::dialog::action(id, kind, &[cap], State::Rest)
+                    .child(self.controls.mark(format!("decision:{id}")))
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        if let Key::Act(action) = this.model.week_click(key, crate::now_ms()) {
+                            drop(this.dispatch(action, this.input, window, cx));
+                        }
+                    }))
+                    .into_any_element()
+            })
+            .collect();
+        let close = ui::dialog::close("week-card-close", State::Rest).on_click(
+            cx.listener(|this, _, window, cx| drop(this.dispatch(Action::DecisionsClose, this.input, window, cx))),
+        );
+        let panel = ui::dialog::frame(
+            ui::dialog::FORM,
+            title,
+            Some(purpose.into()),
+            close,
+            Some(body),
+            ui::dialog::actions(None, Some(format!("{at} of {of}").into()), buttons),
+        );
+        div().size_full().flex().items_center().justify_center().child(panel).into_any_element()
     }
 
     /// A key while the card pane has the keyboard. True: it was the card's.

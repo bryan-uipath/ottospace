@@ -91,6 +91,12 @@ impl Workspace {
             "areas": current.map_or(0, |w| w.areas.len()),
             "set_by": current.map(|w| w.set_by),
             "last": self.model.focus.last().map(|w| w.week.clone()),
+            // An agent's proposal waiting for the user: its revision and how many areas; never a name.
+            "proposal": self.model.focus.pending.as_ref().map(|p| serde_json::json!({
+                "revision": p.revision, "areas": p.areas.len(), "filed": p.filed,
+            })),
+            // A new week asks whether to keep last week's focus.
+            "carry": self.model.focus.wants_carry(),
         })
     }
 

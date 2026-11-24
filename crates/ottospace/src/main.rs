@@ -3540,6 +3540,37 @@ impl Workspace {
                     let _ = reply.send(self.serve_focus());
                     continue;
                 }
+                Request::FocusSet { week, areas, provenance } => {
+                    let now = now_ms();
+                    let week = week.unwrap_or_else(|| self.model.focus.week.clone());
+                    self.dispatch(Action::Tick { now }, Origin::Socket, window, cx);
+                    // Its projects are checked against the Projects folder as it is now: read it.
+                    if let Some(dir) = config::projects_dir() {
+                        let listed = crate::projects::read(&dir);
+                        self.dispatch(Action::SetProjects { on: true, listed }, Origin::System, window, cx);
+                    }
+                    let _ = reply.send(match self.model.focus_refusal(&week, &areas, now) {
+                        Some(why) => control::error(&why),
+                        None => {
+                            let kept: Vec<_> = areas.iter().map(ottospace_core::focus::Area::kept).collect();
+                            self.dispatch(
+                                Action::FocusPropose { week, areas, provenance, now },
+                                Origin::Socket,
+                                window,
+                                cx,
+                            );
+                            let pending = self.model.focus.pending.as_ref().filter(|p| p.areas == kept);
+                            let status = match (pending, self.model.focus.areas() == kept.as_slice()) {
+                                (Some(_), _) => "pending",
+                                (None, true) => "same",
+                                (None, false) => "declined",
+                            };
+                            let revision = pending.map(|p| p.revision);
+                            serde_json::json!({ "ok": true, "status": status, "revision": revision }).to_string()
+                        }
+                    });
+                    continue;
+                }
                 Request::Decision { id } => {
                     self.dispatch(Action::Tick { now: now_ms() }, Origin::Socket, window, cx);
                     let _ = reply.send(match self.model.filed.get(id) {
@@ -9398,8 +9429,9 @@ impl Workspace {
             }))
             // Tasks ▸ This Week's Focus… and the palette: its editor.
             .on_action(cx.listener(|this, _: &crate::week_focus::WeekFocus, window, cx| {
+                let open = Action::FocusEditOpen { from: ottospace_core::model::focus::Seed::Current };
                 match this.on(Feature::DecisionSources) {
-                    true => drop(this.dispatch(Action::FocusEditOpen, this.input, window, cx)),
+                    true => drop(this.dispatch(open, this.input, window, cx)),
                     false => cx.propagate(),
                 }
             }))

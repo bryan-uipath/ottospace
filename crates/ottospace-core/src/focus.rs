@@ -75,6 +75,48 @@ pub struct Week {
     pub at: u64,
 }
 
+/// The most proposals a client files in an hour, and an hour.
+pub const PROPOSALS_PER_HOUR: usize = 6;
+const HOUR_MS: u64 = 3_600_000;
+/// A proposal's quoted source line at its longest.
+pub const MAX_QUOTE: usize = 600;
+
+/// Where an agent read a proposal: the note's path and lines, and what it quotes. Untrusted: drawn
+/// as plain words, never followed.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Provenance {
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub lines: Option<(u32, u32)>,
+    #[serde(default)]
+    pub quote: String,
+}
+
+/// The week's focus an agent proposes (`focus_set`): it sets nothing until the user takes it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct Proposal {
+    pub week: String,
+    pub areas: Vec<Area>,
+    pub provenance: Option<Provenance>,
+    /// One more for each newer proposal of the week: the user's ↵ names the one it was shown.
+    pub revision: u32,
+    pub filed: u64,
+}
+
+/// What a proposal came to.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Proposed {
+    /// Waiting for the user: a card in Decisions.
+    Pending,
+    /// What is set already: no card.
+    Same,
+    /// What the user declined this week: no card until another comes.
+    Declined,
+}
+
 /// What `focus.json` keeps: the weeks set, the newest last.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Kept {
@@ -89,6 +131,16 @@ pub struct Focus {
     pub week: String,
     /// The weeks set, by week, oldest first.
     pub weeks: Vec<Week>,
+    /// An agent's proposal for this week, waiting for the user.
+    pub pending: Option<Proposal>,
+    /// The areas the user declined this week: the same proposed again makes no card.
+    pub declined: Option<(String, Vec<Area>)>,
+    /// The week whose "keep last week's focus?" the user answered.
+    pub carried: Option<String>,
+    /// When each counted proposal came: for `PROPOSALS_PER_HOUR`.
+    recent: Vec<u64>,
+    /// The last proposal's revision: revisions rise and are never given twice.
+    revisions: u32,
 }
 
 impl Focus {
@@ -122,6 +174,112 @@ impl Focus {
         self.weeks.push(week);
         self.weeks = by_week(std::mem::take(&mut self.weeks));
         true
+    }
+
+    /// Why a proposal is refused, or `None`. `projects`: the Projects entries' names;
+    /// `checkouts`: the listed repositories and worktrees.
+    pub fn refusal(
+        &self,
+        week: &str,
+        areas: &[Area],
+        now: u64,
+        projects: &[String],
+        checkouts: &[String],
+    ) -> Option<String> {
+        let entry = |p: &String| projects.iter().any(|q| q.eq_ignore_ascii_case(p));
+        let fault = if self.week.is_empty() || week != self.week {
+            format!("week: this week's, {}", self.week)
+        } else if areas.is_empty() || areas.len() > MAX_AREAS {
+            format!("1 to {MAX_AREAS} areas")
+        } else if let Some(a) =
+            areas.iter().find(|a| plain(&a.name, usize::MAX).is_empty() || a.name.chars().count() > MAX_NAME)
+        {
+            format!(
+                "an area's name: 1 to {MAX_NAME} characters, not {:?}",
+                a.name.chars().take(MAX_NAME).collect::<String>()
+            )
+        } else if areas.iter().any(|a| a.projects.len() > MAX_LINKS || a.repos.len() > MAX_LINKS) {
+            format!("at most {MAX_LINKS} projects and {MAX_LINKS} repositories an area")
+        } else if let Some(p) = areas.iter().flat_map(|a| &a.projects).find(|p| !entry(p)) {
+            format!("no project {p:?} in Projects")
+        } else if let Some(r) = areas.iter().flat_map(|a| &a.repos).find(|r| !checkouts.contains(r)) {
+            format!("no listed repository {r:?}")
+        } else if self.recent.iter().filter(|at| at.saturating_add(HOUR_MS) > now).count() >= PROPOSALS_PER_HOUR {
+            format!("{PROPOSALS_PER_HOUR} proposals in the last hour: wait")
+        } else {
+            return None;
+        };
+        Some(fault)
+    }
+
+    /// An agent proposes this week's focus (checked by `refusal` first). It sets nothing: it waits
+    /// for the user, replacing one that waited, unless it is what is set or what they declined.
+    pub fn propose(&mut self, areas: &[Area], provenance: Option<Provenance>, now: u64) -> Proposed {
+        let areas: Vec<Area> = areas.iter().map(Area::kept).take(MAX_AREAS).collect();
+        if self.current().is_some_and(|w| w.areas == areas) {
+            self.pending = None;
+            return Proposed::Same;
+        }
+        if self.declined.as_ref().is_some_and(|(week, declined)| *week == self.week && *declined == areas) {
+            return Proposed::Declined;
+        }
+        if self.pending.as_ref().is_some_and(|p| p.areas == areas && p.provenance == provenance) {
+            return Proposed::Pending;
+        }
+        self.recent.retain(|at| at.saturating_add(HOUR_MS) > now);
+        self.recent.push(now);
+        self.revisions = self.revisions.saturating_add(1);
+        let provenance = provenance.map(|p| Provenance {
+            path: plain(&p.path, MAX_LINK),
+            lines: p.lines.filter(|(from, to)| *from >= 1 && from <= to),
+            quote: crate::capture::kept_text(&p.quote, MAX_QUOTE),
+        });
+        let week = self.week.clone();
+        self.pending = Some(Proposal { week, areas, provenance, revision: self.revisions, filed: now });
+        Proposed::Pending
+    }
+
+    /// The user's ↵ on the proposal of `revision`, the one they were shown: it is this week's
+    /// focus. Another revision (a newer one came meanwhile) sets nothing.
+    pub fn accept(&mut self, revision: u32, at: u64) -> bool {
+        let Some(p) = self.pending.take_if(|p| p.revision == revision && p.week == self.week) else { return false };
+        self.set(&p.areas, SetBy::Proposal, at)
+    }
+
+    /// The user's N on the proposal of `revision`: the focus stays as it is.
+    pub fn decline(&mut self, revision: u32) -> bool {
+        let Some(p) = self.pending.take_if(|p| p.revision == revision) else { return false };
+        self.declined = Some((p.week, p.areas));
+        true
+    }
+
+    /// A new week, nothing set, last week's there, no proposal waiting, not answered: Decisions asks
+    /// whether to keep it.
+    pub fn wants_carry(&self) -> bool {
+        let answered = self.carried.as_ref().is_some_and(|w| *w == self.week);
+        !self.week.is_empty()
+            && self.current().is_none()
+            && self.last().is_some()
+            && self.pending.is_none()
+            && !answered
+    }
+
+    /// The user answers "keep last week's focus?": `keep` sets it again for this week.
+    pub fn carry(&mut self, keep: bool, at: u64) -> bool {
+        if !self.wants_carry() {
+            return false;
+        }
+        self.carried = Some(self.week.clone());
+        let areas = self.last().map(|w| w.areas.clone()).unwrap_or_default();
+        !keep || self.set(&areas, SetBy::User, at)
+    }
+
+    /// A week turned: a proposal of another week waits no more.
+    pub fn settle(&mut self) {
+        let week = self.week.clone();
+        if self.pending.as_ref().is_some_and(|p| p.week != week) {
+            self.pending = None;
+        }
     }
 
     pub fn kept(&self) -> Kept {

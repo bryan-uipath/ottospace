@@ -349,7 +349,10 @@ agent that may have misread or been steered, so nothing is applied until ↵ (or
   the one that ranks; the note is never written back. A proposal the user declined is not shown
   again until the routine files a different one.
 - Refused: more than four areas, a name over 40 characters, a project or repository that is not
-  listed, a week other than this one or the next.
+  listed, a week other than this one (built, slice 2b: next week is refused for now; `week` may be
+  left out for this one). On the card: ↵ sets the revision shown (a newer proposal replaces the
+  card, and a ↵ for an older one sets nothing), E opens the editor with it ticked, N keeps the focus
+  as it is, Esc closes Decisions and the card waits.
 
 ### The week
 

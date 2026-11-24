@@ -748,6 +748,8 @@ export interface FocusEdit {
   count: number;
   ticked: number[];
   cursor: number;
+  /** What it started ticked with: this week's, a proposal's (its revision), last week's. */
+  from: "current" | "last" | { proposal: number };
 }
 /** The week (`2026-W48`), how many areas are set this week and by whom, and the last week set before. */
 export interface WeekFocusState {
@@ -755,6 +757,22 @@ export interface WeekFocusState {
   areas: number;
   set_by: "user" | "proposal" | null;
   last: string | null;
+  /** An agent's proposal waiting for the user: its revision and how many areas; never a name. */
+  proposal: { revision: number; areas: number; filed: number } | null;
+  /** A new week: Decisions asks whether to keep last week's focus. */
+  carry: boolean;
+}
+/** `focus_set`'s fields. */
+export interface FocusSetArgs {
+  /** Default: this week. Another week is refused. */
+  week?: string;
+  areas: { name: string; projects?: string[]; repos?: string[] }[];
+  provenance?: { path?: string; lines?: [number, number] | null; quote?: string } | null;
+}
+export interface FocusSetReply {
+  ok: true;
+  status: "pending" | "same" | "declined";
+  revision: number | null;
 }
 /** An area of the week's focus: its name, and the projects (by name) and repositories (by path) that are its. */
 export interface FocusArea {
@@ -1580,6 +1598,8 @@ export interface Decisions {
   ticket: number | null;
   /** Triage on show (`decision_sources`): its card (`item` null) or the item being sorted. */
   sort: DecisionSorting | null;
+  /** The week's focus card on show: an agent's proposal (`{"proposal": revision}`) or `"carry"`. */
+  week: { proposal: number } | "carry" | null;
   at: number;
   of: number;
   queue: { task: TaskId; ticket: number; priority: number; since: number }[];

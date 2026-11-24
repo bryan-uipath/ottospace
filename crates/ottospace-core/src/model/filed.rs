@@ -14,7 +14,7 @@ impl Model {
     }
 
     /// The listed repositories and their worktrees: a file given as evidence lies in one.
-    fn checkouts(&self) -> Vec<String> {
+    pub(super) fn checkouts(&self) -> Vec<String> {
         let trees = self.repos.iter().flat_map(|repo| repo.worktrees.iter().map(|tree| tree.path.clone()));
         self.repos.iter().map(|repo| repo.path.clone()).chain(trees).collect()
     }

@@ -1923,8 +1923,32 @@ pub enum Action {
     RestoreFocus {
         kept: crate::focus::Kept,
     },
-    /// ⌘P › This Week's Focus…: the editor, the Projects entries to tick. Only the user's.
-    FocusEditOpen,
+    /// ⌘P › This Week's Focus…: the editor, the Projects entries to tick, ticked as `from` says
+    /// (this week's areas, a proposal's, last week's). Only the user's.
+    FocusEditOpen {
+        from: focus::Seed,
+    },
+    /// An agent proposes this week's focus (`focus_set`): a card for the user; it sets nothing.
+    FocusPropose {
+        week: String,
+        areas: Vec<crate::focus::Area>,
+        provenance: Option<crate::focus::Provenance>,
+        now: u64,
+    },
+    /// ↵ on the proposal card: the proposal of `revision`, the one shown, is this week's focus.
+    FocusAccept {
+        revision: u32,
+        at: u64,
+    },
+    /// N on the proposal card: the focus stays as it is.
+    FocusDecline {
+        revision: u32,
+    },
+    /// ↵ (keep) or N on "Keep last week's focus?".
+    FocusCarry {
+        keep: bool,
+        at: u64,
+    },
     FocusEditClose,
     FocusEditMove {
         delta: i32,
@@ -2673,7 +2697,7 @@ impl Action {
             | Action::BtwKeys { on: true }
             // Its card takes the keys in its pane.
             | Action::DecisionsOpen
-            | Action::FocusEditOpen => true,
+            | Action::FocusEditOpen { .. } => true,
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
@@ -3032,6 +3056,10 @@ impl Action {
             | Action::SortUndo
             | Action::SetWeek { .. }
             | Action::RestoreFocus { .. }
+            | Action::FocusPropose { .. }
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
             | Action::FocusEditClose
             | Action::FocusEditMove { .. }
             | Action::FocusEditToggle { .. }
@@ -3084,7 +3112,11 @@ impl Action {
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo
-            | Action::FocusEditOpen
+            | Action::FocusEditOpen { .. }
+            | Action::FocusPropose { .. }
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
             | Action::FocusEditClose
             | Action::FocusEditMove { .. }
             | Action::FocusEditToggle { .. }
@@ -5158,7 +5190,10 @@ impl Model {
             | Action::SortPromote { .. }
             | Action::SortUndo => Some(decisions::USERS_ALONE),
             // The week's focus is the user's to set; what week it is, the shell's to say.
-            Action::FocusEditOpen
+            Action::FocusEditOpen { .. }
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
             | Action::FocusEditClose
             | Action::FocusEditMove { .. }
             | Action::FocusEditToggle { .. }
@@ -7745,7 +7780,11 @@ impl Model {
             | Action::SortUndo) => self.sort_act(action, effects),
             action @ (Action::SetWeek { .. }
             | Action::RestoreFocus { .. }
-            | Action::FocusEditOpen
+            | Action::FocusEditOpen { .. }
+            | Action::FocusPropose { .. }
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
             | Action::FocusEditClose
             | Action::FocusEditMove { .. }
             | Action::FocusEditToggle { .. }
@@ -11903,7 +11942,11 @@ mod tests {
         Action::SortUndo,
         Action::SetWeek { .. },
         Action::RestoreFocus { .. },
-        Action::FocusEditOpen,
+        Action::FocusEditOpen { .. },
+        Action::FocusPropose { .. },
+        Action::FocusAccept { .. },
+        Action::FocusDecline { .. },
+        Action::FocusCarry { .. },
         Action::FocusEditClose,
         Action::FocusEditMove { .. },
         Action::FocusEditToggle { .. },
@@ -12335,7 +12378,11 @@ mod tests {
             Action::SortUndo,
             Action::SetWeek { week: "2026-W48".into() },
             Action::RestoreFocus { kept: crate::focus::Kept::default() },
-            Action::FocusEditOpen,
+            Action::FocusEditOpen { from: focus::Seed::Current },
+            Action::FocusPropose { week: "2026-W48".into(), areas: Vec::new(), provenance: None, now: 0 },
+            Action::FocusAccept { revision: 1, at: 0 },
+            Action::FocusDecline { revision: 1 },
+            Action::FocusCarry { keep: true, at: 0 },
             Action::FocusEditClose,
             Action::FocusEditMove { delta: 1 },
             Action::FocusEditToggle { row: None },
@@ -12967,7 +13014,10 @@ mod tests {
                     | Action::SortToggle { .. }
                     | Action::SortPromote { .. }
                     | Action::SortUndo => Some(decisions::USERS_ALONE),
-                    Action::FocusEditOpen
+                    Action::FocusEditOpen { .. }
+                    | Action::FocusAccept { .. }
+                    | Action::FocusDecline { .. }
+                    | Action::FocusCarry { .. }
                     | Action::FocusEditClose
                     | Action::FocusEditMove { .. }
                     | Action::FocusEditToggle { .. }
@@ -20455,7 +20505,10 @@ mod tests {
                     | Action::SortToggle { .. }
                     | Action::SortPromote { .. }
                     | Action::SortUndo => Some(decisions::USERS_ALONE),
-                    Action::FocusEditOpen
+                    Action::FocusEditOpen { .. }
+                    | Action::FocusAccept { .. }
+                    | Action::FocusDecline { .. }
+                    | Action::FocusCarry { .. }
                     | Action::FocusEditClose
                     | Action::FocusEditMove { .. }
                     | Action::FocusEditToggle { .. }
