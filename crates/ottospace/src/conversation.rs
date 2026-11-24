@@ -1941,7 +1941,17 @@ impl Workspace {
             .flex_col()
             .children(tabs)
             .children(bar)
-            .children(question.into_iter().flatten())
+            // Short of room (a small window, a taller header), the question gives way before the
+            // foot: Send stays on show.
+            .child(
+                div()
+                    .flex_shrink()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .flex()
+                    .flex_col()
+                    .children(question.into_iter().flatten()),
+            )
             .child(rows)
             .child(foot)
     }

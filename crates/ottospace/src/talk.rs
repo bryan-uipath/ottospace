@@ -762,7 +762,7 @@ impl Workspace {
             .flex()
             .items_start()
             .gap_2()
-            .pt_2()
+            .pt_1p5()
             .child(match shown.and_then(|task| self.task_badge(task.id, 18.)) {
                 Some(badge) => badge,
                 None => home::dot(color),
@@ -784,7 +784,7 @@ impl Workspace {
             );
         // Under it, what can be done, the slide buttons last.
         let controls = div()
-            .h(px(crate::TOP_BAR))
+            .h(px(32.))
             .flex()
             .items_center()
             .gap_2()
