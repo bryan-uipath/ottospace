@@ -743,8 +743,8 @@ mod tests {
         let fresh = gpu.render(&scene, 320, 200, 1., true).unwrap();
         let boxes = Boxes::new(&scene, true);
         let other = ottospace_core::scene::scene(&plan, &[], 1.6, &View::default());
-        drop(gpu.render_boxes(&other, &boxes, 160, 100, 1.).unwrap());
-        let kept = gpu.render_boxes(&scene, &boxes, 320, 200, 1.).unwrap();
+        drop(gpu.render_boxes(&other, &boxes, 160, 100, 1., false).unwrap());
+        let kept = gpu.render_boxes(&scene, &boxes, 320, 200, 1., false).unwrap();
         assert!(kept.bgra == fresh.bgra, "the kept picture differs");
     }
 
