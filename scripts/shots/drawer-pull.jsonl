@@ -1,6 +1,6 @@
 # The drawer as an overlay (`overlay_panels`): its title on a row of its own over its controls,
 # then pulled out over the panes by its |←, an edge of them showing, and back by ⌘⌥R.
-{"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin","OTTOSPACE_FEATURES":"overlay_panels","OTTOSPACE_REDUCE_MOTION":"1"}}
+{"env":{"OTTOSPACE_FEATURES":"overlay_panels","OTTOSPACE_REDUCE_MOTION":"1"}}
 {"cmd":"split"}
 {"cmd":"task_new","line":"a made-up task whose title is long enough to want a row of its own >app"}
 {"click":"rail:tasks"}

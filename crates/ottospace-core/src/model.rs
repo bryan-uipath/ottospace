@@ -4413,7 +4413,7 @@ pub struct Model {
     pub brief: Option<TaskId>,
     /// The conversation the right drawer is on. `None`: no drawer.
     pub talk: Option<Talk>,
-    /// The drawer's width in points, and whether it is widened to half the window.
+    /// The drawer's width in points, and whether it is pulled out over the panes (`talk_pulled`).
     pub talk_width: f32,
     pub talk_wide: bool,
     /// The conversations whose agent runs in a terminal of the drawer's, in the order they started.

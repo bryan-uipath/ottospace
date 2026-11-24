@@ -9682,11 +9682,19 @@ impl Render for Workspace {
         // The btw column widens it, the conversation kept as wide, to three quarters of the window at most.
         let most = f32::from(window.viewport_size().width) * 0.75;
         let drawer = if self.btw_drawn() { (drawer + btw::WIDTH).min(most).max(drawer) } else { drawer };
-        // Pulled out: over the panes, an edge of them left showing; eased there and back.
+        // Pulled out: over the panes, an edge of them left showing (right of an open sidebar's
+        // overlay); eased there and back, at once when the drawer is in the layout.
+        let normal = drawer;
         let pulled = self.model.talk_pulled();
         let window_width = f32::from(window.viewport_size().width);
-        let to = if pulled { ottospace_core::model::overlay::pulled_width(window_width, left, drawer) } else { drawer };
-        let (drawer, grows) = self.slides.drawer_width(to, pulled, crate::dial::calm());
+        let shown_left = left + if self.model.sidebar.is_some() && self.model.overlays() { SECTION } else { 0. };
+        let to = if pulled {
+            ottospace_core::model::overlay::pulled_width(window_width, shown_left, drawer)
+        } else {
+            drawer
+        };
+        let calm = crate::dial::calm() || !self.model.overlays();
+        let (drawer, grows) = self.slides.drawer_width(to, pulled, calm);
         if grows {
             window.request_animation_frame();
         }
@@ -9696,8 +9704,10 @@ impl Render for Workspace {
         let (right, right_width, drawer_over) = self.render_right(drawer, cx);
         let inner = (drawer - drawer_rail::WIDTH).max(0.);
         let (bar_over, drawer_over, left_in, right_in) = self.overlays_drawn(drawer_over, last, inner, window, cx);
-        // The toast keeps clear of an overlay drawer or bar, as far in as it is.
-        let toast_right = right_width + if drawer_over.is_some() { inner * right_in } else { 0. };
+        // The toast keeps clear of an overlay drawer or bar, as far in as it is; over a pulled-out
+        // one, as clear as of the drawer at its own width.
+        let toast_inner = (drawer.min(normal) - drawer_rail::WIDTH).max(0.);
+        let toast_right = right_width + if drawer_over.is_some() { toast_inner * right_in } else { 0. };
         let toast_left = if bar_over.is_some() { SECTION * left_in } else { 0. };
         // The top row's room for its spaces: over the centre and the drawer, less the lights, the +,
         // the buttons and the agent chip's badge.

@@ -415,6 +415,7 @@ impl Workspace {
                 _ => return true,
             },
             ("talk", "talk-close", _) => Action::TalkToggle,
+            ("talk", "talk-wide", _) => Action::TalkWide,
             // The native conversation's buttons: the core says who may.
             ("talk", "chat-allow" | "chat-deny" | "chat-show-all", _) => {
                 let shown = self.model.shown_chat().and_then(|chat| chat.transcript.cards.front());
@@ -774,7 +775,10 @@ impl Workspace {
                     .min_w_0()
                     .text_sm()
                     .line_height(px(18.))
+                    // Two lines at most, also of a title with line breaks in it.
+                    .max_h(px(36.))
                     .line_clamp(2)
+                    .text_ellipsis()
                     .child(title)
                     .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
             );
@@ -978,7 +982,9 @@ impl Workspace {
         };
         let edge = div().id("drawer-edge").absolute().top_0().bottom_0().left(px(-3.)).w(px(6.));
         let edge = edge.cursor(CursorStyle::ResizeLeftRight).on_drag(DraggedEdge, |_, _, _, cx| cx.new(|_| EmptyView));
-        Some(div().relative().flex_none().h_full().flex().child(drawer).child(edge).into_any_element())
+        // Pulled out, its edge is not dragged: the width it goes back to stays as it was.
+        let edge = (!self.model.talk_pulled()).then_some(edge);
+        Some(div().relative().flex_none().h_full().flex().child(drawer).children(edge).into_any_element())
     }
 
     /// The drawer's edge dragged to `x` in the window: its width is what lies right of it.

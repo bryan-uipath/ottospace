@@ -9272,8 +9272,20 @@ fn the_drawer_pulls_out_over_the_panes_to_an_edge_and_back() {
         json!({"cmd": "task_new", "line": "a made-up task whose title is long enough to want a row of its own >app"}),
     );
     otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5));
+    // Each overlay at rest before its controls are read: a slide moves them.
+    otto.wait_for("the sidebar at rest", |o| {
+        let r = o.drawn();
+        r["overlays"]["sidebar"]
+            .is_array()
+            .then(|| (rect(&r["overlays"]["sidebar"])[0] - 56.).abs() <= 1.)?
+            .then_some(())
+    });
     otto.start_task(1);
-    let before = otto.wait_for("the drawer", |o| Some(o.drawn()).filter(|r| r["overlays"]["drawer"].is_array()));
+    let before = otto.wait_for("the drawer at rest", |o| {
+        let r = o.drawn();
+        let d = r["overlays"]["drawer"].is_array().then(|| rect(&r["overlays"]["drawer"]))?;
+        ((d[0] + d[2] - (rect(&r["window"])[2] - 48.)).abs() <= 1.).then_some(r)
+    });
     let (window, normal) = (rect(&before["window"]), rect(&before["overlays"]["drawer"]));
     let pull = otto.control("talk:talk-wide");
     let frames = before["counts"]["overlay_frames"].as_u64().unwrap();
@@ -9282,14 +9294,19 @@ fn the_drawer_pulls_out_over_the_panes_to_an_edge_and_back() {
     assert_eq!(otto.drawn()["state"]["talk_wide"], false);
     // The user's |←: out to an edge of the panes, eased; no pane moves.
     otto.user_click(at(pull, 0.5, 0.5));
+    // What shows left of the panes: the rail, and an open sidebar's overlay.
+    let shown_left = |r: &Value| match r["overlays"]["sidebar"].as_array() {
+        Some(_) => rect(&r["overlays"]["sidebar"])[0] + rect(&r["overlays"]["sidebar"])[2],
+        None => 56.,
+    };
     let out = otto.wait_for("pulled out", |o| {
         let r = o.drawn();
         let d = rect(&r["overlays"]["drawer"]);
         // At rest: as wide as it goes.
-        (d[2] > normal[2] + 100. && (d[0] - 56. - 64.).abs() <= 2.).then_some(r)
+        (d[2] > normal[2] + 100. && (d[0] - shown_left(&r) - 64.).abs() <= 2.).then_some(r)
     });
     let drawer = rect(&out["overlays"]["drawer"]);
-    let edge = drawer[0] - 56.;
+    let edge = drawer[0] - shown_left(&out);
     assert!((edge - 64.).abs() <= 2., "an edge of the panes shows: {drawer:?} {window:?}");
     assert_eq!(out["bounds"], before["bounds"], "a pane moved");
     assert_eq!(out["state"]["talk_wide"], true);
