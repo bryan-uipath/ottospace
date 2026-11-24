@@ -418,6 +418,32 @@ impl Workspace {
         }
     }
 
+    /// A pinch at `at`, `magnification` nearer: zoomed out, the canvas zooms about it; over a code
+    /// city, its camera. `origin`: whose it is (the native hook's are the user's).
+    pub(crate) fn pinch(
+        &mut self,
+        at: Point<Pixels>,
+        magnification: f32,
+        origin: ottospace_core::Origin,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let nearer = 1. + magnification;
+        if !(nearer.is_finite() && nearer > 0.) {
+            return;
+        }
+        let was = self.swap_origin(origin);
+        let area = self.zooming.area.get();
+        let (w, h) = (f32::from(area.size.width), f32::from(area.size.height));
+        if self.model.zoom.is_some() && area.contains(&at) && w > 0. && h > 0. {
+            let about = [f32::from(at.x - area.origin.x) / w, f32::from(at.y - area.origin.y) / h];
+            self.dispatch(Action::ZoomCamera { step: CanvasStep::Zoom { factor: nearer, about } }, origin, window, cx);
+        } else if self.model.zoom.is_none() {
+            self.city_pinch(at, nearer, window, cx);
+        }
+        self.swap_origin(was);
+    }
+
     /// ⌘= ⌘- ⌘0 while zoomed out: nearer, farther (about the middle), every tile. Else not ours.
     pub(crate) fn canvas_key(&mut self, step: CanvasStep, window: &mut Window, cx: &mut Context<Self>) {
         match self.model.zoom.is_some() {

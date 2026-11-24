@@ -89,6 +89,7 @@
 {"cmd":"audio_probe_stop"}
 {"cmd":"window_width","width":340}
 {"cmd":"zoom_press"}
+{"cmd":"pinch","x":400,"y":300,"magnification":0.1,"as":"user"}
 {"cmd":"modifier_flags","changes":[{"at":0,"cmd":true},{"at":80,"cmd":false,"others":false,"input_at":null}]}
 {"cmd":"display_change"}
 {"cmd":"ui_gallery","on":true}

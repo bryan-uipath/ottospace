@@ -549,6 +549,16 @@ pub enum Request {
     /// For tests (`test_refusal`): the window's green button, pressed as the user would: a zoom,
     /// which fills the display instead. Refused outside a test run: only the user's hand fills it.
     ZoomPress,
+    /// For tests (`test_refusal`): a trackpad pinch at `x`, `y` (window points), `magnification`
+    /// nearer (0.1: 10%; negative: farther), as the native hook (`ottospace_mac::magnify`) hands
+    /// it over: the zoomed-out canvas or a code city zooms about it. `"as":"user"`: the user's.
+    Pinch {
+        x: f32,
+        y: f32,
+        magnification: f32,
+        #[serde(default, rename = "as")]
+        by: Option<By>,
+    },
     /// For tests (`test_refusal`): modifier changes, as the listener for ⌘⌘ would see them in
     /// another app (`double_cmd::Flags`); a double tap returns as the return key does
     /// (`counts.double_cmds`). Refused outside a test run: only the user's own ⌘ returns.
@@ -764,6 +774,7 @@ fn two() -> f32 {
 /// `audio_probe_start`: it would hear an app. `window_fixture`: it would make up another app's windows.
 /// `slot_windows` would too, and `slot_make` would make a slot for the user.
 /// `zoom_press`: it would put the window over the menu bar and the Dock as the user.
+/// `pinch`: it would zoom the user's canvas or city as their trackpad does.
 /// `modifier_flags`: it would take the keyboard from the user's app and bring ottospace forward.
 /// `display_change`: no client needs it, and it makes the window draw by GPUI's own paths.
 /// `displays_set`: it would fold the user's tabs in and out by displays that are not there.
@@ -819,6 +830,7 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         Request::ZoomPress => {
             Some("zoom_press is for tests (OTTOSPACE_E2E): only the user's green button fills the display")
         }
+        Request::Pinch { .. } => Some("pinch is for tests (OTTOSPACE_E2E): only the user's trackpad pinches"),
         Request::ModifierFlags { .. } => {
             Some("modifier_flags is for tests (OTTOSPACE_E2E): only the user's own ⌘⌘ returns")
         }
@@ -1103,6 +1115,10 @@ mod tests {
         let zoom = parse(r#"{"cmd":"zoom_press"}"#);
         assert!(test_refusal(&zoom, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&zoom, true), None);
+        // Nor a pinch: it would zoom as the user's trackpad.
+        let pinch = parse(r#"{"cmd":"pinch","x":10,"y":10,"magnification":0.1,"as":"user"}"#);
+        assert!(test_refusal(&pinch, false).expect("refused").contains("only the user"));
+        assert_eq!(test_refusal(&pinch, true), None);
         // Nor ⌘⌘: it would take the keyboard from the user's app.
         let taps = parse(r#"{"cmd":"modifier_flags","changes":[{"at":0,"cmd":true},{"at":80,"cmd":false}]}"#);
         assert!(test_refusal(&taps, false).expect("refused").contains("only the user"));

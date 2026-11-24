@@ -1732,8 +1732,8 @@ a file or a folder changes no other building's colour. A lit building keeps its 
 - Its camera is yours to move, your pointer's only: drag with the middle button held (the
   wheel, pressed) to pan; the mouse wheel zooms about the point under the pointer; a left drag
   (past a click: under 4 points is still a click, which focuses the pane) turns it round the
-  point it looks at. On a trackpad, two-finger scroll pans, ⌥ with it turns, ⌘ with it zooms (no
-  pinch: GPUI 0.2.2 delivers none). Esc during a drag puts it back where the drag began; a
+  point it looks at. On a trackpad, two-finger scroll pans, ⌥ with it turns, ⌘ with it zooms, and a pinch
+  zooms about the pointer (ottospace hears it itself: GPUI 0.2.2 delivers none). Esc during a drag puts it back where the drag began; a
   moved camera shows Reset view at the place's corner, which brings back the fitted view (from
   above a corner, 38° down, the city's middle 0.6 of the way down the place, the room over it for
   beams, names and agents), eased (at once under Reduce Motion). Pitch stays between 12° and 80°, zoom between a building filling the tab and
@@ -1802,9 +1802,10 @@ number and name; the tab you came from says "you were here", the selected tile h
   ground; ⌘ with a two-finger scroll, or a mouse wheel, zooms about the pointer (the point under it
   stays); ⌘= and ⌘- zoom about the middle; ⌘0 fits every tile again. From one tab filling the area
   out to a tab a twelfth of it (a 4 × 4 workspace is then a third of the area wide); it never pans
-  every tile out of view. No pinch yet. The camera is kept per workspace or task, also across a
-  restart (`layout.json`): ⌘⇧\\ opens where you left it, fitted the first time and again when its tabs
-  are not the ones of the last overview (one added, closed or moved since).
+  every tile out of view. A trackpad pinch zooms about the pointer too. The camera is kept per
+  workspace or task, also across a restart (`layout.json`): ⌘⇧\\ opens where you left it, fitted
+  the first time and again when its tabs are not the ones of the last overview (one added, closed
+  or moved since).
 - Drag a tile to place it: it lands where you drop it, its corner on a quarter-tile grid, and
   stays there (also across a restart). The others keep their own grid cells (one a placed tile
   covers takes the next free cell); a new tab takes its own. The arrows go to the nearest tile that

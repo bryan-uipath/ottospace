@@ -18107,6 +18107,19 @@ fn the_users_pointer_moves_the_citys_camera() {
     }
     assert_eq!(view(&otto), fitted, "reset");
     assert!(otto.control_opt("city:reset:tab").is_none(), "no button on a fitted camera");
+    // A pinch out, as the native hook hands it over (GPUI has none): nearer, about the pointer.
+    // A client's moves nothing.
+    let pinch = |user: bool| {
+        let mut event = json!({"cmd": "pinch", "x": p[0], "y": p[1], "magnification": 0.3});
+        if user {
+            event["as"] = json!("user");
+        }
+        otto.call(event);
+    };
+    pinch(false);
+    assert_eq!(view(&otto), fitted, "a client's pinch");
+    pinch(true);
+    assert!(num(&view(&otto), "zoom") < num(&fitted, "zoom"), "{}", view(&otto));
     // At rest: no frame asked for.
     std::thread::sleep(Duration::from_millis(600));
     let frames = otto.call(json!({"cmd": "state"}))["counts"]["city_frames"].clone();
@@ -19064,6 +19077,20 @@ fn zoomed_out_the_canvas_zooms_about_the_pointer_pans_and_fits() {
         let back = otto.user_key("cmd-0");
         assert_eq!(camera(&back), fitted, "{size}");
         assert_eq!(otto.drawn()["counts"]["zoom_frames"], 0, "{size}");
+        // A pinch out over a tile, as the native hook hands it over: nearer, its point stays.
+        // A client's moves nothing.
+        let fit_tile = tile(&otto);
+        let q = at(fit_tile, 0.3, 0.6);
+        let pinch = json!({"cmd": "pinch", "x": q[0], "y": q[1], "magnification": 0.25});
+        assert_eq!(camera(&otto.call(pinch.clone())), fitted, "{size}: a client's pinch");
+        let mut theirs = pinch;
+        theirs["as"] = json!("user");
+        let pinched = otto.call(theirs);
+        assert!(scale(&pinched) > fitted["scale"].as_f64().unwrap(), "{size}: {}", camera(&pinched));
+        let bigger = tile(&otto);
+        let kept = at(bigger, 0.3, 0.6);
+        assert!((kept[0] - q[0]).abs() < 2. && (kept[1] - q[1]).abs() < 2., "{size}: {bigger:?} about {q:?}");
+        otto.user_key("cmd-0");
         // Its camera is kept: in and out again, where it was left.
         otto.user_key("cmd--");
         let left = camera(&otto.drawn());
