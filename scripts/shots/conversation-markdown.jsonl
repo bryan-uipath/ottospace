@@ -1,0 +1,21 @@
+# A reply of every Markdown case the conversation draws (made-up): headings, inline code alone, with
+# spaces, wrapping and inside bold, links, a bare long address, backticks in code, a hard break, an
+# ordered list from 8 (marks on one edge), nested bullets, tasks, a quote, a table, a `text` fence
+# (wraps, no label), an unlabelled tree and a Rust one (each scrolls across). At the drawer's width and dragged wider.
+{"cmd":"split","kind":"empty"}
+{"cmd":"task_new","line":"render the notes >app"}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.1.replies","len":1}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.5],"dy":200}
+{"shot":"narrow-top"}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.5],"dy":-15}
+{"shot":"narrow-middle"}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.5],"dy":-200}
+{"shot":"narrow-foot"}
+{"drag":{"rect":"drawer.body"},"at":[0,0.5],"by":[-420,0]}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.5],"dy":200}
+{"shot":"wide-top"}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.5],"dy":-200}
+{"shot":"wide-foot"}

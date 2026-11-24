@@ -148,6 +148,7 @@ mod syntax;
 mod tags;
 mod talk;
 mod terminal;
+mod text_runs;
 mod toast;
 mod trace;
 mod ui;

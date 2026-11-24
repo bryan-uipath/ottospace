@@ -51,6 +51,35 @@ pub struct Style {
     pub mention: bool,
 }
 
+/// How a span is drawn. Code wins: inside bold or italic it is still code, in the monospace
+/// family at its regular weight, in its box (bold code read as a row of buttons).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Look {
+    pub mono: bool,
+    pub bold: bool,
+    pub italic: bool,
+    /// Drawn on a box: code, a mention.
+    pub boxed: bool,
+}
+
+impl Style {
+    pub fn look(self) -> Look {
+        let code = self.code;
+        Look {
+            mono: code,
+            bold: (self.strong || self.mention) && !code,
+            italic: self.emphasis && !code,
+            boxed: code || self.mention,
+        }
+    }
+}
+
+/// A fence drawn as prose: soft-wrapped, its label not shown: one labelled as plain text
+/// (`text`). An unlabelled one keeps its lines: a tree or a box drawn in it would break.
+pub fn plain_fence(label: Option<&str>) -> bool {
+    label.is_some_and(|label| matches!(label.trim().to_lowercase().as_str(), "text" | "txt" | "plain" | "plaintext"))
+}
+
 /// A link that may open: what `links::target` made of `raw`, the destination as written
 /// (shown on hover).
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -918,6 +947,45 @@ fn mention(text: &str) -> Option<(usize, String)> {
         _ => return None,
     };
     Some((close + 1, name))
+}
+
+#[cfg(test)]
+mod look {
+    use super::*;
+
+    fn spans_of(text: &str) -> Vec<Span> {
+        match parse(text, None).into_iter().next() {
+            Some(Block::Para(spans)) => spans,
+            other => panic!("{other:?}"),
+        }
+    }
+
+    /// Code is code wherever it is: monospace, its box, never bold or italic; bold and italic
+    /// around it stay on the words beside it.
+    #[test]
+    fn code_inside_bold_or_italic_is_still_code() {
+        let spans = spans_of("**`take_keys` / `feature`:** both, *`a(b, c)` too*");
+        let looks: Vec<(&str, Look)> = spans.iter().map(|s| (s.text.as_str(), s.style.look())).collect();
+        let code = Look { mono: true, bold: false, italic: false, boxed: true };
+        assert_eq!(looks[0], ("take_keys", code));
+        assert_eq!(looks[1], (" / ", Look { bold: true, ..Look::default() }));
+        assert_eq!(looks[2], ("feature", code));
+        assert!(looks.iter().any(|(text, look)| *text == "a(b, c)" && *look == code), "{looks:?}");
+        // One span for a code span with spaces: one run, one box.
+        let one = spans_of("the `Array.isArray(value) || value.length !== 2` guard");
+        assert_eq!(one.iter().filter(|s| s.style.code).count(), 1);
+    }
+
+    #[test]
+    fn a_plain_fence_is_prose() {
+        for label in [Some("text"), Some("TXT"), Some(" plain ")] {
+            assert!(plain_fence(label), "{label:?}");
+        }
+        // Unlabelled: a tree or a box keeps its lines, and scrolls across.
+        for label in [None, Some(""), Some("rust"), Some("sh"), Some("src/main.rs")] {
+            assert!(!plain_fence(label), "{label:?}");
+        }
+    }
 }
 
 #[cfg(test)]
