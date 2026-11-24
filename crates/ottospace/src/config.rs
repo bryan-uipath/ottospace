@@ -517,21 +517,24 @@ fn decisions_dir() -> Option<PathBuf> {
 
 /// The most decision files read, and the largest one: a folder is input, not trusted text.
 const MAX_DECISIONS: usize = 512;
-const MAX_DECISION_BYTES: u64 = 64 * 1024;
+const MAX_DECISION_BYTES: u64 = 1024 * 1024;
 
 /// Reads the decisions folder: each small regular `<id>.json` (not a link or a pipe) that
 /// parses. The core checks each again (`Filed::restore`).
 pub fn load_decisions() -> Vec<ottospace_core::filed::Decision> {
     let Some(entries) = decisions_dir().and_then(|dir| fs::read_dir(dir).ok()) else { return Vec::new() };
-    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
-    paths.sort();
-    let named = |path: &PathBuf| {
-        let stem = path.file_stem().and_then(|stem| stem.to_str());
-        path.extension().is_some_and(|ext| ext == "json") && stem.is_some_and(|stem| stem.parse::<u64>().is_ok())
+    // By id, newest first: ids rise, and the core keeps at most a few hundred.
+    let id = |path: &PathBuf| {
+        let stem = path.file_stem().and_then(|stem| stem.to_str())?;
+        path.extension().is_some_and(|ext| ext == "json").then(|| stem.parse::<u64>().ok()).flatten()
     };
+    let mut files: Vec<(u64, PathBuf)> = entries.flatten().filter_map(|e| Some((id(&e.path())?, e.path()))).collect();
+    files.sort_unstable_by(|a, b| b.0.cmp(&a.0));
     let read = |path: &PathBuf| crate::collect::read_plain(path, MAX_DECISION_BYTES);
     let parse = |bytes: Vec<u8>| serde_json::from_slice::<ottospace_core::filed::Decision>(&bytes).ok();
-    paths.iter().filter(|path| named(path)).take(MAX_DECISIONS).filter_map(|path| read(path).and_then(parse)).collect()
+    // A file whose id is not its name's is left out: it could never be removed by its id.
+    let named = |(id, path): &(u64, PathBuf)| read(path).and_then(parse).filter(|d| d.id == *id);
+    files.iter().take(MAX_DECISIONS).filter_map(named).collect()
 }
 
 /// Writes one decision to `<id>.json` in the decisions folder (0600), whole or not at all.

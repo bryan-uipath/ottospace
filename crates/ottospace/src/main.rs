@@ -1784,7 +1784,6 @@ impl Workspace {
         let kept = config::read_projects();
         let restore = Action::RestoreProjects { placed: kept.placed, used: kept.used.into_iter().collect() };
         model.update(restore.sent_by(Origin::System));
-        model.update(Action::RestoreDecisions { kept: config::load_decisions() }.sent_by(Origin::System));
         // Before what a restore reads: a section behind a flag that is off is not put back.
         model.update(Action::SetFeatures { features: features::startup() }.sent_by(Origin::System));
         // A test run's fixture is a transcript's sound: a terminal pane may be heard.
@@ -1797,6 +1796,8 @@ impl Workspace {
         // A folder that could not be listed is left alone: writing could replace tasks it holds.
         let keeping = kept.error.is_none();
         model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest }.sent_by(Origin::System));
+        // After the tasks: an agent's question whose task is there is not taken for an orphan.
+        model.update(Action::RestoreDecisions { kept: config::load_decisions() }.sent_by(Origin::System));
         // The first problem found at start, for the toast: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
@@ -3445,12 +3446,20 @@ impl Workspace {
                         task,
                     };
                     let now = now_ms();
+                    // The model's time first: what expired by now is closed before the caps are counted.
+                    self.dispatch(Action::Tick { now }, Origin::Socket, window, cx);
+                    let said = self.error.clone();
                     let _ = reply.send(match self.model.filing_refusal(&filing, now) {
                         Some(why) => control::error(&why),
                         None => {
                             let (source, key) = (filing.source, filing.key.clone());
                             self.dispatch(Action::DecisionFile { filing: Box::new(filing), now }, Origin::Socket, window, cx);
+                            let unwritten = self.error.clone().filter(|error| Some(error) != said.as_ref());
                             match self.model.filed.find(source, &key) {
+                                Some(_) if unwritten.is_some() => control::error(&format!(
+                                    "filed, but not kept on disk: {}",
+                                    unwritten.unwrap_or_default()
+                                )),
                                 Some(d) => serde_json::json!({
                                     "ok": true, "id": d.id, "revision": d.revision, "status": d.status, "triage": d.triage
                                 })
@@ -3471,6 +3480,7 @@ impl Workspace {
                     }
                 }
                 Request::Decision { id } => {
+                    self.dispatch(Action::Tick { now: now_ms() }, Origin::Socket, window, cx);
                     let _ = reply.send(match self.model.filed.get(id) {
                         Some(d) => {
                             let mut decision = serde_json::json!(d);

@@ -940,12 +940,6 @@ function decisionChoice(value: unknown, at: string): DecisionChoice {
 function decisionAt(value: unknown, at: string): DecisionAt {
   if (typeof value === "string") return value;
   const o = fields(value, at);
-  const pair = (v: unknown, p: string): [number, number] => {
-    const both = list(num)(v, p);
-    const [from, to] = both;
-    if (both.length !== 2 || from === undefined || to === undefined) throw wrong(p, "[from, to]", v);
-    return [from, to];
-  };
   return { path: str(o.path, `${at}.path`), lines: orNull(pair)(o.lines, `${at}.lines`) };
 }
 

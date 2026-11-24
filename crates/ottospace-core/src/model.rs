@@ -9088,6 +9088,7 @@ impl Model {
             || self.finish.offer.as_ref().is_some_and(|offer| offer.until <= now)
             || self.calendar.due(now)
             || self.new_window.as_ref().is_some_and(|wait| wait.since + crate::new_window::WAIT_MS <= now)
+            || self.filed.next_due().is_some_and(|at| at <= now)
     }
 
     /// When `due` turns true next, but for the calendar's alerts: the shell looks at those on its
@@ -9097,7 +9098,8 @@ impl Model {
         let clip = self.clip.as_ref().map(|clip| clip.at.saturating_add(crate::clip::NOTICE_MS));
         let done = self.finish.offer.as_ref().map(|offer| offer.until);
         let window = self.new_window.as_ref().map(|wait| wait.since + crate::new_window::WAIT_MS);
-        [self.tasks.next_due(), offer, clip, self.workbooks.next_due(), done, window].into_iter().flatten().min()
+        let filed = self.filed.next_due();
+        [self.tasks.next_due(), offer, clip, self.workbooks.next_due(), done, window, filed].into_iter().flatten().min()
     }
 
     /// Everything the marks and the workbooks need, each once: what the shell looks for on
