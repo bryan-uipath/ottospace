@@ -341,7 +341,7 @@ struct Mark {
 /// the scene and plan it shows, for what the pointer is over.
 struct Made {
     key: Key,
-    image: Arc<RenderImage>,
+    image: Shown,
     lit: Vec<([f32; 4], (f32, f32))>,
     marks: Vec<Mark>,
     scene: Scene,
@@ -358,6 +358,20 @@ struct Made {
     made_at: Instant,
     painted: bool,
 }
+
+/// A picture as GPUI paints it: an image it uploads (read back), or the surface it was rendered
+/// into, painted with no copy (`city_gpu::Picture::surface`).
+enum Shown {
+    Image(Arc<RenderImage>),
+    Surface(Surface),
+}
+
+/// A pixel buffer, sent from the picture's thread.
+struct Surface(core_video::pixel_buffer::CVPixelBuffer);
+
+// SAFETY: a CVPixelBuffer is reference counted by CoreVideo, which is thread-safe; the picture's
+// thread is done with it (rendered and waited on) before it is sent.
+unsafe impl Send for Surface {}
 
 /// One empty place's city, as the last frame drew it.
 #[derive(Default)]
@@ -695,12 +709,17 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     }
     let scene_us = started.elapsed().as_micros() as u64;
     let (rw, rh) = key.render_size();
-    let Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us } =
-        gpu.render_boxes(&scene, &boxes, rw, rh, f32::from(key.rise) / 1000.)?;
+    let Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us, surface } =
+        gpu.render_boxes(&scene, &boxes, rw, rh, f32::from(key.rise) / 1000., true)?;
     let camera = scene.camera.ok_or("no camera")?;
     let made_at = Instant::now();
-    let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
-    let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
+    let image = match surface {
+        Some(buffer) => Shown::Surface(Surface(buffer)),
+        None => {
+            let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
+            Shown::Image(Arc::new(RenderImage::new([image::Frame::new(image)])))
+        }
+    };
     // Where a picture's time goes, for the bench (`scripts/bench`'s city motion): numbers only.
     let image_us = made_at.elapsed().as_micros() as u64;
     let fields = serde_json::json!({ "scene_us": scene_us, "prep_us": prep_us, "boxes_us": boxes_us, "alloc_us": alloc_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": rw, "h": rh });
@@ -925,7 +944,9 @@ impl Workspace {
             match picture {
                 Ok(made) => {
                     if let Some(old) = drawn.pictures.insert(key, made) {
-                        drawn.retired.push(old.image);
+                        if let Shown::Image(image) = old.image {
+                            drawn.retired.push(image);
+                        }
                     }
                     // Another scene: the box under each pointer, found again in it.
                     let found: Vec<(Floor, Option<usize>)> = (drawn.places.iter())
@@ -978,7 +999,9 @@ impl Workspace {
             drawn.pictures.keys().filter(|key| key.rise < 1000 && !used.contains(*key)).cloned().collect();
         for key in unused.into_iter().skip(KEPT_PICTURES).map(|(_, key)| key).chain(rises) {
             if let Some(old) = drawn.pictures.remove(&key) {
-                drawn.retired.push(old.image);
+                if let Shown::Image(image) = old.image {
+                    drawn.retired.push(image);
+                }
             }
         }
         drawn.failed.retain(|key, _| used.iter().any(|used| used.standing() == *key));
@@ -1761,7 +1784,10 @@ fn paint(
     let new = !made.painted;
     let wait = made.made_at.elapsed().as_secs_f32() * 1e3;
     let painted = Instant::now();
-    let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
+    match &made.image {
+        Shown::Image(image) => drop(window.paint_image(bounds, Corners::default(), image.clone(), 0, false)),
+        Shown::Surface(Surface(buffer)) => window.paint_surface(bounds, buffer.clone()),
+    }
     let us = painted.elapsed().as_micros() as u64;
     crate::trace::record("city_paint", serde_json::json!({ "us": us, "new": new, "wait_us": (wait * 1e3) as u64 }));
 

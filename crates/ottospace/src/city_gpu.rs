@@ -21,6 +21,9 @@ pub struct Picture {
     /// Of it: the boxes' instances ordered and placed, and textures and buffers made.
     pub boxes_us: u64,
     pub alloc_us: u64,
+    /// Rendered into this IOSurface-backed BGRA pixel buffer (macOS), which GPUI paints with no
+    /// copy: then `bgra` is empty. None: read back.
+    pub surface: Option<core_video::pixel_buffer::CVPixelBuffer>,
 }
 
 const SAMPLES: u32 = 4;
@@ -297,10 +300,11 @@ impl Gpu {
     /// `scene` as a picture `width` × `height` pixels, `rise` (0 to 1) of the way through its
     /// buildings' rise (1: standing), its buildings of glass or not, or why there is none.
     pub fn render(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {
-        self.render_boxes(scene, &Boxes::new(scene, glass), width, height, rise)
+        self.render_boxes(scene, &Boxes::new(scene, glass), width, height, rise, false)
     }
 
     /// `render`, of `scene`'s boxes as made already (`Boxes::new`): a camera move's picture.
+    /// `shared`: into an IOSurface GPUI paints, if one can be made (macOS), else read back.
     pub fn render_boxes(
         &self,
         scene: &Scene,
@@ -308,6 +312,7 @@ impl Gpu {
         width: u32,
         height: u32,
         rise: f32,
+        shared: bool,
     ) -> Result<Picture, String> {
         if boxes.base.len() != scene.blocks.len() {
             return Err("boxes of another scene".into());
@@ -316,7 +321,7 @@ impl Gpu {
         // panics.
         let memory = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let valid = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let picture = self.draw(scene, boxes, width, height, rise);
+        let picture = self.draw(scene, boxes, width, height, rise, shared);
         let errors = [pollster::block_on(valid.pop()), pollster::block_on(memory.pop())];
         let picture = match errors.into_iter().flatten().next() {
             Some(error) => Err(format!("render: {error}")),
@@ -329,7 +334,15 @@ impl Gpu {
         picture
     }
 
-    fn draw(&self, scene: &Scene, boxes: &Boxes, width: u32, height: u32, rise: f32) -> Result<Picture, String> {
+    fn draw(
+        &self,
+        scene: &Scene,
+        boxes: &Boxes,
+        width: u32,
+        height: u32,
+        rise: f32,
+        shared: bool,
+    ) -> Result<Picture, String> {
         let prepared = std::time::Instant::now();
         let camera = scene.camera.ok_or("no camera")?;
         let limit = self.device.limits().max_texture_dimension_2d;
@@ -344,6 +357,9 @@ impl Gpu {
         if kept.targets.as_ref().is_none_or(|t| t.size != (width, height)) {
             kept.targets = Some(targets(device, size));
         }
+        // Each picture its own surface: GPUI may still be painting the last one.
+        let surface = shared.then(|| shared_target(device, width, height)).flatten();
+        let surface_view = surface.as_ref().map(|(_, texture)| texture.create_view(&Default::default()));
         let mut alloc_us = allocating.elapsed().as_micros() as u64;
 
         // The frame: the camera, the eye, the fog (from a bit before the target to far past it,
@@ -394,7 +410,7 @@ impl Gpu {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &t.samples,
                     depth_slice: None,
-                    resolve_target: Some(&t.into),
+                    resolve_target: Some(surface_view.as_ref().unwrap_or(&t.into)),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1. }),
                         store: wgpu::StoreOp::Discard,
@@ -415,6 +431,27 @@ impl Gpu {
             pass.draw(0..36, 0..solid_count);
             pass.set_pipeline(&self.glass);
             pass.draw(0..36, solid_count..scene.blocks.len() as u32);
+        }
+        if let Some((buffer, _)) = surface {
+            drop(kept);
+            let prep_us = prepared.elapsed().as_micros() as u64;
+            let started = std::time::Instant::now();
+            self.queue.submit([encoder.finish()]);
+            // Done before GPUI samples it.
+            device.poll(wgpu::PollType::wait_indefinitely()).map_err(|e| format!("poll: {e}"))?;
+            let gpu_us = started.elapsed().as_micros() as u64;
+            let bgra = Vec::new();
+            return Ok(Picture {
+                width,
+                height,
+                bgra,
+                gpu_us,
+                copy_us: 0,
+                prep_us,
+                boxes_us,
+                alloc_us,
+                surface: Some(buffer),
+            });
         }
         encoder.copy_texture_to_buffer(
             t.resolved.as_image_copy(),
@@ -445,8 +482,75 @@ impl Gpu {
         // Unmapped: the next picture copies into it again.
         read.unmap();
         let copy_us = started.elapsed().as_micros() as u64;
-        Ok(Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us })
+        Ok(Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us, surface: None })
     }
+}
+
+/// An IOSurface-backed BGRA pixel buffer `width` × `height` and a wgpu texture over it, on
+/// wgpu's own Metal device; none off Metal, or if any step fails (then the picture is read back).
+fn shared_target(
+    device: &wgpu::Device,
+    width: u32,
+    height: u32,
+) -> Option<(core_video::pixel_buffer::CVPixelBuffer, wgpu::Texture)> {
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::CFDictionary;
+    use core_foundation::string::CFString;
+    use core_video::pixel_buffer::{
+        CVPixelBuffer, kCVPixelBufferIOSurfacePropertiesKey, kCVPixelBufferMetalCompatibilityKey,
+        kCVPixelFormatType_32BGRA,
+    };
+    use objc2_metal::{MTLDevice, MTLPixelFormat, MTLTextureDescriptor, MTLTextureType, MTLTextureUsage};
+    // SAFETY: Core Video's constant keys, alive for the process.
+    let key = |k| unsafe { CFString::wrap_under_get_rule(k) };
+    let none: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[]);
+    let options = CFDictionary::from_CFType_pairs(&[
+        (key(unsafe { kCVPixelBufferIOSurfacePropertiesKey }), none.as_CFType()),
+        (key(unsafe { kCVPixelBufferMetalCompatibilityKey }), CFBoolean::true_value().as_CFType()),
+    ]);
+    let buffer = CVPixelBuffer::new(kCVPixelFormatType_32BGRA, width as usize, height as usize, Some(&options)).ok()?;
+    // SAFETY: the buffer is IOSurface-backed (asked for above) and holds its surface while it lives.
+    let surface =
+        unsafe { core_video::pixel_buffer_io_surface::CVPixelBufferGetIOSurface(buffer.as_concrete_TypeRef()) };
+    // SAFETY: the buffer holds its IOSurface while it lives, and the texture retains it too.
+    let surface = unsafe { (surface as *const objc2_io_surface::IOSurfaceRef).as_ref() }?;
+    // SAFETY: the raw device is only used to make a texture, while `hal` lives.
+    let hal = unsafe { device.as_hal::<wgpu::hal::api::Metal>() }?;
+    let descriptor = unsafe {
+        MTLTextureDescriptor::texture2DDescriptorWithPixelFormat_width_height_mipmapped(
+            MTLPixelFormat::BGRA8Unorm,
+            width as usize,
+            height as usize,
+            false,
+        )
+    };
+    descriptor.setUsage(MTLTextureUsage::RenderTarget | MTLTextureUsage::ShaderRead);
+    let raw = hal.raw_device().newTextureWithDescriptor_iosurface_plane(&descriptor, surface, 0)?;
+    let copy = wgpu::hal::CopyExtent { width, height, depth: 1 };
+    // SAFETY: a 2D BGRA8 texture of one level and one layer, as described.
+    let raw =
+        unsafe { wgpu::hal::metal::Device::texture_from_raw(raw, FORMAT, MTLTextureType::Type2D, 1, 1, copy, None) };
+    drop(hal);
+    let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
+    // SAFETY: `raw` was made on this device, with this descriptor's size, format and usage.
+    let texture = unsafe {
+        device.create_texture_from_hal::<wgpu::hal::api::Metal>(
+            raw,
+            &wgpu::TextureDescriptor {
+                label: Some("city surface"),
+                size,
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: FORMAT,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                view_formats: &[],
+            },
+            wgpu::TextureUses::COLOR_TARGET,
+        )
+    };
+    Some((buffer, texture))
 }
 
 /// A picture's targets: multisampled colour and depth, the resolved colour, and its read buffer
