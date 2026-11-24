@@ -195,14 +195,60 @@ pub struct Watch {
     subject: Subject,
     read: Receiver<Vec<Event>>,
     stop: Arc<std::sync::atomic::AtomicBool>,
+    /// The last look found its file and read it: the header says "Watching" only then.
+    following: Arc<std::sync::atomic::AtomicBool>,
+    /// What the header last drew of `following`: a change is drawn though nothing was read.
+    told: std::cell::Cell<bool>,
 }
 
 /// How often a watched session's file is read again, and how much of it at once.
 const WATCH_MS: u64 = 1000;
 const WATCH_BUDGET: u64 = 4 << 20;
 
+/// A watched session's file as followed: found in its folder, then read on from `cursor`.
+struct Follow {
+    id: String,
+    cwd: std::path::PathBuf,
+    session: Option<ottospace_sessions::SessionRef>,
+    cursor: ottospace_sessions::Cursor,
+    /// Its first read was given: `WatchFromStart` went with it.
+    begun: bool,
+}
+
+impl Follow {
+    fn new(id: String, cwd: String) -> Self {
+        let cursor = ottospace_sessions::Cursor::with_edits();
+        Self { id, cwd: cwd.into(), session: None, cursor, begun: false }
+    }
+
+    /// One look: what its file says since the last, and whether more is there now. `Err`: not
+    /// found or not read this time, tried again at the next look (a folder or file briefly gone).
+    /// A failed read looks the session up again at the next look (its file moved): the cursor
+    /// stays, and the reader starts over if the file it finds is another.
+    fn step(&mut self, reader: &dyn ottospace_sessions::SessionReader) -> Result<(Vec<Event>, bool), ()> {
+        let session = match self.session.take() {
+            Some(session) => session,
+            None => {
+                let sessions = reader.sessions(std::slice::from_ref(&self.cwd)).map_err(drop)?;
+                sessions.into_iter().find(|session| session.id == self.id).ok_or(())?
+            }
+        };
+        let batch = reader.read(&session, self.cursor.clone(), WATCH_BUDGET).map_err(drop)?;
+        self.session = Some(session);
+        // Its first read, or its file replaced or cut short: what an earlier watch built goes first.
+        let mut events = Vec::new();
+        if !std::mem::replace(&mut self.begun, true) || batch.restarted {
+            events.push(Event::WatchFromStart);
+        }
+        self.cursor = batch.cursor;
+        events.extend(batch.events.iter().flat_map(watched));
+        Ok((events, batch.more))
+    }
+}
+
 impl Watch {
     /// Finds the session in its folder, then reads its file from the start and on as it grows.
+    /// A look that fails is tried again: the watch ends only when it is dropped.
     fn start(
         subject: Subject,
         runner: ottospace_core::runner::RunnerId,
@@ -212,33 +258,38 @@ impl Watch {
     ) -> Self {
         let (send, read) = std::sync::mpsc::channel();
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let stopped = stop.clone();
+        let following = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (stopped, followed) = (stop.clone(), following.clone());
         std::thread::spawn(move || {
             let Some(reader) = ottospace_sessions::reader(runner, &dirs) else { return };
-            let Ok(sessions) = reader.sessions(&[std::path::PathBuf::from(&cwd)]) else { return };
-            let Some(session) = sessions.into_iter().find(|session| session.id == id) else { return };
-            // Read from the start again: what an earlier watch built goes first.
-            if send.send(vec![Event::WatchFromStart]).is_err() {
-                return;
-            }
-            ottospace_mac::wake::post();
-            let mut cursor = ottospace_sessions::Cursor::with_edits();
+            let mut follow = Follow::new(id, cwd);
             while !stopped.load(std::sync::atomic::Ordering::Relaxed) {
-                let Ok(batch) = reader.read(&session, cursor.clone(), WATCH_BUDGET) else { return };
-                cursor = batch.cursor;
-                let events: Vec<Event> = batch.events.iter().flat_map(watched).collect();
-                if !events.is_empty() {
-                    if send.send(events).is_err() {
-                        return;
-                    }
+                let step = follow.step(reader.as_ref());
+                if followed.swap(step.is_ok(), std::sync::atomic::Ordering::Relaxed) != step.is_ok() {
                     ottospace_mac::wake::post();
                 }
-                if !batch.more {
+                let more = match step {
+                    Ok((events, more)) if !events.is_empty() => {
+                        if send.send(events).is_err() {
+                            return;
+                        }
+                        ottospace_mac::wake::post();
+                        more
+                    }
+                    Ok((_, more)) => more,
+                    Err(()) => false,
+                };
+                if !more {
                     std::thread::sleep(std::time::Duration::from_millis(WATCH_MS));
                 }
             }
         });
-        Self { subject, read, stop }
+        Self { subject, read, stop, following, told: std::cell::Cell::new(false) }
+    }
+
+    /// Its file was found and read at the last look.
+    pub(crate) fn following(&self) -> bool {
+        self.following.load(std::sync::atomic::Ordering::Relaxed)
     }
 }
 
@@ -552,11 +603,19 @@ impl Workspace {
             self.drawer.watch = crate::config::session_dirs().map(|dirs| Watch::start(subject, runner, id, cwd, dirs));
         }
         let Some(watch) = &self.drawer.watch else { return false };
+        let following = watch.following();
+        let turned = watch.told.replace(following) != following;
         let events: Vec<Event> = watch.read.try_iter().flatten().collect();
         if events.is_empty() {
-            return false;
+            return turned;
         }
         let task = watch.subject.clone();
+        // Built again from the start: rows opened in what was built before are other rows now.
+        if events.contains(&Event::WatchFromStart)
+            && let Some(look) = self.drawer.looks.get_mut(&task)
+        {
+            (look.open, look.parsed) = (HashSet::new(), HashMap::new());
+        }
         self.dispatch(Action::AgentEvents { task, events, at: crate::now_ms() }, Origin::System, window, cx);
         true
     }
@@ -954,7 +1013,15 @@ impl Workspace {
             return None;
         }
         let colour = subject.task().and_then(|id| self.model.tasks.get(id)).map(|task| task.colour);
-        let tip = "Another process holds this session: each reply shows here once that message is complete";
+        // Followed now, its file read at the last look; else it says so, never "Watching".
+        let following = self.drawer.watch.as_ref().is_some_and(|watch| watch.subject == *subject && watch.following());
+        let (label, tip) = match self.model.watching(subject) && following {
+            true => (
+                "Watching · updates per message",
+                "Another process holds this session: each reply shows here once that message is complete",
+            ),
+            false => ("Not updating", "ottospace cannot read this session's file now: what shows is as last read"),
+        };
         Some(
             div()
                 .id("talk-watching")
@@ -970,7 +1037,7 @@ impl Workspace {
                 .bg(rgb(theme::SELECTED))
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
-                .child("Watching · updates per message")
+                .child(label)
                 .child(self.controls.mark("talk:talk-watching".to_string()))
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into())))),
         )
@@ -2668,5 +2735,114 @@ mod tests {
         let (context, asked) = question_blocks("Some context.\n\nUse option A?[^1]\n\n[^1]: A keeps the cache.");
         assert_eq!(asked.map(|asked| markdown::plain(&[asked])).as_deref(), Some("Use option A?[1]"));
         assert!(matches!(&context[..], [Block::Para(_), Block::Footnotes(_)]), "{context:#?}");
+    }
+
+    /// A made-up Claude Code session in `cwd`, under `config`: its file, from its first record.
+    fn session_file(config: &Path, cwd: &Path, id: &str) -> std::path::PathBuf {
+        let file = config.join("projects").join(ottospace_sessions::claude::slug(cwd)).join(format!("{id}.jsonl"));
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let first = serde_json::json!({"type": "user", "message": {"role": "user", "content": "made-up prompt"},
+            "timestamp": "2026-11-13T09:00:00.000Z", "cwd": cwd, "sessionId": id});
+        std::fs::write(&file, format!("{first}\n")).unwrap();
+        file
+    }
+
+    /// A tool call's record, as Claude Code writes one: `n` names its call and message.
+    fn call(n: usize) -> String {
+        let block = serde_json::json!({"type": "tool_use", "id": format!("toolu_{n}"), "name": "Read",
+            "input": {"file_path": format!("/made/up/src/f{n}.rs")}});
+        let message = serde_json::json!({"id": format!("msg_{n}"), "model": "claude-opus-5-5", "content": [block]});
+        serde_json::json!({"type": "assistant", "message": message, "timestamp": "2026-11-13T09:00:01.000Z"})
+            .to_string()
+    }
+
+    fn append(file: &Path, text: &str) {
+        let mut log = std::fs::OpenOptions::new().append(true).open(file).unwrap();
+        std::io::Write::write_all(&mut log, text.as_bytes()).unwrap();
+    }
+
+    fn calls(events: &[Event]) -> usize {
+        events.iter().filter(|event| matches!(event, Event::ToolStart { .. })).count()
+    }
+
+    /// The owner's case: a watch that showed everything up to its opening then nothing more. It
+    /// goes on as the file grows, a record written half then whole included, and a look that
+    /// fails (the file briefly gone) is tried again, never the end of the watch.
+    #[test]
+    fn a_watch_follows_a_growing_file_through_half_written_lines_and_failed_looks() {
+        let root = crate::scratch::Scratch::dir(&format!("ottospace-watch-grow-{}", std::process::id()));
+        let (config, cwd) = (root.as_ref().join("claude"), root.as_ref().join("app"));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let id = "55555555-5555-4555-8555-555555555555";
+        let file = session_file(&config, &cwd, id);
+        let reader = ottospace_sessions::claude::Claude::new(vec![config.clone()]);
+        let mut follow = Follow::new(id.into(), cwd.to_string_lossy().into_owned());
+        let (events, more) = follow.step(&reader).unwrap();
+        assert!(matches!(events[..], [Event::WatchFromStart, Event::MessageElsewhere]) && !more, "{events:?}");
+        // Half a record: nothing yet. Its end: the call.
+        let line = call(1);
+        let (half, rest) = line.split_at(line.len() / 2);
+        append(&file, half);
+        assert_eq!(calls(&follow.step(&reader).unwrap().0), 0);
+        append(&file, &format!("{rest}\n"));
+        assert_eq!(calls(&follow.step(&reader).unwrap().0), 1);
+        // Gone for a look: that look fails; back, the watch goes on where it was.
+        let aside = file.with_extension("aside");
+        std::fs::rename(&file, &aside).unwrap();
+        assert!(follow.step(&reader).is_err());
+        std::fs::rename(&aside, &file).unwrap();
+        append(&file, &format!("{}\n", call(2)));
+        assert_eq!(calls(&follow.step(&reader).unwrap().0), 1, "only the new call");
+    }
+
+    /// A first read that fails (its file moved since it was found) finds it again at the next
+    /// look, and still starts the transcript over: nothing an earlier watch built is doubled.
+    #[test]
+    fn a_watch_whose_first_read_fails_finds_its_file_again_and_starts_over() {
+        let root = crate::scratch::Scratch::dir(&format!("ottospace-watch-moved-{}", std::process::id()));
+        let (config, cwd) = (root.as_ref().join("claude"), root.as_ref().join("app"));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let id = "88888888-8888-4888-8888-888888888888";
+        let file = session_file(&config, &cwd, id);
+        let reader = ottospace_sessions::claude::Claude::new(vec![config.clone()]);
+        let mut follow = Follow::new(id.into(), cwd.to_string_lossy().into_owned());
+        let found =
+            ottospace_sessions::SessionReader::sessions(&reader, std::slice::from_ref(&follow.cwd)).unwrap().remove(0);
+        follow.session = Some(ottospace_sessions::SessionRef { path: file.with_extension("gone"), ..found });
+        assert!(follow.step(&reader).is_err());
+        let (events, _) = follow.step(&reader).unwrap();
+        assert!(matches!(events[..], [Event::WatchFromStart, Event::MessageElsewhere]), "{events:?}");
+    }
+
+    /// A large file (the owner's was 45 MB) is read whole in budget-sized looks, then followed.
+    #[test]
+    fn a_watch_reads_a_large_file_in_slices_then_follows_it() {
+        let root = crate::scratch::Scratch::dir(&format!("ottospace-watch-large-{}", std::process::id()));
+        let (config, cwd) = (root.as_ref().join("claude"), root.as_ref().join("app"));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let id = "66666666-6666-4666-8666-666666666666";
+        let file = session_file(&config, &cwd, id);
+        // Calls padded by request logs (most of a real file's bytes): about 3 budgets in all.
+        let log = format!(r#"{{"type":"api-request","pad":"{}"}}"#, "x".repeat(64 << 10));
+        let mut text = String::new();
+        let n = (3 * WATCH_BUDGET as usize) / log.len();
+        for i in 0..n {
+            text.push_str(&format!("{}\n{log}\n", call(i)));
+        }
+        append(&file, &text);
+        let reader = ottospace_sessions::claude::Claude::new(vec![config.clone()]);
+        let mut follow = Follow::new(id.into(), cwd.to_string_lossy().into_owned());
+        let (mut seen, mut looks) = (0, 0);
+        loop {
+            let (events, more) = follow.step(&reader).unwrap();
+            (seen, looks) = (seen + calls(&events), looks + 1);
+            if !more {
+                break;
+            }
+        }
+        assert_eq!(seen, n);
+        assert!(looks >= 3, "{looks} looks");
+        append(&file, &format!("{}\n", call(n)));
+        assert_eq!(calls(&follow.step(&reader).unwrap().0), 1);
     }
 }

@@ -469,6 +469,20 @@ impl Model {
         matches!(start, agents::Start::Resume { .. }).then_some((subject, runner, id, cwd?))
     }
 
+    /// The space on show is a session's (no task's) that no agent of ours runs: the sessions are
+    /// read while it shows, whatever section is open (an overlay sidebar closes as its row opens),
+    /// so its watch, its city and the counts hold.
+    pub fn shows_session(&self) -> bool {
+        let subject = self.talk.as_ref().map(|talk| &talk.task);
+        subject.is_some_and(|subject| matches!(subject, Subject::Session { .. }) && !self.agent_runs(subject))
+    }
+
+    /// The conversation's transcript is followed from its session's file now (`watch_target`):
+    /// "Watching" says so only while it is.
+    pub fn watching(&self, subject: &Subject) -> bool {
+        self.watch_target().is_some_and(|(watched, ..)| watched == *subject)
+    }
+
     /// True if the session the drawer follows from its file (`watch_target`) is another
     /// program's now: read-only. Else it is a task's past, the user's to go on with.
     fn watched_elsewhere(&self, subject: &Subject) -> bool {
@@ -625,7 +639,7 @@ impl Model {
             Action::AgentEvents { task: subject, events, at }
                 if !self.chat(&subject).is_some_and(|chat| chat.transcript.live) =>
             {
-                if self.watch_target().is_none_or(|(watched, ..)| watched != subject) {
+                if !self.watching(&subject) {
                     return;
                 }
                 if self.chat(&subject).is_none() {

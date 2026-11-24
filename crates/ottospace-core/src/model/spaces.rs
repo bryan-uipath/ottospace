@@ -387,9 +387,17 @@ impl Model {
         self.leave(effects);
         self.leave_visual(effects);
         self.park_active();
+        // A session's tab is in its checkout: its city, and a terminal opened there starts in it.
+        let folder = match &of {
+            Owner::Session { runner, id } => self.facts(runner, id).flatten().map(|found| found.repo.clone()),
+            _ => None,
+        };
         self.push_tab_of(of);
-        if let Some((tab, title)) = self.tabs.get_mut(self.active).zip(title) {
-            tab.title = title;
+        if let Some(tab) = self.tabs.get_mut(self.active) {
+            if let Some(title) = title {
+                tab.title = title;
+            }
+            tab.folder = folder;
         }
     }
 
