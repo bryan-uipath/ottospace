@@ -781,6 +781,15 @@ impl Drawn {
 }
 
 impl Workspace {
+    /// The empty place drawn on `floor`: a pane's, or a tab's (the main window's, or one out).
+    pub(crate) fn at_of(&self, floor: Floor) -> At {
+        match floor {
+            Floor::Pane(id) => At::Pane(id),
+            Floor::Out(tab) => At::Tab(tab),
+            Floor::Main => At::Tab(self.model.tabs[self.model.main_at()].id),
+        }
+    }
+
     /// Where an empty place is drawn.
     fn floor_of(&self, at: At) -> Floor {
         match at {
@@ -1167,7 +1176,7 @@ impl Workspace {
         camera.ground(share(p.x, b.left(), b.size.width), share(p.y, b.top(), b.size.height))
     }
 
-    fn city_step(&mut self, at: At, step: CameraStep, window: &mut Window, cx: &mut Context<Self>) {
+    fn city_step(&mut self, at: At, step: CameraStep, window: &Window, cx: &mut Context<Self>) {
         self.dispatch(Action::CityCamera { at, step }, self.input, window, cx);
     }
 
@@ -1252,12 +1261,7 @@ impl Workspace {
         if self.input != Origin::User || self.over_hints(floor, e.position) {
             return;
         }
-        let about = |this: &Self| {
-            let (_, _, target) = this.city_camera(floor, at)?;
-            // Above the horizon (a low pitch): about the point looked at (the view's pan, kept).
-            let Some(p) = this.city_ground(floor, at, e.position) else { return Some(this.model.city_view(at).pan) };
-            Some([p[0] - target[0], p[1] - target[2]])
-        };
+        let about = |this: &Self| this.city_about(floor, at, e.position);
         let step = match e.delta {
             ScrollDelta::Lines(d) => {
                 about(self).map(|about| CameraStep::Zoom { factor: ZOOM_PER_LINE.powf(-d.y), about })
@@ -1276,15 +1280,47 @@ impl Workspace {
             }
         };
         if let Some(step) = step {
-            // Moving until the steps stop: then once more, full size and named.
-            self.city_wheeled.set(Some((at, Instant::now())));
-            cx.spawn(async move |this, cx| {
-                cx.background_executor().timer(WHEELING + Duration::from_millis(20)).await;
-                let _ = this.update(cx, |_, cx| cx.notify());
-            })
-            .detach();
-            self.city_step(at, step, window, cx);
+            self.city_stepped(at, step, window, cx);
             cx.stop_propagation();
+        }
+    }
+
+    /// The point a zoom keeps where it is: under `position`, in plan units from the city's middle;
+    /// above the horizon (a low pitch), the point looked at (the view's pan, kept).
+    fn city_about(&self, floor: Floor, at: At, position: Point<Pixels>) -> Option<[f32; 2]> {
+        let (_, _, target) = self.city_camera(floor, at)?;
+        let Some(p) = self.city_ground(floor, at, position) else { return Some(self.model.city_view(at).pan) };
+        Some([p[0] - target[0], p[1] - target[2]])
+    }
+
+    /// A step of the wheel or a pinch: moving until the steps stop, then drawn once more, full size
+    /// and named.
+    fn city_stepped(&mut self, at: At, step: CameraStep, window: &Window, cx: &mut Context<Self>) {
+        self.city_wheeled.set(Some((at, Instant::now())));
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(WHEELING + Duration::from_millis(20)).await;
+            let _ = this.update(cx, |_, cx| cx.notify());
+        })
+        .detach();
+        self.city_step(at, step, window, cx);
+    }
+
+    /// A pinch at `position`, `nearer` times nearer (the native hook's: GPUI has none), over the
+    /// city of this window it is on, not over its hints. The user's alone.
+    pub(crate) fn city_pinch(&mut self, position: Point<Pixels>, nearer: f32, window: &Window, cx: &mut Context<Self>) {
+        let id = window.window_handle().window_id();
+        let found = {
+            let drawn = self.city_drawn.borrow();
+            let over = |(_, place): &(&Floor, &Place)| place.window == Some(id) && place.bounds.contains(&position);
+            drawn.places.iter().find(over).map(|(floor, _)| *floor)
+        };
+        let Some(floor) = found.filter(|floor| self.input == Origin::User && !self.over_hints(*floor, position)) else {
+            return;
+        };
+        let at = self.at_of(floor);
+        // The city's zoom is a share of the distance: under 1, nearer.
+        if let Some(about) = self.city_about(floor, at, position) {
+            self.city_stepped(at, CameraStep::Zoom { factor: nearer.recip(), about }, window, cx);
         }
     }
 

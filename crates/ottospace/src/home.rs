@@ -305,14 +305,6 @@ fn build_floor(
     build_lattice(&HOME, bounds, (0.6, 19.), keep)
 }
 
-/// The tab a floor of a tab is of: a folded-out one's own, else the main window's.
-fn tab_id(floor: Floor, model: &ottospace_core::Model) -> u32 {
-    match floor {
-        Floor::Out(tab) => tab,
-        _ => model.tabs[model.main_at()].id,
-    }
-}
-
 /// The rows of Home's list, or an empty tab's.
 fn empty_hints(on_home: bool) -> &'static [empty::Hint] {
     empty::empty(if on_home { Surface::Home } else { Surface::Tab }, (0., 0.), false).hints
@@ -364,10 +356,7 @@ impl Workspace {
         );
         let place = div().absolute().top_0().left_0().w_full().h(relative(1. - FLOOR_ROOM));
         let place = place.px_4().flex().items_center().justify_center();
-        let at = match floor {
-            Floor::Pane(id) => At::Pane(id),
-            Floor::Out(_) | Floor::Main => At::Tab(tab_id(floor, &self.model)),
-        };
+        let at = self.at_of(floor);
         // With a folder and `code_city`: its city, where the lattice was.
         let backdrop = self.render_city(floor, at, lines.absolute().size_full().into_any_element(), cx);
         div().relative().size_full().overflow_hidden().child(backdrop).child(place.child(list)).into_any_element()

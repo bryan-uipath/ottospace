@@ -319,11 +319,7 @@ impl Workspace {
     fn canvas_wheel(&mut self, e: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
         let area = self.zooming.area.get();
         let (w, h) = (f32::from(area.size.width), f32::from(area.size.height));
-        if w <= 0. || h <= 0. {
-            return;
-        }
-        let at = e.position - area.origin;
-        let about = [f32::from(at.x) / w, f32::from(at.y) / h];
+        let Some(about) = self.canvas_about(e.position) else { return };
         let step = match e.delta {
             ScrollDelta::Lines(d) => CanvasStep::Zoom { factor: PER_LINE.powf(d.y), about },
             ScrollDelta::Pixels(d) if e.modifiers.platform => {
@@ -416,6 +412,57 @@ impl Workspace {
             let step = CanvasStep::Pan { dx: -f32::from(d.x) / w, dy: -f32::from(d.y) / h };
             self.dispatch(Action::ZoomCamera { step }, self.input, window, cx);
         }
+    }
+
+    /// A pinch at `at`, `magnification` nearer: zoomed out, the canvas zooms about it; over a code
+    /// city, its camera. `origin`: whose it is (the native hook's are the user's).
+    pub(crate) fn pinch(
+        &mut self,
+        at: Point<Pixels>,
+        magnification: f32,
+        origin: ottospace_core::Origin,
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let nearer = 1. + magnification;
+        if !(nearer.is_finite() && nearer > 0.) {
+            return;
+        }
+        // Under something that covers the panes (the key reference, a box, an overlay), not theirs.
+        if self.pinch_covered(at) {
+            return;
+        }
+        let was = self.swap_origin(origin);
+        match self.model.zoom.is_some() {
+            true => {
+                if let Some(about) = self.canvas_about(at).filter(|_| self.zooming.area.get().contains(&at)) {
+                    let step = CanvasStep::Zoom { factor: nearer, about };
+                    self.dispatch(Action::ZoomCamera { step }, origin, window, cx);
+                }
+            }
+            false => self.city_pinch(at, nearer, window, cx),
+        }
+        self.swap_origin(was);
+    }
+
+    /// `at` in the panes area's fractions (0 to 1 is the area); none before it is laid out.
+    fn canvas_about(&self, at: Point<Pixels>) -> Option<[f32; 2]> {
+        let area = self.zooming.area.get();
+        let (w, h) = (f32::from(area.size.width), f32::from(area.size.height));
+        let d = at - area.origin;
+        (w > 0. && h > 0.).then(|| [f32::from(d.x) / w, f32::from(d.y) / h])
+    }
+
+    /// Whether something lies over the panes at `at`, which a pinch must not reach under: GPUI's
+    /// hit test does not see a native gesture. The key reference, a bug report, a mode's box or
+    /// menu, a side overlay drawn there.
+    fn pinch_covered(&self, at: Point<Pixels>) -> bool {
+        let busy = self.model.keys || self.model.bug.is_some() || self.model.mode() != ottospace_core::Mode::Normal;
+        let marks = self.marks.borrow();
+        let over = [true, false]
+            .into_iter()
+            .any(|left| marks.get(&crate::Mark::Overlay(left)).is_some_and(|bounds| bounds.contains(&at)));
+        busy || over
     }
 
     /// ⌘= ⌘- ⌘0 while zoomed out: nearer, farther (about the middle), every tile. Else not ours.

@@ -1622,6 +1622,13 @@ impl Workspace {
                     if !changes.is_empty() {
                         this.modifier_changes(changes, window, cx);
                     }
+                    // Trackpad pinches over this window (GPUI delivers none): the user's own.
+                    // SAFETY: GPUI's own view, on the main thread.
+                    let here = ns_view(window).map(|view| unsafe { ottospace_mac::window::number(view) });
+                    for pinch in ottospace_mac::magnify::take().into_iter().filter(|p| Some(p.window) == here) {
+                        let at = point(px(pinch.x as f32), px(pinch.y as f32));
+                        this.pinch(at, pinch.magnification as f32, Origin::User, window, cx);
+                    }
                     // In front, the listener hears no release: a ⌘ still down then is forgotten.
                     if window.is_window_active() && std::env::var_os("OTTOSPACE_E2E").is_none() {
                         this.cmd_taps = Default::default();
@@ -3680,6 +3687,11 @@ impl Workspace {
                 // A test run only: modifier changes, as the user's in another app.
                 Request::ModifierFlags { changes } => {
                     self.modifier_changes(changes, window, cx);
+                    None
+                }
+                Request::Pinch { x, y, magnification, by } => {
+                    let origin = by.map_or(Origin::Socket, |control::By::User| Origin::User);
+                    self.pinch(point(px(x), px(y)), magnification, origin, window, cx);
                     None
                 }
                 // A test run only: made-up displays, from now on in place of the real ones.
@@ -9974,6 +9986,10 @@ fn main() {
                 let _ = RETURN_KEY.set(name.to_uppercase());
             }
             let double = listen_double_cmd();
+            // Pinches over ottospace's own windows, for the canvas and the code city.
+            if let Err(err) = ottospace_mac::magnify::listen() {
+                eprintln!("pinch is off: {err}");
+            }
             // Caps Lock as the return key, if the user's settings ask: else a leftover goes.
             let on = config::get().settings.return_caps_lock == Some(true);
             let f = RETURN_KEY.get().filter(|_| on).and_then(|key| key.trim_start_matches('F').parse().ok());
@@ -10059,7 +10075,7 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 22] = [
+        const TESTS_ONLY: [&str; 23] = [
             "capture_start",
             "bug_start",
             "repo_add",
@@ -10073,6 +10089,7 @@ mod tests {
             "audio_probe_start",
             "audio_probe_stop",
             "zoom_press",
+            "pinch",
             "modifier_flags",
             "window_width",
             "display_change",

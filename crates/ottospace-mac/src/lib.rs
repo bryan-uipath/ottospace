@@ -12,6 +12,7 @@ pub mod icon;
 pub mod image;
 pub mod input;
 pub mod locale;
+pub mod magnify;
 pub mod meeting;
 pub mod modifiers;
 pub mod oslog;

@@ -44,8 +44,10 @@ needs no window size: the shell maps world to points by the area's width and hei
   the tab to there; again, or Esc, flies back into the tab you came from. ↵, a click or a double
   click on a tile flies into it.
 
-**Gestures.** GPUI 0.2.2 delivers no pinch (as the code city found): pinch waits for a native
-hook. Today, as the code city's camera does:
+**Gestures.** GPUI 0.2.2 delivers no pinch (as the code city found): `ottospace_mac::magnify`, a
+local NSEvent monitor of `magnify` events only (each passed on unchanged), hands each pinch step to
+the shell, which zooms the canvas, or a code city's camera, about the pointer. Otherwise, as the
+code city's camera does:
 
 | Input | Does |
 | --- | --- |

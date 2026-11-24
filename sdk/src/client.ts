@@ -623,6 +623,14 @@ export class Client {
     return this.snapshot({ cmd: "zoom_press" });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): a trackpad pinch at `x`, `y` (window points), `magnification`
+   * nearer (0.1: 10%; negative: farther), as the native hook hands it over: the zoomed-out canvas
+   * or a code city zooms about it. `as: "user"`: the user's. Rejects outside a test run.
+   */
+  pinch(args: { x: number; y: number; magnification: number; as?: "user" }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "pinch", ...args });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): modifier changes as ⌘⌘'s listener would see them in another app;
    * a double tap of ⌘ returns as the return key (`counts.double_cmds`). Rejects outside a test run.
    */
