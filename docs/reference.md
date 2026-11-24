@@ -508,7 +508,10 @@ moves the tab on show to the end of that space's tabs.
 
 The Developer group, also the Developer menu: Accessibility Overlay (⌘⌃A), [Accessibility
 Inspector](#accessibility-inspector), Copy State as JSON
-(the reply of `{"cmd":"state"}`, to the clipboard), Open the Settings File and Open the ottospace
+(the reply of `{"cmd":"state"}`, to the clipboard), Spin the City and Time Its Frames (with
+`code_city` on: the city on show turns once round, a step a frame, as a steady drag; a toast and
+the event log then give each frame's time, numbers only; Esc stops it; it runs under Reduce Motion
+too, as you asked for it), Open the Settings File and Open the ottospace
 Folder (in the Finder; a test run that named no folder has none), and Bring All Windows Back
 (see [Getting a window back](#getting-a-window-back)).
 

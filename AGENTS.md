@@ -181,6 +181,10 @@ Design note: `docs/ai/attention/plan.md`.
     checkout. Outside a test run only the user starts a bug report (it pictures the window); the
     core refuses a `BugStart` of any other origin. The state's `bug.controls` (where the overlay's
     controls are drawn, by id, while a report is open) is null outside a test run.
+  - `city_spin`: the Developer command "Spin the City and Time Its Frames", as the user's: the city
+    on show turns once round (`CameraStep::Spin`, a step a frame), its camera then back; the numbers
+    in the state's `city.spin` (`scripts/bench`'s spin). Outside a test run only the user moves the
+    city's camera; the core refuses a `CityCamera` of any other origin.
   - `sneak_app_tree`: a fixture tree as if read from the focused pane's window while sneak mode
     is on (a test run hosts no window), so its elements get labels. The state's `app_presses`
     (null outside a test run) lists each press a label asked for.
@@ -232,7 +236,11 @@ Design note: `docs/ai/attention/plan.md`.
     picture's colours had), `first_ms` (the place laid out to its first picture painted),
     `read_us` (the last file list's read), `agents` (each agent's icon drawn: `task` (null: a session no
     task has), `rect`, `cone` (it shines on a building), `fan` `[k, n]`, `hovered`, `pulsing` (a call of it runs), `subagents` (the sub-agents it runs)), `glimmer` (the reads' flashes, searches' sweeps and
-    found files' lights playing now: `flash`, `sweep`, `found`, counts). `counts.city_reads`: the reads, a city on show or not;
+    found files' lights playing now: `flash`, `sweep`, `found`, counts), `spin` (`running`, and the last
+    spin's `result`: `steps`, `done`, `frames`, each frame's time from the one before as `mean`, `p50`,
+    `p95`, `p99`, `max`, `over_16`, `over_33` (ms), `repeats` (frames that showed the picture the
+    frame before did), a new picture's wait from made to painted `wait_p50`, `wait_p95`, `wait_max`,
+    `boxes`). `counts.city_reads`: the reads, a city on show or not;
     `counts.city_beam_frames`: the frames the hovered beam's fade asked for (none under Reduce Motion);
     `counts.city_fade_frames`: the frames a first picture's fade-in over the lattice asked for, and
     `counts.city_rise_frames` those its rise painted (none at rest, none under Reduce Motion);

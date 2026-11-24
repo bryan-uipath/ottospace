@@ -31,6 +31,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
     let sources = features.on(ottospace_core::features::Feature::DecisionSources);
     let quick = features.on(ottospace_core::features::Feature::OverlayPanels);
     let zoom_out = features.on(ottospace_core::features::Feature::ZoomOut);
+    let city = features.on(ottospace_core::features::Feature::CodeCity);
     vec![
         Menu {
             name: "ottospace".into(),
@@ -166,16 +167,21 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
         },
         Menu {
             name: "Developer".into(),
-            items: vec![
+            items: [
                 item("Accessibility Overlay", AxOverlay),
                 item("Accessibility Inspector", commands::AxInspector),
                 item("Filter the Accessibility Inspector", commands::InspectorFilter),
                 item("Read the Inspected App Again", commands::InspectorRefresh),
                 item("Copy State as JSON", commands::CopyState),
+            ]
+            .into_iter()
+            .chain(city.then(|| item("Spin the City and Time Its Frames", commands::CitySpin)))
+            .chain([
                 item("Open the Settings File", commands::OpenSettings),
                 item("Open the ottospace Folder", commands::OpenFolder),
                 item("Bring All Windows Back", commands::BringBack),
-            ],
+            ])
+            .collect(),
         },
         // Named "Window": AppKit lists the open windows in it.
         Menu { name: "Window".into(), items: vec![item("Zoom", ZoomWindow)] },

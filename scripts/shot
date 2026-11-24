@@ -123,6 +123,37 @@ def made_up_tree(at, count):
             f.write("x" * (200 + r * r * r // 20000))
 
 
+def made_up_repo(at, files, folders, deepest):
+    """A git repository at `at` as `city::tests::made_up_repo` lists it, the same every run: `files`
+    files in about `folders` folders up to `deepest` deep, most near the top; most small."""
+    x, mask = 0x2545F4914F6CDD1D, (1 << 64) - 1
+
+    def nxt():
+        nonlocal x
+        x = (x * 6364136223846793005 + 1442695040888963407) & mask
+        return (x >> 11) / float(1 << 53)
+
+    dirs = [("", 0)]
+    for k in range(1, folders):
+        while True:
+            u = nxt()
+            p = int(len(dirs) * u * u)
+            if dirs[p][1] < deepest:
+                break
+        dirs.append((f"{dirs[p][0]}d{k}/", dirs[p][1] + 1))
+    os.makedirs(at, exist_ok=True)
+    subprocess.run(["git", "init", "-q", at], check=True)
+    made = set()
+    for i in range(files):
+        folder = dirs[int(len(dirs) * nxt() ** 1.5)][0]
+        size = 200 + int(nxt() ** 3 * 60000)
+        if folder not in made:
+            os.makedirs(os.path.join(at, folder), exist_ok=True)
+            made.add(folder)
+        with open(os.path.join(at, folder, f"f{i}.rs"), "w") as f:
+            f.write("x" * size)
+
+
 def copy_fixtures(name, root):
     """scripts/shots/<name>/ into the instance's folder; `_git` becomes `.git` (git keeps none).
     A folder `_slug-repos-app` is named as Claude Code names its sessions' folder for

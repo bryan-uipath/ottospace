@@ -108,6 +108,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.wait({ pane: 1, pattern: "^done$", timeout_ms: 1000 }),
   (c) => c.captureStart({ pane: 1 }),
   (c) => c.bugStart(),
+  (c) => c.citySpin(),
   (c) =>
     c.inspectorFixture({
       app: "Fixture",

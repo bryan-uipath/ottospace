@@ -18266,6 +18266,51 @@ fn the_users_pointer_moves_the_citys_camera() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The Developer command's spin turns the city once round, a step a frame, and puts its camera
+/// back: its numbers in `city.spin` (frames timed, none of them a name). Esc stops one.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_spin_turns_the_city_once_round_and_times_its_frames() {
+    let root = support::temp(&format!("ottospace-e2e-city-spin-{}", std::process::id()));
+    let app = root.join("repos/app");
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q"]);
+    for (file, bytes) in [("src/main.rs", 900), ("src/lib.rs", 4000), ("docs/a.md", 300), ("README.md", 2000)] {
+        std::fs::create_dir_all(app.join(file).parent().unwrap()).unwrap();
+        std::fs::write(app.join(file), "x".repeat(bytes)).unwrap();
+    }
+    let app = app.canonicalize().unwrap();
+    let home = user_folder("city-spin", &json!({"repos": [app], "restore_layout": false}).to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "code_city"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ];
+    let otto = Otto::launch_with("city-spin", &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    otto.wait_for("a city", |o| Some(city(o)).filter(|c| !c["picture"].is_null()));
+    let before = city(&otto)["view"].clone();
+    otto.call(json!({"cmd": "city_spin"}));
+    let spun = otto.wait_for("the spin", |o| Some(city(o)["spin"]["result"].clone()).filter(|r| !r.is_null()));
+    assert_eq!((spun["done"].clone(), spun["steps"].clone()), (json!(true), json!(240)), "{spun}");
+    assert!(spun["frames"].as_u64().unwrap() >= 200 && spun["p50"].as_f64().unwrap() > 0., "{spun}");
+    assert_eq!((city(&otto)["view"].clone(), city(&otto)["grabbed"].clone()), (before.clone(), json!(false)));
+    // Esc stops one, the camera back where it was.
+    otto.call(json!({"cmd": "city_spin"}));
+    otto.wait_for("a spin running", |o| city(o)["spin"]["running"].as_bool().filter(|r| *r).map(|_| ()));
+    otto.user_key("escape");
+    let stopped = otto.wait_for("the spin stopped", |o| {
+        Some(city(o)["spin"]["result"].clone()).filter(|r| r["done"] == json!(false))
+    });
+    assert!(stopped["steps"].as_u64().unwrap() < 240, "{stopped}");
+    assert_eq!(city(&otto)["view"], before);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,
 /// inside the picture, again after a zoom. The user's pointer on a folder's ground outlines its
 /// top face and hangs its label by its near edge or the pointer; on a building, a beam a share of

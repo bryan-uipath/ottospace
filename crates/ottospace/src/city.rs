@@ -24,7 +24,7 @@ use ottospace_core::city_filter;
 use ottospace_core::city_labels::{self, Candidate, Tier};
 use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::model::Origin;
-use ottospace_core::model::city::{At, CameraStep, Glimpse, Who};
+use ottospace_core::model::city::{At, CameraStep, Glimpse, SPIN_STEPS, Who};
 use ottospace_core::scene::{self, Camera, Kind, Layout, Scene, View};
 use ottospace_core::settings::expand_home;
 use ottospace_core::tasks::{Group, TaskId};
@@ -351,6 +351,8 @@ struct Made {
     gpu_us: u64,
     /// When a place last painted it: the newest unused are kept (`KEPT_PICTURES`).
     used: Instant,
+    /// When it was made: its wait to be painted is timed (`Drawn::waits`).
+    made_at: Instant,
 }
 
 /// One empty place's city, as the last frame drew it.
@@ -533,6 +535,8 @@ pub struct Drawn {
     glimmer_frames: u64,
     /// Pictures no place shows: GPUI keeps each in the window's atlas until it is dropped.
     retired: Vec<Arc<RenderImage>>,
+    /// While a spin runs: each new picture's wait from made to painted, in ms.
+    waits: Option<Vec<f32>>,
 }
 
 pub type Shared = Rc<RefCell<Drawn>>;
@@ -643,7 +647,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     }
     let scene_us = started.elapsed().as_micros() as u64;
     let (rw, rh) = key.render_size();
-    let Picture { width, height, bgra, gpu_us, copy_us } =
+    let Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, delays_us, alloc_us } =
         gpu.render(&scene, rw, rh, f32::from(key.rise) / 1000., key.glass)?;
     let camera = scene.camera.ok_or("no camera")?;
     let made_at = Instant::now();
@@ -651,7 +655,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
     // Where a picture's time goes, for the bench (`scripts/bench`'s city motion): numbers only.
     let image_us = made_at.elapsed().as_micros() as u64;
-    let fields = serde_json::json!({ "scene_us": scene_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": rw, "h": rh });
+    let fields = serde_json::json!({ "scene_us": scene_us, "prep_us": prep_us, "boxes_us": boxes_us, "delays_us": delays_us, "alloc_us": alloc_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": rw, "h": rh });
     crate::trace::record("city_picture", fields);
     // Each lit building's bounds, and the middle of its top (never hidden).
     let lit = (scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))))
@@ -687,7 +691,20 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     let groups = plan.places.iter().filter(|p| p.group).count();
     let render_us = started.elapsed().as_micros() as u64;
     let (places, plan, used) = (plan.places.len(), plan.clone(), Instant::now());
-    Ok(Made { key: key.clone(), image, lit, marks, scene, plan, places, groups, render_us, gpu_us, used })
+    Ok(Made {
+        key: key.clone(),
+        image,
+        lit,
+        marks,
+        scene,
+        plan,
+        places,
+        groups,
+        render_us,
+        gpu_us,
+        used,
+        made_at: used,
+    })
 }
 
 impl Drawn {
@@ -1189,7 +1206,7 @@ impl Workspace {
     /// A press on a city: over the hints, theirs. A middle press grabs it to pan; a left press is
     /// a click (the pane takes focus) until it moves past `CLICK_SLOP`.
     fn city_press(&mut self, floor: Floor, at: At, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if self.input != Origin::User || self.over_hints(floor, e.position) {
+        if self.input != Origin::User || self.over_hints(floor, e.position) || self.city_spin.is_some() {
             return;
         }
         // Over its lattice (no picture: no GPU, too small, not read yet) there is no camera.
@@ -1396,6 +1413,7 @@ impl Workspace {
         let v = self.model.city_view(*at);
         snapshot["view"] = serde_json::json!({ "yaw": v.yaw, "pitch": v.pitch, "zoom": v.zoom, "pan": v.pan });
         snapshot["grabbed"] = self.model.camera_grabbed().into();
+        snapshot["spin"] = serde_json::json!({ "running": self.city_spin.is_some(), "result": self.city_spun });
         snapshot
     }
 
@@ -1432,6 +1450,165 @@ impl Workspace {
     /// Frames the reads' and searches' effects asked for: for the counts of a test run.
     pub(crate) fn city_glimmer_frames(&self) -> u64 {
         self.city_drawn.borrow().glimmer_frames
+    }
+}
+
+/// A spin in flight (the developer's timed turn, `CameraStep::Spin`): its place, the steps made,
+/// when the last frame began, each frame's time from the one before (ms), how many frames showed
+/// the picture the frame before showed, and the picture shown then.
+pub(crate) struct Spin {
+    floor: Floor,
+    at: At,
+    origin: Origin,
+    step: usize,
+    /// Its frames are asked for (`city_spin_frames`), from the frame after it began.
+    asked: bool,
+    last: Option<Instant>,
+    frames: Vec<f32>,
+    repeats: usize,
+    shown: Option<Key>,
+}
+
+/// A spin's numbers, as the toast, the event log and a test run's state give them: no name or path.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub(crate) struct Spun {
+    pub(crate) steps: usize,
+    pub(crate) done: bool,
+    pub(crate) frames: usize,
+    pub(crate) mean: f32,
+    pub(crate) p50: f32,
+    pub(crate) p95: f32,
+    pub(crate) p99: f32,
+    pub(crate) max: f32,
+    pub(crate) over_16: usize,
+    pub(crate) over_33: usize,
+    /// Frames that showed the same picture as the frame before, while the camera turned.
+    pub(crate) repeats: usize,
+    /// A new picture's wait from made to painted (ms): median, p95 and the longest.
+    pub(crate) wait_p50: f32,
+    pub(crate) wait_p95: f32,
+    pub(crate) wait_max: f32,
+    pub(crate) boxes: usize,
+}
+
+/// The nearest-rank percentile `p` (0 to 100) of `sorted`; none: 0.
+fn rank(sorted: &[f32], p: usize) -> f32 {
+    let n = sorted.len();
+    if n == 0 { 0. } else { sorted[(n * p).div_ceil(100).clamp(1, n) - 1] }
+}
+
+impl Workspace {
+    /// Spins the city on show once round, a step a frame, timing each frame: the user's own
+    /// (the palette's Developer command; a test run's `city_spin`). Esc stops it.
+    pub(crate) fn city_spin_start(&mut self, origin: Origin, window: &Window, cx: &mut Context<Self>) {
+        if origin != Origin::User || self.city_spin.is_some() || self.city_drag.is_some() {
+            return;
+        }
+        let first = self.model.empty_places().into_iter().map(|at| (self.floor_of(at), at)).find(|(floor, _)| {
+            let drawn = self.city_drawn.borrow();
+            drawn.places.get(floor).is_some_and(|place| drawn.picture(place).is_some())
+        });
+        let Some((floor, at)) = first else {
+            self.told = Some(("No city on show to spin".into(), Instant::now()));
+            return cx.notify();
+        };
+        self.dispatch(Action::CityCamera { at, step: CameraStep::Grab }, origin, window, cx);
+        self.city_drawn.borrow_mut().waits = Some(Vec::new());
+        let spin =
+            Spin { floor, at, origin, step: 0, asked: false, last: None, frames: Vec::new(), repeats: 0, shown: None };
+        self.city_spin = Some(spin);
+        cx.notify();
+    }
+
+    /// A spin begun: its first frame asked for, from a frame's render (which has the window).
+    pub(crate) fn city_spin_frames(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(spin) = self.city_spin.as_mut().filter(|spin| !spin.asked) {
+            spin.asked = true;
+            cx.on_next_frame(window, |this, window, cx| this.city_spin_frame(window, cx));
+        }
+    }
+
+    /// A frame of a spin: its time from the last, whether the last showed a new picture, then
+    /// the next step; after the last, the camera back where it was and the numbers told.
+    fn city_spin_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(mut spin) = self.city_spin.take() else { return };
+        let now = Instant::now();
+        if let Some(last) = spin.last {
+            spin.frames.push((now - last).as_secs_f32() * 1e3);
+        }
+        spin.last = Some(now);
+        let shown = self.city_drawn.borrow().places.get(&spin.floor).and_then(|place| place.shown.clone());
+        // The frame before showed what the one before it did: the turn stood still on screen.
+        if spin.step > 1 && shown.is_some() && shown == spin.shown {
+            spin.repeats += 1;
+        }
+        spin.shown = shown;
+        if spin.step == SPIN_STEPS {
+            return self.city_spin_end(spin, true, window, cx);
+        }
+        spin.step += 1;
+        self.dispatch(Action::CityCamera { at: spin.at, step: CameraStep::Spin }, spin.origin, window, cx);
+        self.city_spin = Some(spin);
+        cx.on_next_frame(window, |this, window, cx| this.city_spin_frame(window, cx));
+        cx.notify();
+    }
+
+    /// A spin ends (all its steps, or Esc): its camera back, its numbers in a toast, the event
+    /// log and a test run's state.
+    fn city_spin_end(&mut self, spin: Spin, done: bool, window: &mut Window, cx: &mut Context<Self>) {
+        self.dispatch(Action::CityCamera { at: spin.at, step: CameraStep::Cancel }, spin.origin, window, cx);
+        let mut frames = spin.frames;
+        frames.sort_by(f32::total_cmp);
+        let mut waits = self.city_drawn.borrow_mut().waits.take().unwrap_or_default();
+        waits.sort_by(f32::total_cmp);
+        let boxes = {
+            let drawn = self.city_drawn.borrow();
+            drawn
+                .places
+                .get(&spin.floor)
+                .and_then(|place| drawn.picture(place))
+                .map_or(0, |made| made.scene.blocks.len())
+        };
+        let n = frames.len();
+        let spun = Spun {
+            steps: spin.step,
+            done,
+            frames: n,
+            mean: if n == 0 { 0. } else { frames.iter().sum::<f32>() / n as f32 },
+            p50: rank(&frames, 50),
+            p95: rank(&frames, 95),
+            p99: rank(&frames, 99),
+            max: frames.last().copied().unwrap_or(0.),
+            over_16: frames.iter().filter(|f| **f > 16.7).count(),
+            over_33: frames.iter().filter(|f| **f > 33.).count(),
+            repeats: spin.repeats,
+            wait_p50: rank(&waits, 50),
+            wait_p95: rank(&waits, 95),
+            wait_max: waits.last().copied().unwrap_or(0.),
+            boxes,
+        };
+        let text = format!(
+            "Spin{}: {n} frames, mean {:.1} ms, p95 {:.1}, p99 {:.1}, max {:.1}; over 16.7 ms {}, over 33 ms {}; {} repeated",
+            if done { "" } else { " stopped" },
+            spun.mean,
+            spun.p95,
+            spun.p99,
+            spun.max,
+            spun.over_16,
+            spun.over_33,
+            spun.repeats
+        );
+        crate::event_log::event("city_spin", serde_json::to_value(&spun).unwrap_or_default());
+        self.told = Some((text, Instant::now()));
+        self.city_spun = Some(spun);
+        cx.notify();
+    }
+
+    /// Esc during a spin stops it, the camera back where it was.
+    pub(crate) fn city_spin_escape(&mut self, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(spin) = self.city_spin.take_if(|_| self.input == Origin::User) else { return false };
+        self.city_spin_end(spin, false, window, cx);
+        true
     }
 }
 
@@ -1522,9 +1699,13 @@ fn paint(
         window.request_animation_frame();
     }
     let shown = made.key.clone();
+    let new = drawn.places.get(&floor).is_none_or(|place| place.shown.as_ref() != Some(&shown));
+    let wait = made.made_at.elapsed().as_secs_f32() * 1e3;
     let painted = Instant::now();
     let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
-    crate::trace::record("city_paint", serde_json::json!({ "us": painted.elapsed().as_micros() as u64 }));
+    let us = painted.elapsed().as_micros() as u64;
+    crate::trace::record("city_paint", serde_json::json!({ "us": us, "new": new, "wait_us": (wait * 1e3) as u64 }));
+
     // A first picture after the lattice waited fades in from the background; one made already
     // (a tab come back) shows at once, as under Reduce Motion.
     let fade = fade.or_else(|| (waited && first_ms.is_none() && !rising).then(Instant::now));
@@ -1655,6 +1836,9 @@ fn paint(
         window.request_animation_frame();
     }
     drawn.paints += 1;
+    if let (true, Some(waits)) = (new, drawn.waits.as_mut()) {
+        waits.push(wait);
+    }
     drawn.beam_frames += u64::from(fades);
     drawn.fade_frames += u64::from(fading_in);
     drawn.rise_frames += u64::from(rising);
@@ -2148,6 +2332,125 @@ mod tests {
             all.contains(&"node_modules/m/i.js".to_string()) && all.contains(&"notes/archive/old.md".into()),
             "{all:?}"
         );
+    }
+
+    /// A made-up repository the same every run: `files` files in about `folders` folders up to
+    /// `deepest` deep, most near the top; sizes most small, a few large. `scripts/shot`'s
+    /// `made_up_repo` makes the same tree on disk.
+    pub(crate) fn made_up_repo(files: usize, folders: usize, deepest: usize) -> Vec<(String, u64)> {
+        let mut x: u64 = 0x2545_f491_4f6c_dd1d;
+        let mut next = || {
+            x = x.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (x >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut dirs: Vec<(String, usize)> = vec![(String::new(), 0)];
+        for k in 1..folders {
+            let parent = loop {
+                let u = next();
+                let p = (dirs.len() as f64 * u * u) as usize;
+                if dirs[p].1 < deepest {
+                    break p;
+                }
+            };
+            let (path, depth) = dirs[parent].clone();
+            dirs.push((format!("{path}d{k}/"), depth + 1));
+        }
+        (0..files)
+            .map(|i| {
+                let dir = &dirs[(dirs.len() as f64 * next().powf(1.5)) as usize].0;
+                (format!("{dir}f{i}.rs"), 200 + (next().powf(3.) * 60_000.) as u64)
+            })
+            .collect()
+    }
+
+    /// The pictures of a turn of the city, as the picture's thread makes them while the user's drag
+    /// turns it, at a Retina tab's size, for the owner's repository's scale (about 9,500 files in
+    /// 900 folders): each stage's time per picture, as a distribution. Needs a GPU; no window.
+    /// `cargo test -p ottospace --release -- --ignored a_turn_is_timed --nocapture`.
+    #[test]
+    #[ignore = "needs a GPU; prints timings"]
+    fn a_turn_is_timed() {
+        let gpu = Gpu::new().expect("a GPU");
+        gpu.warm();
+        // The owner's repository's scale, and a config repository's: wide, many small files.
+        for (count, dirs, deepest) in [(9_500, 900, 8), (50_000, 6_800, 9)] {
+            let files = made_up_repo(count, dirs, deepest);
+            let folders: HashSet<&str> = files.iter().filter_map(|(p, _)| p.rsplit_once('/').map(|(d, _)| d)).collect();
+            let bytes: usize = files.iter().map(|(p, _)| p.len() + 1).sum();
+            let started = Instant::now();
+            let plan = Arc::new(atlas::atlas(&atlas::repo(&files)));
+            let atlas_ms = started.elapsed().as_secs_f64() * 1e3;
+            turn(&gpu, &plan, files.len(), folders.len(), bytes, atlas_ms);
+        }
+    }
+
+    fn turn(gpu: &Gpu, plan: &Arc<Atlas>, files: usize, folders: usize, bytes: usize, atlas_ms: f64) {
+        let mut key = Key {
+            dir: "made-up".into(),
+            plan: Arc::as_ptr(plan) as usize,
+            lit: Vec::new(),
+            size: (2560, 1500),
+            glass: true,
+            rise: 1000,
+            view: [0; 5],
+            lower: scene::LOWER.to_bits(),
+            folders: Vec::new(),
+            moving: false,
+        };
+        let set = |key: &mut Key, v: View| key.view = [v.yaw, v.pitch, v.zoom, v.pan[0], v.pan[1]].map(f32::to_bits);
+        let mut last = Layouts::new();
+        let mut view = View::default();
+        set(&mut key, view);
+        let skip = crate::trace::jsonl().lines().count();
+        let at_rest = Instant::now();
+        let first = make(gpu, &key, plan, &mut last).unwrap();
+        let (rest_ms, blocks) = (at_rest.elapsed().as_secs_f64() * 1e3, first.scene.blocks.len());
+        let districts = first.scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).count();
+        let mut stages: HashMap<&str, Vec<f64>> = HashMap::new();
+        let mut kept = Some(first);
+        key.moving = true;
+        for _ in 0..240 {
+            view = view.orbited(1.5, 0.);
+            set(&mut key, view);
+            let started = Instant::now();
+            let made = make(gpu, &key, plan, &mut last).unwrap();
+            let total = started.elapsed().as_secs_f64() * 1e3;
+            // The picture it replaces is let go, as `read_city` retires it.
+            let dropped = Instant::now();
+            drop(kept.replace(made));
+            stages.entry("drop old").or_default().push(dropped.elapsed().as_secs_f64() * 1e3);
+            stages.entry("picture total").or_default().push(total);
+        }
+        let trace = crate::trace::jsonl();
+        let pictures: Vec<serde_json::Value> = (trace.lines().skip(skip))
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|e| e["ev"] == "city_picture" && e["w"] == 1280)
+            .collect();
+        for field in ["scene_us", "prep_us", "delays_us", "boxes_us", "alloc_us", "gpu_us", "copy_us", "image_us"] {
+            let v = pictures.iter().filter_map(|e| e[field].as_f64()).map(|us| us / 1e3).collect();
+            stages.insert(field.trim_end_matches("_us"), v);
+        }
+        println!("\n{files} files, {folders} folders, {bytes} bytes of names, {blocks} boxes ({districts} districts)");
+        println!("once: plan {atlas_ms:.1} ms; first picture at rest (layout, render, names) {rest_ms:.1} ms");
+        println!("turn: 240 pictures at 1280×750 (half of 2560×1500), ms");
+        println!("| stage | mean | p50 | p95 | p99 | max | over 16.7 | over 33 |");
+        println!("|---|---|---|---|---|---|---|---|");
+        for name in ["scene", "prep", "delays", "boxes", "alloc", "gpu", "copy", "image", "drop old", "picture total"] {
+            let Some(v) = stages.get_mut(name).filter(|v| !v.is_empty()) else { continue };
+            v.sort_by(f64::total_cmp);
+            let p = |q: f64| v[((v.len() as f64 * q).ceil() as usize).clamp(1, v.len()) - 1];
+            let over = |ms: f64| v.iter().filter(|t| **t > ms).count();
+            let mean = v.iter().sum::<f64>() / v.len() as f64;
+            println!(
+                "| {name} | {mean:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {} | {} |",
+                p(0.5),
+                p(0.95),
+                p(0.99),
+                v[v.len() - 1],
+                over(16.7),
+                over(33.)
+            );
+        }
     }
 
     /// How long a checkout's read takes, for the design note's costs. `CITY_BENCH`: folders,

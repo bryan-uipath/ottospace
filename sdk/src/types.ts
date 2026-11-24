@@ -1961,11 +1961,38 @@ export interface CityDrawn {
   view: CityView;
   /** A drag of a city's camera is in flight. */
   grabbed: boolean;
+  /** The Developer command's timed spin (`city_spin`): in flight, and the last one's numbers. */
+  spin: CitySpin;
   /** Each agent's icon drawn over the city: its task (null: a session no task has), its box,
    * whether its cone shines on a building, its place in a fan `[k, n]`, under the user's pointer. */
   agents: CityAgent[];
   /** The reads' flashes, searches' sweeps and found files' lights playing now, by count. */
   glimmer: CityGlimmer | null;
+}
+
+export interface CitySpin {
+  running: boolean;
+  result: CitySpun | null;
+}
+
+/** A spin's frames (ms from one to the next) and its new pictures' waits from made to painted (ms). */
+export interface CitySpun {
+  steps: number;
+  done: boolean;
+  frames: number;
+  mean: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  max: number;
+  over_16: number;
+  over_33: number;
+  /** Frames that showed the picture the frame before showed. */
+  repeats: number;
+  wait_p50: number;
+  wait_p95: number;
+  wait_max: number;
+  boxes: number;
 }
 
 export interface CityGlimmer {
