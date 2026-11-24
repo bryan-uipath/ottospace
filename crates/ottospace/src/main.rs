@@ -113,6 +113,7 @@ mod listen_live;
 mod listen_meter;
 mod markdown;
 mod marks;
+mod mcp;
 mod menus;
 mod new_task;
 mod notices;
@@ -3356,6 +3357,19 @@ impl Workspace {
                         None
                     }
                 },
+                Request::Workspace { pane } => {
+                    let caller = self.caller(pass.as_ref());
+                    let message = match self.model.workspace_view(caller, pane).map(serde_json::to_value) {
+                        Ok(Ok(mut view)) => {
+                            view["ok"] = true.into();
+                            view.to_string()
+                        }
+                        Ok(Err(err)) => control::error(&err.to_string()),
+                        Err(why) => control::error(&why),
+                    };
+                    let _ = reply.send(message);
+                    continue;
+                }
                 Request::TaskBrief { id, tab } => {
                     let caller = self.caller(pass.as_ref());
                     let _ = reply.send(self.serve_brief(id, caller, tab));
@@ -3363,6 +3377,11 @@ impl Workspace {
                 }
                 Request::Capture { pane, history } => {
                     let id = pane.or(self.model.focused);
+                    // A task's agent reads only its own workspace's terminals.
+                    if let Some(Err(why)) = id.map(|id| self.model.pane_access(id, self.caller(pass.as_ref()))) {
+                        let _ = reply.send(control::error(&why));
+                        continue;
+                    }
                     let message = match id.and_then(|id| self.terminals.get(&id).map(|t| (id, t))) {
                         Some((id, t)) => {
                             serde_json::json!({ "ok": true, "pane": id, "text": t.text(history) }).to_string()
@@ -3373,7 +3392,7 @@ impl Workspace {
                     continue;
                 }
                 Request::Wait { pane, pattern, timeout_ms } => {
-                    self.wait(pane, &pattern, timeout_ms, reply, cx);
+                    self.wait(pane, &pattern, timeout_ms, pass, reply, cx);
                     continue;
                 }
                 // Only to the task the user let see the pane (agent mode): its pass says who asks.
@@ -3941,12 +3960,18 @@ impl Workspace {
         pane: Option<PaneId>,
         pattern: &str,
         timeout_ms: Option<u64>,
+        pass: Option<pass::Pass>,
         reply: Sender<String>,
         cx: &mut Context<Self>,
     ) {
+        // Resolved once: none named, the focused one, which a task's agent may read only in its
+        // own workspace (`pane_access`), as any pane.
         let Some(id) = pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)) else {
             return drop(reply.send(control::error("no terminal pane to wait on")));
         };
+        if let Err(why) = self.model.pane_access(id, self.caller(pass.as_ref())) {
+            return drop(reply.send(control::error(&why)));
+        }
         let regex = match regex::Regex::new(pattern) {
             Ok(regex) => regex,
             Err(err) => return drop(reply.send(control::error(&err.to_string()))),
@@ -3956,8 +3981,16 @@ impl Workspace {
         let start = Instant::now();
         cx.spawn(async move |this, cx| {
             let message = loop {
-                let text = this.update(cx, |this, _| this.terminals.get(&id).map(|t| t.text(true)));
+                // Asked again each time: the pane may have left the workspace, or the agent ended.
+                let text = this.update(cx, |this, _| {
+                    let caller = this.caller(pass.as_ref());
+                    this.model.pane_access(id, caller).map(|()| this.terminals.get(&id).map(|t| t.text(true)))
+                });
                 let Ok(text) = text else { break control::error("ottospace is closing") };
+                let text = match text {
+                    Ok(text) => text,
+                    Err(why) => break control::error(&why),
+                };
                 let Some(text) = text else { break control::error(&format!("pane {id} closed")) };
                 // Line by line, so `^done$` skips the echoed command, which starts with the prompt.
                 if let Some(line) = text.lines().find(|line| regex.is_match(line)) {
@@ -9728,6 +9761,10 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "ctl") {
         ctl(&args[2..]);
     }
+    // The MCP server of a task's agent: a client of the socket, as `ctl`, its pass kept.
+    if args.get(1).is_some_and(|a| a == "mcp") {
+        mcp::main();
+    }
     // Started from a task agent's shell (a dev build): that pass is its, not for our children.
     // SAFETY: no thread has started yet.
     unsafe { std::env::remove_var(pass::VAR) };
@@ -9762,7 +9799,7 @@ fn main() {
     // open a second window and restore the running instance's hosted windows.
     if let Some(unknown) = args.get(1) {
         eprintln!(
-            "unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub] | rescue | --version]"
+            "unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | mcp | skill [--stub] | rescue | --version]"
         );
         std::process::exit(2);
     }

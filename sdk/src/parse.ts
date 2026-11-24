@@ -36,6 +36,7 @@ import type {
   CalendarReply,
   Captured,
   Note,
+  AgentGrant,
   NoteReply,
   DecisionAccepted,
   DecisionAct,
@@ -47,6 +48,7 @@ import type {
   DecisionReply,
   Filed,
   FiledRow,
+  WorkspaceReply,
   Meeting,
   TimeSpan,
   NativeChat,
@@ -884,6 +886,31 @@ function note(value: unknown, at: string): Captured<Note> {
     meeting: orNull(meeting)(o.meeting, `${at}.meeting`),
     transcript: orNull(transcript)(o.transcript, `${at}.transcript`),
     front: orNull(str)(o.front, `${at}.front`),
+  };
+}
+
+export function workspaceReply(value: unknown): WorkspaceReply {
+  const o = fields(value, "reply");
+  const pane = (value: unknown, at: string) => {
+    const p = fields(value, at);
+    return {
+      id: num(p.id, `${at}.id`),
+      kind: paneKind(p.kind, `${at}.kind`),
+      cwd: orNull(str)(p.cwd, `${at}.cwd`),
+      grant: orNull(grant)(p.grant, `${at}.grant`),
+    };
+  };
+  const tab = (value: unknown, at: string) => {
+    const t = fields(value, at);
+    return { id: num(t.id, `${at}.id`), title: str(t.title, `${at}.title`), panes: list(pane)(t.panes, `${at}.panes`) };
+  };
+  return {
+    ok: true,
+    task: orNull(num)(o.task, "task"),
+    space: owner(o.space, "space"),
+    name: str(o.name, "name"),
+    tabs: list(tab)(o.tabs, "tabs"),
+    agent_mode: bool(o.agent_mode, "agent_mode"),
   };
 }
 
@@ -2149,12 +2176,17 @@ function slot(value: unknown, at: string): Slot {
 
 const agentLevel = oneOf(["off", "see", "act"] as const, "an agent mode level");
 
+/** An app pane's agent mode grant: its level and the task it is given to. */
+function grant(value: unknown, at: string): AgentGrant {
+  const g = fields(value, at);
+  return { level: agentLevel(g.level, `${at}.level`), task: orNull(num)(g.task, `${at}.task`) };
+}
+
 function agentMode(value: unknown, at: string): AgentMode {
   const o = fields(value, at);
   const panes: AgentMode["panes"] = {};
-  for (const [id, grant] of Object.entries(fields(o.panes, `${at}.panes`))) {
-    const g = fields(grant, `${at}.panes.${id}`);
-    panes[id] = { level: agentLevel(g.level, `${at}.panes.${id}.level`), task: orNull(num)(g.task, `${at}.panes.${id}.task`) };
+  for (const [id, given] of Object.entries(fields(o.panes, `${at}.panes`))) {
+    panes[id] = grant(given, `${at}.panes.${id}`);
   }
   const menu = (value: unknown, at: string) => {
     const m = fields(value, at);

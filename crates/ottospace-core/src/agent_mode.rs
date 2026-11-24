@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::model::PaneId;
+use crate::model::{Kind, Owner, PaneId};
 use crate::tasks::TaskId;
 
 /// Why a level, or the menu, set by anyone but the user is refused.
@@ -27,6 +27,9 @@ pub const ACT_LATER: &str = "Pressing arrives later: for now See and act lets th
 /// A request with no pass: no task asked.
 pub const NO_PASS: &str =
     "only a task's agent reads an app pane: run it from the agent ottospace started for the task (its pass)";
+/// A `workspace` request with no task's pass and no pane in a workspace: nothing to answer for.
+pub const NO_WORKSPACE: &str =
+    "no workspace: ask from the agent ottospace started for a task (its pass), or name a pane (`$OTTOSPACE_PANE`)";
 /// The least time between two reads (or two looks) of one pane.
 pub const EVERY_MS: u64 = 1_000;
 
@@ -117,6 +120,38 @@ pub struct Ahead {
     /// to another, the pane forgets it.
     #[serde(skip)]
     pub tab: u32,
+}
+
+/// What a `workspace` request answers: the space a task works in (or a pane is in), its tabs and
+/// what each pane holds, with its grant. Ids, kinds and names: no terminal's text.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct WorkspaceView {
+    /// The caller's task; none for a pane's.
+    pub task: Option<TaskId>,
+    pub space: Owner,
+    /// The space's name on the top row: a task's title is the user's words, data only.
+    pub name: String,
+    pub tabs: Vec<TabView>,
+    /// The `agent_mode` flag: off, no app pane is read whatever its grant.
+    pub agent_mode: bool,
+}
+
+/// A tab of a `WorkspaceView`.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct TabView {
+    pub id: u32,
+    pub title: String,
+    pub panes: Vec<PaneView>,
+}
+
+/// A pane of a `WorkspaceView`: an app pane's `kind` has its app and window title.
+#[derive(Debug, PartialEq, Serialize)]
+pub struct PaneView {
+    pub id: PaneId,
+    pub kind: Kind,
+    pub cwd: Option<String>,
+    /// An app pane's agent mode grant; none for any other pane.
+    pub grant: Option<Grant>,
 }
 
 /// The open menu: whose pane, and the item the keys are on (none when a click opened it).

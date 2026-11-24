@@ -174,6 +174,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
     }),
   (c) => c.decisionWithdraw({ source: "slack", key: "slack:C0MADEUP:1763500000.000100" }),
   (c) => c.decision({ id: 1763500000000 }),
+  (c) => c.workspace({ pane: 3 }),
   (c) => c.marks(),
   (c) => c.markAdd({ pane: 1, name: "notes", key: "n" }),
   (c) => c.markGo({ name: "notes", axis: "down" }),

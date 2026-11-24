@@ -3,7 +3,7 @@
 //! send each action is `Model::refusal`.
 
 use super::{Action, Effect, Kind, Model, Origin, PaneId, STALE_PASS};
-use crate::agent_mode::{self, Ahead, AppUse, Grant, Kept, Level, Menu};
+use crate::agent_mode::{self, Ahead, AppUse, Grant, Kept, Level, Menu, PaneView, TabView, WorkspaceView};
 use crate::features::Feature;
 use crate::tasks::{Caller, State, TaskId};
 use crate::transcript::Notice;
@@ -214,7 +214,7 @@ impl Model {
         }
         if grant.level < Level::See {
             return Err(format!(
-                "agent mode is off on pane {pane}: only the user turns it on, in the pane's header (ask them to)"
+                "agent mode is off on pane {pane}: ask the user to choose See in its header (the robot, or ⌘⌃V)"
             ));
         }
         let last = self.agent.last.get(&pane).and_then(|uses| uses.get(&what));
@@ -222,6 +222,51 @@ impl Model {
             return Err(format!("pane {pane} was {} less than a second ago: try again in a moment", what.verb()));
         }
         Ok(task)
+    }
+
+    /// Whether `caller` may read terminal pane `pane` (`capture`, `wait`): a task's agent (its pass)
+    /// only a pane of its own workspace, so its tools that run unasked read nothing of another
+    /// task's or of the user's elsewhere; a made-up or dead pass nothing. With no pass, as before:
+    /// any same-user client reads every terminal in `state` anyway.
+    pub fn pane_access(&self, pane: PaneId, caller: Caller) -> Result<(), String> {
+        match caller {
+            Caller::Anyone => Ok(()),
+            Caller::Unknown => Err(STALE_PASS.into()),
+            Caller::Task(task) => {
+                let space = self.tab_of(pane).and_then(|id| self.tabs.iter().find(|tab| tab.id == id));
+                let own = space.is_some_and(|tab| tab.space == self.task_space(task));
+                own.then_some(()).ok_or_else(|| {
+                    format!("pane {pane} is not in task {task}'s workspace: a task's agent reads only its own panes")
+                })
+            }
+        }
+    }
+
+    /// The workspace `caller`'s task works in, else the one `pane` is in: its tabs, their panes and
+    /// each app pane's grant. A made-up or dead pass is refused, never answered as no task.
+    pub fn workspace_view(&self, caller: Caller, pane: Option<PaneId>) -> Result<WorkspaceView, String> {
+        let (task, space) = match caller {
+            Caller::Task(task) => (Some(task), self.task_space(task)),
+            Caller::Unknown => return Err(STALE_PASS.into()),
+            Caller::Anyone => {
+                let tab = pane.and_then(|pane| self.tab_of(pane)).and_then(|id| self.tabs.iter().find(|t| t.id == id));
+                let tab = tab.filter(|tab| tab.space != super::Owner::Home);
+                (None, tab.ok_or(agent_mode::NO_WORKSPACE)?.space.clone())
+            }
+        };
+        let view = |id: PaneId| {
+            let pane = self.pane(id)?;
+            let grant = self.agent.panes.get(&id).copied();
+            Some(PaneView { id, kind: pane.kind.clone(), cwd: pane.cwd.clone(), grant })
+        };
+        let tabs = self.tabs.iter().zip(self.tab_panes()).filter(|(tab, _)| tab.space == space);
+        let tabs = tabs.map(|(tab, panes)| TabView {
+            id: tab.id,
+            title: tab.title.clone(),
+            panes: panes.into_iter().filter_map(view).collect(),
+        });
+        let (tabs, name) = (tabs.collect(), self.space_title(&space));
+        Ok(WorkspaceView { task, space, name, tabs, agent_mode: self.features.on(Feature::AgentMode) })
     }
 
     /// The pane the menu, a level or the key is for: the one named, else the focused one.

@@ -12,6 +12,7 @@ import {
   noteReply,
   decisionFileReply,
   decisionReply,
+  workspaceReply,
   captureReply,
   inboxReply,
   markReply,
@@ -46,6 +47,7 @@ import type {
   DecisionFileReply,
   DecisionReply,
   DecisionSource,
+  WorkspaceReply,
   CaptureArgs,
   CaptureReply,
   CellArgs,
@@ -659,6 +661,10 @@ export class Client {
    */
   async calendar(args: CalendarArgs = {}): Promise<CalendarReply> {
     return calendarReply(await this.send({ cmd: "calendar", ...args }));
+  }
+  /** The workspace of the task whose agent asks (its pass), else of `pane`: tabs, panes, grants. */
+  async workspace(args: { pane?: number } = {}): Promise<WorkspaceReply> {
+    return workspaceReply(await this.send({ cmd: "workspace", ...args }));
   }
   /**
    * What task `task`'s quick note (⌘⇧N) was filed with: the meeting then, the transcript and how

@@ -13558,6 +13558,40 @@ mod tests {
         assert_eq!(m.agent.offers.get(&other), None);
     }
 
+    /// `workspace`: the caller's task's space, its tabs and what each pane holds, each app pane's
+    /// grant; with no pass, the space of a pane named. A made-up or dead pass gets nothing.
+    #[test]
+    fn a_workspace_view_is_the_callers_space_with_each_panes_grant() {
+        use crate::agent_mode::{Grant, Level, NO_WORKSPACE};
+        let mut m = Model::default();
+        m.update(Action::Open { kind: app(1), axis: Right, beside: None });
+        let slack = m.focused.unwrap_or_default();
+        m.update(Action::OpenCompose { text: "plan the week".into() });
+        m.update(Action::ComposeEnter);
+        let task = m.tasks.list[0].id;
+        m.update(Action::Focus { pane: slack });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let shell = m.focused.unwrap_or_default();
+        let view = m.workspace_view(Caller::Task(task), None).expect("its workspace");
+        assert_eq!((view.task, view.agent_mode, view.tabs.len()), (Some(task), true, 1));
+        let panes: Vec<_> = view.tabs[0].panes.iter().map(|pane| (pane.id, pane.kind.clone(), pane.grant)).collect();
+        let off = Grant { level: Level::Off, task: Some(task) };
+        assert_eq!(panes, [(slack, app(1), Some(off)), (shell, Kind::Terminal, None)]);
+        // No pass: the space of the pane named; none named, nothing.
+        assert_eq!(m.workspace_view(Caller::Anyone, Some(shell)).map(|v| (v.task, v.space)), Ok((None, view.space)));
+        assert_eq!(m.workspace_view(Caller::Anyone, None), Err(NO_WORKSPACE.into()));
+        assert_eq!(m.workspace_view(Caller::Unknown, Some(shell)), Err(STALE_PASS.into()));
+        // A task's agent reads its own workspace's terminals only; with no pass, as any client.
+        m.update(Action::WorkbookNew { uid: "00000000000000ee".into() });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let elsewhere = m.focused.unwrap_or_default();
+        assert_eq!(m.pane_access(shell, Caller::Task(task)), Ok(()));
+        let theirs = m.pane_access(elsewhere, Caller::Task(task));
+        assert!(theirs.is_err_and(|why| why.contains("not in task")), "a pane of another workspace");
+        assert_eq!(m.pane_access(elsewhere, Caller::Anyone), Ok(()));
+        assert_eq!(m.pane_access(shell, Caller::Unknown), Err(STALE_PASS.into()));
+    }
+
     #[test]
     fn a_tasks_space_holds_its_tabs_and_a_new_tab_joins_the_selected_space() {
         let mut m = Model::default();

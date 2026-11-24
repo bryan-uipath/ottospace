@@ -1895,6 +1895,16 @@ version. A test checks that every request shown in the guide is one the app acce
 
 The guide itself: [`crates/ottospace/skill/guide.md`](../crates/ottospace/skill/guide.md).
 
+### MCP server
+
+`ottospace mcp` is a stdio MCP server over the same socket: read-only tools `workspace`,
+`app_read`, `app_look`, `capture`, `wait`, `task_brief` and `guide`, each one socket request on the
+socket's terms (a task's agent's pass, agent mode's grants; with a task's pass, `capture` and
+`wait` read only that task's workspace's terminals). Its instructions are the agent
+preamble with its tools. To use it from a CLI you start yourself, add it by hand, e.g.
+`claude mcp add ottospace -- ottospace mcp`; with no task's pass it reads no app pane. Design:
+[agent-awareness.md](ai/agent-awareness.md), section 5.
+
 ## How app windows are hosted
 
 macOS cannot reparent another process's window, so ottospace fakes embedding with the Accessibility

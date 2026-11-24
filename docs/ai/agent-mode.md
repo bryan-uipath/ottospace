@@ -334,7 +334,8 @@ pane.
   today with no task, and the user's own scripts.
 - **Migration.** One step, in (b): no outside users depend on it yet. The e2e tests set See as
   the user first. The user keeps the inspector (their own window, no socket) for looking. The
-  error names the fix: "agent mode is off on pane 4: only the user turns it on, in the pane's
+  error names the fix (as built, 2026-11-23: "agent mode is off on pane 4: ask the user to choose See in its header
+  (the robot, or ⌘⌃V)"; first proposed: "agent mode is off on pane 4: only the user turns it on, in the pane's
   header".
 - **Left as is.** `ax_overlay` and `state.inspector`: roles, frames and counts, no app text.
 
