@@ -1798,8 +1798,12 @@ fn agents(
         let block = mark.over.and_then(|i| made.scene.blocks.get(i));
         let foot = block.and_then(|block| to_window(block.top()));
         let offset = point(px((mark.fan.0 as f32 - (mark.fan.1 as f32 - 1.) / 2.) * (ICON + FAN_GAP)), px(0.));
+        // Its sub-agents' row (`SUBS` at most; fanned, as many as its room in the fan) under it.
+        let most = if mark.fan.1 > 1 { ((ICON + FAN_GAP + SUB_GAP) / (SUB + SUB_GAP)) as usize } else { SUBS };
+        let below = if agent.subagents > 0 { px(3. + SUB) } else { px(0.) };
         let fits = |at: Point<Pixels>| {
             let rect = Bounds::centered_at(at, side);
+            let rect = Bounds { size: gpui::size(rect.size.width, rect.size.height + below), ..rect };
             (!rect.intersects(&clear) && bounds.contains(&rect.origin) && bounds.contains(&rect.bottom_right()))
                 .then_some(at)
         };
@@ -1863,16 +1867,16 @@ fn agents(
         let _ = mono.paint(point(shown.x - mono.width / 2., shown.y - px(7.)), px(14.), window, cx);
         let (task, key, cone) = (agent.task, agent.key.clone(), corners.is_some());
         // Its sub-agents: small squares in its colour in a row under it, then `+n`.
-        let shown_subs = agent.subagents.min(SUBS);
+        let shown_subs = agent.subagents.min(most);
         let row = shown_subs as f32 * (SUB + SUB_GAP) - SUB_GAP;
         for k in 0..shown_subs {
             let x = shown.x - px(row / 2.) + px(k as f32 * (SUB + SUB_GAP));
             let sub = Bounds { origin: point(x, rect.bottom() + px(3.)), size: gpui::size(px(SUB), px(SUB)) };
             window.paint_quad(fill(sub, colour.opacity(0.85)).corner_radii(px(2.)));
         }
-        if agent.subagents > SUBS {
+        if agent.subagents > most {
             let more =
-                shape(&format!("+{}", agent.subagents - SUBS), Hsla::from(rgb(theme::TEXT)), theme::TEXT_XS, window);
+                shape(&format!("+{}", agent.subagents - most), Hsla::from(rgb(theme::TEXT)), theme::TEXT_XS, window);
             let at = point(shown.x + px(row / 2. + 3.), rect.bottom() + px(3. + SUB / 2. - 7.));
             let _ = more.paint(at, px(14.), window, cx);
         }

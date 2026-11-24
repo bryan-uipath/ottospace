@@ -723,6 +723,9 @@ mod tests {
         assert_eq!(subs(&m), Some(1));
         events(&mut m, vec![end("b")]);
         assert_eq!(subs(&m), Some(0));
+        // Interrupted: a call whose end never comes runs no more.
+        events(&mut m, vec![agent("d", false), Event::TurnFinished { outcome: Outcome::Interrupted }]);
+        assert_eq!(city(&m).map(|c| c.agents.iter().map(|a| a.subagents).sum::<usize>()), Some(0));
     }
 
     /// Reads and searches as the city's glimpses: a read's file, a search's scope (none: the

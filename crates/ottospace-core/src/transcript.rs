@@ -624,9 +624,10 @@ impl Transcript {
         self.activity.running_label().is_some()
     }
 
-    /// How many sub-agents its agent runs now: its `Agent` or `Task` calls not ended.
+    /// How many sub-agents its agent runs now: its `Agent` or `Task` calls that still run (one
+    /// whose end never came is over once its calls are: an interrupt, an exit).
     pub fn subagents(&self) -> usize {
-        self.subs.len()
+        self.subs.iter().filter(|id| self.activity.runs(id)).count()
     }
 
     /// The command line of its newest shell call that still runs.
