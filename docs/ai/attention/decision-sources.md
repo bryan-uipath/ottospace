@@ -36,7 +36,7 @@ MCP server.
 | How it is answered | 1–9 pick, ↵ sends (`DecisionsAsk` → `ask_act` → `Effect::AgentAnswers`), the agent resumes. Skip: out of this run. Later: the task snoozed one hour (`LATER_MS`). Only `Origin::User`; a client or timer is refused (`USERS_ALONE`) |
 | Persistence | None of its own. The run and `waiting` live in memory; Later is the task's `snoozed_until`, kept with the task |
 | Socket state | `decisions`: null, or `tab`, `pane`, `task`, `ticket`, `at`, `of`, `queue` (`task`, `ticket`, `priority`, `since`). Ids and times only; the question is under `drawer.native` as a shape, never words |
-| Counted | The status bar's `needs you` counts tasks (and in-pane terminal sessions that wait, `session_waits`); the decision itself is not counted apart |
+| Counted | The status bar's `needs you` counts tasks and terminal sessions that wait (in-pane ones under `session_waits`; every waiting session card under `terminal_tasks`, `status_bar.rs`); the decision itself is not counted apart |
 
 The gap to "any source":
 
@@ -82,7 +82,7 @@ forget. Everything else is a `Filed` decision, which starts in triage unless its
 | `suggest` | `projects` (≤ 3 names), `role` (`core`/`ancillary`) with `role_why` ≤ 120 | The filer's proposal. In triage: shown, never used to rank |
 | `claims` | `due` (ms), `person_waits` (bool), `blocks` (task ids) | The filer's word. `blocks` is checked by the core; `due` and `person_waits` add urgency only once accepted (§4) |
 | `triage` | `pending`, or `sorted { area or project, at }`, or `skipped` (a trusted source) | §4 |
-| `accepted` | `projects`, `role`, `due`, `person_waits`, each with `by` (`user` or `trusted source`) | What ranks it. The user's choice sticks for the key, across revisions |
+| `accepted` | `projects` (or an `area`), `role`, `due`, `person_waits`, each with `by` (`user` or `trusted source`); `now { until, displaced }` after `t` | What ranks it. The user's choice sticks for the key, across revisions |
 | `expires` | ms | Tied to its asker where that can be checked (§3); else 7 days after its last update |
 | `task` | task id or none | The task it belongs to, when an agent files for its own task |
 | `status` | `open`, `snoozed { until }`, `answered { option, at }`, `dismissed`, `not_mine`, `withdrawn`, `expired` | Only the user moves it out of `open`, except `withdrawn` (the filer) and `expired` (the clock or the asker's end) |
@@ -94,11 +94,11 @@ on its name outside the table.
 
 | Source | Badge | Filed by | Triage by default | Acts its options may take (§7) |
 |---|---|---|---|---|
-| `agent_session` | the runner's glyph | derived (`Card::Asked`); or over the socket naming a live `task` (a TUI agent cannot use the structured ask). The socket cannot tell the caller: the task is a claim, and the card says "filed over the socket" | no: work the user already started | answer, start task, next action |
+| `agent_session` | the runner's glyph | derived (`Card::Asked`); or over the socket naming a live `task` (a TUI agent cannot use the structured ask). The socket cannot tell the caller: the task is a claim, and the card says "filed over the socket" | derived: no. Over the socket: promoted by default (work the user already took on), revocable as any promotion; Open 8 | answer, start task, next action |
 | `terminal_session` | the runner's glyph, dim | derived (`Card::Waits`), with sessions-as-tasks slice 5 (#423) | no | go to pane |
 | `slack` | # | socket (inbox later) | yes | start task, draft reply, next action, open link |
 | `jira` | ◆ | socket (inbox later) | yes | start task, next action, open link |
-| `pr_review` | ⑂ | socket (inbox later); later derived from `prs.rs` | yes | start task, next action, open link |
+| `pr_review` | ⑂ | socket (inbox later); deriving it from `prs.rs` needs review requests added to its fixed field list (it reads `reviewDecision`, not who is asked) | yes | start task, next action, open link |
 | `calendar` | ◷ | socket (inbox later) | yes | start task, next action |
 | `routine` | ↻ | socket (inbox later) | yes | start task, next action, open link |
 
@@ -222,7 +222,7 @@ they show as `· 6 to sort` beside it (Decided 2).
 │  ▸ Evidence (1)                    (not counted until you say)   │
 │                                                                  │
 │  1 Login rewrite   2 Beacon launch   3 Hiring   4 DRI week       │
-│  t take now · before Atlas: "login" (an agent waits)             │
+│  t take now · first of the unplanned, before cobalt: "cache"     │
 │  o other project · l later · n not mine · d dismiss              │
 │  u count its claims · e evidence · z undo · Esc leave            │
 └──────────────────────────────────────────────────────────────────┘
@@ -230,9 +230,9 @@ they show as `· 6 to sort` beside it (Decided 2).
 
 | Key | The item becomes | Kept |
 |---|---|---|
-| `1`–`4` | Slotted under that focus area (§5): a ranked decision there, role core. With no options, a next action of the area's first project | `triage: sorted`, `accepted.projects` |
+| `1`–`4` | Slotted under that focus area (§5): a ranked decision there, role core. With no options, a next action of the area's first project, or of the area itself when it links none (kept in `focus.json`) | `triage: sorted`, `accepted.area` |
 | `o` | A picker of projects: slotted under that project, role ancillary unless `c` | the same |
-| `t` | Take now: ranked first of the unplanned for today (`now` until midnight), its claims counted. The card says what it goes before, before the key is pressed. Counted as unplanned work that displaced focus (§6) unless it is in a focus area | `accepted.now`, the displaced card's id |
+| `t` | Take now: first of its tier for today (until midnight), its claims counted, role ancillary unless `c`. The card says what it goes before, before the key is pressed. Outside focus it is first of the unplanned, and counted as unplanned work that displaced focus (§6) | `accepted.now { until, displaced }` |
 | `l` | Back in the next sort run, tomorrow | snoozed |
 | `n` | Not mine: closed; the filer reads it | `not_mine` |
 | `d` | Dismiss: closed | `dismissed` |
@@ -326,13 +326,13 @@ agent that may have misread or been steered, so nothing is applied until ↵ (or
 - **When it runs**: the routine's to decide; recommended at the start of the week (Monday
   morning) and when the note changes (the routine watches the file; ottospace does not).
 - **One proposal at a time**: a newer `focus_set` for the same week replaces the pending one (a
-  revision). Identical to the current focus: no card.
+  revision). Identical to the current focus: no card. At most 6 an hour.
 - **The note and ottospace disagree** (the user changed focus by hand, then the note changed):
   the next proposal shows the difference and waits; Esc keeps ottospace's. ottospace's focus is
   the one that ranks; the note is never written back. A proposal the user declined is not shown
   again until the routine files a different one.
 - Refused: more than four areas, a name over 40 characters, a project or repository that is not
-  listed, a week other than this one or the next. Caps as a filing's (one per hour).
+  listed, a week other than this one or the next.
 
 ### The week
 
@@ -353,14 +353,17 @@ card shows the inputs that placed it.
 Sort key, in order:
 
 1. The card on show (unchanged: nothing moves under the person).
-2. The sort card and the focus card, when waiting, after cards with an agent waiting.
+2. The focus card, then the sort card, when waiting: after the in-focus cards where an agent
+   waits, before everything else (a new focus changes where items sort to, so it comes first).
 3. **Focus**: in one of this week's areas first; the rest after, all equal.
 4. **Taken now** (`t` today), first of its tier.
-5. **C × U**: C is 2 for core, 1 for ancillary. U is 1, plus 2 if an agent of ours waits on it,
-   plus 1 if a person waits (accepted), plus 1 if due within 24 h or 2 if within 2 h or overdue
-   (accepted). An agent waiting is checked by the core, never taken from a claim.
-6. The task's priority (P1 first), so today's order holds when nothing else differs.
-7. Waiting longest, then id.
+5. **An agent waits** on it: a `Card::Asked`, or a `blocks` task whose agent waits now (checked by
+   the core, never taken from a claim). An idle agent costs more than any filed card.
+6. **C × U**: C is 2 for core, 1 for ancillary. U is 1, plus 1 if a person waits (accepted), plus
+   1 if due within 24 h or 2 if within 2 h or overdue (accepted). Range 1 to 8.
+7. The task's priority (P1 first; a card of no task after every task's), so today's order holds
+   when nothing else differs.
+8. Waiting longest, then id.
 
 Then one pass over that list: **never more than three in a row from one source** while another
 source has a card in the same focus tier; a card with an agent waiting is exempt.
@@ -371,16 +374,16 @@ and the rule is today's (priority, then age) for agent questions, since all have
 Worked examples, Wednesday at noon. Focus: 1 Login rewrite (atlas), 2 Beacon launch (beacon),
 3 Hiring, 4 DRI week (dri). Not in focus: cobalt, dune.
 
-| Card | Focus | C × U | Why line |
-|---|---|---|---|
-| A. Task "login" (atlas, P3), its agent asks | yes | 2 × 3 = 6 | `Login rewrite · core · an agent waits` |
-| B. Slack thread sorted to Beacon launch, claims accepted (someone waits, due 5 pm) | yes | 2 × 3 = 6 | `Beacon launch · core · someone waits · due 5 pm` |
-| C. Routine: dri error rate up, trusted source, core | yes | 2 × 1 = 2 | `DRI week · core` |
-| D. Jira bug on dune, sorted with `o`, ancillary, due 1 pm accepted | no | 1 × 3 = 3 | `not in focus · due 1 pm` |
-| E. Task "cache" (cobalt, P1), its agent asks | no | 2 × 3 = 6 | `not in focus · an agent waits` |
-| F. Slack thread on dune, taken now with `t` | no, taken now | 1 × 1 = 1 | `taken now · before "cache"` |
+| Card | Focus | Agent waits | C × U | Why line |
+|---|---|---|---|---|
+| A. Task "login" (atlas, P3), its agent asks | yes | yes | 2 × 1 = 2 | `Login rewrite · an agent waits` |
+| B. Slack thread sorted to Beacon launch, claims accepted (someone waits, due 5 pm) | yes | no | 2 × 3 = 6 | `Beacon launch · core · someone waits · due 5 pm` |
+| C. Routine: dri error rate up, trusted source, core | yes | no | 2 × 1 = 2 | `DRI week · core` |
+| D. Jira bug on dune, sorted with `o`, ancillary, due 1 pm accepted | no | no | 1 × 3 = 3 | `not in focus · due 1 pm` |
+| E. Task "cache" (cobalt, P1), its agent asks | no | yes | 2 × 1 = 2 | `not in focus · an agent waits` |
+| F. Slack thread on dune, taken now with `t` | no | no | 1 × 1 = 1 | `taken now · before "cache"` |
 
-Order: A, B (tie at 6: A is older), C, then F (taken now), E, D. B's claims counted only because
+Order: A (an agent waits), B, C, then F (taken now), E (an agent waits), D. B's claims counted only because
 the user pressed `u` when sorting; unsorted, B was in the sort card and ranked nowhere.
 
 Hover (or `?`) on the why line gives the sum: "in focus (Beacon launch) · core, the filer's,
@@ -402,8 +405,9 @@ Core tests it implies:
 - `t` puts a card first of its tier until midnight, and records the card it displaced.
 - A focus proposal changes nothing until the user's ↵; a client's ↵ is refused.
 - Week rollover: nothing in focus until the user keeps, edits or sets it.
-- Four from one source, one from another in the same tier: the other is fourth; an agent-waiting
-  card is exempt.
+- Four non-exempt cards from one source ranked ahead of one from another, in one tier: the other
+  comes fourth; an agent-waiting card is exempt.
+- A filed card never ranks above a card of its tier where an agent waits.
 - Property `check`: the queue is a permutation of the open, sorted (or trusted) cards not dealt
   with in this run and inside the filter; focus tier never inverted; the card on show first.
 
@@ -415,22 +419,23 @@ Per area, this week, from what ottospace already holds (pure: counted from recor
 |---|---|
 | Tasks done | tasks of the area with `finished_at` this week |
 | Pull requests merged | linked repositories' pull requests merged this week: a new read-only `gh` read (Open 6) |
-| Decisions answered | records of the area answered this week (kept 14 days: enough for a week) |
-| Agent time | the area's tasks' agent time this week |
+| Decisions answered | a per-week counter in `focus.json`, counted when the user answers (records are deleted, and a key's revisions reuse one record) |
+| Agent time | the area's tasks' agent time this week: a per-week counter beside `progress::Clock`'s day total (new: it keeps a lifetime and one day's time) |
 | Waiting on you | its open decisions and its tasks under Needs you, now |
 
 Each area's state, one word, in this order:
 
-- **waiting on you**: anything of it waits on the person now;
+- **waiting**: anything of it waits on the person now;
 - **moved**: something done, merged or answered in the last 2 working days;
-- **stalled**: neither, for 3 working days or more since the week began or it last moved.
+- **stalled**: nothing in the last 2 working days (counted in hours of weekdays);
+- **new**: less than 2 working days of the week have passed and nothing moved yet.
 
 Unplanned work: what belongs to no area is counted as one line, "Unplanned". What displaced focus
 is named apart: items taken now (`t`) outside focus, and agent time on unplanned tasks while an
 area was stalled.
 
-Shown in one place, the Week strip: at the top of the Decisions pane between cards, at the end of
-a run, and as the hover of the status bar's `needs you` item. Never a notice.
+Shown as the Week strip on the Decisions pane (between cards, and at the end of a run); the status
+bar's `needs you` hover adds one line per area to its tooltip. Never a notice.
 
 ```
 Week 48 · Wed
@@ -459,7 +464,7 @@ act runs on the user's key only (`Origin::User`).
 | Act | What ↵ on it does | Kept where |
 |---|---|---|
 | `answer` | An agent's question: words back to its agent (`AgentAnswers`, today's path). A filed one from an agent: its status `answered { option }`, read by `decision_wait` | The task's transcript; the record |
-| `start_task { title, brief }` | Files a task (as `task_add`), its project from the decision, its brief the question, the chosen option and the evidence, quoted and labelled untrusted (as a capture's brief). ↵ files; ⌘↵ files and starts it, as the quick box does | The task file |
+| `start_task { title, brief }` | Files a task (as `task_add`), its project from the decision, its brief the question, the chosen option and the evidence, quoted and labelled untrusted (as a capture's brief). ↵ files; ⌘↵ files and starts it, as the quick note box (⌘⇧N) does | The task file |
 | `draft_reply { text }` | Shows the draft in the card, selectable; Copy (⌘C) and Open thread. ottospace never sends | The record, until it closes |
 | `next_action { text }` | Adds a next action to the decision's project | `<home>/projects.json`, keyed by the project's path, beside #409's order: never the notes |
 | `go_to_pane` | Shows the pane a terminal session runs in (sessions-as-tasks) | — |
@@ -514,11 +519,13 @@ Each a pull request that stands alone, behind a new flag `decision_sources` (Exp
 1. **The record, the socket, the source tag and triage.** Core: `Decision`, `Source`/
    `SourceSpec`, `Card`, `DecisionFile`/`Withdraw`, dedupe and revisions, caps, expiry tied to
    the asker, Sort mode's actions (slot to a project with `o`, take now, later, not mine,
-   dismiss, count claims, undo), promote and demote, Skip, Later, Forget; `<home>/decisions/`.
+   dismiss, count claims, `c`, undo) and its end line, promote and demote, Skip, Later, Forget;
+   answering records the choice for the filer (`decision_wait`): an option's act runs from slice
+   4; `<home>/decisions/`.
    Shell: `decision_file`, `decision_withdraw`, `decision`, `decision_wait`; the sort card and
    Sort mode; the card of a sorted decision with its badge, recommended option preselected,
    evidence folded; the source filter; `· n to sort` and `· n to decide`. Order: today's rule,
-   sorted decisions after agent questions, by C × U then age. No inbox, no focus. Evidence: unit
+   sorted decisions after agent questions, by C × U then age (§6 steps 5–8 without focus). No inbox, no focus. Evidence: unit
    tests and property makers for every new `Action` (each origin); `check`s (one open per key,
    caps, no socket step sorts, answers, promotes or opens, triage items unranked); e2e filing a
    made-up Slack item, sorting it, answering it, updating in place, refused over the cap; shots
@@ -534,7 +541,7 @@ Each a pull request that stands alone, behind a new flag `decision_sources` (Exp
    state with times passed in; a shot of the strip; the `gh` stand-in (`OTTOSPACE_GH`) for merged
    pull requests.
 4. **Acts.** `start_task` with the quoted brief, `draft_reply` with Copy and Open thread,
-   `next_action` in `projects.json`, `open_link`, the end-of-run line; `Card::Waits` and
+   `next_action` in `projects.json`, `open_link`, the decide run's outcome line; `Card::Waits` and
    `go_to_pane` once #423's slice 5 is in. Evidence: e2e per act (a test run opens no link:
    counted, as `counts.pr_opens`).
 5. **A reference triage routine**, and with it the inbox folder (an unattended run needs it): an
@@ -570,7 +577,7 @@ From #424 (owner, 2026-11-23), standing unless marked:
 
 Added (owner, 2026-11-23):
 
-11. **Triage is a decision**: items from sources not promoted arrive as "Is this a priority, and
+11. **Triage is a decision**: items from external sources not promoted arrive as "Is this a priority, and
     where does it slot in?"; the user's sort makes them work. Claims are shown and count only once
     accepted. A source skips triage only by the user's promotion, revocable.
 12. **Priority from the week's four focus areas**: in focus first, the rest equal.
@@ -581,13 +588,13 @@ Added (owner, 2026-11-23):
 
 ## 11. Open questions (the owner's)
 
-1. **An idle agent on unplanned work waits behind every focus card?** Recommend yes: it is first
-   of its tier, and its why line says "an agent waits"; the user can `t` it or set focus.
+1. **An idle agent on unplanned work waits behind every focus card** (and behind an item taken
+   now)? Recommend yes: it leads the rest of the unplanned, and its why line says "an agent waits".
 2. **Where the sort card sits**: first of every run while items wait, or only at set times (morning,
    after lunch)? Recommend first of every run; `s` skips it.
 3. **Promotion scope**: a whole source, or a source and key prefix (a channel, a routine)?
    Recommend the prefix: one noisy channel should not ride on a trusted one.
-4. **Stalled after 3 working days**, moved within 2? Recommend yes; a setting only if asked.
+4. **Stalled after 2 working days with nothing moved?** Recommend yes; a setting only if asked.
 5. **An "urgent" rule for an on-call week**: a rule the user sets that may raise `needs you`.
    Recommend: by source and key prefix only (`routine:dri:`, a pager channel), never by keyword
    (a keyword matches untrusted text, so anyone in a channel could raise it); bounded by an end
@@ -598,12 +605,13 @@ Added (owner, 2026-11-23):
    with it.
 7. **Carry-over at a new week**: offer to keep last week's focus, or start empty and wait for a
    proposal? Recommend the offer, unless a proposal is already waiting.
+8. **An agent's own question filed over the socket** skips triage by default (its task is work
+   the user took on), though the socket cannot prove the caller? Recommend yes, revocable as any
+   promotion; a derived question always skips.
+9. **Two Projects entries of one name** (`beacon/` and `beacon.md`): Decided 3's name is then
+   ambiguous. Recommend refusing the name and taking the entry's path instead.
 
 ## Not verified
 
 - That ottobot's runs can write to `<home>/decisions/inbox/`.
-- Whether `prs.rs`'s `gh` read could tell a review requested of the user (a derived `pr_review`
-  source). Today it reads open pull requests only (`--state open`).
-- That a task's agent time can be split by week: the hover card shows a total; per-week needs the
-  times of its turns.
 - The cost of reading the inbox folder on each pass of an existing shell thread.
