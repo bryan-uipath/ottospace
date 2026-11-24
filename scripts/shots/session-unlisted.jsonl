@@ -1,5 +1,5 @@
-# A session opened from Elsewhere, then the Tasks section closed: nothing is listed, and the
-# drawer still offers Resume session (read first), no "cannot". Then a session no runner can
+# A session opened from Elsewhere, then the Tasks section closed: its space on show, the sessions
+# are still read (#482), and the drawer offers Resume session, no "cannot". Then a session no runner can
 # resume (its id is no UUID): the drawer says why.
 {"cmd":"split","kind":"empty"}
 {"cmd":"section","section":"tasks"}
@@ -8,7 +8,7 @@
 {"until":"sessions_bar.rows.1"}
 {"click":"session:claude:8f14e45f-ceea-467f-a8d3-0242ac130009","at":[0.3,0.3]}
 {"cmd":"section","section":"tasks"}
-{"until":"sessions_bar.count","is":0}
+{"until":"state.sidebar","is":null}
 {"settle":1500}
 {"shot":"unlisted"}
 {"cmd":"section","section":"tasks"}

@@ -1,6 +1,7 @@
 # A `claude` another terminal runs (a stand-in `sleep` under its name, its process record busy),
 # listed under Elsewhere and opened by the user's click: its read-only conversation in the
 # drawer, "Watching" in the header; its tab is its checkout's code city (before #482: the lattice).
+{"env": {"OTTOSPACE_FEATURES": "code_city"}}
 {"cmd": "split"}
 {"settle": 1000}
 {"cmd": "wait", "pane": 1, "pattern": "\\$"}
@@ -10,6 +11,6 @@
 {"cmd": "sessions_range", "range": "all"}
 {"until": "sessions_bar.count", "is": 1}
 {"click": "session:claude:11111111-1111-4111-8111-111111111111", "at": [0.3, 0.3]}
-{"settle": 4000}
+{"settle": 6000}
 {"cmd": "mouse", "action": "move", "x": -50, "y": -50, "as": "user"}
 {"shot": "watched"}
