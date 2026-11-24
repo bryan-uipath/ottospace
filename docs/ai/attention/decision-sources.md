@@ -433,7 +433,7 @@ Per area, this week, from what ottospace already holds (pure: counted from recor
 | Counts | From |
 |---|---|
 | Tasks done | tasks of the area with `finished_at` this week |
-| Pull requests merged | linked repositories' pull requests merged this week: a new read-only `gh` read (Open 6) |
+| Pull requests merged | linked repositories' pull requests merged this week: a new read-only `gh` read (Decided 16) |
 | Decisions answered | a per-week counter in `focus.json`, counted when the user answers (records are deleted, and a key's revisions reuse one record) |
 | Agent time | the area's tasks' agent time this week: a per-week counter beside `progress::Clock`'s day total (new: it keeps a lifetime and one day's time) |
 | Waiting on you | its open decisions and its tasks under Needs you, now |
@@ -557,7 +557,7 @@ Each a pull request that stands alone, behind a new flag `decision_sources` (Exp
    Evidence: the core tests of §6; e2e set by hand, proposed then confirmed, proposed then
    declined, rollover with time passed in; shots of the confirm card and the why line.
 3. **Progress against focus.** The tallies, area states, Unplanned and displaced, the Week strip,
-   the rollover snapshot. The merged-PR read if Open 6 says yes. Evidence: core tests of each
+   the rollover snapshot. The merged-PR read (Decided 16), and AGENTS.md's network rule reworded with it. Evidence: core tests of each
    state with times passed in; a shot of the strip; the `gh` stand-in (`OTTOSPACE_GH`) for merged
    pull requests.
 4. **Acts.** `start_task` with the quoted brief, `draft_reply` with Copy and Open thread,
@@ -610,6 +610,14 @@ Added (owner, 2026-11-23):
     the key formats), never by keyword (a keyword matches untrusted text, so anyone in a channel
     could raise it); it ends on a date the user sets; it raises the count and puts the card first,
     with no sound, notice or focus change. Built after slice 2.
+16. **A second read-only `gh` call** (owner, 2026-11-23): pull requests merged this week in the
+    listed repositories, for progress against focus. And the network rule is too narrow as one
+    named command: in the slice that adds this read (progress against focus), AGENTS.md's rule is
+    reworded to the principle it protects. The shell may read, through the user's own `gh`, with a
+    fixed argv and read-only subcommands, data about repositories the user listed (open and merged
+    pull requests today; a new read is added by naming it in the rule and in `prs.rs`); never a
+    write, never another repository, never a shell; `OTTOSPACE_GH` stands in for it in tests. The
+    calendar clause stays as it is. AGENTS.md is not changed before that slice.
 
 ## 11. Open questions (the owner's)
 
@@ -621,9 +629,7 @@ Added (owner, 2026-11-23):
    Recommend the prefix: one noisy channel should not ride on a trusted one.
 4. **Stalled after 2 working days with nothing moved?** Recommend yes; a setting only if asked.
 5. *Decided: see Decided 15.*
-6. **A second `gh` read** (pull requests merged this week in linked repositories) for progress:
-   read-only, a fixed argv, beside `repos_prs`. Recommend yes; AGENTS.md's network line changes
-   with it.
+6. *Decided: see Decided 16.*
 7. **Carry-over at a new week**: offer to keep last week's focus, or start empty and wait for a
    proposal? Recommend the offer, unless a proposal is already waiting.
 8. **An agent's own question filed over the socket** skips triage by default (its task is work
