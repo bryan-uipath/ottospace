@@ -1,6 +1,7 @@
 # A task's agent and ottospace: knowing it is there, and seeing through it
 
-A design. 2026-11-23. Nothing here is built but the guide's fixes (below, "In this change").
+A design. 2026-11-23. Built since: the guide's fixes, the preamble (#436), See before a task (#438),
+the MCP server (#442). The owner chose not to close the screenshot bypass (section 4): the wording stays.
 
 The owner's report: an agent of a task, beside a hosted Slack pane, was asked "can you see what's on
 my screen / what I'm working on in this workspace?". It ran `screencapture -x /tmp/shot/screen.png`,
@@ -166,7 +167,7 @@ cannot give it to another task there.
 
 The owner: "why not an MCP server? We could serve skills through that and it seems natural to
 control, vs the socket." **Recommend: yes, as the next step after the preamble, and only as a
-shim.** Not built. The owner's lean, taken here: MCP becomes what agents are taught; `ottospace ctl`
+shim.** As built: slice 1 (`ottospace mcp`, #442). The owner's lean, taken here: MCP becomes what agents are taught; `ottospace ctl`
 stays for scripts and debugging (and the guide for it); the socket stays underneath both.
 
 **What it is.** `ottospace mcp`: a subcommand of the same binary, a stdio MCP server the runner
@@ -218,7 +219,7 @@ boundary (agent-mode.md section 2).
 | Tool | Request | Why |
 |---|---|---|
 | `workspace` | new, `workspace` (no args): the caller's task's space, its tabs and panes (kind, app name, window title, `cwd`) and each pane's grant; the flag's state | "where am I, what is here", without a whole `state` (tens of kB) in the context. A core function, so `ottospace ctl` and the SDK get it too |
-| `app_read`, `app_look` | as today | `app_look` returns the PNG as MCP image content: no file for the agent to open, nothing left in `/tmp` |
+| `app_read`, `app_look` | as today | `app_look` returns the PNG as MCP image content: no file for the agent to open (the look's own file stays in the task's materials folder until the level goes below See) |
 | `capture`, `wait` | as today | a terminal the agent opened; the description says the user's terminals are theirs |
 | `task_brief` | as today | the task's captures |
 | `guide` | none: `topic` (`rules`, `state`, `apps`, `tasks`…) | a section of `guide.md`, embedded, on demand |

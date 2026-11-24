@@ -612,7 +612,7 @@ export interface WorkspaceReply {
   tabs: {
     id: number;
     title: string;
-    panes: { id: PaneId; kind: PaneKind; cwd: string | null; grant: { level: AgentLevel; task: TaskId | null } | null }[];
+    panes: { id: PaneId; kind: PaneKind; cwd: string | null; grant: AgentGrant | null }[];
   }[];
   /** The `agent_mode` flag. */
   agent_mode: boolean;
@@ -1617,9 +1617,15 @@ export interface Offer {
 /** What the task of a workspace may do in an app pane: `act` grants what `see` does, presses later. */
 export type AgentLevel = "off" | "see" | "act";
 
+/** An app pane's agent mode grant: its level, and the task it is given to (null: none works there; it grants nothing). */
+export interface AgentGrant {
+  level: AgentLevel;
+  task: TaskId | null;
+}
+
 export interface AgentMode {
   /** By pane id: its level, and the task it is given to (null: no task works there; it grants nothing). */
-  panes: Record<string, { level: AgentLevel; task: TaskId | null }>;
+  panes: Record<string, AgentGrant>;
   /** The level a pane the user puts in a task's workspace starts at (`agent_mode` in the settings). */
   default: AgentLevel;
   /** The robot's open menu: its pane, the item the keys are on. */

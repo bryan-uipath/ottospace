@@ -36,6 +36,7 @@ import type {
   CalendarReply,
   Captured,
   Note,
+  AgentGrant,
   NoteReply,
   DecisionAccepted,
   DecisionAct,
@@ -890,10 +891,6 @@ function note(value: unknown, at: string): Captured<Note> {
 
 export function workspaceReply(value: unknown): WorkspaceReply {
   const o = fields(value, "reply");
-  const grant = (value: unknown, at: string) => {
-    const g = fields(value, at);
-    return { level: agentLevel(g.level, `${at}.level`), task: orNull(num)(g.task, `${at}.task`) };
-  };
   const pane = (value: unknown, at: string) => {
     const p = fields(value, at);
     return {
@@ -2179,12 +2176,17 @@ function slot(value: unknown, at: string): Slot {
 
 const agentLevel = oneOf(["off", "see", "act"] as const, "an agent mode level");
 
+/** An app pane's agent mode grant: its level and the task it is given to. */
+function grant(value: unknown, at: string): AgentGrant {
+  const g = fields(value, at);
+  return { level: agentLevel(g.level, `${at}.level`), task: orNull(num)(g.task, `${at}.task`) };
+}
+
 function agentMode(value: unknown, at: string): AgentMode {
   const o = fields(value, at);
   const panes: AgentMode["panes"] = {};
-  for (const [id, grant] of Object.entries(fields(o.panes, `${at}.panes`))) {
-    const g = fields(grant, `${at}.panes.${id}`);
-    panes[id] = { level: agentLevel(g.level, `${at}.panes.${id}.level`), task: orNull(num)(g.task, `${at}.panes.${id}.task`) };
+  for (const [id, given] of Object.entries(fields(o.panes, `${at}.panes`))) {
+    panes[id] = grant(given, `${at}.panes.${id}`);
   }
   const menu = (value: unknown, at: string) => {
     const m = fields(value, at);

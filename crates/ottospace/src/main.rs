@@ -3377,6 +3377,11 @@ impl Workspace {
                 }
                 Request::Capture { pane, history } => {
                     let id = pane.or(self.model.focused);
+                    // A task's agent reads only its own workspace's terminals.
+                    if let Some(Err(why)) = id.map(|id| self.model.pane_access(id, self.caller(pass.as_ref()))) {
+                        let _ = reply.send(control::error(&why));
+                        continue;
+                    }
                     let message = match id.and_then(|id| self.terminals.get(&id).map(|t| (id, t))) {
                         Some((id, t)) => {
                             serde_json::json!({ "ok": true, "pane": id, "text": t.text(history) }).to_string()
@@ -3387,6 +3392,11 @@ impl Workspace {
                     continue;
                 }
                 Request::Wait { pane, pattern, timeout_ms } => {
+                    let id = pane.or(self.model.focused);
+                    if let Some(Err(why)) = id.map(|id| self.model.pane_access(id, self.caller(pass.as_ref()))) {
+                        let _ = reply.send(control::error(&why));
+                        continue;
+                    }
                     self.wait(pane, &pattern, timeout_ms, reply, cx);
                     continue;
                 }

@@ -13581,6 +13581,15 @@ mod tests {
         assert_eq!(m.workspace_view(Caller::Anyone, Some(shell)).map(|v| (v.task, v.space)), Ok((None, view.space)));
         assert_eq!(m.workspace_view(Caller::Anyone, None), Err(NO_WORKSPACE.into()));
         assert_eq!(m.workspace_view(Caller::Unknown, Some(shell)), Err(STALE_PASS.into()));
+        // A task's agent reads its own workspace's terminals only; with no pass, as any client.
+        m.update(Action::WorkbookNew { uid: "00000000000000ee".into() });
+        m.update(Action::Split { axis: Right, kind: Kind::Terminal });
+        let elsewhere = m.focused.unwrap_or_default();
+        assert_eq!(m.pane_access(shell, Caller::Task(task)), Ok(()));
+        let theirs = m.pane_access(elsewhere, Caller::Task(task));
+        assert!(theirs.is_err_and(|why| why.contains("not in task")), "a pane of another workspace");
+        assert_eq!(m.pane_access(elsewhere, Caller::Anyone), Ok(()));
+        assert_eq!(m.pane_access(shell, Caller::Unknown), Err(STALE_PASS.into()));
     }
 
     #[test]

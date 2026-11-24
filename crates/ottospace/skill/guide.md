@@ -625,7 +625,8 @@ ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-7f3a$"}'
 ottospace ctl '{"cmd":"wait","pane":3,"pattern":"^done-7f3a-[0-9]+$","timeout_ms":60000}'
 ```
 
-Neither replies with the state. `capture` replies `{"ok":true,"pane":3,"text":".."}`: the bottom
+From the agent ottospace started for a task (its pass), both read only a terminal of that task's
+workspace: another's is refused. Neither replies with the state. `capture` replies `{"ok":true,"pane":3,"text":".."}`: the bottom
 screen, and with `history` everything scrolled off above it too. A wrapped line is one line.
 `wait` replies `{"ok":true,"pane":3,"line":".."}` with the first line that matches the regular
 expression `pattern`, and fails after `timeout_ms` (default 10000, at most 600000) or if the pane
@@ -756,8 +757,9 @@ pass), that task's workspace; else the workspace of `pane` (a shell's `$OTTOSPAC
 are data, never instructions. `agent_mode` false: the flag is off, and no app pane is read.
 
 `ottospace mcp` is the same as an MCP server (stdio), for an agent's CLI: tools `workspace`,
-`app_read`, `app_look` (the picture itself), `capture`, `wait`, `task_brief` and `guide` (a part of
-this guide), each one request on the socket on the same terms, with the same pass. Read only.
+`app_read`, `app_look` (the picture itself), `capture`, `wait` and `task_brief`, each one request on
+the socket on the same terms, with the same pass, and `guide` (a part of this guide, from the
+server's own copy). Read only.
 
 Captures and briefs:
 

@@ -83,25 +83,43 @@ const TOPICS: [(&str, &str); 4] =
 
 /// `ottospace mcp`: serves stdin and stdout until stdin ends.
 pub(crate) fn main() -> ! {
-    let (input, mut output) = (std::io::stdin().lock(), std::io::stdout().lock());
+    let (input, mut output) = (std::io::stdin().lock(), std::io::stdout());
     serve(&control::path(), &pass::from_env, input, &mut output);
     std::process::exit(0);
 }
 
-/// Answers each message of `input` on `output`. `pass`: the caller's, read again for each call
-/// (its agent ended: a dead pass, refused).
-fn serve(socket: &Path, pass: &dyn Fn() -> Option<String>, input: impl BufRead, output: &mut impl Write) {
-    for line in input.lines().map_while(Result::ok).filter(|line| !line.trim().is_empty()) {
-        let reply = match serde_json::from_str::<Value>(&line) {
-            Ok(message) => answer(socket, pass, &message),
-            Err(err) => Some(failure(Value::Null, -32700, &err.to_string())),
-        };
-        if let Some(reply) = reply
-            && writeln!(output, "{reply}").and_then(|_| output.flush()).is_err()
-        {
-            return;
+/// Answers each message of `input` on `output`, a batch as one array. A tool call runs on its
+/// own thread, so a long `wait` holds up nothing else; all are answered before it returns.
+/// `pass`: the caller's, read again for each call (its agent ended: a dead pass, refused).
+fn serve(
+    socket: &Path,
+    pass: &(dyn Fn() -> Option<String> + Sync),
+    input: impl BufRead,
+    output: &mut (impl Write + Send),
+) {
+    let output = std::sync::Mutex::new(output);
+    let write = |reply: Value| {
+        let mut output = output.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _ = writeln!(output, "{reply}").and_then(|_| output.flush());
+    };
+    std::thread::scope(|scope| {
+        for line in input.lines().map_while(Result::ok).filter(|line| !line.trim().is_empty()) {
+            match serde_json::from_str::<Value>(&line) {
+                Ok(Value::Array(batch)) => {
+                    let replies: Vec<Value> = batch.iter().filter_map(|m| answer(socket, pass, m)).collect();
+                    if !replies.is_empty() {
+                        write(Value::Array(replies));
+                    }
+                }
+                Ok(message) if message["method"] == "tools/call" && message.get("id").is_some() => {
+                    let write = &write;
+                    scope.spawn(move || write(answer(socket, pass, &message).unwrap_or_default()));
+                }
+                Ok(message) => answer(socket, pass, &message).into_iter().for_each(write),
+                Err(err) => write(failure(Value::Null, -32700, &err.to_string())),
+            }
         }
-    }
+    });
 }
 
 /// The reply to one message; none to a notification.
@@ -121,7 +139,13 @@ fn answer(socket: &Path, pass: &dyn Fn() -> Option<String>, message: &Value) -> 
         }
         "ping" => json!({}),
         "tools/list" => json!({ "tools": tools() }),
-        "tools/call" => call(socket, pass, params["name"].as_str().unwrap_or_default(), &params["arguments"]),
+        "tools/call" => {
+            let name = params["name"].as_str().unwrap_or_default();
+            let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) else {
+                return Some(failure(id, -32602, &format!("no tool {name}")));
+            };
+            call(socket, pass, tool, &params["arguments"])
+        }
         method => return Some(failure(id, -32601, &format!("no method {method}"))),
     };
     Some(json!({ "jsonrpc": "2.0", "id": id, "result": result }))
@@ -150,12 +174,10 @@ fn tools() -> Vec<Value> {
     TOOLS.iter().map(tool).collect()
 }
 
-/// A tool's result: its reply as text, or what went wrong, as an error the agent reads.
-fn call(socket: &Path, pass: &dyn Fn() -> Option<String>, name: &str, args: &Value) -> Value {
+/// A tool's result: its reply as text, or what went wrong, as an error the agent reads. `guide`
+/// is answered here, from this build's own guide: the one tool that asks the socket nothing.
+fn call(socket: &Path, pass: &dyn Fn() -> Option<String>, tool: &Tool, args: &Value) -> Value {
     let said = |text: String, error: bool| json!({ "content": [{ "type": "text", "text": text }], "isError": error });
-    let Some(tool) = TOOLS.iter().find(|tool| tool.name == name) else {
-        return said(format!("no tool {name}"), true);
-    };
     let line = match request(tool, args) {
         Ok(line) => line,
         Err(why) => return said(why, true),
@@ -169,27 +191,41 @@ fn call(socket: &Path, pass: &dyn Fn() -> Option<String>, name: &str, args: &Val
     if parsed["ok"] != true {
         return said(parsed["error"].as_str().unwrap_or(&reply).to_string(), true);
     }
-    // A look is its picture: the agent sees it, nothing for it to open, the file left as it was.
-    let picture = parsed["captured"]["path"].as_str().filter(|_| name == "app_look");
-    match picture.map(std::fs::read) {
+    if tool.name != "app_look" {
+        return said(reply, false);
+    }
+    // A look is its picture: the agent sees it, nothing for it to open. Gone meanwhile (the level
+    // went below See): no picture, an error.
+    match parsed["captured"]["path"].as_str().map(std::fs::read) {
         Some(Ok(png)) => json!({ "content": [
             { "type": "text", "text": reply },
-            { "type": "image", "data": base64(&png), "mimeType": "image/png" },
+            { "type": "image", "data": ottospace_agents::claude::base64(&png), "mimeType": "image/png" },
         ], "isError": false }),
-        _ => said(reply, false),
+        _ => said("the picture is gone: ask again".into(), true),
     }
 }
 
-/// The request line a tool sends: its `cmd` and the arguments given, of their names only. None: a
-/// tool answered here (`guide`).
+/// The request line a tool sends: its `cmd` and the arguments given, of their names and types
+/// only. None: a tool answered here (`guide`).
 fn request(tool: &Tool, args: &Value) -> Result<Option<String>, String> {
     let given = match args {
         Value::Object(given) => given.clone(),
         Value::Null => serde_json::Map::new(),
         _ => return Err("arguments: an object".into()),
     };
-    if let Some(extra) = given.keys().find(|key| !tool.args.iter().any(|arg| arg.0 == key.as_str())) {
-        return Err(format!("{}: no argument {extra}", tool.name));
+    for (key, value) in &given {
+        let Some((_, kind, _, _)) = tool.args.iter().find(|arg| arg.0 == key.as_str()) else {
+            return Err(format!("{}: no argument {key}", tool.name));
+        };
+        // A null is no pane: to the socket it would be the focused one.
+        let typed = match *kind {
+            "integer" => value.is_u64(),
+            "boolean" => value.is_boolean(),
+            _ => value.is_string(),
+        };
+        if !typed {
+            return Err(format!("{}: {key} must be {kind}", tool.name));
+        }
     }
     if let Some(missing) = tool.args.iter().find(|arg| arg.3 && !given.contains_key(arg.0)) {
         return Err(format!("{}: {} is required", tool.name, missing.0));
@@ -211,19 +247,6 @@ fn guide_part(topic: &str) -> String {
     rest[..end].trim_end().to_string()
 }
 
-/// Standard base64, padded.
-fn base64(bytes: &[u8]) -> String {
-    const ABC: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let n = chunk.iter().enumerate().fold(0u32, |n, (i, b)| n | u32::from(*b) << (16 - 8 * i));
-        for i in 0..4 {
-            out.push(if i <= chunk.len() { ABC[(n >> (18 - 6 * i) & 63) as usize] as char } else { '=' });
-        }
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -238,8 +261,11 @@ mod tests {
         }
     }
 
-    /// A made-up ottospace: answers each request line with `answer(line)`, and records the lines.
-    fn fake(name: &str, answer: fn(&Value) -> Value) -> (Folder, std::path::PathBuf, std::sync::mpsc::Receiver<Value>) {
+    type Seen = std::sync::mpsc::Receiver<Value>;
+
+    /// A made-up ottospace: answers each request line with `answer(line)`, each connection on its
+    /// own thread, and records the lines.
+    fn fake(name: &str, answer: fn(&Value) -> Value) -> (Folder, std::path::PathBuf, Seen) {
         let dir = std::env::temp_dir().join(format!("ottospace-mcp-{name}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let socket = dir.join("s.sock");
@@ -247,18 +273,21 @@ mod tests {
         let (seen, lines) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             for stream in listener.incoming().map_while(Result::ok) {
-                let mut out = stream.try_clone().unwrap();
-                let mut line = String::new();
-                BufReader::new(stream).read_line(&mut line).unwrap();
-                let request: Value = serde_json::from_str(&line).unwrap();
-                let _ = writeln!(out, "{}", answer(&request));
-                let _ = seen.send(request);
+                let seen = seen.clone();
+                std::thread::spawn(move || {
+                    let mut out = stream.try_clone().unwrap();
+                    let mut line = String::new();
+                    BufReader::new(stream).read_line(&mut line).unwrap();
+                    let request: Value = serde_json::from_str(&line).unwrap();
+                    let _ = seen.send(request.clone());
+                    let _ = writeln!(out, "{}", answer(&request));
+                });
             }
         });
         (Folder(dir), socket, lines)
     }
 
-    /// The replies to `messages`, one a line, as the agent's CLI would send them.
+    /// The lines `messages` are answered with, in the order written.
     fn talk(socket: &Path, pass: Option<&str>, messages: &[Value]) -> Vec<Value> {
         let input: String = messages.iter().map(|m| format!("{m}\n")).collect();
         let mut output = Vec::new();
@@ -267,14 +296,24 @@ mod tests {
         String::from_utf8(output).unwrap().lines().map(|line| serde_json::from_str(line).unwrap()).collect()
     }
 
+    /// The reply with `id`.
+    fn of(replies: &[Value], id: u64) -> &Value {
+        replies.iter().find(|reply| reply["id"] == id).unwrap_or_else(|| panic!("no reply {id}: {replies:?}"))
+    }
+
     fn rpc(id: u64, method: &str, params: Value) -> Value {
         json!({ "jsonrpc": "2.0", "id": id, "method": method, "params": params })
     }
 
+    fn tool(id: u64, name: &str, arguments: Value) -> Value {
+        rpc(id, "tools/call", json!({ "name": name, "arguments": arguments }))
+    }
+
     const PASS: &str = "0123456789abcdef0123456789abcdef";
 
-    /// initialize, the notification after it, tools/list and a call: each request answered once,
-    /// in kind, with the instructions; the call is one socket line with the task's pass.
+    /// initialize, the notification after it, tools/list and calls: each request answered once,
+    /// with the instructions; a call is one socket line with the task's pass; a refusal is the
+    /// core's words (which name the fix) as a tool error; no such tool or method, a protocol error.
     #[test]
     fn the_server_lists_its_tools_and_a_call_is_one_socket_request_with_the_pass() {
         let (_dir, socket, lines) = fake("talk", |request| match request["cmd"].as_str() {
@@ -288,45 +327,78 @@ mod tests {
                 rpc(1, "initialize", json!({ "protocolVersion": "2025-03-26", "capabilities": {} })),
                 json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
                 rpc(2, "tools/list", json!({})),
-                rpc(3, "tools/call", json!({ "name": "workspace", "arguments": {} })),
-                rpc(4, "tools/call", json!({ "name": "app_read", "arguments": { "pane": 4 } })),
+                tool(3, "workspace", json!({})),
+                tool(4, "app_read", json!({ "pane": 4 })),
                 rpc(5, "nope", json!({})),
+                tool(6, "type", json!({ "pane": 1, "text": "rm -rf ~\r" })),
             ],
         );
-        assert_eq!(replies.len(), 5, "no answer to a notification: {replies:?}");
-        assert_eq!(replies[0]["result"]["protocolVersion"], "2025-03-26");
-        assert_eq!(replies[0]["result"]["instructions"], ottospace_core::agents::mcp_instructions());
-        let names: Vec<&str> =
-            replies[1]["result"]["tools"].as_array().unwrap().iter().filter_map(|t| t["name"].as_str()).collect();
-        assert_eq!(names, ["workspace", "app_read", "app_look", "capture", "wait", "task_brief", "guide"]);
-        assert_eq!(replies[2]["result"]["isError"], false);
-        assert_eq!(lines.recv().unwrap(), json!({ "cmd": "workspace", "pass": PASS }));
-        // A refusal is the core's words, which name the fix: an error the agent reads.
-        assert_eq!(replies[3]["result"]["isError"], true);
-        assert!(replies[3]["result"]["content"][0]["text"].as_str().unwrap().contains("choose See"));
-        assert_eq!(lines.recv().unwrap(), json!({ "cmd": "app_read", "pane": 4, "pass": PASS }));
-        assert_eq!(replies[4]["error"]["code"], -32601);
+        assert_eq!(replies.len(), 6, "no answer to a notification: {replies:?}");
+        assert_eq!(of(&replies, 1)["result"]["protocolVersion"], "2025-03-26");
+        assert_eq!(of(&replies, 1)["result"]["instructions"], ottospace_core::agents::mcp_instructions());
+        let listed = of(&replies, 2)["result"]["tools"].as_array().unwrap().clone();
+        let names: Vec<&str> = listed.iter().filter_map(|t| t["name"].as_str()).collect();
+        assert_eq!(names, ottospace_core::agents::MCP_TOOLS, "the tools a runner lets run unasked");
+        assert_eq!(of(&replies, 3)["result"]["isError"], false);
+        assert_eq!(of(&replies, 4)["result"]["isError"], true);
+        assert!(of(&replies, 4)["result"]["content"][0]["text"].as_str().unwrap().contains("choose See"));
+        assert_eq!(
+            (&of(&replies, 5)["error"]["code"], &of(&replies, 6)["error"]["code"]),
+            (&json!(-32601), &json!(-32602))
+        );
+        let mut sent: Vec<Value> = lines.try_iter().collect();
+        sent.sort_by_key(|line| line["cmd"].as_str().unwrap_or_default().to_string());
+        let pane = json!({ "cmd": "app_read", "pane": 4, "pass": PASS });
+        assert_eq!(sent, [pane, json!({ "cmd": "workspace", "pass": PASS })], "one line a call, none for `type`");
     }
 
-    /// An argument a tool does not name never reaches the socket (not `pass`, not `text`); a
-    /// required one missing neither. Nothing is sent for either.
+    /// An argument a tool does not name never reaches the socket (not `pass`), nor one of another
+    /// type (a null pane would be the focused one), nor a call missing one it needs.
     #[test]
-    fn a_tool_sends_only_its_own_arguments() {
+    fn a_tool_sends_only_its_own_arguments_of_their_types() {
         let (_dir, socket, lines) = fake("args", |_| json!({ "ok": true }));
         let replies = talk(
             &socket,
             None,
             &[
-                rpc(1, "tools/call", json!({ "name": "capture", "arguments": { "pane": 1, "pass": PASS } })),
-                rpc(2, "tools/call", json!({ "name": "app_look", "arguments": {} })),
-                rpc(3, "tools/call", json!({ "name": "type", "arguments": { "pane": 1, "text": "rm -rf ~\r" } })),
-                rpc(4, "tools/call", json!({ "name": "capture", "arguments": { "pane": 1, "history": true } })),
+                tool(1, "capture", json!({ "pane": 1, "pass": PASS })),
+                tool(2, "app_look", json!({})),
+                tool(3, "capture", json!({ "pane": null })),
+                tool(4, "wait", json!({ "pane": "1", "pattern": "x" })),
+                tool(5, "capture", json!({ "pane": 1, "history": true })),
             ],
         );
-        let errors: Vec<&Value> = replies.iter().map(|r| &r["result"]["isError"]).collect();
-        assert_eq!(errors, [&json!(true), &json!(true), &json!(true), &json!(false)]);
+        let errors: Vec<&Value> = (1..=5).map(|id| &of(&replies, id)["result"]["isError"]).collect();
+        assert_eq!(errors, [&json!(true), &json!(true), &json!(true), &json!(true), &json!(false)]);
         assert_eq!(lines.recv().unwrap(), json!({ "cmd": "capture", "pane": 1, "history": true }));
         assert!(lines.try_recv().is_err(), "nothing else was sent");
+    }
+
+    /// A long `wait` holds up nothing: a ping and a call after it are answered first. A batch is
+    /// answered as one array. A look whose picture is gone is an error, never a stale path.
+    #[test]
+    fn a_wait_holds_up_nothing_and_a_batch_is_answered_whole() {
+        let (_dir, socket, _lines) = fake("wait", |request| match request["cmd"].as_str() {
+            Some("wait") => {
+                std::thread::sleep(std::time::Duration::from_millis(400));
+                json!({ "ok": true, "line": "done" })
+            }
+            Some("app_look") => json!({ "ok": true, "captured": { "path": "/nowhere/look-1.png" } }),
+            _ => json!({ "ok": true }),
+        });
+        let replies = talk(
+            &socket,
+            None,
+            &[
+                tool(1, "wait", json!({ "pane": 1, "pattern": "^done$" })),
+                rpc(2, "ping", json!({})),
+                tool(3, "app_look", json!({ "pane": 4 })),
+                json!([rpc(4, "ping", json!({})), json!({ "jsonrpc": "2.0", "method": "notifications/x" })]),
+            ],
+        );
+        assert_eq!(replies.last().map(|r| &r["id"]), Some(&json!(1)), "the wait last: {replies:?}");
+        assert!(replies.iter().any(|r| r.as_array().is_some_and(|batch| batch.len() == 1 && batch[0]["id"] == 4)));
+        assert_eq!(of(&replies, 3)["result"]["isError"], true);
     }
 
     /// Each tool's request, every argument given, is one the socket parses: the tools cannot
@@ -362,14 +434,5 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap_or_default(), list, "UPDATE_FIXTURE=1 cargo test mcp");
         let compact = json!({ "tools": tools() }).to_string();
         assert!(compact.len() < 4000, "{} bytes of tool definitions", compact.len());
-    }
-
-    #[test]
-    fn base64_is_the_standard_one() {
-        assert_eq!(base64(b""), "");
-        assert_eq!(base64(b"f"), "Zg==");
-        assert_eq!(base64(b"fo"), "Zm8=");
-        assert_eq!(base64(b"foo"), "Zm9v");
-        assert_eq!(base64(&[0xff, 0xfe, 0x00, 0x01]), "//4AAQ==");
     }
 }

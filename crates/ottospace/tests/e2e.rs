@@ -14212,13 +14212,16 @@ fn agent_mode_lets_only_the_workspaces_task_read_an_app_pane_and_only_the_user_s
 
 /// `ottospace mcp`, driven by a stand-in client over its stdio: the task's agent's pass (its
 /// file) makes `workspace` that task's; an app pane at Off answers with the fix (choose See), one
-/// at See or more is read (a test run hosts no window: "no window"); with no pass, no read.
+/// at See or more is read (a test run hosts no window: "no window"); a terminal of another
+/// workspace is not read; with no pass, no app pane is read.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_mcp_server_answers_a_tasks_agent_on_the_sockets_terms() {
     let extra = [("FAKE_SAY_PASS", "1"), ("OTTOSPACE_FEATURES", "agent_mode")];
     let (root, record, env) = native_setup("mcp", &[], &extra);
     let otto = launch_env("mcp", &env);
+    // A terminal of the user's, in a workspace of no task: not the task's to read.
+    let theirs = otto.call(json!({"cmd": "split"}))["state"]["focused"].as_u64().expect("a terminal");
     otto.call(json!({"cmd": "task_new", "line": "first >app"}));
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.start_task(1);
@@ -14253,7 +14256,11 @@ fn the_mcp_server_answers_a_tasks_agent_on_the_sockets_terms() {
         }
         drop(input);
         let out = child.wait_with_output().unwrap();
-        String::from_utf8(out.stdout).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect()
+        // By id: calls are answered as they finish.
+        let mut replies: Vec<Value> =
+            String::from_utf8(out.stdout).unwrap().lines().map(|l| serde_json::from_str(l).unwrap()).collect();
+        replies.sort_by_key(|reply| reply["id"].as_u64());
+        replies
     };
     let text = |reply: &Value| reply["result"]["content"][0]["text"].as_str().unwrap_or_default().to_string();
     let replies = talk(
@@ -14263,6 +14270,7 @@ fn the_mcp_server_answers_a_tasks_agent_on_the_sockets_terms() {
             ("app_read", json!({"pane": notes})),
             ("app_read", json!({"pane": mail})),
             ("type", json!({"pane": 1, "text": "ls\r"})),
+            ("capture", json!({"pane": theirs})),
         ],
     );
     assert!(replies[0]["result"]["instructions"].as_str().is_some_and(|i| i.contains("`workspace`")));
@@ -14278,7 +14286,8 @@ fn the_mcp_server_answers_a_tasks_agent_on_the_sockets_terms() {
     assert_eq!(replies[2]["result"]["isError"], true);
     assert!(text(&replies[2]).contains("choose See"), "{}", text(&replies[2]));
     assert!(text(&replies[3]).contains("no window"), "granted, read, and no window: {}", text(&replies[3]));
-    assert!(text(&replies[4]).contains("no tool type"), "{}", text(&replies[4]));
+    assert_eq!(replies[4]["error"]["message"], "no tool type", "no tool types into a terminal");
+    assert!(text(&replies[5]).contains("not in task 1's workspace"), "{}", text(&replies[5]));
     // No pass: nothing read, and `workspace` only of a pane named.
     let anyone = talk(None, &[("app_read", json!({"pane": mail})), ("workspace", json!({"pane": mail}))]);
     assert!(text(&anyone[1]).contains("only a task's agent"), "{}", text(&anyone[1]));

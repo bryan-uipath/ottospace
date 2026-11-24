@@ -224,6 +224,24 @@ impl Model {
         Ok(task)
     }
 
+    /// Whether `caller` may read terminal pane `pane` (`capture`, `wait`): a task's agent (its pass)
+    /// only a pane of its own workspace, so its tools that run unasked read nothing of another
+    /// task's or of the user's elsewhere; a made-up or dead pass nothing. With no pass, as before:
+    /// any same-user client reads every terminal in `state` anyway.
+    pub fn pane_access(&self, pane: PaneId, caller: Caller) -> Result<(), String> {
+        match caller {
+            Caller::Anyone => Ok(()),
+            Caller::Unknown => Err(STALE_PASS.into()),
+            Caller::Task(task) => {
+                let space = self.tab_of(pane).and_then(|id| self.tabs.iter().find(|tab| tab.id == id));
+                let own = space.is_some_and(|tab| tab.space == self.task_space(task));
+                own.then_some(()).ok_or_else(|| {
+                    format!("pane {pane} is not in task {task}'s workspace: a task's agent reads only its own panes")
+                })
+            }
+        }
+    }
+
     /// The workspace `caller`'s task works in, else the one `pane` is in: its tabs, their panes and
     /// each app pane's grant. A made-up or dead pass is refused, never answered as no task.
     pub fn workspace_view(&self, caller: Caller, pane: Option<PaneId>) -> Result<WorkspaceView, String> {
