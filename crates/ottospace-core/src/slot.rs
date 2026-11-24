@@ -185,6 +185,18 @@ pub struct Seen {
     pub identifier: Option<String>,
     pub subrole: String,
     pub frame: Frame,
+    /// A sheet, or a child of another window (`rules::Shape::sheet`): no slot holds it.
+    #[serde(default)]
+    pub sheet: bool,
+}
+
+impl Seen {
+    /// Its shape for the window rules: a frame of no size is unread, never tiny.
+    pub fn shape(&self) -> rules::Shape {
+        let read = self.frame.w > 0. && self.frame.h > 0.;
+        let size = read.then_some([self.frame.w, self.frame.h]);
+        rules::Shape { sheet: self.sheet, size, ..rules::Shape::default() }
+    }
 }
 
 /// What a look at one app found: its windows, front to back, and the screen around them.
@@ -211,13 +223,13 @@ impl Look {
         }
     }
 
-    /// The windows `slot` selects that may go in a pane (the window rules first: a slot cannot
-    /// host what hosting refuses) and are not `passed` over, in the order it offers them.
+    /// The windows `slot` selects that may go in a pane (the window rules first: a slot holds what
+    /// a new window's judgement offers, `rules::slot_holds`) and are not `passed` over, in the
+    /// order it offers them.
     pub fn candidates<'a>(&'a self, slot: &Slot, rules: &[Rule], passed: impl Fn(u32) -> bool) -> Vec<&'a Seen> {
         let fits = |seen: &&Seen| {
             let facts = self.facts(seen);
-            let names_kind = slot.select.subrole.is_some();
-            rules::slot_holds(rules, &facts, names_kind) && !passed(seen.window) && slot.select.selects(&facts)
+            rules::slot_holds(rules, &facts, &seen.shape()) && !passed(seen.window) && slot.select.selects(&facts)
         };
         let mut found: Vec<&Seen> = self.windows.iter().filter(fits).collect();
         let area = |seen: &&Seen| (seen.frame.w * seen.frame.h) as i64;
@@ -249,7 +261,15 @@ mod tests {
 
     fn seen(window: u32, title: &str, identifier: Option<&str>, frame: Frame) -> Seen {
         let identifier = identifier.map(String::from);
-        Seen { pid: 7, window, title: title.into(), identifier, subrole: "AXStandardWindow".into(), frame }
+        Seen {
+            pid: 7,
+            window,
+            title: title.into(),
+            identifier,
+            subrole: "AXStandardWindow".into(),
+            frame,
+            sheet: false,
+        }
     }
 
     /// Zoom with its two `Zoom Meeting` windows (zoom-ax.md) and its home window, front to back.
@@ -310,6 +330,30 @@ mod tests {
         // A user's rule that ignores the main window wins over the slot.
         let ignore: Rule = serde_json::from_str(r#"{"identifier": "zm.*", "do": "ignore"}"#).unwrap();
         assert!(look.candidates(&by_id, &[ignore], |_| false).is_empty());
+    }
+
+    /// The owner's case: Zoom's popped-out chat is an `AXSystemDialog`, offered when it opens. A slot
+    /// by its title selects it, with no kind named; the share controls, also dialogs, stay out.
+    #[test]
+    fn a_title_slot_selects_a_dialog_the_picker_would_list() {
+        let dialog = |window, title: &str, w, h| Seen {
+            subrole: "AXSystemDialog".into(),
+            ..seen(window, title, None, Frame::new(0., 0., w, h))
+        };
+        let mut look = zoom();
+        look.windows.push(dialog(5, "Meeting chat", 400., 532.));
+        look.windows.push(dialog(6, "zoom share statusbar window", 300., 40.));
+        look.windows.push(dialog(7, "zoom share toolbar window", 961., 58.));
+        let chat = slot(r#"{"select": {"title": "Meeting chat"}, "pick": "any", "matching": "manual"}"#);
+        assert_eq!(ids(look.candidates(&chat, &[], |_| false)), [5]);
+        assert_eq!(ids(look.candidates(&slot(r#"{"select": {"title": "zoom share*"}}"#), &[], |_| false)), [0u32; 0]);
+        let ignore: Rule = serde_json::from_str(r#"{"title": "Meeting chat", "do": "ignore"}"#).unwrap();
+        assert!(look.candidates(&chat, &[ignore], |_| false).is_empty());
+        // Nor a sheet, nor a tiny one.
+        look.windows[4].sheet = true;
+        assert!(look.candidates(&chat, &[], |_| false).is_empty());
+        look.windows[4] = dialog(5, "Meeting chat", 60., 60.);
+        assert!(look.candidates(&chat, &[], |_| false).is_empty());
     }
 
     #[test]

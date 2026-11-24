@@ -126,7 +126,8 @@ impl Gen<'_> {
 
     /// A window a look found: some that panes hold (theirs are 0 to 4), some none does.
     fn seen(&mut self) -> crate::slot::Seen {
-        let frame = self.rng.pick(&[Frame::new(0., 0., 800., 600.), Frame::new(2000., 0., 400., 300.)]);
+        let sizes = [Frame::new(0., 0., 800., 600.), Frame::new(2000., 0., 400., 300.), Frame::new(0., 0., 60., 40.)];
+        let frame = self.rng.pick(&sizes);
         crate::slot::Seen {
             pid: self.rng.below(3) as i32,
             window: self.rng.pick(&[1, 2, 10, 11, 12]),
@@ -134,6 +135,7 @@ impl Gen<'_> {
             identifier: self.rng.maybe(|rng| rng.pick(&["slotseen.main", "slotseen.other"]).to_string()),
             subrole: self.rng.pick(&["AXStandardWindow", "AXStandardWindow", "AXDialog"]).into(),
             frame,
+            sheet: self.rng.one_in(8),
         }
     }
 
@@ -3793,6 +3795,16 @@ fn check_slots(m: &Model) -> Result<(), String> {
                 "slot {id} offers {window}, taken or passed over"
             );
             ensure!(shown.contains(id), "slot {id} on a hidden tab offers {window}");
+            // Only what the user's own pick could put in a pane: never a sheet, a tiny one or one ignored.
+            if let Some(look) = m.slot_looks.iter().find(|look| run.of(look)) {
+                let pickable = |seen: &crate::slot::Seen| {
+                    seen.window == window && crate::rules::pickable(&m.window_rules, &look.facts(seen), &seen.shape())
+                };
+                ensure!(
+                    look.windows.iter().any(pickable),
+                    "slot {id} offers {window}, which the picker would not list"
+                );
+            }
             ensure!(
                 run.status == crate::slot::Status::Offered || run.status == crate::slot::Status::Away,
                 "slot {id} offers as {:?}",
@@ -4365,8 +4377,7 @@ impl Run {
                     subrole: &seen.subrole,
                     identifier: seen.identifier.as_deref(),
                 };
-                let names_kind = crate::rules::slot_kind(&seen.subrole).is_some();
-                crate::rules::slot_holds(&m.window_rules, &facts, names_kind)
+                crate::rules::slot_holds(&m.window_rules, &facts, &seen.shape())
             })
         };
         let look_seen =

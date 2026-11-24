@@ -351,6 +351,7 @@ impl Hosted {
             identifier: window.identifier(),
             subrole: window.subrole().unwrap_or_default(),
             frame: recovery::to_frame(original),
+            sheet: window.sheet(),
         };
         Ok(Self {
             seen,
@@ -5255,7 +5256,9 @@ impl Workspace {
                     if offer {
                         let frame = frame.map(recovery::to_frame).unwrap_or_default();
                         let subrole = subrole.clone();
-                        let seen = ottospace_core::slot::Seen { pid, window: id, title, identifier, subrole, frame };
+                        let sheet = shape.sheet;
+                        let seen =
+                            ottospace_core::slot::Seen { pid, window: id, title, identifier, subrole, frame, sheet };
                         self.offer_window(pane_id, seen, (&logged, &shape, &decided), window, cx);
                     }
                 }

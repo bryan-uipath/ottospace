@@ -66,7 +66,7 @@ impl Workspace {
         self.offer_send(Action::SlotDialogOpen { pane, look }, window, cx);
     }
 
-    /// What a look at `app` finds now: its windows the hosting would take (standard, the rules'),
+    /// What a look at `app` finds now: its windows the hosting judges (standard, dialogs, panels),
     /// front to back, the displays, and the window the user is in if the app is in front. A test
     /// run's look is its fixture's (`slot_windows`), with pane `pane`'s own window if it has none.
     pub(crate) fn look_at(&self, bundle: Option<&str>, name: &str, pane: Option<PaneId>) -> Look {
@@ -107,6 +107,7 @@ impl Workspace {
                         identifier: w.identifier(),
                         subrole: w.subrole().unwrap_or_default(),
                         frame: w.frame().map(recovery::to_frame).unwrap_or_default(),
+                        sheet: w.sheet(),
                     })
                 })
             })
@@ -464,11 +465,7 @@ impl Workspace {
             Some(seen) => format!("“{}” is open", seen.title),
             None => format!("Waiting for a {app} window"),
         };
-        let state = match run.status {
-            Status::Absent => Some(format!("{app} is not running")),
-            Status::Away => Some(format!("{app}'s window is away")),
-            _ => None,
-        };
+        let state = self.model.slot_note(pane);
         let mode = match run.matching {
             Matching::Manual => "Offers it here when one opens",
             Matching::Automatic => "Takes it here when one opens",

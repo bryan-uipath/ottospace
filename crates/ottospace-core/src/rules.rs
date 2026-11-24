@@ -109,12 +109,11 @@ pub fn manages(user: &[Rule], window: &Facts) -> bool {
     }
 }
 
-/// Whether a slot may hold the window: what `manages` takes, or, for a slot that names a kind
-/// (`subrole`), a dialog or panel of it that no rule ignores or floats: Zoom's meeting chat is an
-/// `AXSystemDialog`, which the user may put in a pane and keep a slot for.
-pub fn slot_holds(user: &[Rule], window: &Facts, names_kind: bool) -> bool {
-    let left = matches!(first(user, window), Some(Action::Ignore | Action::Float));
-    manages(user, window) || (names_kind && judged(window.subrole) && !left)
+/// Whether a slot may hold the window: one a new window's judgement would offer or split, so a
+/// dialog or panel too (Zoom's meeting chat, an `AXSystemDialog`). Never a sheet, a tiny window,
+/// another kind, or one a rule ignores or floats.
+pub fn slot_holds(user: &[Rule], window: &Facts, shape: &Shape) -> bool {
+    matches!(judge(user, window, shape).place, Place::Split | Place::Float { offer: true })
 }
 
 /// The kind a slot names for a window of `subrole`: none for a standard window (`manages` takes
@@ -727,6 +726,13 @@ mod tests {
         assert_eq!(unpickable(&[ignore], &chat, &shape), Some((Why::Rule, Some(Source::User(0)))));
         assert_eq!(unpickable(&[], &chat, &Shape { sheet: true, ..shape }), Some((Why::Sheet, None)));
         assert_eq!(unpickable(&[], &chat, &beside([40.0, 40.0])), Some((Why::Tiny, None)));
+        // A slot holds what is offered: the chat, never the toolbar, a sheet, a tiny one or what a rule ignores.
+        assert!(slot_holds(&[], &chat, &shape));
+        assert!(!slot_holds(&[], &toolbar, &beside([961.0, 58.0])));
+        assert!(!slot_holds(&[], &chat, &Shape { sheet: true, ..shape }));
+        assert!(!slot_holds(&[], &chat, &beside([40.0, 40.0])));
+        let ignore = serde_json::from_str::<Rule>(r#"{"title": "Meeting chat", "do": "ignore"}"#).unwrap();
+        assert!(!slot_holds(&[ignore], &chat, &shape));
     }
 
     /// One screen; ottospace's window over most of it, its app's pane in it.

@@ -66,7 +66,7 @@ impl Run {
         }
     }
 
-    fn of(&self, look: &Look) -> bool {
+    pub(crate) fn of(&self, look: &Look) -> bool {
         self.of_app((look.bundle.as_deref(), &look.name))
     }
 
@@ -116,7 +116,7 @@ pub struct Dialog {
     #[serde(skip)]
     pub words: crate::edit::Field,
     /// The window's kind when it is a dialog or panel (`AXDialog`), or the slot's: the rule names
-    /// it, or the slot would hold standard windows only (`rules::slot_holds`).
+    /// it, so the slot holds only that kind.
     #[serde(skip)]
     pub kind: Option<String>,
     pub has_kind: bool,
@@ -267,6 +267,24 @@ impl Model {
         let open = |d: &&Dialog| d.by == By::Title && self.picker.is_none() && self.bug.is_none();
         let dialog = self.slot_dialog.as_ref().filter(open)?;
         Some(&dialog.words)
+    }
+
+    /// What a slot that waits says of its state, under its rule: its app is not running, its window
+    /// is away, or every window it selects is already in another pane (waiting would read as broken).
+    pub fn slot_note(&self, pane: PaneId) -> Option<String> {
+        let run = self.slots.get(&pane)?;
+        let app = &run.name;
+        match run.status {
+            Status::Absent => return Some(format!("{app} is not running")),
+            Status::Away => return Some(format!("{app}'s window is away")),
+            Status::Empty => {}
+            Status::Offered | Status::Filled => return None,
+        }
+        let look = self.slot_looks.iter().find(|look| run.of(look))?;
+        let held = self.slot_claims(Some(pane), false);
+        let found = look.candidates(&run.slot, &self.window_rules, |window| run.declined.contains(&window));
+        let in_panes = !found.is_empty() && found.iter().all(|seen| held.contains(&seen.window));
+        in_panes.then(|| "Its window is already in another pane".to_string())
     }
 
     /// The window slot `pane` offers, as its look found it: for the pane to draw, never the state.
@@ -497,8 +515,7 @@ impl Model {
         let unmanaged = known.is_some_and(|seen| {
             let (title, subrole, identifier) = (&seen.title, &seen.subrole, seen.identifier.as_deref());
             let facts = crate::rules::Facts { app: name, bundle: bundle.as_deref(), title, subrole, identifier };
-            let names_kind = crate::rules::slot_kind(&seen.subrole).is_some();
-            !crate::rules::slot_holds(&self.window_rules, &facts, names_kind)
+            !crate::rules::slot_holds(&self.window_rules, &facts, &seen.shape())
         });
         if unmanaged {
             return None;
@@ -1193,7 +1210,7 @@ mod tests {
 
     /// The owner's case: Zoom's meeting chat is an `AXSystemDialog`. A slot kept from it (the
     /// dialog's Keep: any window of the app, its kind named) names that kind, and the next meeting's chat, a new window
-    /// of that kind and title, is offered in it; a slot of standard windows still passes it over.
+    /// of that kind and title, is offered in it; so is a dialog to a slot by title that names no kind.
     #[test]
     fn a_slot_kept_from_a_dialog_matches_the_next_one_of_its_kind() {
         let chat = |window| Seen { subrole: "AXSystemDialog".into(), ..seen(7, window, "Meeting chat") };
@@ -1213,13 +1230,39 @@ mod tests {
         // The next meeting's chat, popped out again: a new window, offered in the slot, not in a chip.
         let effects = m.update(system(Action::WindowOffered { pane: 1, seen: chat(5), why: "dialog".into() }));
         assert!(m.slot_offer(2).is_some_and(|s| s.window == 5), "{effects:?}");
-        // A slot of standard windows is not offered a dialog.
+        // A slot by title (`*incident*`) is offered a dialog of that title: the picker lists it too.
         let mut plain = kept(Matching::Manual);
         plain.update(system(Action::WindowGone { pane: 2, app_running: true, at: 0, was: None }));
         plain.update(system(Action::SlotTick { at: slot::AWAY_MS }));
         let incident = Seen { subrole: "AXSystemDialog".into(), ..seen(7, 6, "Incident") };
         plain.update(system(look(vec![incident])));
+        assert_eq!((status(&plain, 2), plain.slot_offer(2).map(|s| s.window)), (Some(Status::Offered), Some(6)));
+        // A user's rule that ignores it keeps it out.
+        let ignore = serde_json::from_str(r#"{"title": "Incident", "do": "ignore"}"#).unwrap();
+        plain.window_rules.insert(0, ignore);
+        plain.update(system(look(vec![Seen { subrole: "AXSystemDialog".into(), ..seen(7, 6, "Incident") }])));
         assert_eq!(status(&plain, 2), Some(Status::Empty));
+    }
+
+    /// The owner's two Zoom slots: one holds the meeting window, the other selects that window too.
+    /// The second does not just wait: it says its window is already in another pane.
+    #[test]
+    fn a_slot_whose_window_is_in_another_pane_says_so() {
+        let main = || Seen { identifier: Some("meetings.main".into()), ..seen(7, 1, "Weekly") };
+        let mut m = waiting(Matching::Manual);
+        m.update(Action::Open { kind: meetings(1, "Weekly"), axis: Right, beside: None });
+        let by_id = crate::rules::Selector { identifier: Some("meetings.main".into()), ..Default::default() };
+        m.update(Action::SlotMake { pane: 2, pid: 7, slot: Slot { select: by_id, ..Default::default() } });
+        m.update(system(look(vec![main()])));
+        assert_eq!(status(&m, 2), Some(Status::Empty));
+        assert_eq!(m.slot_note(2).as_deref(), Some("Its window is already in another pane"));
+        // No window it selects at all: it only waits.
+        m.update(system(look(vec![seen(7, 4, "Home")])));
+        assert_eq!(m.slot_note(2), None);
+        // Its app quits: that is what it says.
+        let quit = Look { bundle: Some(BUNDLE.into()), name: "Meetings".into(), ..Look::default() };
+        m.update(system(Action::SlotWindows { look: quit }));
+        assert_eq!(m.slot_note(2).as_deref(), Some("Meetings is not running"));
     }
 
     /// Not the user's place: a pane a client opened, or a window the app opened itself, closes with
