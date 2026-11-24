@@ -5360,8 +5360,9 @@ impl Run {
             }
         }
 
-        // A terminal made now by a step that names no folder starts in its tab's space's default
-        // worktree, as listed now, or where terminals start (none).
+        // A terminal made now by a step that names no folder starts in its tab's own checkout (as
+        // listed now), else its space's default worktree, as listed now, or where terminals start
+        // (none).
         let unnamed = matches!(
             action,
             Action::Split { .. }
@@ -5375,10 +5376,11 @@ impl Run {
                 continue;
             }
             let tab = m.tab_of(pane.id).and_then(|id| m.tabs.iter().find(|tab| tab.id == id));
-            let default = tab.and_then(|tab| m.space_worktree(&tab.space));
+            let own = tab.and_then(|tab| tab.folder.as_deref()).filter(|path| m.repo_listed(path));
+            let default = own.or_else(|| tab.and_then(|tab| m.space_worktree(&tab.space)));
             ensure!(
                 pane.cwd.as_deref() == default,
-                "{action:?} started terminal {pane:?}, its space's default {default:?}"
+                "{action:?} started terminal {pane:?}, its tab's checkout or space's default {default:?}"
             );
         }
         // The effects: each names what is there, and after them the shell holds what the model does.

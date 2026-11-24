@@ -583,6 +583,28 @@ mod tests {
         assert_eq!(dir(&m), Some("/code/app"));
     }
 
+    /// A new tab the user opens (⌘T) from a tab that keeps a checkout (`open_repo` made it, from
+    /// any origin) carries that checkout: its city, and ⌘D there opens a terminal in it. A
+    /// client's new tab carries none. A workspace's default is still the user's alone to set.
+    #[test]
+    fn a_new_tab_carries_its_tabs_checkout() {
+        for by in [Origin::User, Origin::Socket] {
+            let mut m = listed();
+            // A client's `open_repo` from Home: a workspace with no default, its tab the checkout's.
+            m.update(Action::OpenRepo { path: "/code/web".into(), axis: Axis::Right }.sent_by(Origin::Socket));
+            m.update(Action::Close { pane: None });
+            assert_eq!(dir(&m), Some("/code/web"), "{by:?}: the tab keeps it");
+            m.update(Action::NewTab.sent_by(by));
+            let carried = (by == Origin::User).then_some("/code/web");
+            assert_eq!(dir(&m), carried, "{by:?}: the new tab");
+            if by == Origin::User {
+                m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+                let pane = m.focus_terminal(true).and_then(|id| m.pane(id)).and_then(|p| p.cwd.clone());
+                assert_eq!(pane.as_deref(), Some("/code/web"), "⌘D opens in it");
+            }
+        }
+    }
+
     /// A workspace's empty place lights every task that works in its folder (as the Repos
     /// dots decide), each in its colour; a task's lights only that task's.
     #[test]

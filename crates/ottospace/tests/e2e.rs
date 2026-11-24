@@ -18460,6 +18460,44 @@ fn an_agent_cli_in_a_pane_shows_in_its_checkouts_city_with_no_settings() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The user's ⌘T from a tab that keeps a checkout (a client's `open_repo` made it, so its
+/// workspace has no default) carries that checkout: the new tab draws its city, and a terminal
+/// opened there starts in it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_new_tab_carries_the_checkout_of_its_tab() {
+    let root = support::temp(&format!("ottospace-e2e-city-new-tab-{}", std::process::id()));
+    let app = root.join("repos/app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    git(&app, &["init", "-q"]);
+    std::fs::write(app.join("src/main.rs"), "x".repeat(3000)).unwrap();
+    let app = app.canonicalize().unwrap();
+    let home = user_folder("city-new-tab", &json!({"repos": [app], "restore_layout": false}).to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "code_city"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ];
+    let otto = Otto::launch_with("city-new-tab", &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
+    // The drawer folded: at CI's window the city gets the whole tab (else the lattice).
+    otto.call(json!({"cmd": "key", "keys": "cmd-shift-r", "as": "user"}));
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    otto.wait_for("the tab's city", |o| Some(city(o)).filter(|c| !c.is_null()));
+    otto.call(json!({"cmd": "key", "keys": "cmd-t", "as": "user"}));
+    let tabs = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["tabs"].as_array().map_or(0, Vec::len);
+    otto.wait_for("a new tab", |o| Some(()).filter(|_| tabs(o) == 2));
+    otto.wait_for("the new tab's city", |o| Some(city(o)).filter(|c| !c.is_null()));
+    // A terminal opened there starts in the checkout.
+    let state = otto.call(json!({"cmd": "split"}));
+    let cwd = state["state"]["panes"].as_array().and_then(|p| p.last()).map(|p| p["cwd"].clone());
+    assert_eq!(cwd, Some(json!(app)), "{state}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a 3D
 /// picture rendered on the GPU, where the lattice was, as large as the tab in pixels. The file
 /// the agent reads is lit, and only it, its agent's icon over it; an ignored file is no building;

@@ -6278,9 +6278,15 @@ impl Model {
                 // The user's joins the selected space; a client's is no space's: `settle_home`
                 // gives it to the workspace selected last.
                 let of = if self.by_user { self.space().clone() } else { Owner::Home };
+                // The user's carries the checkout of the tab it is opened from (its city, where ⌘D
+                // starts), as a tab `open_repo` made keeps it.
+                let carried = self.tabs.get(self.active).and_then(|tab| tab.folder.clone()).filter(|_| self.by_user);
                 self.leave(effects);
                 self.park_active();
                 self.push_tab_of(of);
+                if let Some(tab) = self.tabs.get_mut(self.active) {
+                    tab.folder = carried;
+                }
             }
             Action::NewEmptyTab => {
                 self.act(Action::NewTab, effects);
