@@ -66,7 +66,7 @@ pub struct RunnerSpec {
     pub attach: Attach,
     pub introduced: Introduced,
     /// How a task's agent is given ottospace's MCP server for its run, never through its config
-    /// files (`agents::mcp_args`). None: not given; the preamble's commands stand.
+    /// files (`agents::mcp_args`). None: not given; its guidance goes where `introduced` says.
     pub mcp: Option<McpAttach>,
 }
 
@@ -87,6 +87,7 @@ pub enum Introduced {
     /// Appended to its system prompt for the run: `<flag> <text>`.
     SystemPrompt { flag: &'static str },
     /// Nowhere but the server's instructions: it has no per-run place that adds to the user's own.
+    /// Without the server (a path that is not text) it is told nothing.
     ServerOnly,
 }
 

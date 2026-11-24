@@ -321,7 +321,7 @@ impl Workspace {
                 if let Some(dir) = cwd.filter(|dir| Some(*dir) != own) {
                     self.in_checkout(dir)?;
                 }
-                let added = server.as_ref().map(|server| agents::mcp_args(*runner, server)).unwrap_or_default();
+                let added = crate::talk::resumed(subject.task().is_some(), *runner, self.see_apps(), server.as_ref());
                 (*runner, ottospace_agents::Start::Resume { id: session.clone() }, None, None, None, added)
             }
         };
