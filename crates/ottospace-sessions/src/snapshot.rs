@@ -150,7 +150,7 @@ impl Snapshot {
                 }
             }
             What::ModelChange { to, .. } => self.model = Some(to.clone()),
-            What::Cwd { .. } => {}
+            What::Cwd { .. } | What::Words { .. } => {}
         }
     }
 

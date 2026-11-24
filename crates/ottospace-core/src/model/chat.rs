@@ -451,7 +451,7 @@ impl Model {
     /// The session to watch: the open drawer's conversation, when its agent does not run here,
     /// its session is at work or held elsewhere, and its runner's file can be followed live
     /// (`attach.watch`). The shell reads that file and sends what it says (`AgentEvents`):
-    /// a read-only transcript of labels, never the text. Or a task's session nothing has, with
+    /// a read-only transcript, words included, as a chat shows it. Or a task's session nothing has, with
     /// none of it here (a restart since its agent ran): its past, read the same way, to go on with.
     pub fn watch_target(&self) -> Option<(Subject, RunnerId, String, String)> {
         let subject = self.talk.as_ref().filter(|talk| talk.open)?.task.clone();

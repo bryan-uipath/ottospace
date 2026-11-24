@@ -232,7 +232,17 @@ fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
             }
         }
         ("compacted", _) => emit(What::Compaction { tokens_after: None }),
-        ("event_msg", "user_message") => emit(What::UserMessage),
+        ("event_msg", "user_message") => {
+            match payload["message"].as_str().filter(|t| cursor.words && !t.trim().is_empty()) {
+                Some(text) => emit(What::Words { user: true, text: ottospace_core::transcript::Text::new(text) }),
+                None => emit(What::UserMessage),
+            }
+        }
+        ("event_msg", "agent_message") => {
+            if let Some(text) = payload["message"].as_str().filter(|t| cursor.words && !t.trim().is_empty()) {
+                emit(What::Words { user: false, text: ottospace_core::transcript::Text::new(text) });
+            }
+        }
         ("event_msg", "token_count") => {
             // `info` is null on a record that only carries rate limits.
             let info = &payload["info"];
@@ -464,6 +474,27 @@ mod tests {
 
     fn record(kind: &str, payload: Value) -> Value {
         json!({"timestamp": "2026-11-12T09:00:00.000Z", "type": kind, "payload": payload})
+    }
+
+    /// The words of a message and a reply only for the watch view's cursor.
+    #[test]
+    fn words_only_for_a_cursor_that_asks() {
+        let said = [
+            record("event_msg", json!({"type": "user_message", "message": "secret prompt"})),
+            record("event_msg", json!({"type": "agent_message", "message": "secret reply"})),
+        ];
+        let read = |mut cursor: Cursor| {
+            let mut events = Vec::new();
+            said.iter().for_each(|r| record_events(r, &mut cursor, &mut events));
+            events.into_iter().map(|e| e.what).collect::<Vec<_>>()
+        };
+        assert_eq!(read(Cursor::default()), [What::UserMessage]);
+        let text = ottospace_core::transcript::Text::new;
+        let words = [
+            What::Words { user: true, text: text("secret prompt") },
+            What::Words { user: false, text: text("secret reply") },
+        ];
+        assert_eq!(read(Cursor::with_words()), words);
     }
 
     fn exec(call: &str) -> Value {

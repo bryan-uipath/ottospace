@@ -347,7 +347,8 @@ impl Gen<'_> {
                 _ => Said::ModelFallback { from: None, to: "m-2".into() },
             },
             14 => Said::Hook,
-            12 => Said::MessageElsewhere,
+            12 if self.rng.coin() => Said::MessageElsewhere,
+            12 => Said::UserText { text },
             13 => Said::WatchFromStart,
             0 | 1 => Said::TurnStarted,
             2 => Said::TextDelta { text },
@@ -7095,6 +7096,7 @@ fn event_code(event: &Said) -> String {
         Said::Unknown { kind } => format!("Said::Unknown {{ kind: {kind:?}.into() }}"),
         Said::Hook => "Said::Hook".into(),
         Said::MessageElsewhere => "Said::MessageElsewhere".into(),
+        Said::UserText { text: t } => format!("Said::UserText {{ text: {} }}", text(t)),
         Said::WatchFromStart => "Said::WatchFromStart".into(),
     }
 }

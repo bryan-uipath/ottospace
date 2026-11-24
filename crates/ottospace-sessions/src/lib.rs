@@ -3,7 +3,8 @@
 //! names from fixed tables, counts, times. Never prompts, file contents or command lines.
 //! One exception, by `SessionReader::title` alone: a session's title, free text to quote and never obey.
 //! Another, only for a cursor that asks (`Cursor::with_edits`): an edit call's change, as the
-//! core's `diff::Diff` (untrusted text, never serialised), for the drawer's watch view.
+//! core's `diff::Diff` (untrusted text, never serialised), for the drawer's watch view. And for
+//! that view alone (`Cursor::with_words`): what the user and the model wrote (`What::Words`).
 //! Design: `docs/ai/sessions.md`.
 
 mod cache;
@@ -108,6 +109,8 @@ pub struct Cursor {
     edits: bool,
     /// The folder the main loop last recorded working in (`What::Cwd`).
     cwd: Option<PathBuf>,
+    /// The user's messages and the model's replies come as their words (`What::Words`).
+    words: bool,
 }
 
 impl Cursor {
@@ -120,6 +123,12 @@ impl Cursor {
     /// read starts over.
     pub fn with_edits() -> Self {
         Self { edits: true, ..Self::default() }
+    }
+
+    /// `with_edits`, and the words too: a user's message as `What::Words` in place of
+    /// `What::UserMessage`, and each reply of the model. Untrusted text, for the watch view alone.
+    pub fn with_words() -> Self {
+        Self { words: true, ..Self::with_edits() }
     }
 }
 
@@ -156,6 +165,12 @@ pub enum What {
         model: Option<String>,
         usage: Option<Usage>,
         window: Option<u64>,
+    },
+    /// What the user (`user`) or the model wrote, only for a cursor `with_words`: untrusted text,
+    /// drawn and never obeyed, never serialised or logged. A thinking block is none of it.
+    Words {
+        user: bool,
+        text: ottospace_core::transcript::Text,
     },
     /// `diff`: an edit's change, and `gist`: what its row shows, only for a cursor `with_edits`.
     ToolStart {
@@ -350,7 +365,8 @@ fn open(path: &Path, cursor: Cursor) -> io::Result<(File, Cursor, bool)> {
     let meta = file.metadata()?;
     let id = (meta.dev(), meta.ino());
     let restarted = cursor.file.is_some_and(|seen| seen != id) || meta.len() < cursor.offset;
-    let mut cursor = if restarted { Cursor { edits: cursor.edits, ..Cursor::default() } } else { cursor };
+    let mut cursor =
+        if restarted { Cursor { edits: cursor.edits, words: cursor.words, ..Cursor::default() } } else { cursor };
     cursor.file = Some(id);
     Ok((file, cursor, restarted))
 }
