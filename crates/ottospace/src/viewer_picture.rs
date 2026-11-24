@@ -15,6 +15,13 @@ use ottospace_core::viewer::{MAX_PIXELS, Read};
 
 /// The longest side decoded, in pixels.
 const MAX_SIDE: u32 = 32_768;
+/// The most frames kept of an animation: past it, the first ones play (security review: a small
+/// file of many tiny frames).
+const MAX_FRAMES: usize = 1000;
+/// What a frame costs at least against `MAX_PIXELS`, however small: its own keeping.
+const FRAME_COST: u64 = 4096;
+/// The longest an animation decodes: past it, the frames decoded so far play.
+const DECODE_TIME: Duration = Duration::from_secs(5);
 /// A frame shown for less than this plays at `SLOW` instead, as browsers do (a GIF's 0 ms).
 const FASTEST: Duration = Duration::from_millis(20);
 const SLOW: Duration = Duration::from_millis(100);
@@ -101,13 +108,13 @@ fn decode_as(bytes: &[u8], format: ImageFormat) -> Result<Picture, Read> {
         ImageFormat::Gif => {
             let mut decoder = GifDecoder::new(Cursor::new(bytes)).map_err(|_| Read::Broken)?;
             decoder.set_limits(limits()).map_err(|_| Read::Broken)?;
-            animated(decoder.into_frames(), width, height, MAX_PIXELS)?
+            animated(decoder.into_frames(), width, height, Caps::VIEWER)?
         }
         ImageFormat::WebP => {
             let mut decoder = WebPDecoder::new(Cursor::new(bytes)).map_err(|_| Read::Broken)?;
             decoder.set_limits(limits()).map_err(|_| Read::Broken)?;
             if decoder.has_animation() {
-                animated(decoder.into_frames(), width, height, MAX_PIXELS)?
+                animated(decoder.into_frames(), width, height, Caps::VIEWER)?
             } else {
                 vec![still(image::DynamicImage::from_decoder(decoder).map_err(|_| Read::Broken)?)]
             }
@@ -128,20 +135,36 @@ fn still(image: image::DynamicImage) -> (Arc<RenderImage>, Duration) {
     (render(Frame::new(image.into_rgba8())), Duration::ZERO)
 }
 
-/// Each frame of an animation, until its pixels together pass `most`.
+/// What an animation may cost: pixels over all frames (each at least `FRAME_COST`), frames, time.
+struct Caps {
+    pixels: u64,
+    frames: usize,
+    time: Duration,
+}
+
+impl Caps {
+    const VIEWER: Caps = Caps { pixels: MAX_PIXELS, frames: MAX_FRAMES, time: DECODE_TIME };
+}
+
+/// Each frame of an animation: past `caps.pixels` together, too many pixels; past `caps.frames`
+/// frames or `caps.time` of decoding, the frames so far play and the rest is never decoded.
 fn animated(
     frames: image::Frames<'_>,
     width: u32,
     height: u32,
-    most: u64,
+    caps: Caps,
 ) -> Result<Vec<(Arc<RenderImage>, Duration)>, Read> {
     let mut kept = Vec::new();
     let mut pixels = 0u64;
+    let began = std::time::Instant::now();
     for frame in frames {
+        if kept.len() >= caps.frames || (began.elapsed() > caps.time && !kept.is_empty()) {
+            break;
+        }
         let frame = frame.map_err(|_| Read::Broken)?;
         let buffer = frame.buffer();
-        pixels += u64::from(buffer.width()) * u64::from(buffer.height());
-        if pixels > most {
+        pixels += (u64::from(buffer.width()) * u64::from(buffer.height())).max(FRAME_COST);
+        if pixels > caps.pixels {
             return Err(Read::TooManyPixels { width, height, frames: kept.len() as u32 + 1 });
         }
         let (numer, denom) = frame.delay().numer_denom_ms();
@@ -193,7 +216,7 @@ mod tests {
         {
             let mut encoder = image::codecs::gif::GifEncoder::new(&mut out);
             for at in 0..frames {
-                let buffer = RgbaImage::from_pixel(side, side, image::Rgba([at as u8 * 40, 0, 0, 255]));
+                let buffer = RgbaImage::from_pixel(side, side, image::Rgba([(at as u8).wrapping_mul(40), 0, 0, 255]));
                 let delay = image::Delay::from_numer_denom_ms(delay_ms, 1);
                 encoder.encode_frame(Frame::from_parts(buffer, 0, 0, delay)).expect("a frame");
             }
@@ -230,9 +253,23 @@ mod tests {
         huge[18..22].copy_from_slice(&20_000i32.to_le_bytes());
         huge[22..26].copy_from_slice(&20_000i32.to_le_bytes());
         assert!(matches!(decode(&huge), Err(Read::TooManyPixels { width: 20_000, height: 20_000, .. })));
-        // Frames past the cap together: the third of 4 × 4 frames over a cap of 40 pixels.
+        // Frames past the cap together, each costing at least `FRAME_COST`: the third over 2.5 frames' worth.
+        let caps = |pixels, frames| Caps { pixels, frames, time: DECODE_TIME };
         let frames = GifDecoder::new(Cursor::new(gif(5, 4, 50))).expect("a gif").into_frames();
-        assert!(matches!(animated(frames, 4, 4, 40), Err(Read::TooManyPixels { frames: 3, .. })));
+        let cap = FRAME_COST * 5 / 2;
+        assert!(matches!(animated(frames, 4, 4, caps(cap, 100)), Err(Read::TooManyPixels { frames: 3, .. })));
+        // Many tiny frames: the first `frames` kept, the rest never decoded.
+        let many = gif(40, 1, 0);
+        let frames = GifDecoder::new(Cursor::new(&many)).expect("a gif").into_frames();
+        let kept = animated(frames, 1, 1, caps(MAX_PIXELS, 25)).expect("decoded");
+        assert_eq!(kept.len(), 25);
+        // 1×1 frames still cost: 40 of them pass a cap of 30 frames' worth.
+        let frames = GifDecoder::new(Cursor::new(&many)).expect("a gif").into_frames();
+        assert!(matches!(animated(frames, 1, 1, caps(FRAME_COST * 30, 1000)), Err(Read::TooManyPixels { .. })));
+        // The viewer's own caps on 1,200 tiny frames: 1,000 kept, each at least 100 ms.
+        let lots = decode(&gif(1200, 1, 0)).expect("decoded");
+        assert_eq!(lots.frames.len(), MAX_FRAMES);
+        assert!(lots.frames.iter().all(|(_, shows)| *shows >= FASTEST));
     }
 
     #[test]
