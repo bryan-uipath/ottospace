@@ -438,8 +438,10 @@ export interface Task {
   paths: string[];
   /** Where each of `paths` was found when the task was filed, in the same order; or empty. */
   resolved: string[];
-  /** Skills to load for it. */
+  /** Skills to load for it: its first message asks for them. */
   skills: string[];
+  /** The line it was filed from, as typed (its tags in place); left out for one filed otherwise. */
+  line?: string;
   /** When it was filed, in milliseconds since 1970. Null: filed before this was kept. */
   created: number | null;
   /** The session it was adopted from, or null. */
