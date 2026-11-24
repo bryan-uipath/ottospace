@@ -180,16 +180,16 @@ the probe), so it reaches the socket where a sandboxed
 Bash cannot (agent-mode.md, Probes): the one thing it adds that the CLI cannot.
 
 **Attached by ottospace, per runner, by capability.** A `RunnerSpec` field, never a `match` on the
-name: `mcp: Option<McpAttach>`, with `McpAttach::Flag` (a JSON string in argv) or
-`McpAttach::ConfigOverride` (`-c key=value` pairs), and `instructions: bool` (it reads the server's
+name: `mcp: Option<McpAttach>`, as built `McpAttach::ConfigJson` (a JSON string in argv) or
+`McpAttach::Overrides` (`-c key=value` pairs), and `instructions: bool` (it reads the server's
 `instructions`). Both views of a task's agent (structured and terminal) add the same attach
 arguments; nothing touches the user's config files. Docs read 2026-11-23: code.claude.com/docs/en/cli-reference and
 /mcp; learn.chatgpt.com/docs/extend/mcp, /codex/config-file/config-basic and /codex/app-server.
 
 | Runner | Attach, per invocation | Documented | Probe |
 |---|---|---|---|
-| Claude Code 2.1.331 | `--mcp-config '{"mcpServers":{"ottospace":{"command":"<this binary>","args":["mcp"],"env":{"OTTOSPACE_TASK_PASS_FILE":"${OTTOSPACE_TASK_PASS_FILE}"}}}}'`. Not `--strict-mcp-config`: that would drop the user's own servers | "Load MCP servers from JSON files or strings"; with `-p` it waits for servers to connect before the first turn; `${VAR}` expands in `env`. Whether a stdio server inherits the whole environment is not stated, hence the explicit `env` | one `-p` run with the stand-in removed (owner's approval) |
-| Codex 0.171.0 | `codex app-server` (structured) or `codex` (terminal) with `-c mcp_servers.ottospace.command="<this binary>" -c 'mcp_servers.ottospace.args=["mcp"]' -c 'mcp_servers.ottospace.env_vars=["OTTOSPACE_TASK_PASS_FILE"]'` | `-c` overrides any `config.toml` key and wins over the file (config-basic); `env_vars` "allow and forward" variables. Not documented: `-c` on `mcp_servers.*`, nor on `app-server` (its `--help` shows `-c`) | both, before Codex gets the field |
+| Claude Code 2.1.331 | As built (#447): `--mcp-config '{"mcpServers":{"ottospace_task":{"command":"<this binary>","args":["mcp"],"env":{"OTTOSPACE_SOCKET":"<socket>","OTTOSPACE_TASK_PASS_FILE":"<pass file>"}}}}' --allowedTools mcp__ottospace_task__workspace,…` (`McpAttach::ConfigJson`), explicit paths, no `${VAR}`. Not `--strict-mcp-config` | "Load MCP servers from JSON files or strings"; with `-p` it waits for servers to connect before the first turn | a run: the owner's smoke check |
+| Codex 0.171.0 | As built (#447): `-c mcp_servers.ottospace_task.command="<this binary>"`, `.args=["mcp"]`, `.env.OTTOSPACE_SOCKET=…`, `.env.OTTOSPACE_TASK_PASS_FILE=…`, `.default_tools_approval_mode="writes"` (`McpAttach::Overrides`). Named `ottospace_task`: Codex merges `-c` into a same-named table of the user's, and an HTTP one there fails the start | `-c` overrides any config key (config-basic); parsed by `codex … mcp get --json` (a probe, no session) | a run: the owner's smoke check |
 
 `<this binary>` is ottospace's own executable (`std::env::current_exe`), never a name looked up on
 `PATH`: the program on `PATH` was one of A's three prerequisites, and this removes it. No file is

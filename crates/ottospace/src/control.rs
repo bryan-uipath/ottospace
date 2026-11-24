@@ -913,7 +913,8 @@ impl<'de> Deserialize<'de> for Fields {
 
 /// `$OTTOSPACE_SOCKET`, else `ottospace.sock` in the per-user temp dir.
 pub fn path() -> PathBuf {
-    std::env::var_os("OTTOSPACE_SOCKET").map_or_else(|| std::env::temp_dir().join("ottospace.sock"), PathBuf::from)
+    std::env::var_os(ottospace_core::agents::SOCKET_VAR)
+        .map_or_else(|| std::env::temp_dir().join("ottospace.sock"), PathBuf::from)
 }
 
 /// Listens on `path()`. Calls arrive on the returned channel; the UI thread polls it.

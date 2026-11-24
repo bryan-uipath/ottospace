@@ -223,6 +223,7 @@ The table, written by a test from the specs (`runner::tests`): every capability 
 | take over when idle | Yes | Yes |
 | attach live | ViaOwnTerminal | ViaDaemon |
 | told of ottospace | FirstMessage | FirstMessage |
+| ottospace's MCP server | Some(ConfigJson) | Some(Overrides) |
 
 What is verified, and how:
 

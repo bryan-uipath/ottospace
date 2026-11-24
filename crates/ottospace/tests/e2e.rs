@@ -7460,6 +7460,22 @@ if [ "$1" = "--resume" ]; then
 fi
 "#;
 
+/// `argv` without what gives a task's agent ottospace's MCP server (`agents::mcp_args`): Claude
+/// Code's `--mcp-config` and `--allowedTools`, Codex's `-c`, each with its value.
+fn without_mcp(argv: &[String]) -> Vec<String> {
+    let mut left = Vec::new();
+    let mut args = argv.iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--mcp-config" | "--allowedTools" | "-c" => {
+                args.next();
+            }
+            _ => left.push(arg.clone()),
+        }
+    }
+    left
+}
+
 /// What a stand-in was started with: its directory, then each argument.
 fn agent_argv(dir: &Path, name: &str) -> Option<Vec<String>> {
     let text = std::fs::read_to_string(dir.join(format!("{name}.argv"))).ok()?;
@@ -9734,7 +9750,15 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let state = otto.call(json!({"cmd": "state"}));
     let session = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
     let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Claude, "fix login", None, false);
-    assert_eq!(argv, [app.as_str(), "--session-id", &session, "--", &prompt]);
+    assert_eq!(without_mcp(&argv), [app.as_str(), "--session-id", &session, "--", &prompt]);
+    // Its MCP server for the run: this program, `mcp`, the test's socket; only its tools allowed.
+    let config = argv.iter().position(|a| a == "--mcp-config").map(|at| argv[at + 1].clone()).expect("an MCP config");
+    let config: Value = serde_json::from_str(&config).unwrap();
+    let server = &config["mcpServers"]["ottospace_task"];
+    assert_eq!((&server["command"], &server["args"]), (&json!(env!("CARGO_BIN_EXE_ottospace")), &json!(["mcp"])));
+    assert_eq!(server["env"]["OTTOSPACE_SOCKET"], json!(otto.socket.to_str().unwrap()));
+    let allowed = argv.iter().position(|a| a == "--allowedTools").map(|at| argv[at + 1].clone()).unwrap_or_default();
+    assert!(allowed.split(',').all(|tool| tool.starts_with("mcp__ottospace_task__")), "{allowed}");
     assert_eq!(state["state"]["tasks"]["list"][0]["state"], "running");
     // Its space is selected; the workspace's tab and panes are as they were.
     let space = (&state["state"]["active"], &state["state"]["tabs"][1]["space"]);
@@ -9781,7 +9805,8 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     otto.start_task(2);
     let argv = otto.wait_for("codex's argv", |_| agent_argv(&bin, "codex"));
     let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Codex, "try codex", None, false);
-    assert_eq!(argv[1..], ["--model", "gpt-6-astra", "--", &prompt]);
+    assert_eq!(without_mcp(&argv[1..]), ["--model", "gpt-6-astra", "--", &prompt]);
+    assert!(argv.iter().any(|a| a.starts_with("mcp_servers.ottospace_task.command=")), "{argv:?}");
     assert_eq!(Some(&argv[0]), std::env::var("HOME").ok().as_ref(), "no repository: the home folder");
     // Codex names its own session: it is found where Codex wrote it, and the task follows it.
     let id = otto.wait_for("codex's session", |_| std::fs::read_to_string(codex_home.join("last-id")).ok());
@@ -9804,7 +9829,7 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let reply = otto.user_start();
     assert_eq!(reply["state"]["active"], 1);
     let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude").filter(|argv| argv[1] == "--resume"));
-    assert_eq!(argv[1..], ["--resume", session.as_str()]);
+    assert_eq!(without_mcp(&argv[1..]), ["--resume", session.as_str()]);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
 }
@@ -10132,7 +10157,7 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     let again = otto.user_start();
     assert_eq!((&again["drawer"]["note"], &again["state"]["agents"]), (&Value::Null, &json!([1])), "{again}");
     let argv = otto.wait_for("claude --resume", |_| agent_argv(&bin, "claude"));
-    assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
+    assert_eq!(without_mcp(&argv), [below.to_str().unwrap(), "--resume", idle]);
     assert_eq!(otto.call(json!({"cmd": "state"}))["state"]["tasks"]["list"][0]["state"], "running");
 
     // The Tasks section closed, so nothing is listed: the task's session is read for the
@@ -10149,7 +10174,9 @@ fn a_click_shows_a_session_and_resume_goes_on_with_it_in_the_drawer() {
     let reading = otto.user_start();
     assert_eq!((&reading["mode"], &reading["state"]["talk"]["task"]), (&json!("talk"), &json!(1)), "{reading}");
     let argv = otto.wait_for("claude --resume, read first", |_| agent_argv(&bin, "claude"));
-    assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
+    // Now task 1's: its MCP server too.
+    assert_eq!(without_mcp(&argv), [below.to_str().unwrap(), "--resume", idle]);
+    assert!(argv.iter().any(|a| a == "--mcp-config"), "{argv:?}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
@@ -12397,7 +12424,7 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     otto.wait_for("the terminal", |o| terminal(o).then_some(()));
     assert_eq!(chat(&otto)["native"], false, "one process at a time");
     otto.wait_for("claude --resume", |_| (argv().lines().next() == Some("--resume")).then_some(()));
-    assert_eq!(argv().lines().collect::<Vec<_>>(), ["--resume", session.as_str()]);
+    assert_eq!(without_mcp(&argv().lines().map(String::from).collect::<Vec<_>>()), ["--resume", session.as_str()]);
     // And back: the TUI is hung up on, then the session goes on natively.
     otto.user_click(at(otto.control("talk:view-chat"), 0.5, 0.5));
     otto.wait_for("chat again", |o| (chat(o)["native"] == true && !terminal(o)).then_some(()));
