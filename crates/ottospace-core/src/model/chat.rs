@@ -142,7 +142,7 @@ pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
             "m" if bare => Key::Act(Action::TalkDenyNote),
             _ => Key::Swallow,
         },
-        "enter" if mods.shift || mods.alt => Key::Newline,
+        "enter" if mods.shift || (mods.alt && !mods.ctrl) => Key::Newline,
         "enter" if bare => Key::Act(Action::TalkSend),
         _ => Key::Field,
     }

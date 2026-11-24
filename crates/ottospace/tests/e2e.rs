@@ -14970,7 +14970,8 @@ fn quit_names_an_unsent_message_and_its_row_goes_to_the_composer() {
 }
 
 /// The composer wraps a long line and grows with it, a row at a time, to 8 rows; ⌥↵ starts a new
-/// line; ↑ goes to the row drawn above (not the start of the text), ↑ on the first row to the start.
+/// line; ↑ and ↓ go to the row drawn above or below (not the text's start or end), ↑ on the first
+/// row to the start.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_composer_wraps_and_grows_and_arrows_move_a_row() {
@@ -14986,6 +14987,8 @@ fn the_composer_wraps_and_grows_and_arrows_move_a_row() {
     let up = otto.user_key("up");
     let row = up["field"]["cursor"].as_u64().unwrap();
     assert!(0 < row && row < end, "a row up, not the start: {row} of {end}");
+    let down = otto.user_key("down")["field"]["cursor"].as_u64().unwrap();
+    assert!(row < down && down <= end, "a row down again: {down}, from {row}");
     assert_eq!(otto.user_key("up up up up up up up up up up")["field"]["cursor"], 0, "then the start");
     // ⌥↵: a line of its own; many: never past 8 rows.
     let lined = otto.user_key("end alt-enter n e w");
