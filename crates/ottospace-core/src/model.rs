@@ -1903,7 +1903,12 @@ pub enum Action {
     SortItem {
         id: u64,
         how: crate::filed::Sort,
+        /// The item's revision the user was shown: another one (its filer changed it) does nothing.
+        revision: u32,
     },
+    /// The card on show changed since it was first drawn (a newer proposal, a filer's update): the
+    /// user's next key only says they saw it. Only the user's.
+    DecisionsSeen,
     /// U (`claims`) counts the item's claims, C flips its role, before its key. Only the user's.
     SortToggle {
         id: u64,
@@ -1923,8 +1928,32 @@ pub enum Action {
     RestoreFocus {
         kept: crate::focus::Kept,
     },
-    /// ⌘P › This Week's Focus…: the editor, the Projects entries to tick. Only the user's.
-    FocusEditOpen,
+    /// ⌘P › This Week's Focus…: the editor, the Projects entries to tick, ticked as `from` says
+    /// (this week's areas, a proposal's, last week's). Only the user's.
+    FocusEditOpen {
+        from: focus::Seed,
+    },
+    /// An agent proposes this week's focus (`focus_set`): a card for the user; it sets nothing.
+    FocusPropose {
+        week: String,
+        areas: Vec<crate::focus::Area>,
+        provenance: Option<crate::focus::Provenance>,
+        now: u64,
+    },
+    /// ↵ on the proposal card: the proposal of `revision`, the one shown, is this week's focus.
+    FocusAccept {
+        revision: u32,
+        at: u64,
+    },
+    /// N on the proposal card: the focus stays as it is.
+    FocusDecline {
+        revision: u32,
+    },
+    /// ↵ (keep) or N on "Keep last week's focus?".
+    FocusCarry {
+        keep: bool,
+        at: u64,
+    },
     FocusEditClose,
     FocusEditMove {
         delta: i32,
@@ -2673,7 +2702,7 @@ impl Action {
             | Action::BtwKeys { on: true }
             // Its card takes the keys in its pane.
             | Action::DecisionsOpen
-            | Action::FocusEditOpen => true,
+            | Action::FocusEditOpen { .. } => true,
             Action::Split { .. }
             | Action::Open { .. }
             | Action::Adopt { .. }
@@ -3027,11 +3056,16 @@ impl Action {
             | Action::SortStart
             | Action::SortSkip
             | Action::SortItem { .. }
+            | Action::DecisionsSeen
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo
             | Action::SetWeek { .. }
             | Action::RestoreFocus { .. }
+            | Action::FocusPropose { .. }
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
             | Action::FocusEditClose
             | Action::FocusEditMove { .. }
             | Action::FocusEditToggle { .. }
@@ -3081,10 +3115,15 @@ impl Action {
             | Action::SortStart
             | Action::SortSkip
             | Action::SortItem { .. }
+            | Action::DecisionsSeen
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo
-            | Action::FocusEditOpen
+            | Action::FocusEditOpen { .. }
+            | Action::FocusPropose { .. }
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
             | Action::FocusEditClose
             | Action::FocusEditMove { .. }
             | Action::FocusEditToggle { .. }
@@ -5154,11 +5193,15 @@ impl Model {
             | Action::SortStart
             | Action::SortSkip
             | Action::SortItem { .. }
+            | Action::DecisionsSeen
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo => Some(decisions::USERS_ALONE),
             // The week's focus is the user's to set; what week it is, the shell's to say.
-            Action::FocusEditOpen
+            Action::FocusEditOpen { .. }
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
             | Action::FocusEditClose
             | Action::FocusEditMove { .. }
             | Action::FocusEditToggle { .. }
@@ -5561,6 +5604,7 @@ impl Model {
             return Vec::new();
         }
         let (origin, line) = (sent.origin, self.compose_line().cloned());
+        let answer = decisions::answers(&sent.action);
         let overlays = self.overlay_before(&sent);
         let states: Vec<(TaskId, State)> = self.tasks.list.iter().map(|task| (task.id, task.state)).collect();
         let fronts_were: Vec<TaskId> = self.spaces.iter().filter_map(|space| self.front(&space.of)).collect();
@@ -5623,6 +5667,7 @@ impl Model {
         }
         self.settle_focus_edit();
         self.settle_decisions(origin, drawer_keys, &mut effects);
+        self.settle_changed(answer);
         self.settle_spaces(origin, &home);
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         // After the tabs out: a fold-in may move the main window's tab (seed 37143).
@@ -7743,9 +7788,18 @@ impl Model {
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo) => self.sort_act(action, effects),
+            Action::DecisionsSeen => {
+                if let Some(run) = self.decisions.as_mut() {
+                    run.changed = false;
+                }
+            }
             action @ (Action::SetWeek { .. }
             | Action::RestoreFocus { .. }
-            | Action::FocusEditOpen
+            | Action::FocusEditOpen { .. }
+            | Action::FocusPropose { .. }
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
             | Action::FocusEditClose
             | Action::FocusEditMove { .. }
             | Action::FocusEditToggle { .. }
@@ -11898,12 +11952,17 @@ mod tests {
         Action::SortStart,
         Action::SortSkip,
         Action::SortItem { .. },
+        Action::DecisionsSeen,
         Action::SortToggle { .. },
         Action::SortPromote { .. },
         Action::SortUndo,
         Action::SetWeek { .. },
         Action::RestoreFocus { .. },
-        Action::FocusEditOpen,
+        Action::FocusEditOpen { .. },
+        Action::FocusPropose { .. },
+        Action::FocusAccept { .. },
+        Action::FocusDecline { .. },
+        Action::FocusCarry { .. },
         Action::FocusEditClose,
         Action::FocusEditMove { .. },
         Action::FocusEditToggle { .. },
@@ -12329,13 +12388,18 @@ mod tests {
             Action::RestoreDecisions { kept: Vec::new(), trusted: Vec::new() },
             Action::SortStart,
             Action::SortSkip,
-            Action::SortItem { id: 1, how: crate::filed::Sort::Keep },
+            Action::SortItem { id: 1, how: crate::filed::Sort::Keep, revision: 1 },
+            Action::DecisionsSeen,
             Action::SortToggle { id: 1, claims: true },
             Action::SortPromote { id: 1 },
             Action::SortUndo,
             Action::SetWeek { week: "2026-W48".into() },
             Action::RestoreFocus { kept: crate::focus::Kept::default() },
-            Action::FocusEditOpen,
+            Action::FocusEditOpen { from: focus::Seed::Current },
+            Action::FocusPropose { week: "2026-W48".into(), areas: Vec::new(), provenance: None, now: 0 },
+            Action::FocusAccept { revision: 1, at: 0 },
+            Action::FocusDecline { revision: 1 },
+            Action::FocusCarry { keep: true, at: 0 },
             Action::FocusEditClose,
             Action::FocusEditMove { delta: 1 },
             Action::FocusEditToggle { row: None },
@@ -12964,10 +13028,14 @@ mod tests {
                     Action::SortStart
                     | Action::SortSkip
                     | Action::SortItem { .. }
+                    | Action::DecisionsSeen
                     | Action::SortToggle { .. }
                     | Action::SortPromote { .. }
                     | Action::SortUndo => Some(decisions::USERS_ALONE),
-                    Action::FocusEditOpen
+                    Action::FocusEditOpen { .. }
+                    | Action::FocusAccept { .. }
+                    | Action::FocusDecline { .. }
+                    | Action::FocusCarry { .. }
                     | Action::FocusEditClose
                     | Action::FocusEditMove { .. }
                     | Action::FocusEditToggle { .. }
@@ -20452,10 +20520,14 @@ mod tests {
                     Action::SortStart
                     | Action::SortSkip
                     | Action::SortItem { .. }
+                    | Action::DecisionsSeen
                     | Action::SortToggle { .. }
                     | Action::SortPromote { .. }
                     | Action::SortUndo => Some(decisions::USERS_ALONE),
-                    Action::FocusEditOpen
+                    Action::FocusEditOpen { .. }
+                    | Action::FocusAccept { .. }
+                    | Action::FocusDecline { .. }
+                    | Action::FocusCarry { .. }
                     | Action::FocusEditClose
                     | Action::FocusEditMove { .. }
                     | Action::FocusEditToggle { .. }

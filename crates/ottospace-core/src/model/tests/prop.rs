@@ -442,6 +442,14 @@ impl Gen<'_> {
         })
     }
 
+    /// The waiting proposal's revision most of the time, else a stray one.
+    fn proposal_revision(&mut self) -> u32 {
+        match self.m.focus.pending.as_ref().map(|p| p.revision).filter(|_| !self.rng.one_in(4)) {
+            Some(revision) => revision,
+            None => self.rng.pick(&[0, 1, 2, u32::MAX]),
+        }
+    }
+
     /// The item triage shows, most of the time; else any filed one, or none there is.
     fn sort_item(&mut self) -> u64 {
         let shown = self.m.decisions.as_ref().and_then(|run| run.sort.as_ref()).and_then(|sort| sort.item);
@@ -1893,11 +1901,15 @@ const MAKERS: &[Make] = &[
             crate::filed::Sort::NotMine,
             crate::filed::Sort::Dismiss,
         ]);
-        Action::SortItem { id: g.sort_item(), how }
+        let id = g.sort_item();
+        let current = g.m.filed.get(id).map_or(0, |d| d.revision);
+        let revision = g.rng.pick(&[current, current, 0, 1, 2]);
+        Action::SortItem { id, how, revision }
     },
     |g| Action::SortToggle { id: g.sort_item(), claims: g.rng.coin() },
     |g| Action::SortPromote { id: g.sort_item() },
     |_| Action::SortUndo,
+    |_| Action::DecisionsSeen,
     // The week's focus: the week (a real one, another, none), kept weeks, the editor's keys.
     |g| Action::SetWeek { week: g.rng.pick(&["2026-W48", "2026-W49", "", "../x"]).into() },
     |g| {
@@ -1908,9 +1920,35 @@ const MAKERS: &[Make] = &[
             set_by: crate::focus::SetBy::User,
             at: g.time(),
         };
-        Action::RestoreFocus { kept: crate::focus::Kept { weeks: (0..g.rng.below(3)).map(|_| week(g)).collect() } }
+        Action::RestoreFocus {
+            kept: crate::focus::Kept { weeks: (0..g.rng.below(3)).map(|_| week(g)).collect(), ..Default::default() },
+        }
     },
-    |_| Action::FocusEditOpen,
+    |g| {
+        let from = match g.rng.below(3) {
+            0 => crate::model::focus::Seed::Current,
+            1 => crate::model::focus::Seed::Last,
+            _ => crate::model::focus::Seed::Proposal(g.proposal_revision()),
+        };
+        Action::FocusEditOpen { from }
+    },
+    // A proposal: this week or another, made-up areas linking a real project, a stray, too many.
+    |g| {
+        let names = ["atlas", "Atlas", "nope"];
+        let area = |g: &mut Gen| crate::focus::Area {
+            name: g.rng.pick(&["Login rewrite", "Hiring", "", "x"]).into(),
+            projects: g.rng.maybe(|r| r.pick(&names).to_string()).into_iter().collect(),
+            repos: Vec::new(),
+        };
+        let areas = (0..g.rng.pick(&[1, 2, 5])).map(|_| area(g)).collect();
+        let week = g.rng.pick(&["2026-W48", "2026-W49"]).into();
+        let provenance =
+            g.rng.coin().then(|| crate::focus::Provenance { path: g.text(), lines: Some((5, 9)), quote: g.text() });
+        Action::FocusPropose { week, areas, provenance, now: g.time() }
+    },
+    |g| Action::FocusAccept { revision: g.proposal_revision(), at: g.time() },
+    |g| Action::FocusDecline { revision: g.proposal_revision() },
+    |g| Action::FocusCarry { keep: g.rng.coin(), at: g.time() },
     |_| Action::FocusEditClose,
     |g| Action::FocusEditMove { delta: g.rng.pick(&[-1, 1, 5, i32::MIN]) },
     |g| Action::FocusEditToggle { row: g.rng.maybe(|r| r.below(7)) },
@@ -2560,8 +2598,11 @@ fn check_decisions(m: &Model) -> Result<(), String> {
         ensure!(m.tab_of(run.pane) == Some(run.tab), "its card is in tab {:?}", m.tab_of(run.pane));
         return Ok(());
     }
-    // Triage on show: no question with it, and its item one that waits to be sorted.
-    if let Some(sort) = &run.sort {
+    // The week's card on show: no question or triage with it, and the card is the one waiting.
+    if let Some(card) = run.week {
+        ensure!(run.task.is_none() && run.sort.is_none(), "the week's card with another on show");
+        ensure!(m.week_card() == Some(card), "week card {card:?} on show, {:?} waiting", m.week_card());
+    } else if let Some(sort) = &run.sort {
         ensure!(run.task.is_none() && run.ticket.is_none(), "triage and card {:?} on show", run.task);
         ensure!(m.features.on(Feature::DecisionSources), "triage on show with its flag off");
         let waits = |id: u64| m.filed.get(id).is_some_and(|d| d.to_sort(m.now));
@@ -2585,12 +2626,11 @@ fn check_decisions(m: &Model) -> Result<(), String> {
     );
     ensure!(m.tab_of(run.pane) == Some(run.tab), "its card is in tab {:?}", m.tab_of(run.pane));
     let triage = usize::from(run.sort.is_some() || (!run.sorted && m.sortable()));
-    ensure!(
-        run.at == run.done.len() + 1 && run.of == run.done.len() + queue.len() + triage,
-        "{} of {}",
-        run.at,
-        run.of
-    );
+    let week = usize::from(run.week.is_some() || (!run.weeked && m.week_card().is_some()));
+    // The week's card answered this run counts as one done.
+    let done = run.done.len() + usize::from(run.weeked);
+    let of = done + queue.len() + triage + week;
+    ensure!(run.at == done + 1 && run.of == of, "{} of {}, not of {of}", run.at, run.of);
     ensure!(tabs[0].title == format!("Decisions · {} of {}", run.at, run.of), "its tab reads {:?}", tabs[0].title);
     Ok(())
 }
@@ -4293,6 +4333,7 @@ impl Run {
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
+        let proposal_before = m.focus.pending.clone();
         let armed_before = m.listen.on.as_ref().is_some_and(|on| on.session.armed.is_some());
         let listen_pane = m.listen.on.as_ref().and_then(|on| on.source.pane());
         let transcribe_picker = m.picker.as_ref().is_some_and(|picker| picker.transcribe);
@@ -4376,8 +4417,33 @@ impl Run {
             (dirs, found)
         };
         let repos_before = matches!(action, Action::ReorderDrop).then(|| repo_set(m));
+        // No answer applies to a card other than the one, at the revision, on show before it.
+        let on_show_before = m.on_show();
+        let sort_item = |m: &Model| match &action {
+            Action::SortItem { id, .. } => m.filed.get(*id).cloned(),
+            _ => None,
+        };
+        let (sort_item_before, week_before) = (sort_item(m), m.focus.clone());
         let effects = m.update(sent);
         check(m)?;
+        {
+            use crate::model::decisions::On;
+            let target = match &action {
+                Action::SortItem { id, revision, .. } if sort_item(m) != sort_item_before => {
+                    Some((On::Sort(Some(*id)), *revision))
+                }
+                Action::FocusAccept { revision, .. } | Action::FocusDecline { revision } if m.focus != week_before => {
+                    Some((On::Week, *revision))
+                }
+                Action::FocusCarry { .. } if m.focus != week_before => Some((On::Week, 0)),
+                Action::DecisionsAsk { task, ticket, .. } if !effects.is_empty() => Some((On::Ask(*task, *ticket), 0)),
+                _ => None,
+            };
+            ensure!(
+                target.is_none() || target == on_show_before,
+                "{action:?} applied to {target:?}, not the card on show {on_show_before:?}"
+            );
+        }
         ensure!(repos_before.is_none_or(|was| was == repo_set(m)), "a reorder changed the Repos list's entries");
         // With the overlays on, no client or timer opens one over the user's work.
         if m.overlays() && origin != Origin::User {
@@ -5843,7 +5909,22 @@ impl Run {
                 }
                 // Only the user's ↵ in the focus editor writes the week's focus; and it is what is held.
                 Effect::SaveFocus { kept } => {
-                    let acts = user && matches!(action, Action::FocusEditSave { .. });
+                    // An accept sets the proposal of the revision it names, as it was: no other.
+                    if let Action::FocusAccept { revision, .. } = &action {
+                        let shown = proposal_before.as_ref().filter(|p| p.revision == *revision);
+                        ensure!(
+                            shown.is_some_and(|p| m.focus.areas() == p.areas.as_slice()),
+                            "accepted other words than revision {revision}'s"
+                        );
+                    }
+                    let acts = user
+                        && matches!(
+                            action,
+                            Action::FocusEditSave { .. }
+                                | Action::FocusAccept { .. }
+                                | Action::FocusDecline { .. }
+                                | Action::FocusCarry { .. }
+                        );
                     ensure!(acts && *kept == m.focus.kept(), "{origin:?}'s {action:?} wrote focus.json");
                 }
                 // Only the user's P, or their Z of it, writes what skips triage; and it is what is held.
@@ -6674,6 +6755,11 @@ fn code(sent: &Envelope) -> String {
         let filing = serde_json::to_string(filing).unwrap_or_default();
         return format!("decision_file({filing:?}, {now}).sent_by(Origin::{:?})", sent.origin);
     }
+    if let Action::FocusPropose { week, areas, provenance, now } = &sent.action {
+        let (areas, provenance) =
+            (serde_json::to_string(areas).unwrap_or_default(), serde_json::to_string(provenance).unwrap_or_default());
+        return format!("focus_propose({week:?}, {areas:?}, {provenance:?}, {now}).sent_by(Origin::{:?})", sent.origin);
+    }
     if let Action::RestoreFocus { kept } = &sent.action {
         let kept = serde_json::to_string(kept).unwrap_or_default();
         return format!("restore_focus({kept:?}).sent_by(Origin::{:?})", sent.origin);
@@ -6957,6 +7043,13 @@ fn set_features(on: &[&str]) -> Action {
 #[allow(dead_code)] // for a regression `code` writes; none is pasted yet
 fn decision_file(filing: &str, now: u64) -> Action {
     Action::DecisionFile { filing: Box::new(serde_json::from_str(filing).expect("a filing is JSON")), now }
+}
+
+#[allow(dead_code)] // for a regression `code` writes; none is pasted yet
+fn focus_propose(week: &str, areas: &str, provenance: &str, now: u64) -> Action {
+    let read = "a proposal is JSON";
+    let (areas, provenance) = (serde_json::from_str(areas).expect(read), serde_json::from_str(provenance).expect(read));
+    Action::FocusPropose { week: week.into(), areas, provenance, now }
 }
 
 #[allow(dead_code)] // for a regression `code` writes; none is pasted yet

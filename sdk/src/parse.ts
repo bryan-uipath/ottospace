@@ -41,6 +41,7 @@ import type {
   DecisionAccepted,
   FocusArea,
   FocusEdit,
+  FocusSetReply,
   WeekFocusReply,
   WeekFocusState,
   DecisionAct,
@@ -1055,9 +1056,34 @@ function decisionAccepted(value: unknown, at: string): DecisionAccepted {
 
 const setBy = oneOf(["user", "proposal"] as const, "who set the focus");
 
+function weekCard(value: unknown, at: string): { proposal: number } | "carry" {
+  if (value === "carry") return value;
+  return { proposal: num(fields(value, at).proposal, `${at}.proposal`) };
+}
+
+function seed(value: unknown, at: string): FocusEdit["from"] {
+  if (value === "current" || value === "last") return value;
+  return { proposal: num(fields(value, at).proposal, `${at}.proposal`) };
+}
+
 function focusEdit(value: unknown, at: string): FocusEdit {
   const o = fields(value, at);
-  return { count: num(o.count, `${at}.count`), ticked: list(num)(o.ticked, `${at}.ticked`), cursor: num(o.cursor, `${at}.cursor`) };
+  return {
+    count: num(o.count, `${at}.count`),
+    ticked: list(num)(o.ticked, `${at}.ticked`),
+    cursor: num(o.cursor, `${at}.cursor`),
+    // Absent from an app before proposals: the current week's.
+    from: o.from === undefined ? "current" : seed(o.from, `${at}.from`),
+  };
+}
+
+export function focusSetReply(value: unknown): FocusSetReply {
+  const o = fields(value, "reply");
+  return {
+    ok: true,
+    status: oneOf(["pending", "same", "declined"] as const, "what a proposal came to")(o.status, "status"),
+    revision: orNull(num)(o.revision, "revision"),
+  };
 }
 
 function weekFocusState(value: unknown, at: string): WeekFocusState {
@@ -1067,6 +1093,12 @@ function weekFocusState(value: unknown, at: string): WeekFocusState {
     areas: num(o.areas, `${at}.areas`),
     set_by: orNull(setBy)(o.set_by, `${at}.set_by`),
     last: orNull(str)(o.last, `${at}.last`),
+    // Absent from an app before proposals: none, and no carry question.
+    proposal: o.proposal === undefined ? null : orNull((v: unknown, p: string) => {
+      const f = fields(v, p);
+      return { revision: num(f.revision, `${p}.revision`), areas: num(f.areas, `${p}.areas`), filed: num(f.filed, `${p}.filed`) };
+    })(o.proposal, `${at}.proposal`),
+    carry: o.carry === undefined ? false : bool(o.carry, `${at}.carry`),
   };
 }
 
@@ -2186,6 +2218,8 @@ function decisions(value: unknown, at: string): Decisions {
     task: orNull(num)(o.task, `${at}.task`),
     ticket: orNull(num)(o.ticket, `${at}.ticket`),
     sort: orNull(decisionSorting)(o.sort, `${at}.sort`),
+    week: o.week === undefined ? null : orNull(weekCard)(o.week, `${at}.week`),
+    changed: o.changed === undefined ? false : bool(o.changed, `${at}.changed`),
     at: num(o.at, `${at}.at`),
     of: num(o.of, `${at}.of`),
     queue: list(card)(o.queue, `${at}.queue`),

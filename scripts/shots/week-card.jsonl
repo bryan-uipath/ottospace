@@ -1,0 +1,14 @@
+# The week's focus proposed by an agent (`focus_set`): Decisions shows one card with the areas as
+# they would be set, what changes and where it was read. It sets nothing until the user's ↵.
+{"env":{"OTTOSPACE_FEATURES":"projects,decisions,decision_sources"}}
+{"cmd":"split","kind":"empty"}
+{"until":"week_focus.week"}
+{"cmd":"focus_set","areas":[{"name":"Login rewrite","projects":["atlas"]},{"name":"Beacon launch","projects":["beacon"]},{"name":"Hiring"}],"provenance":{"path":"~/notes/weekly/made-up.md","lines":[5,9],"quote":"- Login rewrite\n- Beacon launch\n- Hiring"}}
+{"cmd":"key","keys":"cmd-j","as":"user"}
+{"until":"state.decisions.week"}
+{"settle":300}
+{"shot":"proposal"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"week_focus.areas","is":3}
+{"settle":200}
+{"shot":"set"}

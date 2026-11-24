@@ -348,8 +348,11 @@ agent that may have misread or been steered, so nothing is applied until ↵ (or
   the next proposal shows the difference and waits; Esc keeps ottospace's. ottospace's focus is
   the one that ranks; the note is never written back. A proposal the user declined is not shown
   again until the routine files a different one.
-- Refused: more than four areas, a name over 40 characters, a project or repository that is not
-  listed, a week other than this one or the next.
+- Refused: more than four areas, a name over 40 characters, a week other than this one (a project
+  or repository that is not listed is taken, marked "not listed" on the card: no existence oracle) (built, slice 2b: next week is refused for now; `week` may be
+  left out for this one). On the card: ↵ sets the revision shown (a newer proposal replaces the
+  card, and a ↵ for an older one sets nothing), E opens the editor with it ticked, N keeps the focus
+  as it is, Esc closes Decisions and the card waits.
 
 ### The week
 
@@ -521,6 +524,20 @@ default, which the user sets per card); sorting; setting focus; promoting a sour
 - **Retention**: `<home>/decisions/<id>.json`, 0600, deleted 14 days after it closed; Forget at
   once. `focus.json` keeps weeks' areas and counts; the user may clear a week.
 - **People**: an author is kept only inside a quote's text; the record says `a person`.
+- **What is accepted is what was shown** (built, slice 2b, for every card a filer can change while
+  it shows: the week's proposal, triage's item): a key or click names the card and revision the
+  shell drew, and one on another card or revision takes nothing. The same card at a new revision,
+  or another card put on show by a step that answered none (a filing, a withdrawal, an expiry), is
+  marked "changed while on show", and its next key only says the user saw it. The week card's
+  answers apply only while it is on show at the revision they name. A property check holds that an
+  accept never sets other words than the revision it names, and that no answer applies to a card
+  other than the one (and revision) on show.
+- **No existence oracle**: a refusal never says which project or repository exists. A proposal
+  whose links name nothing listed is taken, and its card marks them "not listed" for the user
+  alone. Filing and proposing count every attempt, refused or taken, against the hour, the rate
+  checked first, so what a refusal does say (a file not inside a listed checkout) cannot be probed
+  faster than that. A full hour records no more attempts: the count is bounded (`PER_HOUR` a source,
+  six proposals), however many are sent.
 - **Promotion and updates** (built, slice 1b): a promotion trusts one named scope of its
   source's key format, shown on the card before P, never a prefix or a whole source; anyone who
   can reach the socket can file under it, within the caps. An update that changes a sorted item's

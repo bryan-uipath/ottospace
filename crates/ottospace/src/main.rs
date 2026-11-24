@@ -1265,6 +1265,8 @@ struct Workspace {
     worktrees: (Sender<worktree::Made>, Receiver<worktree::Made>),
     /// The local day's start last told to the core (`LocalDay`).
     told_day: u64,
+    /// The Decisions card last drawn and its revision: what a key or click on it names.
+    drawn_decision: std::cell::Cell<Option<(ottospace_core::model::decisions::On, u32)>>,
     /// Done's removals of a task's own worktree, off the main thread.
     removals: (Sender<worktree::Removed>, Receiver<worktree::Removed>),
     /// What the user's last step did, said for a few seconds as information (`Effect::Told`).
@@ -1950,6 +1952,7 @@ impl Workspace {
             worktrees: std::sync::mpsc::channel(),
             removals: std::sync::mpsc::channel(),
             told_day: 0,
+            drawn_decision: std::cell::Cell::new(None),
             told: None,
             prs: prs::Reader::new(),
             projects: projects::Reader::new(),
@@ -3507,7 +3510,11 @@ impl Workspace {
                     self.dispatch(Action::Tick { now }, Origin::Socket, window, cx);
                     let said = self.error.clone();
                     let _ = reply.send(match self.model.filing_refusal(&filing, now) {
-                        Some(why) => control::error(&why),
+                        // Sent all the same: a refused filing counts against the source's hour.
+                        Some(why) => {
+                            self.dispatch(Action::DecisionFile { filing: Box::new(filing), now }, Origin::Socket, window, cx);
+                            control::error(&why)
+                        }
                         None => {
                             let (source, key) = (filing.source, filing.key.clone());
                             self.dispatch(Action::DecisionFile { filing: Box::new(filing), now }, Origin::Socket, window, cx);
@@ -3538,6 +3545,41 @@ impl Workspace {
                 }
                 Request::WeekFocus => {
                     let _ = reply.send(self.serve_focus());
+                    continue;
+                }
+                Request::FocusSet { week, areas, provenance } => {
+                    let now = now_ms();
+                    let week = week.unwrap_or_else(|| self.model.focus.week.clone());
+                    self.dispatch(Action::Tick { now }, Origin::Socket, window, cx);
+                    let _ = reply.send(match self.model.focus_refusal(&week, &areas, now) {
+                        // Sent all the same: a refused proposal counts against the hour.
+                        Some(why) => {
+                            self.dispatch(
+                                Action::FocusPropose { week, areas, provenance, now },
+                                Origin::Socket,
+                                window,
+                                cx,
+                            );
+                            control::error(&why)
+                        }
+                        None => {
+                            let kept: Vec<_> = areas.iter().map(ottospace_core::focus::Area::kept).collect();
+                            self.dispatch(
+                                Action::FocusPropose { week, areas, provenance, now },
+                                Origin::Socket,
+                                window,
+                                cx,
+                            );
+                            let pending = self.model.focus.pending.as_ref().filter(|p| p.areas == kept);
+                            let status = match (pending, self.model.focus.areas() == kept.as_slice()) {
+                                (Some(_), _) => "pending",
+                                (None, true) => "same",
+                                (None, false) => "declined",
+                            };
+                            let revision = pending.map(|p| p.revision);
+                            serde_json::json!({ "ok": true, "status": status, "revision": revision }).to_string()
+                        }
+                    });
                     continue;
                 }
                 Request::Decision { id } => {
@@ -9398,8 +9440,9 @@ impl Workspace {
             }))
             // Tasks ▸ This Week's Focus… and the palette: its editor.
             .on_action(cx.listener(|this, _: &crate::week_focus::WeekFocus, window, cx| {
+                let open = Action::FocusEditOpen { from: ottospace_core::model::focus::Seed::Current };
                 match this.on(Feature::DecisionSources) {
-                    true => drop(this.dispatch(Action::FocusEditOpen, this.input, window, cx)),
+                    true => drop(this.dispatch(open, this.input, window, cx)),
                     false => cx.propagate(),
                 }
             }))

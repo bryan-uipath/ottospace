@@ -19402,3 +19402,67 @@ fn week_focus_is_set_by_hand_from_the_projects_and_kept() {
     let _ = std::fs::remove_dir_all(&home);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+/// A proposed week's focus (`focus_set`): it sets nothing. Decisions shows it as one card; a
+/// client's ↵ sets nothing; a newer proposal takes the card's place; the user's ↵ sets the one
+/// shown. Refused: another week, a project that is not an entry, five areas.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_proposed_week_focus_waits_for_the_users_enter() {
+    let dir = support::temp(&format!("ottospace-e2e-week-propose-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    for name in ["atlas", "beacon"] {
+        std::fs::write(dir.join(format!("{name}.md")), format!("# The {name} project\n")).unwrap();
+    }
+    let settings = json!({"projects_dir": dir, "repos": [], "restore_layout": false, "sessions": false});
+    let home = user_folder("week-propose", &settings.to_string());
+    let env =
+        [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "projects,decisions,decision_sources")];
+    let otto = Otto::launch_with("week-propose", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    let week = otto.call(json!({"cmd": "state"}))["week_focus"]["week"].as_str().unwrap().to_string();
+    let propose = |areas: Value, week: &str| json!({"cmd": "focus_set", "week": week, "areas": areas});
+    let error = |request: Value| otto.raw(&request.to_string())["error"].as_str().unwrap_or_default().to_string();
+    assert!(error(propose(json!([{"name": "Login"}]), "2001-W01")).contains("week"));
+    // A link to nothing listed is not refused (the agent learns nothing of what exists): it waits too.
+    assert_eq!(otto.call(propose(json!([{"name": "Login", "projects": ["nope"]}]), &week))["status"], "pending");
+    assert!(
+        error(propose(json!([{"name": "a"}, {"name": "b"}, {"name": "c"}, {"name": "d"}, {"name": "e"}]), &week))
+            .contains("areas")
+    );
+    let first =
+        otto.call(propose(json!([{"name": "Login rewrite", "projects": ["atlas"]}, {"name": "Hiring"}]), &week));
+    assert_eq!(first["status"], "pending");
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&state["week_focus"]["areas"], &state["week_focus"]["proposal"]["areas"]), (&json!(0), &json!(2)));
+    assert!(!state.to_string().contains("Login rewrite"), "a proposal's names are never in the state");
+    // The user's ⌘J: the proposal's card; a client's ↵ sets nothing.
+    let opened = otto.user_key("cmd-j");
+    assert_eq!(opened["state"]["decisions"]["week"]["proposal"], first["revision"], "{}", opened["state"]["decisions"]);
+    otto.call(json!({"cmd": "key", "keys": "enter"}));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["week_focus"]["areas"], 0);
+    // A newer one takes the card's place; the user's ↵ sets it.
+    let second = otto.call(propose(
+        json!([{"name": "Login rewrite", "projects": ["atlas"]}, {"name": "Beacon", "projects": ["beacon"]}]),
+        &week,
+    ));
+    let shown = otto.call(json!({"cmd": "state"}))["state"]["decisions"]["week"]["proposal"].clone();
+    assert_eq!(shown, second["revision"]);
+    // Replaced while on show: marked changed; the first ↵ only says it was seen.
+    let seen = otto.user_key("enter");
+    assert_eq!((&seen["week_focus"]["areas"], &seen["state"]["decisions"]["changed"]), (&json!(0), &json!(false)));
+    let set = otto.user_key("enter");
+    assert_eq!((&set["week_focus"]["areas"], &set["week_focus"]["set_by"]), (&json!(2), &json!("proposal")));
+    assert_eq!(set["state"]["decisions"], Value::Null, "nothing else waits");
+    let names = otto.call(json!({"cmd": "week_focus"}))["focus"]["areas"].clone();
+    assert_eq!(names[1]["name"], "Beacon");
+    // The same again: nothing waits.
+    let again = otto.call(propose(
+        json!([{"name": "Login rewrite", "projects": ["atlas"]}, {"name": "Beacon", "projects": ["beacon"]}]),
+        &week,
+    ));
+    assert_eq!(again["status"], "same");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&dir);
+}

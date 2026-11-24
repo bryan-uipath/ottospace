@@ -77,6 +77,9 @@ pub struct Run {
     pub ticket: Option<u64>,
     /// Triage on show, or null. It comes after the agents' questions.
     pub sort: Option<Sorting>,
+    /// The week's focus card on show (an agent's proposal, or "keep last week's?"), or null. After
+    /// the agents' questions, before triage.
+    pub week: Option<super::focus::WeekCard>,
     /// "`at` of `of`": the cards dealt with in this run, and those left.
     pub at: usize,
     pub of: usize,
@@ -94,6 +97,24 @@ pub struct Run {
     /// Triage was skipped or finished in this run: its card does not come again.
     #[serde(skip)]
     pub(crate) sorted: bool,
+    /// The week's card was answered or left in this run: it does not come again.
+    #[serde(skip)]
+    pub(crate) weeked: bool,
+    /// The card on show changed since it was first drawn (a newer proposal, its filer's update):
+    /// the next key only says the user saw it (`DecisionsSeen`), nothing is taken.
+    pub changed: bool,
+    /// What was on show at the last step, and its revision: another revision, or another card put
+    /// there by a step that was not an answer, sets `changed`.
+    #[serde(skip)]
+    pub(crate) seen: Option<(On, u32)>,
+}
+
+/// Which card is on show, for `changed`: an agent's question, the week's card, triage (its item).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum On {
+    Ask(TaskId, u64),
+    Week,
+    Sort(Option<u64>),
 }
 
 impl Model {
@@ -165,7 +186,55 @@ impl Model {
     /// A key on the card pane, while it has the keyboard: 1 to 9 pick, ↑↓ j k move, space picks,
     /// ↵ sends, ⇥ between questions; S skips, L puts it off until `now + LATER_MS`, Esc closes Decisions.
     pub fn decision_key(&self, key: &str, mods: crate::keys::Mods, now: u64) -> Key {
+        self.decision_key_drawn(key, mods, now, self.on_show())
+    }
+
+    /// The card on show and its revision: an agent's question (its ticket never changes), the
+    /// week's card (the proposal's revision), triage's item (the decision's revision).
+    pub fn on_show(&self) -> Option<(On, u32)> {
+        let run = self.decisions.as_ref()?;
+        if let Some(card) = run.week {
+            let revision = match card {
+                super::focus::WeekCard::Proposal(revision) => revision,
+                super::focus::WeekCard::Carry => 0,
+            };
+            return Some((On::Week, revision));
+        }
+        if let Some(sort) = &run.sort {
+            let revision = sort.item.and_then(|id| self.filed.get(id)).map_or(0, |d| d.revision);
+            return Some((On::Sort(sort.item), revision));
+        }
+        run.task.zip(run.ticket).map(|(task, ticket)| (On::Ask(task, ticket), 0))
+    }
+
+    /// After every step, one rule for every card a filer can change while it is on show: another
+    /// card or revision put there by a step that answered none (a filing, a withdrawal, an expiry)
+    /// is marked changed, and its next key only says it was seen.
+    pub(super) fn settle_changed(&mut self, answer: bool) {
+        let now = self.on_show();
+        let Some(run) = self.decisions.as_mut() else { return };
+        match (run.seen, now) {
+            (Some(seen), Some(on)) if seen == on => {}
+            (seen, Some(_)) if seen != now && !answer => run.changed = true,
+            _ => run.changed = false,
+        }
+        run.seen = now;
+    }
+
+    /// A key on the card pane, as `decision_key`, the shell saying which revision it drew: a key
+    /// on a card whose revision moved since (a newer proposal, its filer's update) takes nothing,
+    /// and while the card is marked changed, the next key only says the user saw it.
+    pub fn decision_key_drawn(&self, key: &str, mods: crate::keys::Mods, now: u64, drawn: Option<(On, u32)>) -> Key {
         let bare = !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift;
+        if self.keyboard_decision()
+            && key != "escape"
+            && let Some(stop) = self.unseen(drawn)
+        {
+            return stop;
+        }
+        if let Some(card) = self.decisions.as_ref().and_then(|run| run.week).filter(|_| self.keyboard_decision()) {
+            return self.week_key(card, key, bare, now);
+        }
         let sort = self.decisions.as_ref().and_then(|run| run.sort.as_ref()).filter(|_| self.keyboard_decision());
         if let Some(sort) = sort {
             return self.sort_key(sort, key, bare, now);
@@ -189,7 +258,8 @@ impl Model {
         // Today ends at the user's next midnight; with no day yet, twelve hours on.
         let day = crate::filed::DAY_MS;
         let tonight = if self.local_day > 0 { self.local_day.saturating_add(day) } else { now.saturating_add(day / 2) };
-        let act = |how| sort.item.map(|id| Action::SortItem { id, how });
+        let revision = sort.item.and_then(|id| self.filed.get(id)).map_or(0, |d| d.revision);
+        let act = |how| sort.item.map(|id| Action::SortItem { id, how, revision });
         let action = match (key, sort.item) {
             ("escape", _) => Some(Action::DecisionsClose),
             ("enter", None) => Some(Action::SortStart),
@@ -211,10 +281,51 @@ impl Model {
         action.map_or(Key::Pass, Key::Act)
     }
 
+    /// A key on the week's card: ↵ takes the proposal (or keeps last week's), E edits it first, N
+    /// keeps the focus as it is (or none for the new week), Esc closes Decisions.
+    fn week_key(&self, card: super::focus::WeekCard, key: &str, bare: bool, now: u64) -> Key {
+        use super::focus::{Seed, WeekCard};
+        let action = match (key, card) {
+            ("escape", _) => Action::DecisionsClose,
+            ("enter", WeekCard::Proposal(revision)) => Action::FocusAccept { revision, at: now },
+            ("enter", WeekCard::Carry) => Action::FocusCarry { keep: true, at: now },
+            ("e", WeekCard::Proposal(revision)) if bare => Action::FocusEditOpen { from: Seed::Proposal(revision) },
+            ("e", WeekCard::Carry) if bare => Action::FocusEditOpen { from: Seed::Last },
+            ("n", WeekCard::Proposal(revision)) if bare => Action::FocusDecline { revision },
+            ("n", WeekCard::Carry) if bare => Action::FocusCarry { keep: false, at: now },
+            _ => return Key::Pass,
+        };
+        Key::Act(action)
+    }
+
+    /// A click on one of the week card's buttons: what its key does, wherever the keyboard is.
+    pub fn week_click(&self, key: &str, now: u64, drawn: Option<(On, u32)>) -> Key {
+        let Some(card) = self.decisions.as_ref().and_then(|run| run.week) else { return Key::Pass };
+        if let Some(stop) = self.unseen(drawn) {
+            return stop;
+        }
+        self.week_key(card, key, true, now)
+    }
+
     /// A click on one of triage's buttons: what its key does, wherever the keyboard is.
-    pub fn sort_click(&self, key: &str, mods: crate::keys::Mods, now: u64) -> Key {
+    pub fn sort_click(&self, key: &str, mods: crate::keys::Mods, now: u64, drawn: Option<(On, u32)>) -> Key {
         let Some(sort) = self.decisions.as_ref().and_then(|run| run.sort.as_ref()) else { return Key::Pass };
+        if let Some(stop) = self.unseen(drawn) {
+            return stop;
+        }
         self.sort_key(sort, key, !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift, now)
+    }
+
+    /// A click or key on a card that is not the one drawn (another card, or another revision of it)
+    /// takes nothing; on the one drawn while it is marked changed, it only says the user saw it
+    /// (so the mark clears only once drawn). `None`: it may act.
+    fn unseen(&self, drawn: Option<(On, u32)>) -> Option<Key> {
+        let changed = self.decisions.as_ref().is_some_and(|run| run.changed);
+        match (drawn != self.on_show(), changed) {
+            (true, _) => Some(Key::Swallow),
+            (false, true) => Some(Key::Act(Action::DecisionsSeen)),
+            (false, false) => None,
+        }
     }
 
     /// After every step, while triage shows: its item moves on once sorted (or gone); no item
@@ -343,8 +454,8 @@ impl Model {
             return self.focus(pane, effects);
         }
         let queue = self.decision_queue();
-        let sortable = self.sortable();
-        if queue.is_empty() && !sortable {
+        let (sortable, week) = (self.sortable(), self.week_card());
+        if queue.is_empty() && !sortable && week.is_none() {
             return self.act(Action::TaskGo { id: None }, effects);
         }
         // Not from a window out: Decisions is the main window's.
@@ -359,13 +470,31 @@ impl Model {
         let pane = self.add(Kind::Decision, None, Axis::Right);
         effects.push(Effect::Opened(pane));
         let tab = self.tabs[self.active].id;
-        // The agents' questions first; triage after them, as one card.
+        // The agents' questions first; then the week's card; triage after them, as one card.
         let (task, ticket) = queue.first().map(|first| (first.task, first.ticket)).unzip();
-        let sort = task.is_none().then(|| self.sorting_at(None, 0, Vec::new()));
-        let of = queue.len() + usize::from(sortable);
+        let week = week.filter(|_| task.is_none());
+        let sort = (task.is_none() && week.is_none()).then(|| self.sorting_at(None, 0, Vec::new()));
+        let of = queue.len() + usize::from(sortable) + usize::from(self.week_card().is_some());
         let done = Vec::new();
-        self.decisions =
-            Some(Run { tab, pane, task, ticket, sort, at: 1, of, queue, done, from, held: false, sorted: false });
+        let (held, sorted, weeked, changed, seen) = (false, false, false, false, None);
+        self.decisions = Some(Run {
+            tab,
+            pane,
+            task,
+            ticket,
+            sort,
+            week,
+            at: 1,
+            of,
+            queue,
+            done,
+            from,
+            held,
+            sorted,
+            weeked,
+            changed,
+            seen,
+        });
         self.title_decisions();
     }
 
@@ -449,11 +578,30 @@ impl Model {
         for other in self.tabs.iter_mut().filter(|t| t.space == Owner::Decisions && Some(t.id) != tab) {
             other.space = Owner::Home;
         }
+        // The week's card on show stays while it waits (a newer proposal takes its place); answered,
+        // it does not come again this run.
+        if self.decisions.as_ref().is_some_and(|run| run.week.is_some()) {
+            let card = self.week_card();
+            let queue = self.decision_queue();
+            let sorts = usize::from(self.sortable());
+            if let Some(run) = self.decisions.as_mut() {
+                run.week = card;
+                run.weeked |= card.is_none();
+                if card.is_some() {
+                    (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len() + 1 + sorts);
+                    run.queue = queue;
+                    return self.title_decisions();
+                }
+            }
+        }
         // Triage on show stays while items wait: nothing moves under the person.
         if self.settle_sort() {
             let queue = self.decision_queue();
+            let weeks =
+                usize::from(self.decisions.as_ref().is_some_and(|run| !run.weeked) && self.week_card().is_some());
             if let Some(run) = self.decisions.as_mut() {
-                (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len() + 1);
+                let done = run.done.len() + usize::from(run.weeked);
+                (run.at, run.of) = (done + 1, done + queue.len() + 1 + weeks);
                 run.queue = queue;
             }
             return self.title_decisions();
@@ -487,20 +635,22 @@ impl Model {
             }
         }
         let queue = self.decision_queue();
-        // After the agents' questions, triage as one card, once a run.
-        let sort = queue.is_empty() && self.sortable() && self.decisions.as_ref().is_some_and(|run| !run.sorted);
+        // After the agents' questions, the week's card, then triage as one card, each once a run.
+        let (weeked, sorted) = self.decisions.as_ref().map_or((true, true), |run| (run.weeked, run.sorted));
+        let week = self.week_card().filter(|_| queue.is_empty() && !weeked);
+        let sort = queue.is_empty() && week.is_none() && self.sortable() && !sorted;
         let sorting = sort.then(|| self.sorting_at(None, 0, Vec::new()));
-        if queue.is_empty() && sorting.is_none() {
+        if queue.is_empty() && sorting.is_none() && week.is_none() {
             return self.end_decisions(effects);
         }
+        let weeks = usize::from(!weeked && self.week_card().is_some());
+        let sorts = usize::from(sorting.is_some() || (!sorted && self.sortable()));
         if let Some(run) = self.decisions.as_mut() {
             (run.task, run.ticket) = queue.first().map(|first| (first.task, first.ticket)).unzip();
-            run.sort = sorting;
-            let more = usize::from(
-                run.sort.is_some()
-                    || (!run.sorted && self.features.on(Feature::DecisionSources) && self.filed.to_sort(self.now) > 0),
-            );
-            (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len() + more);
+            (run.sort, run.week) = (sorting, week);
+            // The week's card answered this run counts as one done.
+            let done = run.done.len() + usize::from(run.weeked);
+            (run.at, run.of) = (done + 1, done + queue.len() + weeks + sorts);
             run.queue = queue;
         }
         self.title_decisions();
@@ -537,6 +687,30 @@ impl Model {
             tab.title = title;
         }
     }
+}
+
+/// A step that answers the card on show, or opens Decisions: the card it puts there is the user's
+/// next, not a change under them.
+pub(super) fn answers(action: &Action) -> bool {
+    use super::focus::Seed;
+    matches!(
+        action,
+        Action::DecisionsOpen
+            | Action::DecisionsAsk { .. }
+            | Action::DecisionsSkip { .. }
+            | Action::DecisionsLater { .. }
+            | Action::SortStart
+            | Action::SortSkip
+            | Action::SortItem { .. }
+            | Action::SortToggle { .. }
+            | Action::SortPromote { .. }
+            | Action::SortUndo
+            | Action::FocusAccept { .. }
+            | Action::FocusDecline { .. }
+            | Action::FocusCarry { .. }
+            | Action::FocusEditOpen { from: Seed::Proposal(_) | Seed::Last }
+            | Action::FocusEditSave { .. }
+    )
 }
 
 #[cfg(test)]

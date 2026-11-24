@@ -14,7 +14,7 @@ impl Model {
     }
 
     /// The listed repositories and their worktrees: a file given as evidence lies in one.
-    fn checkouts(&self) -> Vec<String> {
+    pub fn checkouts(&self) -> Vec<String> {
         let trees = self.repos.iter().flat_map(|repo| repo.worktrees.iter().map(|tree| tree.path.clone()));
         self.repos.iter().map(|repo| repo.path.clone()).chain(trees).collect()
     }
@@ -31,7 +31,14 @@ impl Model {
             Action::DecisionFile { filing, now } => {
                 let (live, checkouts) = (self.filing_live(), self.checkouts());
                 let tasks: Vec<TaskId> = self.tasks.list.iter().map(|t| t.id).collect();
-                self.filed.file(&filing, &Ctx { now, live: &live, tasks: &tasks, checkouts: &checkouts })
+                let ctx = Ctx { now, live: &live, tasks: &tasks, checkouts: &checkouts };
+                // Refused, it still counts against its source's hour: no probing for free.
+                if self.filed.refusal(&filing, &ctx).is_some() {
+                    self.filed.attempt(filing.source, now);
+                    None
+                } else {
+                    self.filed.file(&filing, &ctx)
+                }
             }
             Action::DecisionWithdraw { source, key, now } => self.filed.withdraw(source, &key, now),
             Action::RestoreDecisions { kept, trusted } => {
@@ -60,9 +67,13 @@ impl Model {
                 }
                 return;
             }
-            // A key given to another revision of it does nothing: the card shows the new one first.
-            Action::SortItem { id, .. } if self.filed.get(id).is_some_and(|d| d.revision != sort.revision) => return,
-            Action::SortItem { id, how } if shown(id) => {
+            // A key given to another revision than the one shown does nothing.
+            Action::SortItem { id, revision, .. }
+                if self.filed.get(id).is_some_and(|d| d.revision != revision || d.revision != sort.revision) =>
+            {
+                return;
+            }
+            Action::SortItem { id, how, .. } if shown(id) => {
                 if let Some(before) = self.filed.sort(id, how, sort.claims, sort.role, now) {
                     next.undo.push(Undo::Sorted(Box::new(before)));
                     next.done += 1;
@@ -282,6 +293,84 @@ mod tests {
         m.update(Action::DecisionsOpen);
         key(&mut m, "s");
         assert!(m.decisions.is_none());
+    }
+
+    #[test]
+    fn an_item_its_filer_changes_while_on_show_takes_no_key_until_seen() {
+        let mut m = Model::in_workspace();
+        let a = file(&mut m, Source::Slack, "slack:C1:1.0", 10);
+        m.update(Action::Tick { now: 1_000 }.sent_by(Origin::System));
+        m.update(Action::DecisionsOpen);
+        key(&mut m, "enter");
+        assert_eq!(item(&m), Some(Some(a)));
+        // Its filer changes its words while it is on show.
+        let mut f = filing();
+        (f.key, f.question) = ("slack:C1:1.0".into(), "Approve the made-up rollout now?".into());
+        m.update(Action::DecisionFile { filing: Box::new(f), now: 20 }.sent_by(Origin::Socket));
+        assert!(m.decisions.as_ref().is_some_and(|r| r.changed));
+        // ↵ only says it was seen; a key for the revision drawn before takes nothing.
+        key(&mut m, "enter");
+        assert_eq!((m.filed.get(a).unwrap().triage, item(&m)), (Triage::Pending, Some(Some(a))));
+        m.update(Action::SortItem { id: a, how: crate::filed::Sort::Keep, revision: 1 });
+        assert_eq!(m.filed.get(a).unwrap().triage, Triage::Pending, "revision 1 is not what is shown");
+        key(&mut m, "enter");
+        assert_eq!(m.filed.get(a).unwrap().triage, Triage::Sorted);
+    }
+
+    #[test]
+    fn another_card_put_on_show_by_its_filer_takes_no_key_drawn_for_the_one_before() {
+        use crate::keys::Mods;
+        use crate::model::{chat::Key, decisions::On};
+        let mut m = Model::in_workspace();
+        let a = file(&mut m, Source::Slack, "slack:C1:1.0", 10);
+        let b = file(&mut m, Source::Slack, "slack:C1:2.0", 11);
+        m.update(Action::Tick { now: 1_000 }.sent_by(Origin::System));
+        m.update(Action::DecisionsOpen);
+        key(&mut m, "enter");
+        let drawn = m.on_show();
+        assert_eq!(drawn, Some((On::Sort(Some(a)), 1)));
+        // Its filer withdraws it: b, at the same revision number, takes its place.
+        m.update(Action::DecisionWithdraw { source: Source::Slack, key: "slack:C1:1.0".into(), now: 1_001 });
+        assert_eq!(m.on_show(), Some((On::Sort(Some(b)), 1)));
+        assert!(m.decisions.as_ref().is_some_and(|r| r.changed), "b is marked changed");
+        // The ↵ the user meant for a takes nothing, and leaves b marked until b is drawn.
+        assert_eq!(m.decision_key_drawn("enter", Mods::default(), 1_002, drawn), Key::Swallow);
+        assert!(m.decisions.as_ref().is_some_and(|r| r.changed));
+        // Drawn, b's first ↵ only says it was seen; neither is sorted. The next sorts b.
+        let Key::Act(seen) = m.decision_key_drawn("enter", Mods::default(), 1_002, m.on_show()) else { panic!() };
+        assert_eq!(seen, Action::DecisionsSeen);
+        m.update(seen);
+        assert_eq!(
+            (m.filed.get(a).unwrap().status, m.filed.get(b).unwrap().triage),
+            (Status::Withdrawn, Triage::Pending)
+        );
+        let Key::Act(keep) = m.decision_key_drawn("enter", Mods::default(), 1_003, m.on_show()) else { panic!() };
+        m.update(keep);
+        assert_eq!(m.filed.get(b).unwrap().triage, Triage::Sorted);
+    }
+
+    #[test]
+    fn a_refused_filing_counts_against_the_hour() {
+        let mut m = Model::default();
+        let mut bad = filing();
+        bad.key = "../x".into();
+        for n in 0..crate::filed::PER_HOUR as u64 {
+            m.update(Action::DecisionFile { filing: Box::new(bad.clone()), now: n }.sent_by(Origin::Socket));
+        }
+        assert!(m.filing_refusal(&filing(), 100).is_some_and(|why| why.contains("last hour")), "probing is metered");
+    }
+
+    #[test]
+    fn a_million_refused_filings_keep_the_hours_count_a_source_and_no_more() {
+        let mut m = Model::default();
+        for n in 0..1_000_000 {
+            m.filed.attempt(Source::Slack, n);
+            m.filed.attempt(Source::AgentSession, n);
+        }
+        assert_eq!(m.filed.recent.len(), 2 * crate::filed::PER_HOUR);
+        let mut f = filing();
+        f.source = Source::Slack;
+        assert!(m.filing_refusal(&f, 1_000_000).is_some_and(|why| why.contains("last hour")), "still refused");
     }
 
     #[test]

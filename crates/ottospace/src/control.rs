@@ -635,6 +635,19 @@ pub enum Request {
     /// This week's focus (`decision_sources`), read-only: `{"ok":true,"week":"2026-W48","focus":
     /// {"untrusted":true,"warning":"..","areas":[{"name","projects","repos"}],"set_by":"user"}}`.
     WeekFocus,
+    /// Proposes this week's focus (`decision_sources`): `{"cmd":"focus_set","week":"2026-W48",
+    /// "areas":[{"name":"Login rewrite","projects":["atlas"]}],"provenance":{"path":"..","lines":[5,9],
+    /// "quote":".."}}`. It sets nothing: a card in Decisions waits for the user's ↵. The reply is
+    /// `{"ok":true,"status":"pending","revision":..}` (or `same`: it is set; `declined`: the user
+    /// declined it this week).
+    FocusSet {
+        /// Default: this week. Another week is refused.
+        #[serde(default)]
+        week: Option<String>,
+        areas: Vec<ottospace_core::focus::Area>,
+        #[serde(default)]
+        provenance: Option<ottospace_core::focus::Provenance>,
+    },
     /// The decision of `source` and `key` is moot: it closes as withdrawn.
     DecisionWithdraw {
         source: ottospace_core::filed::Source,
@@ -861,7 +874,8 @@ pub fn feature_refusal(request: &Request, features: &Features) -> Option<&'stati
         Request::DecisionFile { .. }
         | Request::DecisionWithdraw { .. }
         | Request::Decision { .. }
-        | Request::WeekFocus => Feature::DecisionSources,
+        | Request::WeekFocus
+        | Request::FocusSet { .. } => Feature::DecisionSources,
         // `ax_tree` says so itself: an app-window test run reads it with the flag off.
         Request::AppRead { .. } | Request::AppLook { .. } => Feature::AgentMode,
         Request::Section { section } => section.feature()?,

@@ -531,7 +531,7 @@ pub struct Filed {
     /// Scopes the user promoted: their items skip triage. Kept in `<home>/decisions/trust.json`.
     pub trusted: Vec<Trust>,
     /// When each counted filing came, by source: for `PER_HOUR`.
-    recent: Vec<(Source, u64)>,
+    pub(crate) recent: Vec<(Source, u64)>,
 }
 
 impl Filed {
@@ -676,11 +676,17 @@ impl Filed {
     }
 
     /// Why `filing` is refused, or `None`: what it holds, then the caps.
+    /// The rate first, every attempt counted (`attempt`): what a refusal says (a file not inside a
+    /// listed checkout, a task that is not there) cannot be probed faster than filing.
     pub fn refusal(&self, filing: &Filing, ctx: &Ctx) -> Option<String> {
+        let (source, name) = (filing.source, filing.source.name());
+        let hour = self.recent.iter().filter(|(s, at)| *s == source && at.saturating_add(HOUR_MS) > ctx.now).count();
+        if hour >= PER_HOUR {
+            return Some(format!("{PER_HOUR} filings from {name} in the last hour: wait"));
+        }
         if let Some(why) = invalid(filing, ctx) {
             return Some(why);
         }
-        let (source, name) = (filing.source, filing.source.name());
         let was = self.find(source, &filing.key);
         let kept = kept(filing, ctx);
         // An update that changes nothing is taken and not counted; so is one of a closed decision
@@ -690,10 +696,6 @@ impl Filed {
         }
         if was.is_some_and(|was| !was.open() && !self.opens(Some(was), filing)) {
             return None;
-        }
-        let hour = self.recent.iter().filter(|(s, at)| *s == source && at.saturating_add(HOUR_MS) > ctx.now).count();
-        if hour >= PER_HOUR {
-            return Some(format!("{PER_HOUR} filings from {name} in the last hour: wait"));
         }
         // A new one, or a closed one opened again, counts against the open caps.
         if !was.is_some_and(|was| was.open()) && self.opens(was, filing) {
@@ -717,6 +719,15 @@ impl Filed {
                 let sooner = filing.claims.due.is_some_and(|due| was.claims.due.is_none_or(|old| due < old));
                 sooner || filing.claims.blocks.iter().any(|task| !was.claims.blocks.contains(task))
             }
+        }
+    }
+
+    /// A filing came and was refused: it counts against its source's hour. A full hour keeps no
+    /// more: the list stays at `PER_HOUR` a source however many come.
+    pub fn attempt(&mut self, source: Source, now: u64) {
+        self.recent.retain(|(_, at)| at.saturating_add(HOUR_MS) > now);
+        if self.recent.iter().filter(|(s, _)| *s == source).count() < PER_HOUR {
+            self.recent.push((source, now));
         }
     }
 

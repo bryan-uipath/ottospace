@@ -176,6 +176,12 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.decisionWithdraw({ source: "slack", key: "slack:C0MADEUP:1763500000.000100" }),
   (c) => c.decision({ id: 1763500000000 }),
   (c) => c.weekFocus(),
+  (c) =>
+    c.focusSet({
+      week: "2026-W48",
+      areas: [{ name: "Login rewrite", projects: ["atlas"] }, { name: "Hiring" }],
+      provenance: { path: "~/notes/weekly/2026-w48.md", lines: [5, 9], quote: "- Login rewrite" },
+    }),
   (c) => c.workspace({ pane: 3 }),
   (c) => c.marks(),
   (c) => c.markAdd({ pane: 1, name: "notes", key: "n" }),
