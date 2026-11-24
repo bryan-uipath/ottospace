@@ -178,19 +178,10 @@ impl Model {
             MenuOf::Pane(_) if !self.features.on(Feature::Slots) => &[],
             // A slot's acts, with Swap and Re-sort among its app's; an app pane's: keep it as one.
             MenuOf::Pane(id) if self.slots.contains_key(id) => return self.slot_items(*id),
-            MenuOf::Pane(id) => {
-                let passed = self.slots.get(id).is_some_and(|run| !run.declined.is_empty());
-                match (self.pane(*id).map(|pane| &pane.kind), self.slots.contains_key(id), passed) {
-                    (Some(Kind::App { .. }), false, _) => &[Item::SlotKeep],
-                    (Some(Kind::App { .. }), true, true) => {
-                        &[Item::SlotEdit, Item::SlotLookAgain, Item::SlotGiveBack, Item::SlotClear]
-                    }
-                    (Some(Kind::App { .. }), true, false) => &[Item::SlotEdit, Item::SlotGiveBack, Item::SlotClear],
-                    (Some(Kind::Slot { .. }), _, true) => &[Item::SlotEdit, Item::SlotLookAgain, Item::SlotClear],
-                    (Some(Kind::Slot { .. }), _, false) => &[Item::SlotEdit, Item::SlotClear],
-                    _ => &[],
-                }
-            }
+            MenuOf::Pane(id) => match self.pane(*id).map(|pane| &pane.kind) {
+                Some(Kind::App { .. }) => &[Item::SlotKeep],
+                _ => &[],
+            },
             // One decision with the palette's and the menu bar's (`listen_pause_action`).
             MenuOf::Transcript => match self.listen_pause_action(0).filter(|_| self.listen.shown) {
                 Some(Action::ListenPause { .. }) => &[Item::Pause],
@@ -203,7 +194,7 @@ impl Model {
 
     /// A slot's menu: Edit slot…, Offer again (while it passed over any), Give back the window
     /// (while filled), Swap with… each other slot of its app on the tab on show (one of the two
-    /// holds a window), Re-sort by size (two or more of them, one holding a window), Clear slot.
+    /// holds a window), Re-sort by size (when it can: `Model::slot_resorts`), Clear slot.
     fn slot_items(&self, id: crate::model::PaneId) -> Vec<Item> {
         let filled = |id| matches!(self.pane(id).map(|pane| &pane.kind), Some(Kind::App { .. }));
         let passed = self.slots.get(&id).is_some_and(|run| !run.declined.is_empty());
@@ -213,7 +204,7 @@ impl Model {
         items.extend(filled(id).then_some(Item::SlotGiveBack));
         let others = group.iter().copied().filter(|other| *other != id && (filled(id) || filled(*other)));
         items.extend(others.map(Item::SlotSwap));
-        items.extend((group.len() > 1 && group.iter().any(|g| filled(*g))).then_some(Item::SlotResort));
+        items.extend(self.slot_resorts(id).then_some(Item::SlotResort));
         items.push(Item::SlotClear);
         items
     }

@@ -5182,8 +5182,8 @@ impl Workspace {
         // Each window's id as its app gives it now: Zoom moves its meeting window's id between its
         // windows, and the slot its pane becomes waits for the id it had last. Kept on no answer.
         for hosted in self.hosted.values_mut() {
-            if let Some(id) = hosted.window.quick(ax::Window::identifier) {
-                hosted.seen.identifier = Some(id);
+            if let Some(id) = hosted.window.quick(ax::Window::identifier_read) {
+                hosted.seen.identifier = id;
             }
         }
         for id in gone {

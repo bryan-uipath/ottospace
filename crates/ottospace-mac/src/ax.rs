@@ -256,6 +256,22 @@ impl Window {
         (!id.is_empty()).then_some(id)
     }
 
+    /// `AXIdentifier` as read now: `Some(None)` when the window has none (no value, unsupported or
+    /// empty), `None` when the app gave no answer (a timeout, an error).
+    pub fn identifier_read(&self) -> Option<Option<String>> {
+        let attr = CFString::from_str("AXIdentifier");
+        let mut out: *const CFType = std::ptr::null();
+        let err = unsafe { self.element.copy_attribute_value(&attr, NonNull::from(&mut out)) };
+        match err {
+            AXError::NoValue | AXError::AttributeUnsupported => return Some(None),
+            AXError::Success => {}
+            _ => return None,
+        }
+        let value = NonNull::new(out.cast_mut()).map(|ptr| unsafe { CFRetained::<CFType>::from_raw(ptr) });
+        let id = value.and_then(|value| value.downcast::<CFString>().ok()).map(|id| id.to_string());
+        Some(id.filter(|id| !id.is_empty()))
+    }
+
     pub fn frame(&self) -> Option<CGRect> {
         frame_of(&self.element)
     }

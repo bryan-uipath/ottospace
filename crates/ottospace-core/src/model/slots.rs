@@ -45,6 +45,9 @@ pub struct Run {
     /// Since when it is Away.
     #[serde(skip)]
     pub away: Option<u64>,
+    /// The window the user's Next chose: it stays the offer while it can, whatever the pairing.
+    #[serde(skip)]
+    pub picked: Option<u32>,
 }
 
 impl Run {
@@ -63,6 +66,7 @@ impl Run {
             declined: BTreeSet::new(),
             known: None,
             away: None,
+            picked: None,
         }
     }
 
@@ -76,7 +80,7 @@ impl Run {
 
     /// It waits again from now: windows open now are not new to it.
     fn waits(&mut self) {
-        (self.offered, self.known) = (None, None);
+        (self.offered, self.known, self.picked) = (None, None, None);
     }
 
     /// Whether it takes `seen` without asking: its own process's window back while Away (Manual
@@ -371,25 +375,26 @@ impl Model {
         let select = &run.slot.select;
         let one = |field: crate::rules::Selector, facts: &crate::rules::Facts| field.selects(facts);
         let mut counted: BTreeMap<Miss, usize> = BTreeMap::new();
+        let id = crate::rules::Selector { identifier: select.identifier.clone(), ..Default::default() };
+        let title = crate::rules::Selector { title: select.title.clone(), ..Default::default() };
+        let kind = crate::rules::Selector { subrole: select.subrole.clone(), ..Default::default() };
+        let picks: BTreeSet<u32> =
+            look.candidates(&run.slot, &self.window_rules, |_| false).iter().map(|s| s.window).collect();
         for seen in &look.windows {
             let facts = look.facts(seen);
-            let by = |selector| !one(selector, &facts);
-            let id = crate::rules::Selector { identifier: select.identifier.clone(), ..Default::default() };
-            let title = crate::rules::Selector { title: select.title.clone(), ..Default::default() };
-            let kind = crate::rules::Selector { subrole: select.subrole.clone(), ..Default::default() };
+            let by = |selector: &crate::rules::Selector| !one(selector.clone(), &facts);
             let other = self.slots.iter().find(|(id, other)| {
                 **id != pane && (other.offered == Some(seen.window) || other.pending == Some(seen.window))
             });
             let miss = if !crate::rules::slot_holds(&self.window_rules, &facts, &seen.shape()) {
                 Miss::Rules
-            } else if by(id) {
+            } else if by(&id) {
                 if seen.identifier.as_deref().is_none_or(str::is_empty) { Miss::NoId } else { Miss::OtherId }
-            } else if by(title) {
+            } else if by(&title) {
                 Miss::OtherTitle
-            } else if by(kind) {
+            } else if by(&kind) {
                 Miss::OtherKind
-            } else if look.candidates(&run.slot, &self.window_rules, |_| false).iter().all(|s| s.window != seen.window)
-            {
+            } else if !picks.contains(&seen.window) {
                 Miss::OtherDisplay
             } else if held(seen.window) {
                 Miss::InPane
@@ -751,6 +756,24 @@ impl Model {
         if group.contains(&pane) { group } else { Vec::new() }
     }
 
+    /// Whether Re-sort can pair `pane`'s app's slots: two or more, one holding a window, and the
+    /// last look lists each held window with the size its app gave it (seen in no pane).
+    pub fn slot_resorts(&self, pane: PaneId) -> bool {
+        let group = self.slot_group(pane);
+        let held: Vec<u32> = group
+            .iter()
+            .filter_map(|id| match self.pane(*id).map(|p| &p.kind) {
+                Some(Kind::App { window, .. }) => Some(*window),
+                _ => None,
+            })
+            .collect();
+        let look = self.slots.get(&pane).and_then(|run| self.slot_looks.iter().find(|look| run.of(look)));
+        let known = |w: &u32| {
+            self.slot_natural.contains_key(w) && look.is_some_and(|l| l.windows.iter().any(|s| s.window == *w))
+        };
+        group.len() > 1 && !held.is_empty() && held.iter().all(known)
+    }
+
     /// Slots `a` and `b` exchange what they hold: a window and a window, or a window and none (it
     /// moves, the other waits). The slots, their rules and what they passed over stay.
     fn slot_swap(&mut self, a: PaneId, b: PaneId, effects: &mut Vec<Effect>) {
@@ -915,6 +938,7 @@ impl Model {
         let next = at.map_or(found.first(), |at| found.get((at + 1) % found.len())).copied();
         if let Some(run) = self.slots.get_mut(&pane) {
             run.offered = next.or(run.offered);
+            run.picked = next.or(run.picked);
         }
     }
 
@@ -960,15 +984,20 @@ impl Model {
                     windows.sort_by(|a, b| natural(b).total_cmp(&natural(a)).then(at(a.window).cmp(&at(b.window))));
                 }
                 let mut windows: Vec<u32> = windows.iter().map(|seen| seen.window).collect();
-                // What it offers now stays first: an offer does not jump while nothing needs it to.
-                if let Some(kept) = run.offered.filter(|w| !by_size && windows.contains(w)) {
+                // What the user's Next chose stays first, and a named slot's offer: an offer does
+                // not jump while nothing needs it to.
+                let kept = run.picked.or(run.offered.filter(|_| !by_size));
+                if let Some(kept) = kept.filter(|w| windows.contains(w)) {
                     windows.retain(|w| *w != kept);
                     windows.insert(0, kept);
                 }
-                // Before all, one it would take now (its own back, or a new one for Automatic).
+                // A named slot: before all, one it would take now (its own back, or a new one for
+                // Automatic). A size slot keeps size order: taking only decides host or offer.
                 let takes =
                     |w: &u32| look.windows.iter().any(|seen| seen.window == *w && run.takes(seen, look.frontmost));
-                windows.sort_by_key(|w| !takes(w));
+                if !by_size {
+                    windows.sort_by_key(|w| !takes(w));
+                }
                 crate::slot::Want { windows, by_size }
             })
             .collect();
@@ -2279,6 +2308,19 @@ mod tests {
         let mut m = three_slots([any(), any(), c]);
         m.update(system(look(meeting_windows())));
         assert_eq!(offers(&m), [Some(21), Some(23), Some(22)]);
+    }
+
+    /// Next on a slot that pairs by size: the window it chose stays its offer at the next look.
+    #[test]
+    fn next_on_an_app_only_slot_keeps_the_window_it_chose() {
+        let mut m = three_slots([Slot::default(), Slot::default(), Slot::default()]);
+        m.update(Action::SlotClear { pane: 2 });
+        m.update(Action::SlotClear { pane: 3 });
+        m.update(system(look(meeting_windows())));
+        assert_eq!(m.slot_offer(1).map(|s| s.window), Some(21));
+        m.update(Action::SlotNext { pane: 1 });
+        m.update(system(look(meeting_windows())));
+        assert_eq!(m.slot_offer(1).map(|s| s.window), Some(22));
     }
 
     /// Two windows, then a larger third. Offers pair again by size, but a window in a pane stays.
