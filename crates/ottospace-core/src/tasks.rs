@@ -359,6 +359,9 @@ pub struct Task {
     /// Skills to load for it, from `$name` words.
     #[serde(default)]
     pub skills: Vec<String>,
+    /// The line it was filed from, as typed: the first message shows it, its tags as pills.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<String>,
     /// When it was filed (milliseconds since 1970). `None`: filed before this was kept.
     #[serde(default)]
     pub created: Option<u64>,
@@ -647,6 +650,7 @@ impl Tasks {
             paths,
             resolved,
             skills,
+            line: None,
             created: None,
             session: None,
             refs: Vec::new(),
@@ -661,6 +665,13 @@ impl Tasks {
             extra: Default::default(),
         });
         self.next_id
+    }
+
+    /// The line the task was filed from, as typed (its tags in place).
+    pub fn set_line(&mut self, id: TaskId, line: &str) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.line = Some(line.to_string());
+        }
     }
 
     /// Notes that nobody typed a task's title.
@@ -1089,6 +1100,7 @@ mod tests {
             paths: Vec::new(),
             resolved: Vec::new(),
             skills: Vec::new(),
+            line: None,
             created: None,
             session: None,
             refs: Vec::new(),

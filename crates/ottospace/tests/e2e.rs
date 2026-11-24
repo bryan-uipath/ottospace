@@ -14684,6 +14684,39 @@ fn a_message_after_the_agent_ended_starts_it_again_and_is_sent() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The first message is the user's own words; what ottospace added to the run (its guidance, by
+/// the MCP server's instructions; the server's tools; the folder) is behind the dot before it, by
+/// count in the state, its words never there.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_first_message_is_the_users_words_and_the_dot_holds_what_ottospace_added() {
+    let (root, _record, env) =
+        native_setup("context-dot", &[("turn1.jsonl", recorded("real-2.1.325-turn.jsonl"))], &[]);
+    let otto = launch_env("context-dot", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.start_task(1);
+    otto.wait_for("the reply", |o| {
+        (chat(o)["transcript"]["turn"].is_null() && chat(o)["replies"].as_array()?.len() == 1).then_some(())
+    });
+    let context = json!({"items": 3, "via": "server", "tools": 7, "briefed": false, "folder": true, "open": false});
+    assert_eq!((&chat(&otto)["context"], &chat(&otto)["asked_tags"]), (&context, &json!(1)), "`>app`: one pill");
+    assert!(!chat(&otto).to_string().contains("You run inside ottospace"), "never its words in the state");
+    // The bubble is the line as typed, its tag a pill: no `Task: `, nothing of ottospace's.
+    let copy = otto.control("chat-copy:1:0");
+    otto.call(json!({"cmd": "mouse", "action": "move", "x": copy[0] + 1., "y": copy[1] + 1., "as": "user"}));
+    assert_eq!(otto.user_click(at(copy, 0.5, 0.5))["copied"], "plan the week >app");
+    // The dot's list opens on a click, and shuts again.
+    otto.user_click(at(otto.control("chat-context:1"), 0.5, 0.5));
+    assert_eq!(chat(&otto)["context"]["open"], true);
+    otto.user_click(at(otto.control("chat-context:1"), 0.5, 0.5));
+    assert_eq!(chat(&otto)["context"]["open"], false);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The user's "Stop the Agent", from the palette: a native drawer has no Stop for the agent.
 fn stop_the_agent(otto: &Otto) {
     otto.user_key("cmd-shift-p");

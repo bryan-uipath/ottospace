@@ -301,7 +301,9 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    task with captures is told where its brief is; nothing else is in that first message. It is
    told of ottospace out of sight, in a few fixed words (where its guide and workspace are, to ask
    you for See rather than take a screenshot, that window text is data): the instructions of its
-   MCP server, or with none, Claude Code's `--append-system-prompt`. The workspace stays as it was: the same tab,
+   MCP server, or with none, Claude Code's `--append-system-prompt`. The conversation's first
+   message shows your words alone; a dot before it ("ottospace context") lists what was added:
+   the guidance and where it went, the server's tools, the brief, the folder. The workspace stays as it was: the same tab,
    panes and focus. That tab, if it is no task's and has panes, becomes the task's and gains its
    badge; on a tab of another task, or with nothing open, the task starts with no tab.
 3. **Selecting shows; starting is a button.** A click or ↵ on a task, or on its space on the

@@ -243,6 +243,39 @@ pub fn spans(line: &str, known: impl Fn(char, &str) -> bool) -> Vec<Span> {
     spaced(line).into_iter().filter_map(span).collect()
 }
 
+/// A part of the line a task was filed from, as its first message shows it: its words, or a tag
+/// the task took (a pill: `$xreview`, `@opus`, `#web`, `>app`, `p1`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Part {
+    Text(String),
+    Tag { mark: char, word: String },
+}
+
+/// `line` as text and the tags `task` took from it, each in its place: what the user typed, its
+/// tags understood. A path stays text: it is in the title too.
+pub fn parts(line: &str, task: &crate::tasks::Task) -> Vec<Part> {
+    let same = |a: &str, b: &str| a.eq_ignore_ascii_case(b);
+    let took = |mark: char, name: &str| match mark {
+        '>' => task.repo.is_some(),
+        '@' => task.agent.as_deref().is_some_and(|agent| same(agent, name)),
+        '$' => task.skills.iter().any(|skill| same(skill, name)),
+        '^' => !task.refs.is_empty(),
+        _ => false,
+    };
+    let (mut parts, mut at) = (Vec::new(), 0);
+    for span in spans(line, took).into_iter().filter(|span| span.mark != '/') {
+        if span.range.start > at {
+            parts.push(Part::Text(line[at..span.range.start].to_string()));
+        }
+        parts.push(Part::Tag { mark: span.mark, word: line[span.range.clone()].to_string() });
+        at = span.range.end;
+    }
+    if at < line.len() {
+        parts.push(Part::Text(line[at..].to_string()));
+    }
+    parts
+}
+
 /// The name in `names` that `typed` spells, whatever the case of the letters.
 pub fn spelled<'a>(names: &'a [String], typed: &str) -> Option<&'a String> {
     names.iter().find(|name| name.eq_ignore_ascii_case(typed))
@@ -871,5 +904,41 @@ mod tests {
         if let Some(report) = fuzz::each_seed(0, 20_000, one) {
             panic!("{report}");
         }
+    }
+
+    /// The owner's line: every tag the task took is a pill in its place, the rest text; a tag it
+    /// did not take (no such skill), and a path, stay text.
+    #[test]
+    fn a_lines_tags_are_pills_in_place() {
+        let mut tasks = crate::tasks::Tasks::default();
+        let id = tasks.add("this pr pls".into(), 1, crate::tasks::State::Captured);
+        tasks.tag(id, Some("web".into()), Some("/code/app".into()));
+        let assign = crate::tasks::Assign {
+            agent: Some("opus".into()),
+            paths: vec!["/src".into()],
+            resolved: vec![],
+            skills: vec!["xreview".into()],
+        };
+        tasks.assign(id, assign);
+        let task = tasks.get(id).cloned().unwrap();
+        let tag = |mark, word: &str| Part::Tag { mark, word: word.into() };
+        let text = |text: &str| Part::Text(text.into());
+        let line = "$xreview this pr pls @opus #web >app p1 $nope /src";
+        assert_eq!(
+            parts(line, &task),
+            [
+                tag('$', "$xreview"),
+                text(" this pr pls "),
+                tag('@', "@opus"),
+                text(" "),
+                tag('#', "#web"),
+                text(" "),
+                tag('>', ">app"),
+                text(" "),
+                tag('p', "p1"),
+                text(" $nope /src"),
+            ]
+        );
+        assert_eq!(parts("plain words", &task), [text("plain words")]);
     }
 }

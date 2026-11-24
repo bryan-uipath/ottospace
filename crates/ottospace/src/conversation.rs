@@ -33,7 +33,7 @@ use ottospace_core::tasks::TaskId;
 use ottospace_core::transcript::{
     By, Call, Entry, Event, Item, MAX_CARDS, NoteKind, Notice, Status, Text, View, clean,
 };
-use ottospace_core::{Action, Origin, theme, working};
+use ottospace_core::{Action, Origin, compose, theme, working};
 
 use crate::highlight;
 use crate::markdown::{self, Align, Block, Callout, Span};
@@ -102,6 +102,8 @@ pub struct Look {
     ask_open: HashSet<(u64, usize)>,
     /// Text selected in it (`chat_select`).
     pub(crate) select: crate::chat_select::Selecting,
+    /// Its context dot's list is open: what ottospace added to the agent's run.
+    context: bool,
 }
 
 /// A question's context past this many lines folds behind "Show all".
@@ -677,6 +679,59 @@ impl Workspace {
         cx.notify();
     }
 
+    pub(crate) fn toggle_context(&mut self, subject: &Subject, cx: &mut Context<Self>) {
+        let look = self.drawer.looks.entry(subject.clone()).or_default();
+        look.context = !look.context;
+        cx.notify();
+    }
+
+    /// A dot before the first message for what ottospace added to the agent's run beside the
+    /// user's words (`agents::Added`); a click lists it. Nothing of the list is built while shut.
+    fn context_dot(&self, subject: &Subject, key: &str, added: &agents::Added, cx: &mut Context<Self>) -> AnyElement {
+        let open = self.drawer.looks.get(subject).is_some_and(|look| look.context);
+        let control = format!("chat-context:{key}");
+        let count = added.count();
+        let dot = div()
+            .id(ElementId::Name(control.clone().into()))
+            .flex()
+            .items_center()
+            .gap_1p5()
+            .cursor_pointer()
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .child(div().size(px(6.)).rounded_full().bg(rgb(theme::MUTED)))
+            .child(format!("ottospace context · {count}"))
+            .child(self.controls.mark(control))
+            .tooltip(|_, cx| AnyView::from(cx.new(|_| Tooltip("What ottospace added for the agent".into()))))
+            .on_click(cx.listener({
+                let subject = subject.clone();
+                move |this, _, _, cx| this.toggle_context(&subject, cx)
+            }));
+        let list = open.then(|| {
+            let small = |text: String| div().text_xs().child(text);
+            let via = match added.via {
+                agents::Via::Server => "the MCP server's instructions",
+                agents::Via::SystemPrompt => "its system prompt",
+                agents::Via::Nowhere => "nowhere",
+            };
+            let guidance = added.guidance.clone().map(|text| {
+                let said = div().flex().flex_col().child(small(format!("in {via}"))).child(muted(text));
+                crate::ui::dialog::row("Guidance", said)
+            });
+            let tools = (!added.tools.is_empty()).then(|| {
+                crate::ui::dialog::row("MCP server", small(format!("ottospace_task: {}", added.tools.join(", "))))
+            });
+            let brief = added.briefed.then(|| crate::ui::dialog::row("Brief", small("its file, named in the first message".into())));
+            let skills = (!added.skills.is_empty())
+                .then(|| crate::ui::dialog::row("Skills", small(format!("asked for: {}", added.skills.join(", ")))));
+            let sent = crate::ui::dialog::row("Sent", small("`Task: ` before your words, the tags read out of them".into()));
+            let folder = added.folder.clone().map(|folder| crate::ui::dialog::row("Folder", small(folder)));
+            let rows = div().flex().flex_col().gap_1().pl_3().child(sent).children(guidance).children(tools);
+            rows.children(brief).children(skills).children(folder)
+        });
+        div().flex().flex_col().gap_1().child(dot).children(list).into_any_element()
+    }
+
     pub(crate) fn toggle_row(&mut self, subject: &Subject, id: u64, cx: &mut Context<Self>) {
         let open = &mut self.drawer.looks.entry(subject.clone()).or_default().open;
         if !open.remove(&id) {
@@ -699,6 +754,7 @@ impl Workspace {
         }
         let dropped = (t.dropped > 0)
             .then(|| muted(format!("{} earlier entries are not kept here; the session's file has them.", t.dropped)));
+        let context = chat.added.as_ref().map(|added| self.context_dot(subject, &key, added, cx));
         let items = t.items().map(|item| self.chat_item(subject, &key, item, cx));
         let list = div()
             .id(ElementId::Name(format!("chat-scroll:{key}").into()))
@@ -713,6 +769,7 @@ impl Workspace {
             .flex_col()
             .gap_2()
             .children(dropped)
+            .children(context)
             .children(items)
             .children(self.done_offer_line(subject, cx))
             .children((t.unread_lines() > 0).then(|| self.chat_unread(subject, t, cx)))
@@ -918,6 +975,23 @@ impl Workspace {
         match &item.entry {
             Entry::User { text } => {
                 let copy = text.text().to_string();
+                // The task's first message: the user's line, its tags as pills in place.
+                let asked = self.model.chat(subject).and_then(|chat| chat.asked.as_ref()).filter(|(at, _)| *at == id);
+                let words = match asked {
+                    Some((_, parts)) => div()
+                        .flex()
+                        .flex_wrap()
+                        .items_center()
+                        .gap_x_1()
+                        .children(parts.iter().map(|part| match part {
+                            compose::Part::Text(text) => div().child(text.trim().to_string()),
+                            compose::Part::Tag { mark, word } => {
+                                crate::ui::chip(word.clone(), Some(crate::new_task::tag_color(*mark)))
+                            }
+                        }))
+                        .into_any_element(),
+                    None => self.picked_text(Some(subject), &format!("msg:{id}"), text.text()).into_any_element(),
+                };
                 let body = div()
                     .rounded_md()
                     .bg(rgb(theme::SELECTED))
@@ -925,7 +999,7 @@ impl Workspace {
                     .py_1()
                     .text_sm()
                     .child(div().text_xs().text_color(rgb(theme::MUTED)).child("You"))
-                    .child(self.picked_text(Some(subject), &format!("msg:{id}"), text.text()));
+                    .child(words);
                 self.with_copy(key, id, body, copy.clone(), copy, cx)
             }
             Entry::Assistant { text, streaming } => {
@@ -2246,6 +2320,16 @@ impl Workspace {
                     // How much of the transcript is selected, never its text; whether it has the keys.
                     "selection": self.selection_snapshot(&subject),
                     "btw": crate::btw::snapshot(&self.model, &subject),
+                    // What ottospace added to the run, by kind and count: never its words or paths.
+                    // The first message's tags drawn as pills: a count, never the words.
+                    "asked_tags": chat.asked.as_ref().map_or(0, |(_, parts)| {
+                        parts.iter().filter(|part| matches!(part, compose::Part::Tag { .. })).count()
+                    }),
+                    "context": chat.added.as_ref().map(|added| serde_json::json!({
+                        "items": added.count(), "via": added.via, "tools": added.tools.len(),
+                        "briefed": added.briefed, "folder": added.folder.is_some(),
+                        "open": look.is_some_and(|look| look.context),
+                    })),
                 }),
             );
         }
