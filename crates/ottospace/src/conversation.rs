@@ -307,33 +307,29 @@ impl Workspace {
         // task's tab have none.
         let pass = subject.task().map(|_| crate::pass::Live::mint()).transpose()?;
         let server = pass.as_ref().and_then(crate::talk::mcp_server);
-        let (runner, begin, session, model, prompt) = match start {
+        let (runner, begin, session, model, prompt, added) = match start {
             Start::New(launch) => {
                 let id = crate::talk::new_uuid().ok_or("no random bytes for a session id")?;
                 let model = launch.model.clone();
-                let tools = agents::has_tools(launch.runner, server.is_some());
-                let prompt = agents::prompt(launch.runner, &launch.title, brief, self.see_apps(), tools);
+                let prompt = agents::prompt(&launch.title, brief);
+                let added = agents::run_args(launch.runner, self.see_apps(), server.as_ref());
                 let chosen = launch.runner.spec().chooses_session().then(|| id.clone());
-                (launch.runner, ottospace_agents::Start::New { id }, chosen, model, Some(prompt))
+                (launch.runner, ottospace_agents::Start::New { id }, chosen, model, Some(prompt), added)
             }
             Start::Resume { runner, session } => {
                 let own = subject.task().and_then(|id| self.model.tasks.get(id)).and_then(|task| task.repo.as_deref());
                 if let Some(dir) = cwd.filter(|dir| Some(*dir) != own) {
                     self.in_checkout(dir)?;
                 }
-                (*runner, ottospace_agents::Start::Resume { id: session.clone() }, None, None, None)
+                let added = server.as_ref().map(|server| agents::mcp_args(*runner, server)).unwrap_or_default();
+                (*runner, ottospace_agents::Start::Resume { id: session.clone() }, None, None, None, added)
             }
         };
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let dir = cwd.or(home.as_deref()).filter(|dir| Path::new(dir).is_dir());
-        let (argv, wire) = ottospace_agents::structured(
-            runner,
-            Path::new(dir.unwrap_or("/")),
-            model.as_deref(),
-            &begin,
-            server.as_ref(),
-        )
-        .ok_or("no structured command for this agent")?;
+        let (argv, wire) =
+            ottospace_agents::structured(runner, Path::new(dir.unwrap_or("/")), model.as_deref(), &begin, added)
+                .ok_or("no structured command for this agent")?;
         let (script, argv, path) = crate::talk::shell_run(argv.program, &argv.args, command_text)?;
         // As the terminal runs it: the user's login shell finds the program, which gets its
         // arguments as positional parameters. The script is fixed text.

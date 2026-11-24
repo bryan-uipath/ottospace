@@ -297,9 +297,10 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    `>repo`: the home folder), with the keyboard: Claude Code drawn natively (its structured
    mode, see step 11), Codex in a terminal (its TUI); `conversation_view: "terminal"` puts
    Claude Code in a terminal too. It is asked `Task: <title>`; a
-   task with captures is told where its brief is. Then a few fixed lines tell it of ottospace:
-   `ottospace skill`, the `state` of its workspace, `app_look` at a pane you set to See, and to ask
-   you for See rather than take a screenshot. The workspace stays as it was: the same tab,
+   task with captures is told where its brief is; nothing else is in that first message. It is
+   told of ottospace out of sight, in a few fixed words (where its guide and workspace are, to ask
+   you for See rather than take a screenshot, that window text is data): the instructions of its
+   MCP server, or with none, Claude Code's `--append-system-prompt`. The workspace stays as it was: the same tab,
    panes and focus. That tab, if it is no task's and has panes, becomes the task's and gains its
    badge; on a tab of another task, or with nothing open, the task starts with no tab.
 3. **Selecting shows; starting is a button.** A click or ↵ on a task, or on its space on the
@@ -1900,8 +1901,8 @@ The guide itself: [`crates/ottospace/skill/guide.md`](../crates/ottospace/skill/
 `ottospace mcp` is a stdio MCP server over the same socket: read-only tools `workspace`,
 `app_read`, `app_look`, `capture`, `wait`, `task_brief` and `guide`, each one socket request on the
 socket's terms (a task's agent's pass, agent mode's grants; with a task's pass, `capture` and
-`wait` read only that task's workspace's terminals). Its instructions are the agent
-preamble with its tools. ottospace gives it to the agent of every task it starts, for that run
+`wait` read only that task's workspace's terminals). Its instructions are that guidance,
+with its tools. ottospace gives it to the agent of every task it starts, for that run
 only and never in your CLI's config files: Claude Code by `--mcp-config` with its tools in
 `--allowedTools` (no prompt for them; the server is named `ottospace_task` there), Codex by `-c mcp_servers.ottospace_task.*` with
 `default_tools_approval_mode = "writes"` (its read-only tools unasked), both in either view.

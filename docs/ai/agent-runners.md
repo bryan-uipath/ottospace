@@ -222,7 +222,7 @@ The table, written by a test from the specs (`runner::tests`): every capability 
 | watch | Yes | Yes |
 | take over when idle | Yes | Yes |
 | attach live | ViaOwnTerminal | ViaDaemon |
-| told of ottospace | FirstMessage | FirstMessage |
+| told of ottospace | SystemPrompt { flag: "--append-system-prompt" } | ServerOnly |
 | ottospace's MCP server | Some(ConfigJson) | Some(Overrides) |
 
 What is verified, and how:

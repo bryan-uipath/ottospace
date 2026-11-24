@@ -80,11 +80,14 @@ pub enum McpAttach {
     Overrides,
 }
 
-/// Where a task's agent is told of ottospace (`agents::preamble`).
+/// Where a task's agent is told of ottospace (`agents::guidance`) when it has no MCP server, whose
+/// instructions carry it otherwise. Never its first message: that is the user's task alone.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Introduced {
-    /// After the task, in its first message: the user sees it in the transcript.
-    FirstMessage,
+    /// Appended to its system prompt for the run: `<flag> <text>`.
+    SystemPrompt { flag: &'static str },
+    /// Nowhere but the server's instructions: it has no per-run place that adds to the user's own.
+    ServerOnly,
 }
 
 /// Its TUI in a terminal pane (stage 1). Read from the CLI's `--help`.
@@ -231,7 +234,8 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         // branches the same file. Only a `--bg` session is joined, by `claude attach <id>` (a TUI).
         attach_live: AttachLive::ViaOwnTerminal,
     },
-    introduced: Introduced::FirstMessage,
+    // `claude --help` (2.1.331): `--append-system-prompt <prompt>`, "to the end of the default".
+    introduced: Introduced::SystemPrompt { flag: "--append-system-prompt" },
     // Read from `claude --help` (2.1.331): `--mcp-config <configs...>` "JSON files or strings".
     mcp: Some(McpAttach::ConfigJson),
 };
@@ -272,7 +276,8 @@ const CODEX: RunnerSpec = RunnerSpec {
         // running thread and got its live events. A private `codex app-server` refuses it.
         attach_live: AttachLive::ViaDaemon,
     },
-    introduced: Introduced::FirstMessage,
+    // `developer_instructions` is its documented key, but `-c` would replace the user's own.
+    introduced: Introduced::ServerOnly,
     // `-c` overrides any config key (`codex --help`); `codex -c 'mcp_servers.x.command=..' mcp
     // list` lists it (0.171.0, 2026-11-23). A run with it is not probed.
     mcp: Some(McpAttach::Overrides),
