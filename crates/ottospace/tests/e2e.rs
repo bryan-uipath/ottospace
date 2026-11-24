@@ -18759,7 +18759,8 @@ fn zoomed_out_the_tabs_are_tiles_on_a_grid_and_the_keys_go_in_and_back() {
         let refused = otto.call(json!({"cmd": "key", "keys": "cmd-|"}));
         assert_eq!((&refused["state"]["zoom"], &refused["zoom_tiles"]), (&Value::Null, &Value::Null), "{size}");
         let zoomed = otto.user_key("cmd-|");
-        assert_eq!(zoomed["state"]["zoom"], json!({"from": tabs[0], "selected": tabs[0]}), "{size}");
+        let zoom = &zoomed["state"]["zoom"];
+        assert_eq!((&zoom["from"], &zoom["selected"]), (&json!(tabs[0]), &json!(tabs[0])), "{size}");
         let drawn = otto.drawn();
         let tiles: Vec<[f64; 4]> = tabs.iter().map(|id| rect(&drawn["zoom_tiles"][id.to_string()])).collect();
         // A 2×2 grid inside the panes area, each tile its shape, room between.
@@ -18994,4 +18995,79 @@ fn filed_decisions_are_sorted_one_key_each_by_the_user_alone() {
     );
     assert_eq!(done["filed"]["to_sort"], 0);
     assert_eq!(otto.user_key("escape")["state"]["decisions"], Value::Null);
+}
+
+/// Zoomed out, the canvas (`zoom_out`, slice 2): ⌘- and ⌘= zoom about the middle, a mouse wheel
+/// about the pointer (the point under it stays), a trackpad's scroll and a drag of the empty
+/// canvas pan it, ⌘0 fits every tile again. It stops at its farthest. Only the user moves it; at
+/// CI's window and the default, no frame at rest.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn zoomed_out_the_canvas_zooms_about_the_pointer_pans_and_fits() {
+    for size in ["1024x674", "1400x900"] {
+        let env =
+            [("OTTOSPACE_FEATURES", "zoom_out"), ("OTTOSPACE_REDUCE_MOTION", "1"), ("OTTOSPACE_E2E_WINDOW", size)];
+        let otto = Otto::launch_with(&format!("canvas-{size}"), &env);
+        otto.call(json!({"cmd": "split"}));
+        for _ in 1..4 {
+            otto.call(json!({"cmd": "new_tab"}));
+            otto.call(json!({"cmd": "split"}));
+        }
+        let state = otto.call(json!({"cmd": "select_tab", "index": 0}));
+        let first = state["state"]["tabs"][0]["id"].as_u64().unwrap().to_string();
+        let camera = |s: &Value| s["state"]["zoom"]["camera"].clone();
+        let scale = |s: &Value| camera(s)["scale"].as_f64().unwrap();
+        let tile = |o: &Otto| rect(&o.drawn()["zoom_tiles"][&first]);
+        let fitted = camera(&otto.user_key("cmd-|"));
+        let fit = tile(&otto);
+        // ⌘-: farther, about the middle. A client's is refused.
+        let theirs = otto.call(json!({"cmd": "key", "keys": "cmd--"}));
+        assert_eq!(camera(&theirs), fitted, "{size}");
+        let farther = otto.user_key("cmd--");
+        assert!(scale(&farther) < fitted["scale"].as_f64().unwrap(), "{size}: {}", camera(&farther));
+        let small = tile(&otto);
+        assert!(small[2] < fit[2] - 10., "{size}: {small:?} smaller than {fit:?}");
+        // A mouse wheel's lines up over the first tile's middle: nearer, its middle stays under the pointer.
+        let p = at(small, 0.5, 0.5);
+        let wheel = json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dy": 3, "as": "user"});
+        assert!(scale(&otto.call(wheel)) > scale(&farther), "{size}");
+        let near = tile(&otto);
+        let middle = at(near, 0.5, 0.5);
+        assert!((middle[0] - p[0]).abs() < 2. && (middle[1] - p[1]).abs() < 2., "{size}: {near:?} about {p:?}");
+        assert!(near[2] > small[2], "{size}");
+        // A trackpad's scroll pans: the canvas follows the fingers.
+        let pan = json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dx": -60, "dy": -30, "precise": true, "as": "user"});
+        otto.call(pan);
+        let panned = tile(&otto);
+        assert!(
+            (panned[0] - near[0] + 60.).abs() < 2. && (panned[1] - near[1] + 30.).abs() < 2.,
+            "{size}: {panned:?} {near:?}"
+        );
+        // A drag of the empty canvas, from the gap right of the tile: it follows the pointer.
+        let second = rect(&otto.drawn()["zoom_tiles"][state["state"]["tabs"][1]["id"].as_u64().unwrap().to_string()]);
+        let empty = [(panned[0] + panned[2] + second[0]) / 2., panned[1] + panned[3] / 2.];
+        otto.user_drag(empty, [empty[0] + 40., empty[1] + 20.]);
+        let dragged = tile(&otto);
+        assert!(
+            (dragged[0] - panned[0] - 40.).abs() < 2. && (dragged[1] - panned[1] - 20.).abs() < 2.,
+            "{size}: {dragged:?}"
+        );
+        // As far as it goes: the tabs small with room round them, each its name alone.
+        for _ in 0..30 {
+            otto.user_key("cmd--");
+        }
+        let far = otto.drawn();
+        assert!((scale(&far) - 0.08).abs() < 1e-3, "{size}: {}", camera(&far));
+        let tiny = rect(&far["zoom_tiles"][&first]);
+        assert!(tiny[2] < 120., "{size}: {tiny:?}");
+        // ⌘0: every tile again, as it opened.
+        let back = otto.user_key("cmd-0");
+        assert_eq!(camera(&back), fitted, "{size}");
+        assert_eq!(otto.drawn()["counts"]["zoom_frames"], 0, "{size}");
+        // Its camera is kept: in and out again, where it was left.
+        otto.user_key("cmd--");
+        let left = camera(&otto.drawn());
+        otto.user_key("escape");
+        assert_eq!(camera(&otto.user_key("cmd-|")), left, "{size}");
+    }
 }

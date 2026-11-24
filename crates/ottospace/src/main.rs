@@ -945,6 +945,10 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-shift-o", FoldTab, None),
         // Every tab at once, and back in (`zoom_out`): ⌘⇧\, which GPUI reads as the shifted `|`.
         KeyBinding::new("cmd-|", zoom::ZoomToggle, None),
+        // Zoomed out: the canvas nearer, farther, every tile (`zoom::canvas_key`).
+        KeyBinding::new("cmd-=", zoom::CanvasNearer, None),
+        KeyBinding::new("cmd--", zoom::CanvasFarther, None),
+        KeyBinding::new("cmd-0", zoom::CanvasFit, None),
         // Debug: outline the focused app pane's accessibility tree.
         KeyBinding::new("cmd-ctrl-a", AxOverlay, None),
         // The bug button's, while it shows; shown in its tooltip only.
@@ -9406,6 +9410,17 @@ impl Workspace {
             .on_action(cx.listener(|this, _: &FoldTab, window, cx| match this.on(Feature::MultiMonitor) {
                 true => drop(this.dispatch(Action::TabOut { tab: None }, this.input, window, cx)),
                 false => cx.propagate(),
+            }))
+            .on_action(
+                cx.listener(|this, _: &zoom::CanvasNearer, window, cx| {
+                    this.canvas_key(zoom::key_step(true), window, cx)
+                }),
+            )
+            .on_action(cx.listener(|this, _: &zoom::CanvasFarther, window, cx| {
+                this.canvas_key(zoom::key_step(false), window, cx)
+            }))
+            .on_action(cx.listener(|this, _: &zoom::CanvasFit, window, cx| {
+                this.canvas_key(ottospace_core::model::canvas::CanvasStep::Fit, window, cx)
             }))
             .on_action(cx.listener(|this, _: &zoom::ZoomToggle, window, cx| match this.on(Feature::ZoomOut) {
                 true => drop(this.dispatch(Action::ZoomOut, this.input, window, cx)),

@@ -1921,6 +1921,10 @@ pub enum Action {
     ZoomEnter {
         tab: Option<u32>,
     },
+    /// Zoomed out: the camera zooms, pans or fits (a gesture, ⌘= ⌘- ⌘0). Only the user's.
+    ZoomCamera {
+        step: canvas::CanvasStep,
+    },
     /// A key or click on the shown question card (`ask::Act`), `ticket` as in `TalkAnswer`: a
     /// move, a pick, ↵ (the answers go) or Esc (declined). Only the user's.
     TalkAsk {
@@ -2576,6 +2580,7 @@ impl Action {
                 | Action::DecisionsOpen
                 | Action::ZoomOut
                 | Action::ZoomMove { .. }
+                | Action::ZoomCamera { .. }
                 | Action::ZoomEnter { .. }
         )
     }
@@ -2989,7 +2994,8 @@ impl Action {
             | Action::SortUndo
             | Action::CityCamera { .. }
             | Action::ZoomMove { .. }
-            | Action::ZoomEnter { .. } => false,
+            | Action::ZoomEnter { .. }
+            | Action::ZoomCamera { .. } => false,
         }
     }
 
@@ -3033,7 +3039,9 @@ impl Action {
             | Action::SortPromote { .. }
             | Action::SortUndo => Some(Feature::DecisionSources),
             Action::SessionUnhide { .. } | Action::HiddenPeek { .. } => Some(Feature::TerminalTasks),
-            Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. } => Some(Feature::ZoomOut),
+            Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. } | Action::ZoomCamera { .. } => {
+                Some(Feature::ZoomOut)
+            }
             Action::ListenStart { .. }
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
@@ -3955,6 +3963,7 @@ pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 mod agent;
 pub mod btw;
 mod bug;
+pub mod canvas;
 pub mod chat;
 pub mod city;
 mod clone;
@@ -4445,6 +4454,9 @@ pub struct Model {
     pub decisions: Option<decisions::Run>,
     /// The overview of the space's tabs, while zoomed out (`zoom_out`). In the state: tab ids.
     pub zoom: Option<zoom::Zoom>,
+    /// Each space's canvas camera as the user left it (`zoom_out`), kept in `layout.json`.
+    #[serde(skip)]
+    pub(crate) canvases: std::collections::HashMap<Owner, canvas::Camera>,
     /// When each waiting card was first seen waiting, for the queue's age.
     #[serde(skip)]
     pub(crate) waiting: Vec<decisions::Seen>,
@@ -4629,6 +4641,7 @@ impl Default for Model {
             window_rules: Vec::new(),
             decisions: None,
             zoom: None,
+            canvases: std::collections::HashMap::new(),
             waiting: Vec::new(),
         };
         // Home's own tab, on show.
@@ -7613,6 +7626,7 @@ impl Model {
             | Action::SortUndo) => self.sort_act(action, effects),
             Action::ZoomOut => self.zoom_toggle(effects),
             Action::ZoomMove { dir } => self.zoom_move(dir),
+            Action::ZoomCamera { step } => self.zoom_camera(step),
             Action::ZoomEnter { tab } => self.zoom_enter(tab, effects),
             action @ (Action::BtwOpen
             | Action::BtwKeys { .. }
@@ -11742,6 +11756,7 @@ mod tests {
         Action::ZoomOut,
         Action::ZoomMove { .. },
         Action::ZoomEnter { .. },
+        Action::ZoomCamera { .. },
         Action::TalkAsk { .. },
         Action::TalkDenyNote,
         Action::TalkEscape,
@@ -12163,6 +12178,7 @@ mod tests {
             Action::ZoomOut,
             Action::ZoomMove { dir: Dir::Right },
             Action::ZoomEnter { tab: None },
+            Action::ZoomCamera { step: canvas::CanvasStep::Fit },
             Action::TalkAsk { ticket: 1, act: crate::ask::Act::Submit },
             Action::TalkDenyNote,
             Action::TalkEscape,

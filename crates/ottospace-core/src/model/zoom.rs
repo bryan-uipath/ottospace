@@ -4,6 +4,7 @@
 
 use serde::Serialize;
 
+use super::canvas::{self, Camera, CanvasStep};
 use super::{Effect, Kind, Model, Owner, PaneId, spaces::HOME_TAB};
 use crate::features::Feature;
 use crate::layout::{Dir, Rect};
@@ -18,16 +19,16 @@ pub const HOME_NONE: &str = "Home has no tabs to zoom out to";
 /// How long the zoom lasts, in milliseconds (`overlay::slide`'s curve). The model has moved on
 /// before it starts.
 pub const ZOOM_MS: f32 = 220.;
-/// Room between tiles, and around them, in points.
-pub const GAP: f32 = 28.;
 
-/// The overview while it shows. In the state: the tab ids only.
+/// The overview while it shows. In the state: the tab ids and the camera.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Zoom {
     /// The tab on show when it opened: where ⌘⇧\ and Esc go back to.
     pub from: u32,
     /// The tile the keys are on.
     pub selected: u32,
+    /// Where the canvas is looked at from (`canvas`): kept per space when it closes.
+    pub camera: Camera,
     /// The app pane that had the keyboard when it opened: it has it again on the way back.
     #[serde(skip)]
     pub(crate) live: Option<PaneId>,
@@ -38,28 +39,6 @@ pub struct Zoom {
 pub(crate) fn grid(n: usize) -> (usize, usize) {
     let cols = (1..=n).find(|c| c * c >= n).unwrap_or(0);
     (cols, if cols == 0 { 0 } else { n.div_ceil(cols) })
-}
-
-/// Each of `n` tiles' rect in `area`, in tab order: the area's own shape, centred in its cell, `GAP`
-/// between cells and around them.
-pub fn cells(n: usize, area: Rect) -> Vec<Rect> {
-    let (cols, rows) = grid(n);
-    if n == 0 {
-        return Vec::new();
-    }
-    let cell_w = ((area.w - GAP * (cols + 1) as f32) / cols as f32).max(0.);
-    let cell_h = ((area.h - GAP * (rows + 1) as f32) / rows as f32).max(0.);
-    // The area's shape fitted in a cell: a tile looks like the tab it stands for.
-    let shape = if area.h > 0. { area.w / area.h } else { 1. };
-    let (w, h) = if cell_h * shape <= cell_w { (cell_h * shape, cell_h) } else { (cell_w, cell_w / shape) };
-    (0..n)
-        .map(|at| {
-            let (col, row) = (at % cols, at / cols);
-            let x = area.x + GAP + col as f32 * (cell_w + GAP) + (cell_w - w) / 2.;
-            let y = area.y + GAP + row as f32 * (cell_h + GAP) + (cell_h - h) / 2.;
-            Rect { x, y, w, h }
-        })
-        .collect()
 }
 
 /// `a` moved `t` of the way to `b`.
@@ -87,6 +66,34 @@ impl Model {
         tabs.filter(|id| *id != HOME_TAB).collect()
     }
 
+    /// Each tile's place on the canvas, by tab id, in tab order: the grid's.
+    pub fn zoom_spots(&self) -> Vec<(u32, Rect)> {
+        let tabs = self.zoom_tabs();
+        let n = tabs.len();
+        tabs.into_iter().enumerate().map(|(at, id)| (id, canvas::grid_spot(at, n))).collect()
+    }
+
+    /// Every tile's place on the canvas.
+    fn zoom_tiles(&self) -> Vec<Rect> {
+        self.zoom_spots().into_iter().map(|(_, r)| r).collect()
+    }
+
+    /// The camera of the space on show: as the user left it, else every tile fitted.
+    fn kept_camera(&self) -> Camera {
+        let tiles = self.zoom_tiles();
+        let kept = self.canvases.get(self.shown_space());
+        kept.map_or_else(|| Camera::fit(canvas::extent(&tiles)), |cam| cam.clamped(&tiles))
+    }
+
+    /// The camera zoomed, panned or fitted by the user, and kept for the space.
+    pub(super) fn zoom_camera(&mut self, step: CanvasStep) {
+        let extent = self.zoom_tiles();
+        let of = self.shown_space().clone();
+        let Some(zoom) = self.zoom.as_mut() else { return };
+        zoom.camera = zoom.camera.stepped(step, &extent);
+        self.canvases.insert(of, zoom.camera);
+    }
+
     /// ⌘⇧\: the overview of the tab on show's space, or back to where it opened.
     pub(super) fn zoom_toggle(&mut self, effects: &mut Vec<Effect>) {
         if self.zoom.is_some() {
@@ -104,7 +111,12 @@ impl Model {
         let live = self.live;
         // A live window would float over the tiles: parked, its picture is in its tile.
         self.leave(effects);
-        self.zoom = Some(Zoom { from, selected: from, live });
+        // Where it was left, with the tab it opens on in view.
+        let spot = self.zoom_spots().into_iter().find(|(id, _)| *id == from).map(|(_, r)| r);
+        let camera = self.kept_camera();
+        let camera = spot.map_or(camera, |spot| camera.showing(spot, &self.zoom_tiles()));
+        self.canvases.insert(self.shown_space().clone(), camera);
+        self.zoom = Some(Zoom { from, selected: from, camera, live });
     }
 
     /// Back to the tab it opened on; the app that had the keyboard has it again.
@@ -127,8 +139,14 @@ impl Model {
         let tabs = self.zoom_tabs();
         let Some(zoom) = self.zoom.as_mut() else { return };
         let at = tabs.iter().position(|id| *id == zoom.selected).unwrap_or(0);
-        if let Some(to) = step(at, tabs.len(), dir) {
-            zoom.selected = tabs[to];
+        let Some(to) = step(at, tabs.len(), dir) else { return };
+        zoom.selected = tabs[to];
+        // The camera follows the selection into view.
+        let (tiles, spots, of) = (self.zoom_tiles(), self.zoom_spots(), self.shown_space().clone());
+        let Some(zoom) = self.zoom.as_mut() else { return };
+        if let Some((_, spot)) = spots.iter().find(|(id, _)| *id == zoom.selected) {
+            zoom.camera = zoom.camera.showing(*spot, &tiles);
+            self.canvases.insert(of, zoom.camera);
         }
     }
 
@@ -158,13 +176,20 @@ impl Model {
         }
         let tabs = self.zoom_tabs();
         let on = self.features.on(Feature::ZoomOut);
+        // A tile added or gone: the camera stays inside the new bounds.
+        let (tiles, spots) = (self.zoom_tiles(), self.zoom_spots());
         let Some(zoom) = self.zoom.as_mut() else { return };
+        zoom.camera = zoom.camera.clamped(&tiles);
         if !on || !tabs.contains(&zoom.from) || self.live.is_some() || self.away.is_some() {
             self.zoom = None;
             return;
         }
         if !tabs.contains(&zoom.selected) {
+            // Its tile gone: back to where it opened, in view.
             zoom.selected = zoom.from;
+            if let Some((_, spot)) = spots.iter().find(|(id, _)| *id == zoom.from) {
+                zoom.camera = zoom.camera.showing(*spot, &tiles);
+            }
         }
     }
 }
@@ -194,32 +219,11 @@ mod tests {
     }
 
     #[test]
-    fn the_grid_is_the_least_square_and_keeps_the_areas_shape() {
+    fn the_grid_is_the_least_square() {
         assert_eq!(
             [0, 1, 2, 4, 5, 7, 9, 10].map(grid),
             [(0, 0), (1, 1), (2, 1), (2, 2), (3, 2), (3, 3), (3, 3), (4, 3)]
         );
-        let area = Rect { x: 10., y: 20., w: 1000., h: 600. };
-        // One tile: as tall as the area less its margins, the area's width to height, centred.
-        let [one] = cells(1, area)[..] else { panic!("one tile") };
-        let near = |a: f32, b: f32| (a - b).abs() < 1e-3;
-        assert!(near(one.h, 600. - 2. * GAP) && near(one.w, one.h * 1000. / 600.) && near(one.y, 20. + GAP), "{one:?}");
-        assert!(near(one.x - 10., 1000. - one.x + 10. - one.w), "{one:?} centred");
-        for n in [1, 4, 7] {
-            let tiles = cells(n, area);
-            assert_eq!(tiles.len(), n);
-            for (i, a) in tiles.iter().enumerate() {
-                assert!((a.w / a.h - area.w / area.h).abs() < 1e-3, "{n}: tile {i} keeps the shape");
-                assert!(a.x >= area.x + GAP - 1e-3 && a.x + a.w <= area.x + area.w - GAP + 1e-3, "{n}: {a:?}");
-                assert!(a.y >= area.y + GAP - 1e-3 && a.y + a.h <= area.y + area.h - GAP + 1e-3, "{n}: {a:?}");
-                for b in &tiles[i + 1..] {
-                    let apart = a.x + a.w + GAP <= b.x + 1e-3 || b.x + b.w + GAP <= a.x + 1e-3;
-                    let apart = apart || a.y + a.h + GAP <= b.y + 1e-3 || b.y + b.h + GAP <= a.y + 1e-3;
-                    assert!(apart, "{n}: {a:?} and {b:?} have room between");
-                }
-            }
-        }
-        assert!(cells(4, Rect { x: 0., y: 0., w: 10., h: 10. }).iter().all(|r| r.w >= 0. && r.h >= 0.));
     }
 
     #[test]
@@ -362,5 +366,60 @@ mod tests {
             Action::SetFeatures { features: Features::all().with(Feature::ZoomOut, false) }.sent_by(Origin::System),
         );
         assert!(m.zoom.is_none());
+    }
+
+    #[test]
+    fn it_opens_fitted_and_the_camera_is_kept_per_space() {
+        let mut m = tabs(4);
+        m.update(Action::ZoomOut);
+        let fitted = m.zoom.as_ref().map(|z| z.camera);
+        assert_eq!(fitted, Some(Camera::fit(canvas::extent(&m.zoom_tiles()))));
+        let step = CanvasStep::Zoom { factor: 0.5, about: [0.5, 0.5] };
+        m.update(Action::ZoomCamera { step });
+        let farther = m.zoom.as_ref().map(|z| z.camera);
+        assert!(farther.is_some_and(|c| fitted.is_some_and(|f| c.scale < f.scale)), "{farther:?}");
+        // Back in and out again: where it was left.
+        m.update(Action::ZoomOut);
+        m.update(Action::ZoomOut);
+        assert_eq!(m.zoom.as_ref().map(|z| z.camera), farther);
+        // ⌘0: fitted again.
+        m.update(Action::ZoomCamera { step: CanvasStep::Fit });
+        assert_eq!(m.zoom.as_ref().map(|z| z.camera), fitted);
+        // Closed, a step does nothing; a client's is refused.
+        m.update(Action::ZoomOut);
+        m.update(Action::ZoomCamera { step });
+        assert!(m.zoom.is_none());
+        let theirs = Action::ZoomCamera { step: CanvasStep::Pan { dx: 1., dy: 0. } };
+        assert_eq!(m.refusal(&theirs, Origin::Socket), Some(USERS_ALONE));
+    }
+
+    #[test]
+    fn the_selection_brings_its_tile_into_view() {
+        let mut m = tabs(9);
+        m.update(Action::ZoomOut);
+        // Near the first tile: the last is out of view.
+        m.update(Action::ZoomCamera { step: CanvasStep::Zoom { factor: 4., about: [0., 0.] } });
+        for dir in [Dir::Right, Dir::Right, Dir::Down, Dir::Down] {
+            m.update(Action::ZoomMove { dir });
+        }
+        let zoom = m.zoom.clone().expect("zoomed out");
+        let spot = m.zoom_spots().into_iter().find(|(id, _)| *id == zoom.selected).map(|(_, r)| r).expect("tile");
+        let r = zoom.camera.on_screen(spot);
+        assert!(r.x >= -1e-3 && r.y >= -1e-3 && r.x + r.w <= 1.001 && r.y + r.h <= 1.001, "{r:?}");
+    }
+
+    /// Reopened from a tab the kept camera does not show: that tile is brought into view.
+    #[test]
+    fn it_opens_with_the_tab_it_came_from_in_view() {
+        let mut m = tabs(9);
+        m.update(Action::ZoomOut);
+        m.update(Action::ZoomCamera { step: CanvasStep::Zoom { factor: 4., about: [0., 0.] } });
+        m.update(Action::ZoomOut);
+        m.update(Action::SelectVisibleTab { index: 8 });
+        m.update(Action::ZoomOut);
+        let zoom = m.zoom.clone().expect("zoomed out");
+        let spot = m.zoom_spots().into_iter().find(|(id, _)| *id == zoom.from).map(|(_, r)| r).expect("tile");
+        let r = zoom.camera.on_screen(spot);
+        assert!(r.x >= -1e-3 && r.y >= -1e-3 && r.x + r.w <= 1.001 && r.y + r.h <= 1.001, "{r:?}");
     }
 }

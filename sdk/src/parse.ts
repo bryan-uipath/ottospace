@@ -2112,7 +2112,14 @@ function model(value: unknown, at: string): Model {
 
 function zoom(value: unknown, at: string): Zoom {
   const o = fields(value, at);
-  return { from: num(o.from, `${at}.from`), selected: num(o.selected, `${at}.selected`) };
+  const camera = fields(o.camera, `${at}.camera`);
+  const [x, y, ...more] = list(num)(camera.center, `${at}.camera.center`);
+  if (x === undefined || y === undefined || more.length > 0) throw wrong(`${at}.camera.center`, "two numbers", camera.center);
+  return {
+    from: num(o.from, `${at}.from`),
+    selected: num(o.selected, `${at}.selected`),
+    camera: { scale: num(camera.scale, `${at}.camera.scale`), center: [x, y] },
+  };
 }
 
 function decisions(value: unknown, at: string): Decisions {

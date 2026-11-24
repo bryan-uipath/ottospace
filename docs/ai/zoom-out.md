@@ -89,8 +89,8 @@ Actions, all of the `zoom_out` flag:
 | `ZoomEnter { tab }` | Into `tab` (a click, a label) or the selected tile (↵): the overview closes and that tab is selected, as ⌘1 would. |
 
 - **The grid is the core's**: `zoom::grid(n)` gives columns and rows (`cols = ⌈√n⌉`: 1, 2×2 for 4,
-  3 + 3 + 1 for 7), `zoom::cells(n, area)` each tile's rect, with a gap between tiles and around
-  them. Tiles keep the panes area's aspect. Tab order is the tab row's (⌘1…⌘9): a new tab takes the
+  3 + 3 + 1 for 7), `canvas::grid_spot(at, n)` each tile's place on the canvas (slice 2), with a
+  gap between tiles. Tiles keep the panes area's aspect. Tab order is the tab row's (⌘1…⌘9): a new tab takes the
   next cell and nothing else moves.
 - **It never changes what exists.** No action of it adds, closes or moves a tab or a pane. The
   property test checks it: while open, `from` and `selected` are tabs of the space on show (never

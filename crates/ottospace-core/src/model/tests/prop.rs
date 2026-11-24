@@ -1886,6 +1886,16 @@ const MAKERS: &[Make] = &[
     |_| Action::ZoomOut,
     |g| Action::ZoomMove { dir: g.dir() },
     |g| Action::ZoomEnter { tab: g.rng.coin().then(|| g.tab_id()) },
+    |g| {
+        use crate::model::canvas::CanvasStep;
+        let n = |g: &mut Gen| g.rng.pick(&[0.5, 1.25, 0.8, 2., -3., 1e9, f32::NAN, 0.]);
+        let step = match g.rng.below(3) {
+            0 => CanvasStep::Zoom { factor: n(g), about: [n(g), n(g)] },
+            1 => CanvasStep::Pan { dx: n(g), dy: n(g) },
+            _ => CanvasStep::Fit,
+        };
+        Action::ZoomCamera { step }
+    },
     |_| Action::TalkDenyNote,
     |_| Action::TalkEscape,
     |_| Action::TalkInterrupt,
@@ -2368,6 +2378,14 @@ fn check_zoom(m: &Model) -> Result<(), String> {
     let tabs = m.zoom_tabs();
     ensure!(tabs.contains(&zoom.from) && tabs.contains(&zoom.selected), "zoomed out on {zoom:?}, tiles {tabs:?}");
     ensure!(m.live.is_none() && m.away.is_none(), "zoomed out, live {:?}, away {:?}", m.live, m.away);
+    // The camera inside its range, and never with every tile off screen: some reaches into the view.
+    use crate::model::canvas::{self, NEAREST};
+    let cam = zoom.camera;
+    let spots: Vec<_> = m.zoom_spots().into_iter().map(|(_, r)| r).collect();
+    let far = canvas::farthest(canvas::extent(&spots));
+    ensure!((far..=NEAREST).contains(&cam.scale), "camera scale {}", cam.scale);
+    let seen = spots.iter().any(|r| canvas::in_view(cam.on_screen(*r)));
+    ensure!(seen, "no tile in view: {cam:?} over {spots:?}");
     Ok(())
 }
 

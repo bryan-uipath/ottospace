@@ -123,6 +123,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧W | Close the tab and its panes |
 | ⌘⇧O | With the `multi_monitor` [flag](#features) on: fold the tab on show out to its own window on another display, the keyboard with it; again there (or its Fold back in) folds it back in. See [Displays](#displays) |
 | ⌘⇧\\ | With the `zoom_out` [flag](#features) on: zoom out to every tab of the workspace or task on show, as tiles on a grid; again, or Esc, back to the tab you came from. Arrows or H J K L select a tile, ↵ or a click goes into it. See [Zoom out](#zoom-out) |
+| ⌘= / ⌘- / ⌘0 | Zoomed out (`zoom_out`): the canvas nearer, farther, every tile fitted. Elsewhere nothing |
 | ⌘⇧S | Save the tab on show into the [workspace](#workspaces) it is in; in a task's space, as a new one. On a tab that came from one, or was saved into one: update its tab there |
 | ⌘Q | Quit. Asks first while a terminal runs something (a program in front of its shell, or a background or stopped job) or an agent runs ("Quitting ends these:"), or a draft has words ("Not sent yet": an unsent message, the new-task line, a capture, a card's typed answer, a btw question, a message in your editor; never one of only spaces). Click a draft's row to go to it. ↵, Q or ⌘Q again quits; Esc, any other key or any other shortcut cancels and does nothing else |
 | Wheel / trackpad | Scroll a terminal back through its history |
@@ -1797,7 +1798,15 @@ places, a terminal's screen live and small, an app pane its window's last pictur
 parked pane already shows: nothing new is captured), any other pane its name. Above each, its
 number and name; the tab you came from says "you were here", the selected tile has a ring.
 
-- Arrows or H J K L move the selection; ↵ or a click goes into that tab; Esc or ⌘⇧\\ again goes
+- It is a canvas. A two-finger scroll pans it (it follows the fingers), as does a drag of its empty
+  ground; ⌘ with a two-finger scroll, or a mouse wheel, zooms about the pointer (the point under it
+  stays); ⌘= and ⌘- zoom about the middle; ⌘0 fits every tile again. From one tab filling the area
+  out to a tab a twelfth of it (a 4 × 4 workspace is then a third of the area wide); it never pans
+  every tile out of view. No pinch yet. The camera is kept per workspace or task, also across a
+  restart (`layout.json`): ⌘⇧\\ opens where you left it, fitted the first time.
+- A tile shows its terminals' text from 360 points wide, their rows as bars down to 120, and under
+  that the tab's name alone.
+- Arrows or H J K L move the selection, and the canvas follows it into view; ↵ or a click goes into that tab; Esc or ⌘⇧\\ again goes
   back to the tab you came from. ⌘; labels the tiles: a label's letters go in. No other key reaches a
   terminal under it (⌃C does nothing); ⌘ shortcuts run as ever. In an app pane the keys are the
   app's: take the keyboard back first (F18), then ⌘⇧\\.
@@ -1813,7 +1822,7 @@ number and name; the tab you came from says "you were here", the selected tile h
 - Only you zoom: a client's ⌘⇧\\, arrows, ↵ or click is refused ("only the user zooms out or in"), and
   while you are zoomed out a client's request that would take the keyboard is refused too. A
   client's other requests run underneath (a split redraws its tile).
-- The state's `state.zoom` (`from`, `selected`, tab ids) and `zoom_tiles` (each tile as drawn, also
+- The state's `state.zoom` (`from`, `selected`, tab ids, and `camera`: `scale` and `center`) and `zoom_tiles` (each tile as drawn, also
   while zooming back in); `counts.zoom_frames`: the frames the zoom asked for, none at rest.
 
 ## Driving it from outside
