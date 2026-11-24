@@ -48,7 +48,6 @@ impl Workspace {
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
                 .child(format!("{line} · P{} · {waiting}", own.priority))
-                .child(self.controls.mark("decision:why"))
                 .tooltip(move |_, cx| gpui::AnyView::from(cx.new(|_| crate::Tooltip(tip.clone()))))
         });
         let header = div()
@@ -120,7 +119,8 @@ impl Workspace {
         let (head, body, keys): (String, Vec<AnyElement>, Vec<Keyed>) = match sort.item {
             None if sort.left == 0 => {
                 let line = muted(format!("{} sorted in this run.", sort.done)).into_any_element();
-                ("All sorted".into(), vec![line], vec![("sort-undo", "Undo", "Z", "z")])
+                let keys = vec![("sort-start", "Continue", "↵", "enter"), ("sort-undo", "Undo", "Z", "z")];
+                ("All sorted".into(), vec![line], keys)
             }
             None => {
                 let n = sort.left;

@@ -192,12 +192,22 @@ impl Model {
     pub fn task_inbox(&self) -> Vec<(crate::tasks::Group, &crate::tasks::Task)> {
         let mut rows = self.tasks.inbox();
         if self.features.on(Feature::DecisionSources) && !self.focus.areas().is_empty() {
-            let out =
-                |task: &crate::tasks::Task| self.focus.area_of(task.project.as_deref(), task.repo.as_deref()).is_none();
+            let out = |task: &crate::tasks::Task| self.task_area(task).is_none();
             // Stable: within each tier the inbox's own order.
             rows.sort_by_key(|(group, task)| (*group, *group == crate::tasks::Group::NeedsYou && out(task)));
         }
         rows
+    }
+
+    /// This week's area task `task` is in: by its `#project`, or its repository (a worktree counts
+    /// as the repository it is of).
+    fn task_area(&self, task: &crate::tasks::Task) -> Option<usize> {
+        let repo = task.repo.as_deref().map(|path| {
+            let at = |p: &str| std::path::Path::new(path).starts_with(p);
+            let owner = self.repos.iter().find(|r| at(&r.path) || r.worktrees.iter().any(|w| at(&w.path)));
+            owner.map_or(path, |r| r.path.as_str())
+        });
+        self.focus.area_of(task.project.as_deref(), repo)
     }
 
     /// The task ⌘J opens: the first under Needs you, in focus first.
@@ -217,10 +227,7 @@ impl Model {
         let area = |project: Option<&str>, repo: Option<&str>| {
             if on { self.focus.area_of(project, repo) } else { None }
         };
-        let task_area = |id: TaskId| {
-            let task = self.tasks.get(id)?;
-            area(task.project.as_deref(), task.repo.as_deref())
-        };
+        let task_area = |id: TaskId| self.tasks.get(id).filter(|_| on).and_then(|task| self.task_area(task));
         let since = |task, ticket| {
             let seen = self.waiting.iter().find(|seen| seen.task == task && seen.ticket == ticket);
             seen.map_or(self.now, |seen| seen.since)
@@ -561,10 +568,13 @@ impl Model {
         let pane = self.add(Kind::Decision, None, Axis::Right);
         effects.push(Effect::Opened(pane));
         let tab = self.tabs[self.active].id;
-        // The agents' questions first; then the week's card; triage after them, as one card.
-        let (task, ticket) = queue.first().map(|first| (first.task, first.ticket)).unzip();
-        let week = week.filter(|_| task.is_none());
-        let sort = (task.is_none() && week.is_none()).then(|| self.sorting_at(None, 0, Vec::new()));
+        // The agents' questions in focus first (all, with no focus set); then the week's card;
+        // triage as one card; then the questions out of focus.
+        let asks_first = queue.first().is_some_and(|w| w.why.tier() == 0);
+        let week = week.filter(|_| !asks_first);
+        let sort = (!asks_first && week.is_none() && sortable).then(|| self.sorting_at(None, 0, Vec::new()));
+        let first = queue.first().filter(|_| week.is_none() && sort.is_none());
+        let (task, ticket) = first.map(|first| (first.task, first.ticket)).unzip();
         let of = queue.len() + usize::from(sortable) + usize::from(self.week_card().is_some());
         let done = Vec::new();
         let (held, sorted, weeked, changed, seen) = (false, false, false, false, None);
@@ -679,7 +689,8 @@ impl Model {
                 run.week = card;
                 run.weeked |= card.is_none();
                 if card.is_some() {
-                    (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len() + 1 + sorts);
+                    let done = run.done.len() + usize::from(run.sorted);
+                    (run.at, run.of) = (done + 1, done + queue.len() + 1 + sorts);
                     run.queue = queue;
                     return self.title_decisions();
                 }
@@ -691,7 +702,7 @@ impl Model {
             let weeks =
                 usize::from(self.decisions.as_ref().is_some_and(|run| !run.weeked) && self.week_card().is_some());
             if let Some(run) = self.decisions.as_mut() {
-                let done = run.done.len() + usize::from(run.weeked);
+                let done = run.done.len() + usize::from(run.weeked) + usize::from(run.sorted);
                 (run.at, run.of) = (done + 1, done + queue.len() + 1 + weeks);
                 run.queue = queue;
             }
@@ -743,8 +754,8 @@ impl Model {
             let first = queue.first().filter(|_| week.is_none() && sorting.is_none());
             (run.task, run.ticket) = first.map(|first| (first.task, first.ticket)).unzip();
             (run.sort, run.week) = (sorting, week);
-            // The week's card answered this run counts as one done.
-            let done = run.done.len() + usize::from(run.weeked);
+            // The week's card and triage, dealt with in this run, count as one done each.
+            let done = run.done.len() + usize::from(run.weeked) + usize::from(run.sorted);
             (run.at, run.of) = (done + 1, done + queue.len() + weeks + sorts);
             run.queue = queue;
         }
@@ -1071,15 +1082,60 @@ mod tests {
         );
         m.update(Action::DecisionsOpen);
         assert_eq!(m.decision_card(), Some((a, 1)));
+        let at = |m: &Model| m.decisions.as_ref().map(|run| (run.at, run.of));
+        assert_eq!(at(&m), Some((1, 3)));
         // Skipped: the sort card comes before the question out of focus.
-        let Key::Act(skip) = m.decision_key("s", Mods::default(), 3_000) else { panic!() };
-        m.update(skip);
+        let press = |m: &mut Model, key: &str| {
+            let Key::Act(action) = m.decision_key(key, Mods::default(), 3_000) else { panic!("{key}") };
+            m.update(action);
+        };
+        press(&mut m, "s");
+        assert!(m.decisions.as_ref().is_some_and(|run| run.sort.is_some() && run.task.is_none()));
+        assert_eq!(at(&m), Some((2, 3)));
+        // Sorted: "All sorted", and ↵ goes on to the question left, the third of three.
+        press(&mut m, "enter");
+        press(&mut m, "enter");
+        assert!(m.decisions.as_ref().is_some_and(|run| run.sort.as_ref().is_some_and(|s| s.item.is_none())));
+        press(&mut m, "enter");
+        assert_eq!((m.decision_card(), at(&m)), (Some((b, 1)), Some((3, 3))));
+        // ⌘J's task and the Tasks list: in focus first.
+        assert_eq!(m.next_task(), Some(a));
+        let rows = m.task_list_rows(crate::model::TasksView::State, true);
+        let place = |id| rows.iter().position(|r| *r == crate::list::ListRow::Task(id));
+        assert!(place(a) < place(b), "{rows:?}");
+    }
+
+    #[test]
+    fn with_every_question_out_of_focus_triage_comes_first() {
+        let (mut m, a, b) = two();
+        in_focus(&mut m, 99, "dune");
+        m.update(
+            Action::DecisionFile { filing: Box::new(crate::filed::tests::filing()), now: 2_500 }
+                .sent_by(Origin::Socket),
+        );
+        m.update(Action::DecisionsOpen);
         assert!(m.decisions.as_ref().is_some_and(|run| run.sort.is_some() && run.task.is_none()));
         let Key::Act(skip) = m.decision_key("s", Mods::default(), 3_000) else { panic!() };
         m.update(skip);
-        assert_eq!(m.decision_card(), Some((b, 1)));
-        // ⌘J's task and the Tasks inbox: in focus first.
-        assert_eq!(m.next_task(), Some(a));
+        assert_eq!(queue(&m), [b, a], "then the rest by priority");
+    }
+
+    #[test]
+    fn a_task_in_a_worktree_is_in_its_repositorys_area() {
+        let (mut m, a, b) = two();
+        m.repos = vec![crate::repos::Repo {
+            name: "app".into(),
+            path: "/code/app".into(),
+            branch: None,
+            worktrees: vec![crate::repos::Worktree { name: "w".into(), path: "/wt/app/w".into(), branch: None }],
+        }];
+        if let Some(task) = m.tasks.list.iter_mut().find(|t| t.id == a) {
+            task.repo = Some("/wt/app/w".into());
+        }
+        m.update(Action::SetWeek { week: "2026-W48".into() }.sent_by(Origin::System));
+        let area = crate::focus::Area { name: "App".into(), projects: vec![], repos: vec!["/code/app".into()] };
+        m.focus.set(&[area], crate::focus::SetBy::User, 1);
+        assert_eq!(queue(&m), [a, b]);
     }
 
     #[test]

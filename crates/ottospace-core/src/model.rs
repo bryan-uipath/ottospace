@@ -9772,7 +9772,8 @@ impl Model {
             };
             places.push(TaskPlace { heading, group, task });
         }
-        places.sort_by_key(|place| (place.heading, place.task.priority, place.task.id));
+        // Stable: within a heading the inbox's order (this week's focus first under Needs you).
+        places.sort_by_key(|place| place.heading);
         places
     }
 
@@ -10889,7 +10890,7 @@ impl Model {
     pub fn home(&self, keep_out: &[Rect]) -> Option<Home<'_>> {
         // A task's empty tab is its own, not the home screen: the shell says what goes in it.
         let workspace = *self.shown_space() == Owner::Home;
-        (self.tree_at(self.main_at()).is_none() && workspace).then(|| home::home(&self.tasks, keep_out))
+        (self.tree_at(self.main_at()).is_none() && workspace).then(|| home::home(self.task_inbox(), keep_out))
     }
 
     /// Pane ids of each tab, in tab order. The state dump uses it to show which tab holds a pane.

@@ -2642,8 +2642,8 @@ fn check_decisions(m: &Model) -> Result<(), String> {
     ensure!(m.tab_of(run.pane) == Some(run.tab), "its card is in tab {:?}", m.tab_of(run.pane));
     let triage = usize::from(run.sort.is_some() || (!run.sorted && m.sortable()));
     let week = usize::from(run.week.is_some() || (!run.weeked && m.week_card().is_some()));
-    // The week's card answered this run counts as one done.
-    let done = run.done.len() + usize::from(run.weeked);
+    // The week's card and triage, dealt with in this run, count as one done each.
+    let done = run.done.len() + usize::from(run.weeked) + usize::from(run.sorted);
     let of = done + queue.len() + triage + week;
     ensure!(run.at == done + 1 && run.of == of, "{} of {}, not of {of}", run.at, run.of);
     ensure!(tabs[0].title == format!("Decisions · {} of {}", run.at, run.of), "its tab reads {:?}", tabs[0].title);

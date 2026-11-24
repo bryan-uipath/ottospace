@@ -1,6 +1,6 @@
 # This week's focus ranks Decisions (`decision_sources`): the focus set first (an agent's
 # proposal, the user's ↵), then two made-up tasks whose agents each ask. The one in focus comes
-# first though asked later; its line says why, and its hover gives the sum.
+# first though asked later; its line says why.
 {"env":{"OTTOSPACE_FEATURES":"decisions,decision_sources"}}
 {"cmd":"split","kind":"empty"}
 {"until":"week_focus.week"}
@@ -22,6 +22,3 @@
 {"until":"state.decisions.at"}
 {"settle":300}
 {"shot":"focus-first"}
-{"hover":"decision:why"}
-{"settle":600}
-{"shot":"why-sum"}

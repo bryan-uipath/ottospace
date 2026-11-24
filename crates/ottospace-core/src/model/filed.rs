@@ -58,10 +58,11 @@ impl Model {
         let mut next = sort.clone();
         let mut changed = Vec::new();
         match action {
-            Action::SortStart if sort.item.is_none() => {
+            Action::SortStart if sort.item.is_none() && self.filed.next_to_sort(now).is_some() => {
                 next = self.sorting_at(self.filed.next_to_sort(now), sort.done, sort.undo.clone());
             }
-            Action::SortSkip if sort.item.is_none() => {
+            // Not now; or all sorted, ↵ goes on to what is left in the run.
+            Action::SortSkip | Action::SortStart if sort.item.is_none() => {
                 if let Some(run) = self.decisions.as_mut() {
                     (run.sort, run.sorted) = (None, true);
                 }

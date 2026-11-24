@@ -94,8 +94,12 @@ fn spaced(mut left: Vec<Entry>) -> Vec<Entry> {
             .rev()
             .take_while(|e| e.why.tier() == first.why.tier() && e.source == first.source && !e.why.agent_waits)
             .count();
+        // Never past a card an agent waits on: it is never held back.
         let other = (run >= IN_A_ROW && !first.why.agent_waits)
-            .then(|| left.iter().position(|e| e.why.tier() == first.why.tier() && e.source != first.source))
+            .then(|| {
+                let before = left.iter().take_while(|e| !e.why.agent_waits);
+                before.into_iter().position(|e| e.why.tier() == first.why.tier() && e.source != first.source)
+            })
             .flatten();
         out.push(left.remove(other.unwrap_or(0)));
     }
@@ -150,7 +154,7 @@ pub fn sum(why: &Why, area: Option<&str>, now: u64, due: impl Fn(u64) -> String)
         out.push_str(" · taken now: first of its tier today");
     }
     if why.agent_waits {
-        out.push_str(" · an agent waits: before every filed card");
+        out.push_str(" · an agent waits on it");
     }
     out
 }
@@ -260,6 +264,11 @@ mod tests {
         let out = entry(Card::Filed(9), Source::Jira, Why { area: None, ..why.clone() }, 5, 9);
         let got = order(vec![slack(1), slack(2), slack(3), slack(4), out.clone()], NOON);
         assert_eq!(ids(&got), ids(&[slack(1), slack(2), slack(3), slack(4), out]));
+        // Never brought past a card an agent waits on.
+        let blocked = entry(Card::Filed(5), Source::Slack, Why { agent_waits: true, ..why.clone() }, 5, 5);
+        let taken = |id: u64| entry(Card::Filed(id), Source::Slack, Why { taken_now: true, ..why.clone() }, 5, id);
+        let got = order(vec![taken(1), taken(2), taken(3), taken(4), blocked.clone(), jira.clone()], NOON);
+        assert_eq!(ids(&got), ids(&[taken(1), taken(2), taken(3), taken(4), blocked, jira.clone()]));
         // A card an agent waits on is never held back.
         let waits = |id: u64| entry(Card::Filed(id), Source::Slack, Why { agent_waits: true, ..why.clone() }, 5, id);
         let got = order(vec![waits(1), waits(2), waits(3), waits(4), jira.clone()], NOON);
