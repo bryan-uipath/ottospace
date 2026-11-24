@@ -1650,6 +1650,12 @@ items back in triage). A sorted item whose filer then changes what it says (not 
 comes back to triage, says what changed, and keeps nothing you accepted. The look is
 provisional. Only you sort.
 
+The week's focus (`decision_sources`): Tasks ▸ This Week's Focus… (the palette too) lists the
+Projects entries; tick up to four (↑↓ move, space ticks, ↵ sets, Esc closes, setting nothing).
+Each is an area of the week, named by the project's title (an area set before keeps its own name
+and links). Kept in `~/.ottospace/focus.json` by ISO week (the last twelve); a new week starts with
+none. Only you set it; agents read it with `week_focus`.
+
 ### Projects
 
 With `projects` on and `projects_dir` set, the left rail has a Projects cell under Repos. Its list

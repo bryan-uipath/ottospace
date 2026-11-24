@@ -126,10 +126,14 @@ impl Workspace {
 
     /// The local day's start, when it turns: what Done today counts from.
     pub(crate) fn tell_day(&mut self, window: &Window, cx: &mut Context<Self>) {
-        let day = crate::day_start(crate::now_ms());
+        let now = crate::now_ms();
+        let day = crate::day_start(now);
         if self.told_day != day {
             self.told_day = day;
             self.dispatch(Action::LocalDay { day }, ottospace_core::Origin::System, window, cx);
+            // The ISO week of the local date: the week's focus is this week's.
+            let week = ottospace_core::focus::iso_week(crate::local_days(now));
+            self.dispatch(Action::SetWeek { week }, ottospace_core::Origin::System, window, cx);
         }
     }
 

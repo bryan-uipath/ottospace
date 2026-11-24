@@ -1,0 +1,16 @@
+# The week's focus (`decision_sources`): Tasks ▸ This Week's Focus… lists the made-up Projects
+# entries; the user ticks two (space), the cursor on a third, and sets them (↵).
+{"env":{"OTTOSPACE_FEATURES":"projects,decisions,decision_sources"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"key","keys":"cmd-shift-p","as":"user"}
+{"cmd":"key","keys":"w e e k space f o c u s enter","as":"user"}
+{"until":"state.focus_edit.count","is":5}
+{"settle":300}
+{"shot":"editor"}
+{"cmd":"key","keys":"space down down space down","as":"user"}
+{"settle":200}
+{"shot":"ticked"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"week_focus.areas","is":2}
+{"settle":200}
+{"shot":"set"}

@@ -1898,6 +1898,23 @@ const MAKERS: &[Make] = &[
     |g| Action::SortToggle { id: g.sort_item(), claims: g.rng.coin() },
     |g| Action::SortPromote { id: g.sort_item() },
     |_| Action::SortUndo,
+    // The week's focus: the week (a real one, another, none), kept weeks, the editor's keys.
+    |g| Action::SetWeek { week: g.rng.pick(&["2026-W48", "2026-W49", "", "../x"]).into() },
+    |g| {
+        let area = |g: &mut Gen| crate::focus::Area { name: g.text(), projects: vec![g.text()], repos: vec![g.text()] };
+        let week = |g: &mut Gen| crate::focus::Week {
+            week: g.rng.pick(&["2026-W47", "2026-W48", "x"]).into(),
+            areas: (0..g.rng.below(6)).map(|_| area(g)).collect(),
+            set_by: crate::focus::SetBy::User,
+            at: g.time(),
+        };
+        Action::RestoreFocus { kept: crate::focus::Kept { weeks: (0..g.rng.below(3)).map(|_| week(g)).collect() } }
+    },
+    |_| Action::FocusEditOpen,
+    |_| Action::FocusEditClose,
+    |g| Action::FocusEditMove { delta: g.rng.pick(&[-1, 1, 5, i32::MIN]) },
+    |g| Action::FocusEditToggle { row: g.rng.maybe(|r| r.below(7)) },
+    |g| Action::FocusEditSave { at: g.time() },
     // Zoom-out: open or back, the selection, into a tile (else a stray tab).
     |_| Action::ZoomOut,
     |g| Action::ZoomMove { dir: g.dir() },
@@ -2578,6 +2595,26 @@ fn check_decisions(m: &Model) -> Result<(), String> {
     Ok(())
 }
 
+/// The week's focus: four areas at most, each named, of a real week; the editor's ticks four at
+/// most, each a row once; only the user opens the editor.
+fn check_focus(m: &Model) -> Result<(), String> {
+    let areas = m.focus.areas();
+    ensure!(areas.len() <= crate::focus::MAX_AREAS, "{} areas", areas.len());
+    ensure!(
+        areas.iter().all(|a| !a.name.is_empty() && a.name.chars().all(crate::capture::shows)),
+        "an area's name not kept"
+    );
+    ensure!(m.focus.weeks.iter().all(|w| crate::focus::valid_week(&w.week)), "a week that is no week");
+    if let Some(edit) = &m.focus_edit {
+        let once = edit.ticked.iter().enumerate().all(|(i, r)| !edit.ticked[..i].contains(r));
+        ensure!(once && edit.ticked.len() <= crate::focus::MAX_AREAS, "ticked {:?}", edit.ticked);
+        ensure!(edit.ticked.iter().all(|r| *r < edit.count) && edit.count == edit.rows.len(), "ticks past the rows");
+        ensure!(edit.cursor < edit.count.max(1), "cursor {} of {}", edit.cursor, edit.count);
+        ensure!(m.features.on(Feature::DecisionSources), "the editor open with its flag off");
+    }
+    Ok(())
+}
+
 /// Filed decisions: one open per key, the caps, every word as kept, nothing open past its time
 /// or its task, triage as its source says, nothing a client may not file.
 fn check_filed(m: &Model) -> Result<(), String> {
@@ -2682,6 +2719,7 @@ fn check_reorder(m: &Model) -> Result<(), String> {
 
 fn check(m: &Model) -> Result<(), String> {
     check_decisions(m)?;
+    check_focus(m)?;
     check_filed(m)?;
     check_zoom(m)?;
     // A program's ask, and the "always" the user gave, last only while their pane does; an ask
@@ -5803,6 +5841,11 @@ impl Run {
                         "{action:?} wrote {decision:?}, not what is held"
                     );
                 }
+                // Only the user's ↵ in the focus editor writes the week's focus; and it is what is held.
+                Effect::SaveFocus { kept } => {
+                    let acts = user && matches!(action, Action::FocusEditSave { .. });
+                    ensure!(acts && *kept == m.focus.kept(), "{origin:?}'s {action:?} wrote focus.json");
+                }
                 // Only the user's P, or their Z of it, writes what skips triage; and it is what is held.
                 Effect::SaveTrust { trusted } => {
                     let acts = user && matches!(action, Action::SortPromote { .. } | Action::SortUndo);
@@ -6631,6 +6674,10 @@ fn code(sent: &Envelope) -> String {
         let filing = serde_json::to_string(filing).unwrap_or_default();
         return format!("decision_file({filing:?}, {now}).sent_by(Origin::{:?})", sent.origin);
     }
+    if let Action::RestoreFocus { kept } = &sent.action {
+        let kept = serde_json::to_string(kept).unwrap_or_default();
+        return format!("restore_focus({kept:?}).sent_by(Origin::{:?})", sent.origin);
+    }
     if let Action::RestoreDecisions { kept, trusted } = &sent.action {
         let (kept, trusted) =
             (serde_json::to_string(kept).unwrap_or_default(), serde_json::to_string(trusted).unwrap_or_default());
@@ -6910,6 +6957,11 @@ fn set_features(on: &[&str]) -> Action {
 #[allow(dead_code)] // for a regression `code` writes; none is pasted yet
 fn decision_file(filing: &str, now: u64) -> Action {
     Action::DecisionFile { filing: Box::new(serde_json::from_str(filing).expect("a filing is JSON")), now }
+}
+
+#[allow(dead_code)] // for a regression `code` writes; none is pasted yet
+fn restore_focus(kept: &str) -> Action {
+    Action::RestoreFocus { kept: serde_json::from_str(kept).expect("focus.json is JSON") }
 }
 
 #[allow(dead_code)] // for a regression `code` writes; none is pasted yet

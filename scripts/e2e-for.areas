@@ -64,6 +64,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?(finish|seal)(\.rs|/)                                             done|seal
 /src/(.*/)?decisions(\.rs|/)                                                 decisions
 /src/(.*/)?filed(\.rs|/)                                                     a_filed_decision|filed_decisions
+/src/(.*/)?(focus|week_focus)(\.rs|/)                                        week_focus
 /src/(.*/)?pass(\.rs|/)                                                      pass
 /src/(.*/)?(worktree|worktrees|repos|prs)(\.rs|/)                            worktree|repo|pull_request
 /src/(.*/)?clone\.rs                                                          clone|repo

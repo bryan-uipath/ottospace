@@ -442,6 +442,20 @@ pub fn save_projects(kept: &ottospace_core::projects::Kept) -> io::Result<()> {
     write_whole(home, "projects.json", &text)
 }
 
+/// `focus.json`: the weeks' focus as the user set it. Nothing read in a test run that named no folder.
+pub fn read_focus() -> ottospace_core::focus::Kept {
+    let file = get().home.as_ref().map(|home| home.join("focus.json"));
+    let bytes = file.and_then(|file| crate::collect::read_plain(&file, 256 * 1024));
+    bytes.and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+/// Writes `focus.json` (0600), whole or not at all. Nothing in a test run that named no folder.
+pub fn save_focus(kept: &ottospace_core::focus::Kept) -> io::Result<()> {
+    let Some(home) = get().home.as_ref() else { return Ok(()) };
+    let text = serde_json::to_string_pretty(kept).map_err(io::Error::other)? + "\n";
+    write_mode(home, "focus.json", text.as_bytes(), Some(0o600))
+}
+
 /// Writes `keys.json`, as `save_task` writes a task. Nothing in a test run that named no folder.
 pub fn save_keys(text: &str) -> io::Result<()> {
     let Some(home) = get().home.as_ref() else { return Ok(()) };

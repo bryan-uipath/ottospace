@@ -632,6 +632,9 @@ pub enum Request {
         #[serde(default)]
         task: Option<TaskId>,
     },
+    /// This week's focus (`decision_sources`), read-only: `{"ok":true,"week":"2026-W48","focus":
+    /// {"untrusted":true,"warning":"..","areas":[{"name","projects","repos"}],"set_by":"user"}}`.
+    WeekFocus,
     /// The decision of `source` and `key` is moot: it closes as withdrawn.
     DecisionWithdraw {
         source: ottospace_core::filed::Source,
@@ -855,9 +858,10 @@ pub fn feature_refusal(request: &Request, features: &Features) -> Option<&'stati
         | Request::MarkRemove { .. }
         | Request::MarkRename { .. } => Feature::Marks,
         Request::ListenEnd { .. } => Feature::Transcripts,
-        Request::DecisionFile { .. } | Request::DecisionWithdraw { .. } | Request::Decision { .. } => {
-            Feature::DecisionSources
-        }
+        Request::DecisionFile { .. }
+        | Request::DecisionWithdraw { .. }
+        | Request::Decision { .. }
+        | Request::WeekFocus => Feature::DecisionSources,
         // `ax_tree` says so itself: an app-window test run reads it with the flag off.
         Request::AppRead { .. } | Request::AppLook { .. } => Feature::AgentMode,
         Request::Section { section } => section.feature()?,

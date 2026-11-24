@@ -28,6 +28,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
     let mark_tab = [MenuItem::separator(), item("Mark Tab", MarkTab), item("Go to Mark…", MarkJump)];
     let displays = features.on(ottospace_core::features::Feature::MultiMonitor);
     let decisions = features.on(ottospace_core::features::Feature::Decisions);
+    let sources = features.on(ottospace_core::features::Feature::DecisionSources);
     let quick = features.on(ottospace_core::features::Feature::OverlayPanels);
     let zoom_out = features.on(ottospace_core::features::Feature::ZoomOut);
     vec![
@@ -150,6 +151,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
                 .into_iter()
                 .chain(quick.then(|| item("Quick Note", QuickNote)))
                 .chain(decisions.then(|| item("Decisions", OpenDecisions)))
+                .chain(sources.then(|| item("This Week's Focus…", crate::week_focus::WeekFocus)))
                 .chain([
                     item("Capture the Pane", CapturePane),
                     MenuItem::separator(),

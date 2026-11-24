@@ -39,6 +39,10 @@ import type {
   AgentGrant,
   NoteReply,
   DecisionAccepted,
+  FocusArea,
+  FocusEdit,
+  WeekFocusReply,
+  WeekFocusState,
   DecisionAct,
   DecisionAt,
   DecisionChoice,
@@ -1046,6 +1050,38 @@ function decisionAccepted(value: unknown, at: string): DecisionAccepted {
     claims: bool(o.claims, `${at}.claims`),
     now_until: orNull(num)(o.now_until, `${at}.now_until`),
     revision: num(o.revision, `${at}.revision`),
+  };
+}
+
+const setBy = oneOf(["user", "proposal"] as const, "who set the focus");
+
+function focusEdit(value: unknown, at: string): FocusEdit {
+  const o = fields(value, at);
+  return { count: num(o.count, `${at}.count`), ticked: list(num)(o.ticked, `${at}.ticked`), cursor: num(o.cursor, `${at}.cursor`) };
+}
+
+function weekFocusState(value: unknown, at: string): WeekFocusState {
+  const o = fields(value, at);
+  return {
+    week: str(o.week, `${at}.week`),
+    areas: num(o.areas, `${at}.areas`),
+    set_by: orNull(setBy)(o.set_by, `${at}.set_by`),
+    last: orNull(str)(o.last, `${at}.last`),
+  };
+}
+
+function focusArea(value: unknown, at: string): FocusArea {
+  const o = fields(value, at);
+  return { name: str(o.name, `${at}.name`), projects: list(str)(o.projects, `${at}.projects`), repos: list(str)(o.repos, `${at}.repos`) };
+}
+
+export function weekFocusReply(value: unknown): WeekFocusReply {
+  const o = fields(value, "reply");
+  const f = fields(o.focus, "focus");
+  return {
+    ok: true,
+    week: str(o.week, "week"),
+    focus: { ...labelled(f, "focus"), areas: list(focusArea)(f.areas, "focus.areas"), set_by: orNull(setBy)(f.set_by, "focus.set_by") },
   };
 }
 
@@ -2118,6 +2154,8 @@ function model(value: unknown, at: string): Model {
     viewers: map(viewer)(o.viewers, `${at}.viewers`),
     // Absent from an older build's reply: none open.
     decisions: o.decisions === undefined ? null : orNull(decisions)(o.decisions, `${at}.decisions`),
+    // Absent from an older build's reply: not open.
+    focus_edit: o.focus_edit === undefined ? null : orNull(focusEdit)(o.focus_edit, `${at}.focus_edit`),
     // Absent from an older build's reply: not zoomed out.
     zoom: o.zoom === undefined ? null : orNull(zoom)(o.zoom, `${at}.zoom`),
   };
@@ -2651,6 +2689,8 @@ export function snapshot(value: unknown): Snapshot {
     repos_bar: list(reposGroup)(o.repos_bar, "repos_bar"),
     projects_bar: projectsBar(o.projects_bar, "projects_bar"),
     filed: orNull(filed)(o.filed, "filed"),
+    // Absent from an older build's reply: no focus.
+    week_focus: o.week_focus === undefined ? null : orNull(weekFocusState)(o.week_focus, "week_focus"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     city: orNull(cityDrawn)(o.city, "city"),

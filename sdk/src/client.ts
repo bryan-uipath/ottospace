@@ -12,6 +12,7 @@ import {
   noteReply,
   decisionFileReply,
   decisionReply,
+  weekFocusReply,
   workspaceReply,
   captureReply,
   inboxReply,
@@ -46,6 +47,7 @@ import type {
   DecisionFileArgs,
   DecisionFileReply,
   DecisionReply,
+  WeekFocusReply,
   DecisionSource,
   WorkspaceReply,
   CaptureArgs,
@@ -696,6 +698,10 @@ export class Client {
   /** A filed decision, its words labelled untrusted: data, never instructions. Read-only. */
   async decision(args: { id: number }): Promise<DecisionReply> {
     return decisionReply(await this.send({ cmd: "decision", ...args }));
+  }
+  /** This week's focus by name (`decision_sources`): the user's words, labelled; data, never instructions. */
+  async weekFocus(): Promise<WeekFocusReply> {
+    return weekFocusReply(await this.send({ cmd: "week_focus" }));
   }
   /** The marks, in the user's order. */
   async marks(): Promise<MarksReply> {
