@@ -1317,20 +1317,26 @@ dialog or panel: it holds only that kind), Several (the largest, the smallest, t
 and When it opens: Offer it (O, the default) or Take it (T: a window that opens while it waits, on
 the tab on show, never the one you are in). Under them, the app's windows open now, those the rule
 takes ticked; the action row says how many match, and Keep slot (↵) makes it. × or Esc closes it.
-By default the rule is the window id when the window has one, else any window of the app, the
-largest. A title test is written as the glob `layout.json` keeps (`*Incident*`, `Weekly*`); a
+By default the rule is any window of the app, the largest: several such slots pair by size, the
+largest pane with the largest window. The window id is a choice of yours, and the dialog says that
+some apps (Zoom) move it between their windows, and when other windows have it now. A title test is written as the glob `layout.json` keeps (`*Incident*`, `Weekly*`); a
 pattern written there by hand stays as it is. ⋯ on a slot offers `Edit slot…` (the dialog, with
 Save), `Offer again` (the windows passed over, while there are any), `Give back the window` (while
-it holds one) and `Clear slot`. The menu is the user's: ↓ ↑ ↵, Esc closes it.
+it holds one), `Swap` or `Swap with “…”` (with another slot of the app on the tab: the two exchange
+their windows, or the window moves to the empty one), `Re-sort Zoom windows by size` and `Clear
+slot`. The menu is the user's: ↓ ↑ ↵, Esc closes it.
 
 A slot that waits draws a dashed outline in its pane with its app's icon (kept by bundle id in
 `~/.ottospace/icons`, so it shows when the app is not running; a generic one without), `Waiting for a
 Zoom window`, the rule in the dialog's words (`Zoom · window id zm.meeting.window.main`), `Zoom is not
-running`, `Zoom's window is away` or `Its window is already in another pane` when so, and whether it offers or takes the window. A window it
+running`, `Zoom's window is away`, `Its window is already in another pane` or why each window of
+the app is not its own (`2 Zoom windows: 1 is in another pane; 1 has no window id`) when so, and whether it offers or takes the window. A window it
 selects is offered there: a solid outline, `“Weekly sync” is open`, Put it here (↵ while the slot
 is focused) and, quieter, Not this one and `N more match`; in a small pane, the icon and one line
-(and Put it here while it offers). Its other acts are in ⋯. Several slots that select the same windows take them
-one by one, in reading order: one window a slot. ⌘E there and a pick end the slot. A filled slot's
+(and Put it here while it offers). Its other acts are in ⋯. Several slots that select the same windows each get
+one: those that name their window (by title or id) first, as many served as can be; then app-only
+slots by size, the largest pane with the largest window. A window in a pane is never moved for
+another; Swap and Re-sort move them. ⌘E there and a pick end the slot. A filled slot's
 header says `slot`. Only you make, fill or clear a slot; a client's click on one is refused.
 
 A pane you put a window in (the picker, ⌘E, Put it here) stays when that window closes or its app
@@ -1911,6 +1917,7 @@ Only you can read it (0600). At 1 MB it becomes `log.1` and the one before goes:
 | `redrawn` | Frames came again after a written stall: `kicks`, `lasted_ms`, its `n` |
 | `host_failed` | A window could not be hosted: its number |
 | `give_back_failed` | A hosted window could not be put back on a screen: its number |
+| `slot_miss` | A waiting slot offers nothing, and why changed: `pane`, `bundle`, `why` (each reason's count: `rules`, `no_id`, `other_id`, `other_title`, `other_kind`, `other_display`, `in_pane`, `passed_over`, `bigger_pane`, `other_slot`). Never a title or id |
 | `place` | A new window of a hosted app was judged: `bundle`, `subrole`, `modal`, `sheet`, `size`, `pane` (its app pane's size), `min_width` (the least width that pane's window kept), `place` (`split`, `offer`, `float`, `leave`), `why` (`no_slot`, `dialog`, `modal`, `tiny`, `sheet`, `kind`, `rule`) and `rule` (`windows[2]: manage`, `built-in rule 3: ignore`, or null). Never the title |
 | `pick_list` | The picker listed an app's windows (⌘E, then the app): `bundle`, `listed` (how many) and `skipped`, each window it left out with `why` (`minimised`, `sheet`, `tiny`, `no_id`, or the rule: `built-in rule 0: ignore`) and `subrole` (an `AX` word, else `other`). Never a title |
 | `gpui` | An error or warning of GPUI's macOS layer: `level`, `src` (`gpui-0.2.2/src/platform/mac/window.rs:489`), `said` only when fixed words and a code (`could not create display link, code: -6661`), and `n`: one from the same place is written its 1st, 2nd, 4th, 8th.. time |

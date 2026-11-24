@@ -2429,6 +2429,17 @@ pub enum Action {
     SlotGiveBack {
         pane: PaneId,
     },
+    /// Swap with…: slot `pane` and slot `with`, of one app on the tab on show, exchange the windows
+    /// they hold (one may hold none: the window moves, the other waits). The slots stay.
+    SlotSwap {
+        pane: PaneId,
+        with: PaneId,
+    },
+    /// Re-sort by size: the windows the slots of `pane`'s app on the tab on show hold, paired again
+    /// as a look pairs them (`slot::pair`), the largest pane with the largest window.
+    SlotResort {
+        pane: PaneId,
+    },
     /// What a look at an app found (`Effect::WatchSlots`). The shell's alone.
     SlotWindows {
         look: crate::slot::Look,
@@ -3021,6 +3032,8 @@ impl Action {
             | Action::SlotNext { .. }
             | Action::SlotLookAgain { .. }
             | Action::SlotGiveBack { .. }
+            | Action::SlotSwap { .. }
+            | Action::SlotResort { .. }
             | Action::SlotWindows { .. }
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. }
@@ -3170,6 +3183,8 @@ impl Action {
             | Action::SlotNext { .. }
             | Action::SlotLookAgain { .. }
             | Action::SlotGiveBack { .. }
+            | Action::SlotSwap { .. }
+            | Action::SlotResort { .. }
             | Action::SlotWindows { .. }
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. } => Some(Feature::Slots),
@@ -3826,6 +3841,12 @@ pub enum Effect {
     /// Put slot pane `pane`'s window back where it was before it was hosted. The pane stays.
     GiveBack {
         pane: PaneId,
+    },
+    /// Slots `a` and `b` exchanged what they hold (`Action::SlotSwap`): the shell's hosted windows
+    /// change panes with them, and each is placed in its new pane.
+    SlotSwapped {
+        a: PaneId,
+        b: PaneId,
     },
     /// The user dismissed the notice of `kind`: a slot the shell holds it in is emptied.
     NoticeDismissed {
@@ -4542,6 +4563,10 @@ pub struct Model {
     /// The last look at each app a slot names, and the apps the shell is asked to look at.
     #[serde(skip)]
     slot_looks: Vec<crate::slot::Look>,
+    /// Each window's area as its app sized it, from the last look that found it in no pane: a
+    /// hosted window has its pane's size. Slots that pair by size rank windows by it.
+    #[serde(skip)]
+    slot_natural: std::collections::BTreeMap<u32, f64>,
     #[serde(skip)]
     slot_watch: Vec<(Option<String>, String)>,
     /// A slot's record kept as read while it is not run (the flag off, or a newer build's), with
@@ -4758,6 +4783,7 @@ impl Default for Model {
             agent: crate::agent_mode::AgentMode::default(),
             slots: Default::default(),
             slot_looks: Vec::new(),
+            slot_natural: Default::default(),
             slot_watch: Vec::new(),
             slot_dormant: Default::default(),
             slot_dialog: None,
@@ -4989,7 +5015,9 @@ impl Model {
             | Action::SlotDecline { .. }
             | Action::SlotNext { .. }
             | Action::SlotLookAgain { .. }
-            | Action::SlotGiveBack { .. } => Some(crate::slot::USERS_ALONE),
+            | Action::SlotGiveBack { .. }
+            | Action::SlotSwap { .. }
+            | Action::SlotResort { .. } => Some(crate::slot::USERS_ALONE),
             Action::SlotWindows { .. }
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. }
@@ -8134,6 +8162,8 @@ impl Model {
             | Action::SlotNext { .. }
             | Action::SlotLookAgain { .. }
             | Action::SlotGiveBack { .. }
+            | Action::SlotSwap { .. }
+            | Action::SlotResort { .. }
             | Action::SlotWindows { .. }
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. }) => self.slot_act(action, effects),
@@ -12033,6 +12063,8 @@ mod tests {
         Action::SlotNext { .. },
         Action::SlotLookAgain { .. },
         Action::SlotGiveBack { .. },
+        Action::SlotSwap { .. },
+        Action::SlotResort { .. },
         Action::SlotWindows { .. },
         Action::SlotHosted { .. },
         Action::SlotTick { .. },
@@ -12472,6 +12504,8 @@ mod tests {
             Action::SlotNext { pane: 1 },
             Action::SlotLookAgain { pane: 1 },
             Action::SlotGiveBack { pane: 1 },
+            Action::SlotSwap { pane: 1, with: 2 },
+            Action::SlotResort { pane: 1 },
             Action::SlotWindows { look: crate::slot::Look::default() },
             Action::SlotHosted { pane: 1, kind: None },
             Action::SlotTick { at: 0 },
@@ -12572,7 +12606,9 @@ mod tests {
             | Action::SlotDecline { .. }
             | Action::SlotNext { .. }
             | Action::SlotLookAgain { .. }
-            | Action::SlotGiveBack { .. } => Some(crate::slot::USERS_ALONE),
+            | Action::SlotGiveBack { .. }
+            | Action::SlotSwap { .. }
+            | Action::SlotResort { .. } => Some(crate::slot::USERS_ALONE),
             Action::SlotWindows { .. }
             | Action::SlotHosted { .. }
             | Action::SlotTick { .. }

@@ -17831,6 +17831,88 @@ fn a_title_slot_is_offered_a_dialog_of_that_title_and_bring_it_here_fills_it() {
     assert!(held, "{state}");
 }
 
+/// The owner's two Zoom slots: A by the title both meeting windows have, B by the id only the
+/// larger has. Two windows of that title open: B is offered its window and A the other, not both
+/// waiting on one. The user's Swap (A's ⋯) exchanges them; a client's is refused.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn two_slots_of_one_title_each_get_a_window_and_swap_exchanges_them() {
+    let otto = Otto::launch_with("slot-pair", &[("OTTOSPACE_FEATURES", "slots")]);
+    let app = |otto: &Otto| {
+        otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}))["state"]["focused"].as_u64().unwrap()
+    };
+    let main = app(&otto);
+    let (a, b) = (app(&otto), app(&otto));
+    let by_title = json!({"select": {"title": "Team Meeting"}, "pick": "largest"});
+    otto.call(json!({"cmd": "slot_make", "pane": a, "slot": by_title}));
+    otto.call(json!({"cmd": "slot_make", "pane": b, "slot": {"select": {"identifier": "meetings.main"}}}));
+    slot_menu(&otto, a, "slot_give_back");
+    slot_menu(&otto, b, "slot_give_back");
+    let open = |id: Option<&str>, size: [u32; 2]| {
+        let mut line = json!({"cmd": "window_fixture", "pane": main, "title": "Team Meeting", "size": size});
+        if let Some(id) = id {
+            line["identifier"] = json!(id);
+        }
+        otto.call(line)
+    };
+    open(Some("meetings.main"), [880, 862]);
+    let reply = open(None, [875, 336]);
+    let run = |reply: &Value, pane: u64| reply["state"]["slots"][pane.to_string()].clone();
+    assert_eq!(
+        (run(&reply, a)["status"].clone(), run(&reply, b)["status"].clone()),
+        (json!("offered"), json!("offered")),
+        "{reply}"
+    );
+    assert_eq!(reply["state"]["offers"], json!([]), "{reply}");
+    for pane in [a, b] {
+        otto.user_click(at(otto.control(&format!("slot-accept:{pane}")), 0.5, 0.5));
+    }
+    let window = |state: &Value, pane: u64| {
+        let panes = state["state"]["panes"].as_array().cloned().unwrap_or_default();
+        panes.iter().find(|p| p["id"] == pane).map(|p| p["kind"]["window"].clone()).unwrap_or(Value::Null)
+    };
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((window(&state, a), window(&state, b)), (json!(800_002), json!(800_001)), "{state}");
+    // A client's Swap is refused; the user's exchanges the two windows.
+    let reply = otto.user_click(at(otto.control(&format!("slot-dots:{a}")), 0.5, 0.5));
+    let items = reply["row_menu"]["items"].as_array().cloned().unwrap_or_default();
+    let swap = items.iter().position(|i| i["item"] == "slot_swap").unwrap_or_else(|| panic!("no swap: {reply}"));
+    otto.click(at(otto.control(&format!("row-menu:{swap}")), 0.5, 0.5), 1);
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((window(&state, a), window(&state, b)), (json!(800_002), json!(800_001)), "a client's: {state}");
+    let reply = otto.user_click(at(otto.control(&format!("slot-dots:{a}")), 0.5, 0.5));
+    assert!(
+        reply["row_menu"]["items"].as_array().is_some_and(|i| i.iter().any(|i| i["item"] == "slot_swap")),
+        "{reply}"
+    );
+    otto.user_click(at(otto.control(&format!("row-menu:{swap}")), 0.5, 0.5));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((window(&state, a), window(&state, b)), (json!(800_001), json!(800_002)), "{state}");
+}
+
+/// A window whose id its app gives only later (the owner's Zoom moves it): a slot by that id is
+/// offered the window at the look that first reads the id. No id is ever in the state.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_slot_by_id_takes_a_window_whose_id_comes_later() {
+    let otto = Otto::launch_with("slot-late-id", &[("OTTOSPACE_FEATURES", "slots")]);
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let pane = reply["state"]["focused"].as_u64().unwrap();
+    otto.call(json!({"cmd": "slot_make", "pane": pane, "slot": {"select": {"identifier": "meetings.main"}}}));
+    slot_menu(&otto, pane, "slot_give_back");
+    let look = |id: Option<&str>| {
+        let seen = json!({"pid": 0, "window": 700_001, "title": "Team Meeting", "identifier": id,
+            "subrole": "AXStandardWindow", "frame": {"x": 0, "y": 0, "w": 880, "h": 862}});
+        let displays = [json!({"x": 0, "y": 0, "w": 1920, "h": 1080})];
+        otto.call(json!({"cmd": "slot_windows", "look": {"name": "Meetings", "running": true, "windows": [seen], "displays": displays}}))
+    };
+    let run = |reply: &Value| reply["state"]["slots"][pane.to_string()]["status"].clone();
+    assert_eq!(run(&look(None)), json!("empty"));
+    let reply = look(Some("meetings.main"));
+    assert_eq!(run(&reply), json!("offered"), "{reply}");
+    assert!(!reply.to_string().contains("meetings.main"), "{reply}");
+}
+
 /// The slot dialog (board H4): its rule in one line over a form. A window with no id: any window
 /// of the app, the largest. The user's Title, starts with, and the words cut down to "SECRET
 /// weekly" make a slot that takes both weekly windows and not Home; a client's click or key changes

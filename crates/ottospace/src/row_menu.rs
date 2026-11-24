@@ -200,7 +200,7 @@ impl Workspace {
                 .when(menu.selected == Some(index), |d| d.bg(rgb(theme::SELECTED)))
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
                 .when(why.is_some(), |d| d.pb_1().text_color(rgb(theme::MUTED)))
-                .child(item.label())
+                .child(self.model.menu_label(*item))
                 .children(why.map(|why| div().text_xs().child(why)))
                 .child(self.controls.mark(item_control(index)))
                 .on_click(cx.listener(move |this, _, window, cx| this.row_menu_choose(Some(index), window, cx)))

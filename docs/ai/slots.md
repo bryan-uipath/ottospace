@@ -318,15 +318,30 @@ Rejected:
 
 ### Several slots, one window
 
-The owner, 2026-11-18: "if we have 4 zoom slots, we could just take them one by one if all windows
-match". A window is offered or taken by one slot at a time: the first **that waits**, in the order
-of the tab on show's panes (`Node::leaves`: left to right, top to bottom, as drawn), whose selector
-selects it. A slot that already offers or holds a window is passed: the next window goes to the
-next slot, so four slots that each select only `app` take four windows one by one. Manual still
-offers; a window is still in one pane at most. Declined there, it may be offered in the next. Moving or swapping panes changes that order, visibly.
-Rejected: the most specific selector first (which is more specific, `identifier` or a long
-`title`, has no answer a user could predict), and offering in every matching slot at once (two
-`Bring it here` for one window).
+A window is offered or taken by one slot at a time, and slots of one app do not starve each other
+(the owner, 2026-11-24: slot A by the title both Zoom meeting windows have held the one window that
+slot B, by id, could take, while the other window sat unhosted). Each look pairs the waiting slots
+of an app on the tab on show at once (`slot::pair`, `Model::slot_pairs`):
+
+1. Slots that name their window (by title or id, or a pick of the smallest or a display), Away ones
+   first, then in reading order: as many served as can be. One with a second choice gives up its
+   first to one with none (Kuhn's augmenting step); a free window in its own order comes before a
+   moved one, and what it offers now stays first.
+2. The rest, app-only slots (any window, or the largest), pair by size, as the owner put it:
+   "biggest pane gets biggest window, next biggest pane gets next biggest window". Panes by area,
+   windows by the area their app gave them (`Model::slot_natural`, read while the window is in no
+   pane: hosted, it has its pane's size); ties front to back, then in reading order.
+
+A window in a pane is never moved by this: offers pair again as windows come and go, filled slots
+keep theirs. The user moves them: ⋯'s `Swap` (two slots of the app) or `Swap with “…”` (each other
+slot, by what it holds; with the empty slot the window moves and the other waits) and `Re-sort Zoom
+windows by size` (the windows those slots hold, paired again as above). Only the user's; the slots'
+rules stay. Rejected: a key and a Rotate (two swaps cover three slots; fewer items).
+
+A slot that waits with nothing to offer says why, per window of its app, never a title
+(`Model::slot_misses`): `2 Zoom windows: 1 is in another pane; 1 has no window id`, and the log has
+the same as codes (`slot_miss`: `rules`, `no_id`, `other_id`, `other_title`, `other_kind`,
+`other_display`, `in_pane`, `passed_over`, `bigger_pane`, `other_slot`), one line each change.
 
 ## 4. Persistence
 

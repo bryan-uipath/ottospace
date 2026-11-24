@@ -1409,7 +1409,7 @@ export interface RowMenu {
   /** `why`: the item does nothing now, and why (drawn dimmed). */
   items: {
     item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree" | "local_folder" | "from_github"
-      | "slot_keep" | "slot_edit" | "slot_look_again" | "slot_give_back" | "slot_clear";
+      | "slot_keep" | "slot_edit" | "slot_look_again" | "slot_give_back" | "slot_swap" | "slot_resort" | "slot_clear";
     label: string;
     why: string | null;
     rect: Rect | null;

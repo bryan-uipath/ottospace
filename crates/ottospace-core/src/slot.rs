@@ -246,6 +246,67 @@ impl Look {
     }
 }
 
+/// A waiting slot to `pair`: the windows it may take, in the order it prefers them, and whether it
+/// pairs by size (one that names no window: app only) or names its window and goes first.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Want {
+    pub windows: Vec<u32>,
+    pub by_size: bool,
+}
+
+/// Which window each waiting slot gets: one window a slot, never two slots one window. First the
+/// slots that name their window, in the order given, as many served as can be: one with a second
+/// choice gives up its first to one with none (an identifier slot gets the meeting window, the
+/// title slot of both takes the other). Then the slots by size, in the order given (the largest
+/// pane first), each taking from what is left in its own order (the largest window first), and
+/// again as many served as can be.
+pub fn pair(wants: &[Want]) -> Vec<Option<u32>> {
+    let mut owner: std::collections::BTreeMap<u32, usize> = Default::default();
+    for by_size in [false, true] {
+        let phase: Vec<usize> = (0..wants.len()).filter(|i| wants[*i].by_size == by_size).collect();
+        // A window the first phase took is not the second's to move.
+        let fixed: std::collections::BTreeSet<u32> = owner.keys().copied().collect();
+        for &i in &phase {
+            let open = |w: &&u32| !fixed.contains(*w);
+            // A free window in its own order first; only with none, one moved from another slot.
+            if let Some(&w) = wants[i].windows.iter().filter(open).find(|w| !owner.contains_key(*w)) {
+                owner.insert(w, i);
+                continue;
+            }
+            let mut tried = fixed.clone();
+            augment(i, wants, &mut owner, &mut tried);
+        }
+    }
+    let mut out = vec![None; wants.len()];
+    for (window, i) in owner {
+        out[i] = Some(window);
+    }
+    out
+}
+
+/// Kuhn's step: slot `i` takes a window, moving its holder to another of that holder's own.
+fn augment(
+    i: usize,
+    wants: &[Want],
+    owner: &mut std::collections::BTreeMap<u32, usize>,
+    tried: &mut std::collections::BTreeSet<u32>,
+) -> bool {
+    for &w in &wants[i].windows {
+        if !tried.insert(w) {
+            continue;
+        }
+        let moved = match owner.get(&w).copied() {
+            None => true,
+            Some(j) => augment(j, wants, owner, tried),
+        };
+        if moved {
+            owner.insert(w, i);
+            return true;
+        }
+    }
+    false
+}
+
 /// The display a frame's middle is on, numbered as `Pick::Display` says. `None`: on none.
 pub fn display_of(frame: &Frame, displays: &[Frame]) -> Option<u32> {
     let mut order: Vec<&Frame> = displays.iter().collect();
@@ -359,6 +420,26 @@ mod tests {
         // A read of no width is tiny too; only 0x0 is a frame not read.
         look.windows[4] = dialog(5, "Meeting chat", 0., 40.);
         assert!(look.candidates(&chat, &[], |_| false).is_empty());
+    }
+
+    #[test]
+    fn named_slots_are_served_first_and_as_many_as_can_be_then_the_rest_by_size() {
+        let want = |windows: &[u32], by_size| Want { windows: windows.to_vec(), by_size };
+        // The owner's Zoom: A by title selects both meeting windows (1 the larger), B by id only 2.
+        assert_eq!(pair(&[want(&[2, 1], false), want(&[2], false)]), [Some(1), Some(2)]);
+        assert_eq!(pair(&[want(&[2], false), want(&[2, 1], false)]), [Some(2), Some(1)]);
+        // One with a free second choice takes it rather than move another.
+        assert_eq!(pair(&[want(&[5], false), want(&[5, 6], false)]), [Some(5), Some(6)]);
+        // By size, given largest pane first, windows largest first: largest with largest.
+        let all = [1, 2, 3];
+        assert_eq!(pair(&[want(&all, true), want(&all, true), want(&all, true)]), [Some(1), Some(2), Some(3)]);
+        // A named slot first: the size slots share what it leaves.
+        assert_eq!(pair(&[want(&all, true), want(&[1], false), want(&all, true)]), [Some(2), Some(1), Some(3)]);
+        // A size slot never moves a named slot's window, and more slots than windows leave one waiting.
+        assert_eq!(pair(&[want(&[1], true), want(&[1], false)]), [None, Some(1)]);
+        assert_eq!(pair(&[want(&[1], true), want(&[1], true)]), [Some(1), None]);
+        // One that can hold only the dialog (its kind) gets it; the other size slot the rest.
+        assert_eq!(pair(&[want(&[9, 4], true), want(&[9], true)]), [Some(4), Some(9)]);
     }
 
     #[test]
