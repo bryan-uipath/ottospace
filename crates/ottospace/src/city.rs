@@ -75,7 +75,7 @@ const FADE: Duration = Duration::from_millis(120);
 /// grow, district by district); where a frame of the rise renders slower than `RISE_BUDGET_US`,
 /// its standing picture fades in over `FADE_IN` instead.
 const RISE: Duration = Duration::from_millis(400);
-const RISE_BUDGET_US: u64 = 12_000;
+const RISE_BUDGET_US: u64 = 16_000;
 const FADE_IN: Duration = Duration::from_millis(250);
 /// Pictures no place shows, kept so a tab come back shows its city at once: the newest this many.
 const KEPT_PICTURES: usize = 2;
@@ -340,6 +340,8 @@ struct Made {
     places: usize,
     groups: usize,
     render_us: u64,
+    /// The GPU's part of it: what a rise's frame costs once the city is laid out.
+    gpu_us: u64,
     /// When a place last painted it: the newest unused are kept (`KEPT_PICTURES`).
     used: Instant,
 }
@@ -606,7 +608,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     let groups = plan.places.iter().filter(|p| p.group).count();
     let render_us = started.elapsed().as_micros() as u64;
     let (places, plan, used) = (plan.places.len(), plan.clone(), Instant::now());
-    Ok(Made { key: key.clone(), image, lit, marks, scene, plan, places, groups, render_us, used })
+    Ok(Made { key: key.clone(), image, lit, marks, scene, plan, places, groups, render_us, gpu_us, used })
 }
 
 impl Drawn {
@@ -1351,7 +1353,9 @@ fn paint(
     let drawn = &mut *drawn;
     let made = drawn.places.get(&floor).and_then(|place| drawn.picture(place));
     // A frame of the rise rendered too slowly: no rise for this city, its standing picture fades in.
-    let slow = made.is_some_and(|made| made.key.rise < 1000 && made.render_us > RISE_BUDGET_US);
+    // The GPU's time: the layout (made once, before the first frame) and names (none while it
+    // rises) are no frame's cost.
+    let slow = made.is_some_and(|made| made.key.rise < 1000 && made.gpu_us > RISE_BUDGET_US);
     let Some(made) = made.filter(|_| !slow) else {
         // Its lattice shows while it waits: its first picture will rise, or fade in.
         if let Some(place) = drawn.places.get_mut(&floor) {
