@@ -271,7 +271,7 @@ impl Workspace {
         };
         let disk = self.viewers.values().filter_map(due).min();
         // An animation on show: its next frame.
-        let frames = self.model.shown_panes().into_iter().filter_map(|id| {
+        let frames = self.animated_panes().into_iter().filter_map(|id| {
             let (view, core) = (self.viewers.get(&id)?, self.model.viewer(id)?);
             let Body::Picture(picture) = &view.body else { return None };
             playing(core).then(|| picture.next_change(view.began.elapsed()).map(|at| view.began + at))?
@@ -281,7 +281,7 @@ impl Workspace {
 
     /// Each tick: a view for each viewer pane, the files read handed to the core, changes on
     /// disk read again once they settle, and the core told where each view on show is.
-    pub(crate) fn sync_viewers(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn sync_viewers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let files: HashMap<PaneId, (String, Shows)> = self
             .model
             .viewers
@@ -291,7 +291,8 @@ impl Workspace {
                 _ => None,
             })
             .collect();
-        let mut retired: Vec<Arc<gpui::RenderImage>> = Vec::new();
+        // Pictures of viewers closed or reused since (`forget_viewer`), and those replaced below.
+        let mut retired = std::mem::take(&mut self.retired_pictures);
         self.viewers.retain(|id, view| {
             let kept = files.get(id).is_some_and(|(path, _)| *path == view.path);
             if !kept {
@@ -306,14 +307,14 @@ impl Workspace {
                 view.reading = None;
                 view.stamp = at;
                 let (_, dir) = name_and_dir(path);
+                // The frames it drew before leave GPUI's atlas, whatever comes in their place.
+                retired.extend(view.frames());
                 view.body = match loaded {
                     Some(Loaded::Markdown(blocks)) => Body::Markdown(Rc::new(blocks)),
                     Some(Loaded::Lines(lines, marks, colours)) => {
                         Body::Lines(Rc::new(lines), Rc::new(marks), colours.map(Rc::new))
                     }
                     Some(Loaded::Picture(picture)) => {
-                        // The frames it drew before leave GPUI's atlas.
-                        retired.extend(view.frames());
                         view.began = Instant::now();
                         Body::Picture(Rc::new(picture))
                     }
@@ -392,7 +393,7 @@ impl Workspace {
         }
         // An animation on show moves to its next frame when its time comes; none at rest, none
         // off show, none paused (or under Reduce Motion, until played).
-        for id in self.model.shown_panes() {
+        for id in self.animated_panes() {
             let (Some(view), Some(core)) = (self.viewers.get(&id), self.model.viewer(id)) else { continue };
             let Body::Picture(picture) = &view.body else { continue };
             let at = if playing(core) { picture.frame_at(view.began.elapsed()) } else { 0 };
@@ -402,7 +403,7 @@ impl Workspace {
             }
         }
         for image in retired {
-            cx.drop_image(image, None);
+            cx.drop_image(image, Some(window));
         }
         for action in actions {
             self.dispatch(action, Origin::System, window, cx);
@@ -522,8 +523,9 @@ impl Workspace {
                     viewer::MAX_IMAGE_BYTES
                 } else {
                     MAX_BYTES
-                } / (1024 * 1024);
-                return said(format!("Too large: {:.1} MB; the viewer reads up to {most} MB", bytes as f64 / 1e6));
+                };
+                let size = ottospace_core::calendar::fetch::size;
+                return said(format!("Too large: {}; the viewer reads up to {}", size(bytes), size(most)));
             }
             Read::NotFile => return said("Not a regular file".into()),
             Read::Binary => return said("Not text: the viewer shows text, markdown and pictures".into()),
@@ -679,12 +681,27 @@ impl Workspace {
     }
 }
 
+/// The foot under a picture: its size and zoom, an animation's control.
+const FOOT: f32 = 22.;
+
 /// An animation plays as the user set it, else unless Reduce Motion is on.
 fn playing(core: &Viewer) -> bool {
     core.playing.unwrap_or_else(|| !crate::dial::calm())
 }
 
 impl Workspace {
+    /// The viewers whose animation may move on: on show, and not under the zoomed-out canvas.
+    fn animated_panes(&self) -> Vec<PaneId> {
+        if self.model.zoom.is_some() { Vec::new() } else { self.model.shown_panes() }
+    }
+
+    /// A viewer pane closed or reused: its view goes, its picture's frames with the next tick.
+    pub(crate) fn forget_viewer(&mut self, id: PaneId) {
+        if let Some(view) = self.viewers.remove(&id) {
+            self.retired_pictures.extend(view.frames());
+        }
+    }
+
     /// A picture: fitted to the pane (never enlarged) or zoomed, moved by its pan, over a
     /// checker for what is transparent, its size in the foot; an animation's play control.
     fn picture_body(&self, id: PaneId, view: &FileView, cx: &mut Context<Self>) -> AnyElement {
@@ -692,7 +709,8 @@ impl Workspace {
             return div().into_any_element();
         };
         let area = view.area.get();
-        let room = (f32::from(area.size.width), f32::from(area.size.height));
+        // Above the foot: the picture never goes under it fitted.
+        let room = (f32::from(area.size.width), (f32::from(area.size.height) - FOOT).max(0.));
         let fit = viewer_picture::fit(room, picture.width, picture.height);
         let scale = core.zoom.unwrap_or(fit);
         let (w, h) = (picture.width as f32 * scale, picture.height as f32 * scale);
@@ -703,7 +721,10 @@ impl Workspace {
         let checker = canvas(
             move |bounds, _, _| bounds,
             move |bounds, _, window, _| {
-                laid.set(bounds);
+                // Laid out anew (the first frame, a split, a resize): drawn again at its place.
+                if laid.replace(bounds) != bounds {
+                    window.refresh();
+                }
                 let shown = Bounds::new(bounds.origin + point(px(x), px(y)), gpui::size(px(w), px(h)));
                 let shown = shown.intersect(&bounds);
                 const SQUARE: f32 = 8.;
@@ -750,7 +771,7 @@ impl Workspace {
         });
         let of = core.read.clone();
         let bytes = match of {
-            Read::Picture { bytes, .. } => viewer_picture::size(bytes),
+            Read::Picture { bytes, .. } => ottospace_core::calendar::fetch::size(bytes),
             _ => String::new(),
         };
         let frames = if animated { format!(" · {} frames", picture.frames.len()) } else { String::new() };
@@ -760,7 +781,7 @@ impl Workspace {
             .bottom_0()
             .left_0()
             .right_0()
-            .h(px(22.))
+            .h(px(FOOT))
             .px_2()
             .flex()
             .items_center()
@@ -847,16 +868,14 @@ impl Workspace {
         let view = self.viewers.get(&id)?;
         let Body::Picture(picture) = &view.body else { return None };
         let area = view.area.get();
-        Some(viewer_picture::fit(
-            (f32::from(area.size.width), f32::from(area.size.height)),
-            picture.width,
-            picture.height,
-        ))
+        let room = (f32::from(area.size.width), (f32::from(area.size.height) - FOOT).max(0.));
+        Some(viewer_picture::fit(room, picture.width, picture.height))
     }
 
-    /// The viewer whose picture is under `at`, in this window.
+    /// The viewer whose picture is under `at`, in the main window (the one pinches are read in).
     pub(crate) fn picture_at(&self, at: Point<Pixels>) -> Option<PaneId> {
-        let shown = self.model.shown_panes();
+        let main = self.model.tree_at(self.model.main_at());
+        let shown = main.map(|tree| tree.leaves()).unwrap_or_default();
         self.viewers.iter().find_map(|(id, view)| {
             let over = matches!(view.body, Body::Picture(_)) && view.area.get().contains(&at);
             (over && shown.contains(id)).then_some(*id)

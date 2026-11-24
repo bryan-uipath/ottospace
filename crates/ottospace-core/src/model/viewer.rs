@@ -170,8 +170,8 @@ impl Model {
             if let Read::Shown { lines } = read {
                 view.marked = view.marked.and_then(|at| at.within(lines));
             }
-            // A picture read again at another size: fitted again.
-            if view.read != read && !matches!(read, Read::Picture { .. }) {
+            // Read again as anything else (another size, no picture): fitted again.
+            if view.read != read {
                 (view.zoom, view.pan) = (None, [0., 0.]);
             }
             view.read = read;
@@ -185,10 +185,12 @@ impl Model {
         if !matches!(view.read, Read::Picture { .. }) {
             return;
         }
-        view.zoom = viewer::zoomed(view.zoom, fit, step);
-        if view.zoom.is_none() {
-            view.pan = [0., 0.];
-        }
+        let (was, zoom) = (view.zoom.unwrap_or(fit), viewer::zoomed(view.zoom, fit, step));
+        // About the pane's centre: the point there stays there.
+        let by = zoom.map_or(0., |zoom| zoom / was);
+        let by = if by.is_finite() { by } else { 0. };
+        view.pan = view.pan.map(|at| (at * by).clamp(-viewer::MAX_PAN, viewer::MAX_PAN));
+        view.zoom = zoom;
     }
 
     /// A zoomed picture moved by `by` points. Fitted, it stays centred; never further than
@@ -501,8 +503,16 @@ mod tests {
         zoom(&mut m, ZoomStep::In);
         m.update(Action::ViewerPan { pane: id, by: [10., -4.] });
         assert_eq!(m.viewer(id).map(|v| (v.zoom, v.pan)), Some((Some(0.625), [10., -4.])));
+        // Farther: the pan comes in with it, about the centre.
+        zoom(&mut m, ZoomStep::Out);
+        assert_eq!(m.viewer(id).map(|v| (v.zoom, v.pan)), Some((Some(0.5), [8., -3.2])));
         zoom(&mut m, ZoomStep::Fit);
         assert_eq!(m.viewer(id).map(|v| (v.zoom, v.pan)), Some((None, [0., 0.])));
+        // Read again at another size: fitted again.
+        zoom(&mut m, ZoomStep::In);
+        let other = Read::Picture { width: 80, height: 60, frames: 12, bytes: 900 };
+        m.update(Action::ViewerRead { pane: id, path: "/w/app/spin.gif".into(), read: other }.sent_by(Origin::System));
+        assert_eq!(m.viewer(id).map(|v| v.zoom), Some(None));
         // Its frames: paused, played.
         m.update(Action::ViewerPlay { pane: None, play: false });
         assert_eq!(m.viewer(id).and_then(|v| v.playing), Some(false));

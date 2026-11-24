@@ -13,8 +13,8 @@ use image::codecs::webp::WebPDecoder;
 use image::{AnimationDecoder, Frame, ImageDecoder, ImageFormat, ImageReader, Limits};
 use ottospace_core::viewer::{MAX_PIXELS, Read};
 
-/// The longest side decoded, in pixels.
-const MAX_SIDE: u32 = 32_768;
+/// The longest side decoded, in pixels: GPUI's atlas holds no texture wider or taller.
+const MAX_SIDE: u32 = 16_384;
 /// The most frames kept of an animation: past it, the first ones play (security review: a small
 /// file of many tiny frames).
 const MAX_FRAMES: usize = 1000;
@@ -94,14 +94,17 @@ fn limits() -> Limits {
 }
 
 fn decode_as(bytes: &[u8], format: ImageFormat) -> Result<Picture, Read> {
+    // The header alone, to say its size even past the sides' cap.
     let mut reader = ImageReader::with_format(Cursor::new(bytes), format);
-    reader.limits(limits());
+    let mut header = limits();
+    (header.max_image_width, header.max_image_height) = (None, None);
+    reader.limits(header);
     let (width, height) = reader.into_dimensions().map_err(|_| Read::Broken)?;
     if width == 0 || height == 0 {
         return Err(Read::Broken);
     }
     let pixels = u64::from(width) * u64::from(height);
-    if pixels > MAX_PIXELS {
+    if pixels > MAX_PIXELS || width > MAX_SIDE || height > MAX_SIDE {
         return Err(Read::TooManyPixels { width, height, frames: 1 });
     }
     let frames = match format {
@@ -188,15 +191,6 @@ pub(crate) fn fit(room: (f32, f32), width: u32, height: u32) -> f32 {
     if scale.is_finite() && scale > 0. { scale.min(1.) } else { 1. }
 }
 
-/// A file's bytes as the foot says them: `820 B`, `14.2 KB`, `3.1 MB`.
-pub(crate) fn size(bytes: u64) -> String {
-    match bytes {
-        0..1000 => format!("{bytes} B"),
-        1000..1_000_000 => format!("{:.1} KB", bytes as f64 / 1e3),
-        _ => format!("{:.1} MB", bytes as f64 / 1e6),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -253,6 +247,9 @@ mod tests {
         huge[18..22].copy_from_slice(&20_000i32.to_le_bytes());
         huge[22..26].copy_from_slice(&20_000i32.to_le_bytes());
         assert!(matches!(decode(&huge), Err(Read::TooManyPixels { width: 20_000, height: 20_000, .. })));
+        // Within the pixels but wider than GPUI's atlas holds (review): refused too.
+        huge[22..26].copy_from_slice(&100i32.to_le_bytes());
+        assert!(matches!(decode(&huge), Err(Read::TooManyPixels { width: 20_000, height: 100, .. })));
         // Frames past the cap together, each costing at least `FRAME_COST`: the third over 2.5 frames' worth.
         let caps = |pixels, frames| Caps { pixels, frames, time: DECODE_TIME };
         let frames = GifDecoder::new(Cursor::new(gif(5, 4, 50))).expect("a gif").into_frames();
@@ -277,6 +274,5 @@ mod tests {
         assert_eq!(fit((400., 300.), 800, 600), 0.5);
         assert_eq!(fit((400., 300.), 40, 30), 1.);
         assert_eq!(fit((0., 0.), 40, 30), 1.);
-        assert_eq!((size(820), size(14_200), size(3_100_000)), ("820 B".into(), "14.2 KB".into(), "3.1 MB".into()));
     }
 }

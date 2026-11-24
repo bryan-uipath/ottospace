@@ -553,11 +553,11 @@ function viewerRead(value: unknown, at: string): ViewerRead {
   const o = fields(value, at);
   if (o.status === "shown") return { status: "shown", lines: num(o.lines, `${at}.lines`) };
   if (o.status === "too_large") return { status: "too_large", bytes: num(o.bytes, `${at}.bytes`) };
-  const size = { width: num(o.width, `${at}.width`), height: num(o.height, `${at}.height`) };
+  const size = () => ({ width: num(o.width, `${at}.width`), height: num(o.height, `${at}.height`) });
   if (o.status === "picture") {
-    return { status: "picture", ...size, frames: num(o.frames, `${at}.frames`), bytes: num(o.bytes, `${at}.bytes`) };
+    return { status: "picture", ...size(), frames: num(o.frames, `${at}.frames`), bytes: num(o.bytes, `${at}.bytes`) };
   }
-  if (o.status === "too_many_pixels") return { status: "too_many_pixels", ...size, frames: num(o.frames, `${at}.frames`) };
+  if (o.status === "too_many_pixels") return { status: "too_many_pixels", ...size(), frames: num(o.frames, `${at}.frames`) };
   const bare = ["reading", "missing", "not_file", "binary", "unreadable", "broken"] as const;
   return { status: oneOf(bare, "what the viewer read")(o.status, `${at}.status`) };
 }

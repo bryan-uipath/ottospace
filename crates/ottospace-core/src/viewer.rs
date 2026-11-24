@@ -263,7 +263,8 @@ pub enum ZoomStep {
 }
 
 /// The zoom after `step`, from `zoom` (`None`: fitted, at `fit` points a pixel). Kept within
-/// `MIN_ZOOM` and `MAX_ZOOM`; `None`: fitted. A step that is not a number changes nothing.
+/// `MIN_ZOOM` and `MAX_ZOOM` (or where it is, past them); `None`: fitted. A step that is not a
+/// number changes nothing.
 pub fn zoomed(zoom: Option<f32>, fit: f32, step: ZoomStep) -> Option<f32> {
     let now = zoom.unwrap_or(fit);
     let factor = match step {
@@ -276,7 +277,8 @@ pub fn zoomed(zoom: Option<f32>, fit: f32, step: ZoomStep) -> Option<f32> {
     if !(next.is_finite() && now.is_finite() && factor > 0.) {
         return zoom;
     }
-    Some(next.clamp(MIN_ZOOM, MAX_ZOOM))
+    // A step never goes the other way: a picture fitted under `MIN_ZOOM` stays where it is going out.
+    Some(next.clamp(MIN_ZOOM.min(now), MAX_ZOOM.max(now)))
 }
 
 impl Viewer {
@@ -547,6 +549,8 @@ mod tests {
         assert_eq!(zoomed(Some(4.), 0.5, ZoomStep::Fit), None);
         assert_eq!(zoomed(Some(30.), 0.5, ZoomStep::By { factor: 10. }), Some(MAX_ZOOM));
         assert_eq!(zoomed(None, 0.06, ZoomStep::By { factor: 0.1 }), Some(MIN_ZOOM));
+        // Fitted at 4%: farther stays at 4%, never nearer (review).
+        assert_eq!(zoomed(None, 0.04, ZoomStep::Out), Some(0.04));
         // A pinch that is no number, or none, changes nothing.
         for factor in [f32::NAN, f32::INFINITY, 0., -2.] {
             assert_eq!(zoomed(Some(2.), 0.5, ZoomStep::By { factor }), Some(2.), "{factor}");
