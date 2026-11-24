@@ -5554,7 +5554,7 @@ impl Model {
         // After the tabs out: a fold-in may move the main window's tab (seed 37143).
         self.settle_selected();
         self.settle_zoom();
-        // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its space's default.
+        // A terminal opened now, wherever its tab went (Home's go to a workspace), starts in its tab's checkout, else its space's default.
         for effect in &effects {
             if let Effect::Opened(pane) = effect {
                 self.start_in_default(*pane);
@@ -6278,9 +6278,14 @@ impl Model {
                 // The user's joins the selected space; a client's is no space's: `settle_home`
                 // gives it to the workspace selected last.
                 let of = if self.by_user { self.space().clone() } else { Owner::Home };
+                // The user's carries the checkout of the tab it is opened from (its city, where ⌘D
+                // starts), as a tab `open_repo` made keeps it.
+                let carried =
+                    if self.by_user { self.tabs.get(self.active).and_then(|tab| tab.folder.clone()) } else { None };
                 self.leave(effects);
                 self.park_active();
                 self.push_tab_of(of);
+                self.tabs[self.active].folder = carried;
             }
             Action::NewEmptyTab => {
                 self.act(Action::NewTab, effects);
@@ -10529,6 +10534,11 @@ impl Model {
         }
         let shown = self.tabs[self.active].id;
         let mut moved = self.tabs.remove(from);
+        // Moved to another space, it is that space's: its own checkout goes (else its terminals
+        // would start in the old one).
+        if moved.space != of {
+            moved.folder = None;
+        }
         moved.space = of.clone();
         self.add_space(&of);
         let to = match at {

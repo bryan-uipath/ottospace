@@ -287,11 +287,13 @@ impl Model {
         self.repo_listed(path).then_some(path)
     }
 
-    /// A pane that just became a terminal, with no folder of its own, starts in the default
-    /// worktree of its tab's space, as listed now.
+    /// A pane that just became a terminal, with no folder of its own, starts in its tab's
+    /// checkout (one `open_repo` gave it or a new tab carried), else the default worktree of its
+    /// tab's space, as listed now.
     pub(crate) fn start_in_default(&mut self, pane: u32) {
         let tab = self.tab_of(pane).and_then(|id| self.tabs.iter().find(|tab| tab.id == id));
-        let default = tab.and_then(|tab| self.space_worktree(&tab.space)).map(String::from);
+        let own = tab.and_then(|tab| tab.folder.as_deref()).filter(|path| self.repo_listed(path));
+        let default = own.or_else(|| tab.and_then(|tab| self.space_worktree(&tab.space))).map(String::from);
         let terminal = |p: &&mut super::Pane| p.id == pane && p.kind == super::Kind::Terminal && p.cwd.is_none();
         if let Some(opened) = self.panes.iter_mut().find(terminal) {
             opened.cwd = default;
