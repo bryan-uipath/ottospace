@@ -1943,7 +1943,7 @@ first brainstorm:
 
 [attention/plan.md](ai/attention/plan.md): human attention as the scarcest resource: a Decisions session with visual aids, agents and roles, a secretary agent, a machine-wide stray-sessions inbox, Slack ping to draft reply, a quick note, focus mode; what exists on main for each. Not built.
 
-[attention/decision-sources.md](ai/attention/decision-sources.md): decisions from any source (agents, terminal sessions, Slack, Jira, PR review, calendar, routines) in one queue: the record, filing over the socket or an inbox folder, a priority rule from the Projects order, core or ancillary and urgency, the acts an answer takes, trust. Design note, not built.
+[attention/decision-sources.md](ai/attention/decision-sources.md): decisions from any source (agents, terminal sessions, Slack, Jira, PR review, calendar, routines) in one queue: the record, filing over the socket, triage as a decision (sorted in one key each), priority from the week's four focus areas and progress against them, the acts an answer takes, trust. Design note, not built.
 
 [`docs/ai/backlog.md`](ai/backlog.md) is an older backlog. `docs/ideas/` holds the owner's own
 notes.
