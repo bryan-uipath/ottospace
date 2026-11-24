@@ -807,7 +807,7 @@ unfolds it. A session at work does not unfold it.
   workspace stays as it is. No task is made. Resume session goes on with an idle one there: `claude
   --resume <id>` or `codex resume <id>`, in the folder the session started in, which must be in
   a listed repository or worktree. One at work (its dot lit) or held by a live Claude Code
-  process is not: the drawer says it is live in another terminal, and nothing is started. When
+  process is not: the drawer says it is running in another terminal, and nothing is started. When
   the card says it runs in a pane, that pane is focused too.
 - **Track** makes a task of the session: named after the repository, with `>repo` set to that
   repository (wherever in it the session started) and `@agent` to its runner. The session is
@@ -1613,8 +1613,11 @@ then does nothing (a toast says so). A preference is a normal setting.
   panes, anywhere; elsewhere, in a listed repository while Tasks is open) is a card under Needs you
   or Running, after the tasks, and counts there (`needs you`, ⌘J, the status bar). Live: its pane
   runs it, or its runner's process record holds it (Claude Code), or its file changed in the last
-  30 s (Codex). A click opens it read-only; Hide takes it out until it works and asks again (kept
-  in `sessions-hidden.json`; "N hidden" under the list shows them). Ended, it stays dim 5 minutes,
+  30 s, or its record says busy (Claude Code: then never "your turn", however quiet its own file).
+  A click opens it read-only. Hide takes it out until it asks again in a new turn (answered or at
+  work since, then a wait), never within 5 minutes; activity or the wait it had never ends a hide
+  (kept in `sessions-hidden.json`). "N hidden · Show" lists the hidden ones, dim, each with Unhide;
+  "N hidden · Hide" folds them away again. Ended, it stays dim 5 minutes,
   counted nowhere, with Take over when it can be gone on with here. The Project view shows no
   cards yet: there they stay Elsewhere's rows.
   Design note: pull request #423.

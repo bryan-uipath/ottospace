@@ -1041,6 +1041,8 @@ export interface SessionCard extends SessionRow {
   state: "needs_you" | "running" | "ended";
   /** The user may take it over here (an ended one, listed, that no program has). */
   take_over: boolean;
+  /** Hidden by the person, drawn only while they look at the hidden ones: counted nowhere. */
+  hidden: boolean;
 }
 
 /** The Tasks section as drawn. */

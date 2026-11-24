@@ -6740,6 +6740,7 @@ impl Workspace {
             "session" => Action::SessionOpen { runner, id },
             "session-adopt" => Action::SessionAdopt { runner, id },
             "session-hide" => Action::SessionHide { runner, id },
+            "session-unhide" => Action::SessionUnhide { runner, id },
             _ => return,
         };
         self.dispatch(action, self.input, window, cx);
@@ -6807,10 +6808,11 @@ impl Workspace {
         rows
     }
 
-    /// "2 hidden" under the Tasks section while hidden terminal sessions run (`terminal_tasks`): a
-    /// click lists them again.
+    /// "2 hidden · Show" under the Tasks section while hidden terminal sessions run (`terminal_tasks`):
+    /// a click lists them, marked, and "Hide" folds them away again.
     fn hidden_line(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         let hidden = self.model.hidden_live();
+        let peek = self.model.hidden_peek;
         let line = div()
             .id("sessions-hidden")
             .px_2()
@@ -6818,13 +6820,12 @@ impl Workspace {
             .text_color(rgb(theme::MUTED))
             .cursor_pointer()
             .hover(|s| s.text_color(rgb(theme::TEXT)))
-            .child(format!("{} hidden · Show", hidden.len()))
+            .child(format!("{} hidden · {}", hidden.len(), if peek { "Hide" } else { "Show" }))
             .relative()
             .child(self.controls.mark("sessions-hidden"))
+            // A look, not an un-hide: Show lists them, marked; Hide folds them away again.
             .on_click(cx.listener(move |this, _, window, cx| {
-                for (runner, id) in this.model.hidden_live() {
-                    this.dispatch(Action::SessionUnhide { runner, id }, this.input, window, cx);
-                }
+                this.dispatch(Action::HiddenPeek { on: !peek }, this.input, window, cx);
                 cx.notify();
             }));
         (!hidden.is_empty()).then(|| line.into_any_element())
@@ -6854,11 +6855,18 @@ impl Workspace {
             None => Some(("Track", "Track as a task")),
             Some(card) => card.take_over.then_some(("Take over", "Track as a task and go on with it here")),
         };
-        let actions = words::words("session-row", selected)
-            .top(px(3.5))
-            .children(take.map(|(label, tip)| button("session-adopt", label, tip)))
-            .child(button("session-hide", "Hide", "Hide"));
-        let ended = card.is_some_and(|card| card.state == ottospace_core::sessions::CardState::Ended);
+        // A hidden card, shown by the user's look: Unhide brings it back for good; nothing else.
+        let hidden = card.is_some_and(|card| card.hidden);
+        let actions = words::words("session-row", selected).top(px(3.5));
+        let actions = match hidden {
+            true => actions.child(button("session-unhide", "Unhide", "List it again")),
+            false => actions.children(take.map(|(label, tip)| button("session-adopt", label, tip))).child(button(
+                "session-hide",
+                "Hide",
+                "Until it asks again",
+            )),
+        };
+        let ended = card.is_some_and(|card| card.state == ottospace_core::sessions::CardState::Ended || card.hidden);
         let color = match (row.waits_for, row.active) {
             (Some(_), _) => theme::task(Group::NeedsYou),
             (None, true) => theme::task(Group::Running),

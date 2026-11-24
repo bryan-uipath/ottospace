@@ -358,6 +358,9 @@ fn repo_of<'a>(checkouts: &'a [PathBuf], session: &SessionRef) -> Option<&'a Pat
 
 /// What a listing says of a session in `repo`: where and when, at work, held. Nothing it runs.
 fn as_found(session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
+    // Only a runner that records its process can say so (`disk.held`): any of its records
+    // whose process lives and is the one that wrote it (`sessions::holds`).
+    let held = session.runner.spec().disk.held && session.holders.iter().any(holds);
     Found {
         runner: session.runner.name().to_string(),
         id: session.id.clone(),
@@ -365,14 +368,13 @@ fn as_found(session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
         repo: repo.to_string_lossy().into_owned(),
         started: session.started,
         last_activity: session.last_activity,
-        active: session.last_activity.is_some_and(|at| recent(at, now)),
+        // Or its runner's live record says it is at work (a sub-agent writes its own file).
+        active: session.last_activity.is_some_and(|at| recent(at, now)) || (held && session.busy == Some(true)),
         station: None,
         label: None,
         title: None,
         model: None,
-        // Only a runner that records its process can say so (`disk.held`): any of its records
-        // whose process lives and is the one that wrote it (`sessions::holds`).
-        held: session.runner.spec().disk.held && session.holders.iter().any(holds),
+        held,
     }
 }
 
@@ -398,10 +400,11 @@ fn in_panes(runners: &[&dyn SessionReader], panes: &[PaneProc]) -> Vec<InPane> {
         };
         // Newest first: of several in one folder, the one last active.
         let Some(session) = sessions.iter().find(mine) else { continue };
+        let busy = process.as_ref().is_some_and(|p| p.busy);
         let waits_for = process.and_then(|p| p.waits_for).filter(|_| disk.waits);
         let (runner, id, last_activity) = (id.name().to_string(), session.id.clone(), session.last_activity);
         let cwd = Some(cwd.to_string_lossy().into_owned());
-        out.push(InPane { pane: *pane, runner, id, last_activity, waits_for, cwd });
+        out.push(InPane { pane: *pane, runner, id, last_activity, waits_for, cwd, busy });
     }
     out
 }

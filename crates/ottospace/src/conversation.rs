@@ -2103,7 +2103,7 @@ impl Workspace {
             _ if chat.queued.is_some() => ("Starting the agent…", "your message goes once it runs"),
             // Sending resumes the session.
             _ if !chat.transcript.live && self.model.shown_draft_chat().is_some() => ("Resume…", ""),
-            _ if !chat.transcript.live => ("The agent ended", "it cannot be gone on with from here"),
+            _ if !chat.transcript.live => ("The agent ended", "Read-only here"),
             _ => ("Message", ""),
         };
         let open = chat.transcript.live || self.model.shown_draft_chat().is_some();

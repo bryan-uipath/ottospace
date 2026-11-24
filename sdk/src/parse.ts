@@ -499,6 +499,7 @@ function sessionCard(value: unknown, at: string): SessionCard {
     ...sessionRow(value, at),
     state: oneOf(["needs_you", "running", "ended"] as const, "a card's state")(o.state, `${at}.state`),
     take_over: bool(o.take_over, `${at}.take_over`),
+    hidden: bool(o.hidden, `${at}.hidden`),
   };
 }
 
