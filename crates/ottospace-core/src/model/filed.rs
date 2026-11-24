@@ -67,7 +67,6 @@ impl Model {
                 }
                 return;
             }
-            // A key given to another revision of it does nothing: the card shows the new one first.
             // A key given to another revision than the one shown does nothing.
             Action::SortItem { id, revision, .. }
                 if self.filed.get(id).is_some_and(|d| d.revision != revision || d.revision != sort.revision) =>
@@ -334,14 +333,17 @@ mod tests {
         m.update(Action::DecisionWithdraw { source: Source::Slack, key: "slack:C1:1.0".into(), now: 1_001 });
         assert_eq!(m.on_show(), Some((On::Sort(Some(b)), 1)));
         assert!(m.decisions.as_ref().is_some_and(|r| r.changed), "b is marked changed");
-        // The ↵ the user meant for a: it only says b was seen; neither is sorted.
-        let Key::Act(seen) = m.decision_key_drawn("enter", Mods::default(), 1_002, drawn) else { panic!() };
+        // The ↵ the user meant for a takes nothing, and leaves b marked until b is drawn.
+        assert_eq!(m.decision_key_drawn("enter", Mods::default(), 1_002, drawn), Key::Swallow);
+        assert!(m.decisions.as_ref().is_some_and(|r| r.changed));
+        // Drawn, b's first ↵ only says it was seen; neither is sorted. The next sorts b.
+        let Key::Act(seen) = m.decision_key_drawn("enter", Mods::default(), 1_002, m.on_show()) else { panic!() };
         assert_eq!(seen, Action::DecisionsSeen);
         m.update(seen);
-        assert_eq!(m.filed.get(b).unwrap().triage, Triage::Pending);
-        // Not marked any more, a key drawn for a still takes nothing; one drawn for b sorts b.
-        let stale = m.decision_key_drawn("enter", Mods::default(), 1_003, drawn);
-        assert_eq!(stale, Key::Swallow);
+        assert_eq!(
+            (m.filed.get(a).unwrap().status, m.filed.get(b).unwrap().triage),
+            (Status::Withdrawn, Triage::Pending)
+        );
         let Key::Act(keep) = m.decision_key_drawn("enter", Mods::default(), 1_003, m.on_show()) else { panic!() };
         m.update(keep);
         assert_eq!(m.filed.get(b).unwrap().triage, Triage::Sorted);

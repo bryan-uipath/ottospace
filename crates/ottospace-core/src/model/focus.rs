@@ -75,11 +75,14 @@ impl Model {
                     effects.push(Effect::SaveFocus { kept: self.focus.kept() });
                 }
             }
+            // Kept, so a restart asks nothing again.
             Action::FocusDecline { revision } if self.week_on_show(revision) => {
-                self.focus.decline(revision);
+                if self.focus.decline(revision) {
+                    effects.push(Effect::SaveFocus { kept: self.focus.kept() });
+                }
             }
             Action::FocusCarry { keep, at } if self.week_on_show(0) => {
-                if self.focus.carry(keep, at) && keep {
+                if self.focus.carry(keep, at) {
                     effects.push(Effect::SaveFocus { kept: self.focus.kept() });
                 }
             }
@@ -108,8 +111,10 @@ impl Model {
                 let mut ticked = edit.ticked.clone();
                 ticked.sort_unstable();
                 let seed = self.seed_areas(edit.from).unwrap_or_default();
-                let areas: Vec<Area> =
+                let mut areas: Vec<Area> =
                     ticked.iter().filter_map(|r| self.edit_area(edit.rows.get(*r)?, &seed)).collect();
+                // The seed's areas keep their order; new ones follow.
+                areas.sort_by_key(|a| seed.iter().position(|s| s == a).unwrap_or(usize::MAX));
                 if self.focus.set(&areas, SetBy::User, at) {
                     effects.push(Effect::SaveFocus { kept: self.focus.kept() });
                     // Set from a proposal or last week's: that question is answered too.
@@ -209,10 +214,18 @@ impl Model {
         let entry = |area: &Area| {
             ordered.iter().position(|p| area.projects.iter().any(|q| q.eq_ignore_ascii_case(project_name(&p.path))))
         };
-        let kept: Vec<Row> = areas.iter().filter(|a| entry(a).is_none()).map(|a| Row::Kept(a.clone())).collect();
+        // An entry stands for the first area linking it; a second one is kept as is (its own row).
+        let mut claimed: Vec<usize> = Vec::new();
+        let mut kept: Vec<Row> = Vec::new();
+        for a in areas {
+            match entry(a) {
+                Some(at) if !claimed.contains(&at) => claimed.push(at),
+                _ => kept.push(Row::Kept(a.clone())),
+            }
+        }
         let first = kept.len();
         let mut ticked: Vec<usize> = (0..first.min(MAX_AREAS)).collect();
-        for at in areas.iter().filter_map(|a| entry(a).map(|at| first + at)) {
+        for at in claimed.into_iter().map(|at| first + at) {
             if !ticked.contains(&at) && ticked.len() < MAX_AREAS {
                 ticked.push(at);
             }
@@ -347,7 +360,7 @@ mod tests {
             })
             .collect();
         m.update(
-            Action::FocusPropose { week: "2026-W48".into(), areas, provenance: None, now }.sent_by(Origin::Socket),
+            Action::FocusPropose { week: m.focus.week.clone(), areas, provenance: None, now }.sent_by(Origin::Socket),
         );
     }
 
@@ -437,11 +450,21 @@ mod tests {
         assert!(m.focus.areas().is_empty(), "a client keeps nothing");
         key(&mut m, "enter");
         assert_eq!((m.focus.areas().len(), m.week_card()), (1, None));
-        // Next week: N, none; not asked again.
+        // Next week: N on a proposal leaves the carry question, not marked changed: the user's own step.
         m.update(Action::SetWeek { week: "2026-W49".into() }.sent_by(Origin::System));
+        propose(&mut m, &[("Launch", &["atlas"])], 3);
         m.update(Action::DecisionsOpen);
         key(&mut m, "n");
+        assert_eq!(m.decisions.as_ref().map(|r| (r.week, r.changed)), Some((Some(super::WeekCard::Carry), false)));
+        // N: none; not asked again, nor after a restart, and the declined proposal is not shown again.
+        key(&mut m, "n");
         assert_eq!((m.focus.areas().len(), m.week_card()), (0, None));
+        let mut again = Model::in_workspace();
+        again.update(Action::RestoreFocus { kept: m.focus.kept() }.sent_by(Origin::System));
+        again.update(Action::SetWeek { week: "2026-W49".into() }.sent_by(Origin::System));
+        assert_eq!(again.week_card(), None, "answered before the restart");
+        propose(&mut again, &[("Launch", &["atlas"])], 4);
+        assert_eq!(again.week_card(), None, "declined before the restart");
     }
 
     #[test]
@@ -455,11 +478,13 @@ mod tests {
             repos,
         };
         let own = area("Hiring push", "atlas", vec!["/code/ats".into()]);
-        m.focus.set(&[own.clone(), area("B", "beacon", vec![]), area("C", "atlas", vec![])], SetBy::Proposal, 1);
+        let areas = [own.clone(), area("B", "beacon", vec![]), area("C", "atlas", vec![])];
+        m.focus.set(&areas, SetBy::Proposal, 1);
+        // atlas's row stands for the first area of it; the second is its own row.
         m.update(Action::FocusEditOpen { from: Seed::Current });
-        assert_eq!(m.focus_edit.as_ref().map(|e| e.ticked.clone()), Some(vec![0, 1]), "atlas once");
+        assert_eq!(m.focus_edit.as_ref().map(|e| e.ticked.clone()), Some(vec![0, 1, 2]), "each row once");
         m.update(Action::FocusEditSave { at: 2 });
-        assert_eq!(m.focus.areas()[0], own, "its own name and repositories, unchanged");
+        assert_eq!(m.focus.areas(), &areas, "each area, its own name and links, in its order");
         // The palette over it closes it, setting nothing.
         m.update(Action::FocusEditOpen { from: Seed::Current });
         m.update(Action::PaletteOpen);

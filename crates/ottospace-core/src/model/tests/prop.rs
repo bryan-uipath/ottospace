@@ -1920,7 +1920,9 @@ const MAKERS: &[Make] = &[
             set_by: crate::focus::SetBy::User,
             at: g.time(),
         };
-        Action::RestoreFocus { kept: crate::focus::Kept { weeks: (0..g.rng.below(3)).map(|_| week(g)).collect() } }
+        Action::RestoreFocus {
+            kept: crate::focus::Kept { weeks: (0..g.rng.below(3)).map(|_| week(g)).collect(), ..Default::default() },
+        }
     },
     |g| {
         let from = match g.rng.below(3) {
@@ -2625,8 +2627,10 @@ fn check_decisions(m: &Model) -> Result<(), String> {
     ensure!(m.tab_of(run.pane) == Some(run.tab), "its card is in tab {:?}", m.tab_of(run.pane));
     let triage = usize::from(run.sort.is_some() || (!run.sorted && m.sortable()));
     let week = usize::from(run.week.is_some() || (!run.weeked && m.week_card().is_some()));
-    let of = run.done.len() + queue.len() + triage + week;
-    ensure!(run.at == run.done.len() + 1 && run.of == of, "{} of {}, not of {of}", run.at, run.of);
+    // The week's card answered this run counts as one done.
+    let done = run.done.len() + usize::from(run.weeked);
+    let of = done + queue.len() + triage + week;
+    ensure!(run.at == done + 1 && run.of == of, "{} of {}, not of {of}", run.at, run.of);
     ensure!(tabs[0].title == format!("Decisions · {} of {}", run.at, run.of), "its tab reads {:?}", tabs[0].title);
     Ok(())
 }
@@ -5916,7 +5920,10 @@ impl Run {
                     let acts = user
                         && matches!(
                             action,
-                            Action::FocusEditSave { .. } | Action::FocusAccept { .. } | Action::FocusCarry { .. }
+                            Action::FocusEditSave { .. }
+                                | Action::FocusAccept { .. }
+                                | Action::FocusDecline { .. }
+                                | Action::FocusCarry { .. }
                         );
                     ensure!(acts && *kept == m.focus.kept(), "{origin:?}'s {action:?} wrote focus.json");
                 }

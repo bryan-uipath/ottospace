@@ -3551,11 +3551,6 @@ impl Workspace {
                     let now = now_ms();
                     let week = week.unwrap_or_else(|| self.model.focus.week.clone());
                     self.dispatch(Action::Tick { now }, Origin::Socket, window, cx);
-                    // Its projects are checked against the Projects folder as it is now: read it.
-                    if let Some(dir) = config::projects_dir() {
-                        let listed = crate::projects::read(&dir);
-                        self.dispatch(Action::SetProjects { on: true, listed }, Origin::System, window, cx);
-                    }
                     let _ = reply.send(match self.model.focus_refusal(&week, &areas, now) {
                         // Sent all the same: a refused proposal counts against the hour.
                         Some(why) => {

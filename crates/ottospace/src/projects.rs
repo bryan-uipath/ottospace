@@ -64,8 +64,10 @@ impl Workspace {
             self.dispatch(set, Origin::System, window, cx);
             (self.projects.last, self.projects.dir) = (None, dir.clone());
         }
-        // The week's focus editor lists the projects too: read while it is open.
-        let open = self.model.sidebar == Some(Section::Projects) || self.model.focus_edit.is_some();
+        // The week's focus editor lists the projects too, and its card marks links not listed: read
+        // while either shows.
+        let week_card = self.model.decisions.as_ref().is_some_and(|run| run.week.is_some());
+        let open = self.model.sidebar == Some(Section::Projects) || self.model.focus_edit.is_some() || week_card;
         let opened = open && !self.projects.open;
         self.projects.open = open;
         let now = now_ms();

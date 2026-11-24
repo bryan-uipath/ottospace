@@ -1072,7 +1072,8 @@ function focusEdit(value: unknown, at: string): FocusEdit {
     count: num(o.count, `${at}.count`),
     ticked: list(num)(o.ticked, `${at}.ticked`),
     cursor: num(o.cursor, `${at}.cursor`),
-    from: seed(o.from, `${at}.from`),
+    // Absent from an app before proposals: the current week's.
+    from: o.from === undefined ? "current" : seed(o.from, `${at}.from`),
   };
 }
 
@@ -1092,11 +1093,12 @@ function weekFocusState(value: unknown, at: string): WeekFocusState {
     areas: num(o.areas, `${at}.areas`),
     set_by: orNull(setBy)(o.set_by, `${at}.set_by`),
     last: orNull(str)(o.last, `${at}.last`),
-    proposal: orNull((v: unknown, p: string) => {
+    // Absent from an app before proposals: none, and no carry question.
+    proposal: o.proposal === undefined ? null : orNull((v: unknown, p: string) => {
       const f = fields(v, p);
       return { revision: num(f.revision, `${p}.revision`), areas: num(f.areas, `${p}.areas`), filed: num(f.filed, `${p}.filed`) };
     })(o.proposal, `${at}.proposal`),
-    carry: bool(o.carry, `${at}.carry`),
+    carry: o.carry === undefined ? false : bool(o.carry, `${at}.carry`),
   };
 }
 

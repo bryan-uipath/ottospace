@@ -207,15 +207,14 @@ impl Model {
         run.task.zip(run.ticket).map(|(task, ticket)| (On::Ask(task, ticket), 0))
     }
 
-    /// After every step, one rule for every card a filer can change while it is on show: the same
-    /// card at another revision, or another card put there by a step that answered none (a filing,
-    /// a withdrawal, an expiry), is marked changed, and its next key only says it was seen.
+    /// After every step, one rule for every card a filer can change while it is on show: another
+    /// card or revision put there by a step that answered none (a filing, a withdrawal, an expiry)
+    /// is marked changed, and its next key only says it was seen.
     pub(super) fn settle_changed(&mut self, answer: bool) {
         let now = self.on_show();
         let Some(run) = self.decisions.as_mut() else { return };
         match (run.seen, now) {
-            (Some((was, from)), Some((on, to))) if was == on && from != to => run.changed = true,
-            (Some((was, _)), Some((on, _))) if was == on => {}
+            (Some(seen), Some(on)) if seen == on => {}
             (seen, Some(_)) if seen != now && !answer => run.changed = true,
             _ => run.changed = false,
         }
@@ -317,14 +316,14 @@ impl Model {
         self.sort_key(sort, key, !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift, now)
     }
 
-    /// A click or key on a card that is not the one drawn (another card, or another revision of it),
-    /// or that is marked changed: it takes nothing (the latter's says the user saw it). `None`: it may act.
+    /// A click or key on a card that is not the one drawn (another card, or another revision of it)
+    /// takes nothing; on the one drawn while it is marked changed, it only says the user saw it
+    /// (so the mark clears only once drawn). `None`: it may act.
     fn unseen(&self, drawn: Option<(On, u32)>) -> Option<Key> {
         let changed = self.decisions.as_ref().is_some_and(|run| run.changed);
-        let moved = drawn != self.on_show();
-        match (changed, moved) {
-            (true, _) => Some(Key::Act(Action::DecisionsSeen)),
-            (false, true) => Some(Key::Swallow),
+        match (drawn != self.on_show(), changed) {
+            (true, _) => Some(Key::Swallow),
+            (false, true) => Some(Key::Act(Action::DecisionsSeen)),
             (false, false) => None,
         }
     }
@@ -601,7 +600,8 @@ impl Model {
             let weeks =
                 usize::from(self.decisions.as_ref().is_some_and(|run| !run.weeked) && self.week_card().is_some());
             if let Some(run) = self.decisions.as_mut() {
-                (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len() + 1 + weeks);
+                let done = run.done.len() + usize::from(run.weeked);
+                (run.at, run.of) = (done + 1, done + queue.len() + 1 + weeks);
                 run.queue = queue;
             }
             return self.title_decisions();
@@ -648,7 +648,9 @@ impl Model {
         if let Some(run) = self.decisions.as_mut() {
             (run.task, run.ticket) = queue.first().map(|first| (first.task, first.ticket)).unzip();
             (run.sort, run.week) = (sorting, week);
-            (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len() + weeks + sorts);
+            // The week's card answered this run counts as one done.
+            let done = run.done.len() + usize::from(run.weeked);
+            (run.at, run.of) = (done + 1, done + queue.len() + weeks + sorts);
             run.queue = queue;
         }
         self.title_decisions();

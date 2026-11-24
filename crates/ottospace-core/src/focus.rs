@@ -83,9 +83,11 @@ pub struct Week {
     pub at: u64,
 }
 
-/// The most proposals a client files in an hour, and an hour.
+/// The most proposals a client files in an hour.
 pub const PROPOSALS_PER_HOUR: usize = 6;
-const HOUR_MS: u64 = 3_600_000;
+use crate::filed::HOUR_MS;
+/// The most proposals declined a week kept: older ones may come again.
+const MAX_DECLINED: usize = 8;
 /// A proposal's quoted source line at its longest.
 pub const MAX_QUOTE: usize = 600;
 
@@ -125,11 +127,16 @@ pub enum Proposed {
     Declined,
 }
 
-/// What `focus.json` keeps: the weeks set, the newest last.
+/// What `focus.json` keeps: the weeks set, the newest last; and this week's answers, so a restart
+/// asks nothing again.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Kept {
     #[serde(default)]
     pub weeks: Vec<Week>,
+    #[serde(default)]
+    pub declined: Vec<(String, Vec<Area>)>,
+    #[serde(default)]
+    pub carried: Option<String>,
 }
 
 /// The week's focus and the weeks before it.
@@ -141,8 +148,9 @@ pub struct Focus {
     pub weeks: Vec<Week>,
     /// An agent's proposal for this week, waiting for the user.
     pub pending: Option<Proposal>,
-    /// The areas the user declined this week: the same proposed again makes no card.
-    pub declined: Option<(String, Vec<Area>)>,
+    /// The proposals the user declined, by week (this week's only): the same proposed again makes
+    /// no card.
+    pub declined: Vec<(String, Vec<Area>)>,
     /// The week whose "keep last week's focus?" the user answered.
     pub carried: Option<String>,
     /// When each counted proposal came: for `PROPOSALS_PER_HOUR`.
@@ -184,8 +192,6 @@ impl Focus {
         true
     }
 
-    /// Why a proposal is refused, or `None`. `projects`: the Projects entries' names;
-    /// `checkouts`: the listed repositories and worktrees.
     /// Why a proposal is refused, or `None`. The rate first, every attempt counted (`attempt`), and
     /// never a word on which projects or repositories exist: a link that is not listed is kept and
     /// shown to the user as not listed (`Area::unlisted`), never refused.
@@ -224,22 +230,23 @@ impl Focus {
     /// for the user, replacing one that waited, unless it is what is set or what they declined.
     pub fn propose(&mut self, areas: &[Area], provenance: Option<Provenance>, now: u64) -> Proposed {
         let areas: Vec<Area> = areas.iter().map(Area::kept).take(MAX_AREAS).collect();
+        // Kept as it would be shown before it is compared: the same words make no new revision.
+        let provenance = provenance.map(|p| Provenance {
+            path: plain(&p.path, MAX_LINK),
+            lines: p.lines.filter(|(from, to)| *from >= 1 && from <= to),
+            quote: crate::capture::kept_text(&p.quote, MAX_QUOTE),
+        });
         if self.current().is_some_and(|w| w.areas == areas) {
             self.pending = None;
             return Proposed::Same;
         }
-        if self.declined.as_ref().is_some_and(|(week, declined)| *week == self.week && *declined == areas) {
+        if self.declined.iter().any(|(week, declined)| *week == self.week && *declined == areas) {
             return Proposed::Declined;
         }
         if self.pending.as_ref().is_some_and(|p| p.areas == areas && p.provenance == provenance) {
             return Proposed::Pending;
         }
         self.revisions = self.revisions.saturating_add(1);
-        let provenance = provenance.map(|p| Provenance {
-            path: plain(&p.path, MAX_LINK),
-            lines: p.lines.filter(|(from, to)| *from >= 1 && from <= to),
-            quote: crate::capture::kept_text(&p.quote, MAX_QUOTE),
-        });
         let week = self.week.clone();
         self.pending = Some(Proposal { week, areas, provenance, revision: self.revisions, filed: now });
         Proposed::Pending
@@ -255,7 +262,12 @@ impl Focus {
     /// The user's N on the proposal of `revision`: the focus stays as it is.
     pub fn decline(&mut self, revision: u32) -> bool {
         let Some(p) = self.pending.take_if(|p| p.revision == revision) else { return false };
-        self.declined = Some((p.week, p.areas));
+        let week = self.week.clone();
+        self.declined.retain(|(w, _)| *w == week);
+        if self.declined.len() >= MAX_DECLINED {
+            self.declined.remove(0);
+        }
+        self.declined.push((p.week, p.areas));
         true
     }
 
@@ -289,13 +301,20 @@ impl Focus {
     }
 
     pub fn kept(&self) -> Kept {
-        Kept { weeks: self.weeks.clone() }
+        let declined = self.declined.iter().filter(|(w, _)| *w == self.week).cloned().collect();
+        Kept { weeks: self.weeks.clone(), declined, carried: self.carried.clone() }
     }
 
     /// `focus.json` read at start: each week as a set would keep it, by week, the last of each.
     pub fn restore(&mut self, kept: Kept) {
         let weeks = kept.weeks.into_iter().filter(|w| valid_week(&w.week));
         self.weeks = by_week(weeks.map(|w| Week { areas: kept_areas(&w.areas), ..w }).collect());
+        // The answers, as a decline would keep them: another week's never match.
+        let declined = kept.declined.into_iter().filter(|(w, _)| valid_week(w));
+        let mut declined: Vec<_> = declined.map(|(w, areas)| (w, kept_areas(&areas))).collect();
+        declined.drain(..declined.len().saturating_sub(MAX_DECLINED));
+        self.declined = declined;
+        self.carried = kept.carried.filter(|w| valid_week(w));
     }
 }
 
@@ -371,6 +390,16 @@ mod tests {
     }
 
     #[test]
+    fn the_same_proposal_again_is_no_new_revision_however_its_source_was_spaced() {
+        let mut focus = Focus { week: "2026-W48".into(), ..Focus::default() };
+        let areas = [Area { name: "Launch".into(), projects: vec![], repos: vec![] }];
+        let from = || Some(Provenance { path: " note.md ".into(), lines: Some((3, 4)), quote: "Launch".into() });
+        assert_eq!(focus.propose(&areas, from(), 1), Proposed::Pending);
+        focus.propose(&areas, from(), 2);
+        assert_eq!(focus.pending.as_ref().map(|p| p.revision), Some(1));
+    }
+
+    #[test]
     fn a_million_refused_proposals_keep_the_hours_count_and_no_more() {
         let mut focus = Focus { week: "2026-W48".into(), ..Focus::default() };
         for n in 0..1_000_000 {
@@ -420,10 +449,13 @@ mod tests {
             set_by: SetBy::User,
             at: 0,
         };
-        focus.restore(Kept { weeks: vec![week("2026-W48"), week("../x"), week("2026-W47"), week("2026-W48")] });
+        focus.restore(Kept {
+            weeks: vec![week("2026-W48"), week("../x"), week("2026-W47"), week("2026-W48")],
+            ..Kept::default()
+        });
         let weeks: Vec<&str> = focus.weeks.iter().map(|w| w.week.as_str()).collect();
         assert_eq!(weeks, ["2026-W47", "2026-W48"]);
-        focus.restore(Kept { weeks: vec![week("2026-W48"), Week { at: 9, ..week("2026-W48") }] });
+        focus.restore(Kept { weeks: vec![week("2026-W48"), Week { at: 9, ..week("2026-W48") }], ..Kept::default() });
         assert_eq!(focus.weeks[0].at, 9, "the later of two");
         assert_eq!(focus.weeks[0].areas[0].name, "a b");
     }
