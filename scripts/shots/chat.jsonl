@@ -11,7 +11,22 @@
 {"until":"drawer.native.chats.1.transcript.cards","len":1}
 {"shot":"permission"}
 # The context dot before the first message, opened: what ottospace added to the run.
-{"wheel":{"rect":"drawer.body"},"at":[0.5,0.5],"dy":40}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.6],"dy":5}
+{"settle":100}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.6],"dy":5}
+{"settle":100}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.6],"dy":5}
+{"settle":100}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.6],"dy":5}
+{"settle":100}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.6],"dy":5}
+{"settle":100}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.6],"dy":5}
+{"settle":100}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.6],"dy":5}
+{"settle":100}
+{"wheel":{"rect":"drawer.body"},"at":[0.5,0.6],"dy":5}
+{"settle":100}
 {"shot":"first-message"}
 {"click":"chat-context:1"}
 {"shot":"context-open"}
