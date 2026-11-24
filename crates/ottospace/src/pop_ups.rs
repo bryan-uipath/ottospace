@@ -519,7 +519,8 @@ impl Workspace {
             rules::Place::Float { offer: true } => {
                 self.offer_fixtures.insert(id, title.clone());
                 let frame = ottospace_core::ax::Frame::new(0., 0., size[0], size[1]);
-                let seen = SlotSeen { pid: 0, window: id, title, identifier, subrole: subrole.clone(), frame };
+                let seen =
+                    SlotSeen { pid: 0, window: id, title, identifier, subrole: subrole.clone(), frame, sheet: false };
                 self.offer_window(pane, seen, (&logged, &shape, &decided), window, cx);
             }
             // A `split` rule's: a pane with no window, as `app_fixture` makes.

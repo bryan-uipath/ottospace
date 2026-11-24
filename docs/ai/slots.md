@@ -30,11 +30,12 @@ is a made-up "Meetings" app; so are the examples here.
    takes only on the tab on show, only a window that opened while the slot waited, and never the
    window the user is using outside ottospace: those are offered (§3).
 3. **A window is in one pane at most**, slot or not. A window in a pane is never a candidate.
-4. **Window rules come first.** A window the rules ignore or float is never a candidate: a slot
-   cannot host what hosting refuses. A dialog or panel is one only for a slot that names its kind
-   (`subrole`), which Keep writes when the slot is made from one (`rules::slot_holds`; the owner,
-   2026-11-23: Zoom's popped-out meeting chat is an `AXSystemDialog`, and a slot made from it waited
-   for good).
+4. **Window rules come first.** A slot holds what a new window's judgement offers or splits
+   (`rules::slot_holds`): a standard window, a dialog or a panel, as the picker lists them. Never a
+   sheet, a tiny window, another kind, or one the rules ignore or float: a slot cannot host what
+   hosting refuses. (The owner, 2026-11-24: a slot by the title `Meeting chat` never offered Zoom's
+   popped-out chat, an `AXSystemDialog`, which the picker lists; a dialog was a candidate only for a
+   slot that named its kind.)
 5. **No new text in the state.** A slot's selector, its candidates' titles and identifiers are drawn
    in the pane and never sent on the socket: the core holds them in fields the state skips
    (`#[serde(skip)]`), and a property check holds it. A filled slot is an app pane and carries what
@@ -58,7 +59,7 @@ is a made-up "Meetings" app; so are the examples here.
 | `app` | The app's name or bundle id, as `windows` rules today | Yes |
 | `title` | The window's title | Yes |
 | `identifier` | The window's `AXIdentifier` (one app gives its windows fixed names: Zoom's `zm.meeting.window.main`) | Yes |
-| `subrole` | The window's `AXSubrole`. Within standard windows only (rule 4), so it narrows little; kept because `windows` rules have it | Yes (exists) |
+| `subrole` | The window's `AXSubrole`: a slot kept from a dialog names its kind, and holds only that kind | Yes (exists) |
 | `has` | The window holds elements: each entry (`role`, `identifier`, `description`, each a pattern) is met by some element, all fields of an entry by the same one. Every entry must be met | No: slice 6 |
 
 - **Every field given must match**, as in `windows` rules today. A selector with no field selects
@@ -104,7 +105,7 @@ The cheap facts first, the tree last. For each window of a slot's app, in this o
 "no" stops:
 
 1. `app` (from the running app, no AX call)
-2. `rules::manages` (rule 4; standard windows only)
+2. `rules::slot_holds` (rule 4; what a new window's judgement offers)
 3. not in any pane (rule 3), and not passed over for this slot (§3)
 4. `subrole`, `identifier`, `title` (one AX read of the window's attributes, which hosting already does)
 5. `has` (a bounded tree read, below)
@@ -202,14 +203,15 @@ so the next meeting's windows fill them. So, with `slots` on:
 `Title is “…”` whole, would wait for that one meeting). Of several, the largest. Matching Manual.
 ⋯ edits it.
 - **Not the user's, so it closes as before:** a pane a socket client filled, a window the app
-  opened itself (`Adopt`), a dialog or other non-standard window (rule 4: never a candidate, so it
-  would wait for good), and every app pane with `slots` off. The user's own × or close key on the
+  opened itself (`Adopt`), a window no slot holds (rule 4: never a candidate, so it would wait for
+  good), and every app pane with `slots` off. The user's own × or close key on the
   pane is the user saying no: the pane goes, as ever.
 - **As easy to be rid of as to get:** × in its header, and ⋯'s Clear slot. Nothing moves or takes
   focus.
 - **Drawn (the owner, 2026-11-23):** a dashed outline inset in the pane, the app's icon (dimmed),
   `Waiting for a Zoom window`, the rule in the dialog's words, `Offers it here when one opens` (or
-  Takes); no keys and no ⌘E hint (⌘E still works). Offering: a solid accent outline, the window's
+  Takes); when every window it selects is in another pane, `Its window is already in another pane`
+  (`Model::slot_note`), so it does not read as broken; no keys and no ⌘E hint (⌘E still works). Offering: a solid accent outline, the window's
   title and one button, Put it here; Not this one and `N more match` stay as quiet words under it.
   A small pane: the icon and one line (and Put it here while it offers). The icon is kept by bundle
   id (`slot_icon.rs`, `<home>/icons`, 64 at most, read again when the app's bundle is newer); the

@@ -1326,7 +1326,7 @@ it holds one) and `Clear slot`. The menu is the user's: ↓ ↑ ↵, Esc closes 
 A slot that waits draws a dashed outline in its pane with its app's icon (kept by bundle id in
 `~/.ottospace/icons`, so it shows when the app is not running; a generic one without), `Waiting for a
 Zoom window`, the rule in the dialog's words (`Zoom · window id zm.meeting.window.main`), `Zoom is not
-running` or `Zoom's window is away` when so, and whether it offers or takes the window. A window it
+running`, `Zoom's window is away` or `Its window is already in another pane` when so, and whether it offers or takes the window. A window it
 selects is offered there: a solid outline, `“Weekly sync” is open`, Put it here (↵ while the slot
 is focused) and, quieter, Not this one and `N more match`; in a small pane, the icon and one line
 (and Put it here while it offers). Its other acts are in ⋯. Several slots that select the same windows take them
@@ -1337,7 +1337,9 @@ A pane you put a window in (the picker, ⌘E, Put it here) stays when that windo
 quits: it becomes a slot that waits for the same kind of window, by the window's id (`Waits for:
 Zoom · window id zm.meeting.window.main · the largest`, which the next meeting's window has too), or
 `no window id` for one without, never by its title. × closes it. A pane a client opened,
-a window the app opened by itself, and a dialog close with their window, as before.
+and a window the app opened by itself close with their window, as before. A slot holds what the picker
+lists and a new window would be offered: a standard window, a dialog or a panel (Zoom's popped-out
+`Meeting chat`), never a sheet, a tiny window or one a rule ignores or floats.
 
 ## The return key
 

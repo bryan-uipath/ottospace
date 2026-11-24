@@ -17804,6 +17804,33 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
     assert_eq!(state["state"]["panes"][0]["kind"]["window"], 700_001);
 }
 
+/// The owner's Zoom chat: a slot by title (no kind named) waits; the app's popped-out chat, an
+/// `AXSystemDialog`, opens. It is offered in the slot, not in a chip, and the user's Bring it here fills it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_title_slot_is_offered_a_dialog_of_that_title_and_bring_it_here_fills_it() {
+    let otto = Otto::launch_with("slot-chat", &[("OTTOSPACE_FEATURES", "slots")]);
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let main = reply["state"]["focused"].as_u64().unwrap();
+    let reply = otto.call(json!({"cmd": "app_fixture", "name": "Meetings", "user": true}));
+    let pane = reply["state"]["focused"].as_u64().unwrap();
+    let slot = json!({"select": {"title": "Meeting chat"}, "pick": "any", "matching": "manual"});
+    otto.call(json!({"cmd": "slot_make", "pane": pane, "slot": slot}));
+    slot_menu(&otto, pane, "slot_give_back");
+    let line = json!({"cmd": "window_fixture", "pane": main, "title": "Meeting chat", "subrole": "AXSystemDialog",
+        "size": [400, 532]});
+    let reply = otto.call(line);
+    let run = |reply: &Value| reply["state"]["slots"][pane.to_string()].clone();
+    assert_eq!((run(&reply)["status"].clone(), reply["state"]["offers"].clone()), (json!("offered"), json!([])));
+    assert_eq!(run(&reply)["matches"], 1, "{reply}");
+    otto.user_click(at(otto.control(&format!("slot-accept:{pane}")), 0.5, 0.5));
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!(run(&state)["status"], "filled", "{state}");
+    let held =
+        state["state"]["panes"].as_array().unwrap().iter().any(|p| p["id"] == pane && p["kind"]["window"] == 800_001);
+    assert!(held, "{state}");
+}
+
 /// The slot dialog (board H4): its rule in one line over a form. A window with no id: any window
 /// of the app, the largest. The user's Title, starts with, and the words cut down to "SECRET
 /// weekly" make a slot that takes both weekly windows and not Home; a client's click or key changes

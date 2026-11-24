@@ -1638,6 +1638,8 @@ export interface SlotLook {
     identifier?: string | null;
     subrole: string;
     frame: Frame;
+    /** A sheet, or a child of another window: no slot holds it. */
+    sheet?: boolean;
   }[];
   displays: Frame[];
   frontmost?: number | null;
