@@ -861,11 +861,9 @@ impl Workspace {
         };
         let (screen, cell) = (agent.terminal.screen(), self.cell);
         let keys = self.model.mode() == Mode::Talk;
-        let grid = canvas(
-            |_, _, _| {},
-            move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, keys, &[], window, cx),
-        )
-        .size_full();
+        let grid =
+            canvas(|_, _, _| {}, move |bounds, _, window, _| terminal::paint(&screen, bounds, cell, keys, &[], window))
+                .size_full();
         let ended = agent.terminal.exited().then(|| {
             div()
                 .px_3()

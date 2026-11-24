@@ -22,7 +22,7 @@ use alacritty_terminal::tty;
 use alacritty_terminal::vi_mode::ViMotion;
 use alacritty_terminal::vte::ansi::{Color, CursorShape, NamedColor, Processor, Rgb};
 use gpui::{
-    App, Bounds, ContentMask, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, Size, StrikethroughStyle, TextRun,
+    Bounds, ContentMask, FontFeatures, FontStyle, FontWeight, Hsla, Pixels, Size, StrikethroughStyle, TextRun,
     UnderlineStyle, Window, fill, font, point, px, rgb, size,
 };
 use ottospace_core::keys::{self, Kitty, Mods};
@@ -81,6 +81,12 @@ pub fn cell_size(window: &Window) -> Size<Pixels> {
 /// `v` on the nearest whole device pixel at `scale`: 12.6 → 13 at 1x, 12.6 → 12.5 at 2x.
 fn on_pixel(v: Pixels, scale: f32) -> Pixels {
     px((f32::from(v) * scale).round() / scale)
+}
+
+/// Where a terminal's grid starts in its `bounds` at `scale`: on the next whole device pixel (never
+/// outside them), so each whole-pixel cell is on the pixel grid. Painting and the pointer share it.
+pub fn grid_origin(origin: gpui::Point<Pixels>, scale: f32) -> gpui::Point<Pixels> {
+    origin.map(|v| px((f32::from(v) * scale).ceil() / scale))
 }
 
 /// State the PTY reader thread shares with the UI thread.
@@ -693,13 +699,15 @@ impl Terminal {
     /// Resizes the grid to fill `area`, if that changes its size.
     pub fn fit(&mut self, area: Size<Pixels>, cell: Size<Pixels>) {
         let grid = Grid { cols: (area.width / cell.width) as usize, rows: (area.height / cell.height) as usize };
-        if grid == self.grid || grid.cols < 2 || grid.rows < 1 {
+        let drawn = [grid.cols as f32 * f32::from(cell.width), grid.rows as f32 * f32::from(cell.height)];
+        // The same grid of other cells (the window moved to another scale) is told too.
+        let same = grid == self.grid && *self.shared.area.lock().unwrap_or_else(|e| e.into_inner()) == Some(drawn);
+        if same || grid.cols < 2 || grid.rows < 1 {
             return;
         }
         self.grid = grid;
         // Under the grid's lock: a program's questions in one read see one size, cells and points.
         let mut term = self.term.lock();
-        let drawn = [grid.cols as f32 * f32::from(cell.width), grid.rows as f32 * f32::from(cell.height)];
         *self.shared.area.lock().unwrap_or_else(|e| e.into_inner()) = Some(drawn);
         let _ = self.input.send(Msg::Resize(window_size(grid, cell)));
         term.resize(grid);
@@ -1215,9 +1223,8 @@ pub fn paint(
     focused: bool,
     link: &[(usize, usize, usize)],
     window: &mut Window,
-    cx: &mut App,
 ) {
-    paint_scaled(screen, bounds, (cell, 1.), focused, link, window, cx)
+    paint_scaled(screen, bounds, (cell, 1.), focused, link, window)
 }
 
 /// The grid as blocks, no glyph shaped: each run of text a bar of its colour, half a row high, and
@@ -1255,14 +1262,12 @@ pub fn paint_scaled(
     focused: bool,
     link: &[(usize, usize, usize)],
     window: &mut Window,
-    cx: &mut App,
 ) {
     let chosen = terminal_font();
     let cell = size(cell.width * scale, cell.height * scale);
     // The grid's origin on the pixel grid, so each cell's (whole-pixel wide) is too.
     let device = window.scale_factor();
-    let bounds =
-        Bounds { origin: point(on_pixel(bounds.origin.x, device), on_pixel(bounds.origin.y, device)), ..bounds };
+    let bounds = Bounds { origin: grid_origin(bounds.origin, device), ..bounds };
     let mut art = 0;
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (r, spans) in screen.rows.iter().enumerate() {
@@ -1308,32 +1313,56 @@ pub fn paint_scaled(
                 if s.italic {
                     font.style = FontStyle::Italic;
                 }
+                let color: Hsla = rgb(s.fg).into();
+                let text = s.text.clone().into();
                 let run = TextRun {
                     len: s.text.len(),
                     font,
-                    color: rgb(s.fg).into(),
+                    color,
                     background_color: None,
-                    underline: s.underline.map(|u| UnderlineStyle {
-                        thickness: px(1.),
-                        color: u.color.map(|c| rgb(c).into()),
-                        wavy: u.curly,
-                    }),
-                    strikethrough: s.strike.then(|| StrikethroughStyle { thickness: px(1.), color: None }),
+                    underline: None,
+                    strikethrough: None,
                 };
-                // A run of plain characters: each glyph on its column. One character alone: centred
-                // in its cells, whatever font fell back for it (`⎿` is 13 points wide in Hiragino).
-                let force = (!s.alone).then_some(cell.width);
-                let text = s.text.clone().into();
-                let line = window.text_system().shape_line(text, px(chosen.font_size * scale), &[run], force);
+                let line = window.text_system().shape_line(text, px(chosen.font_size * scale), &[run], None);
+                // One character alone: centred in its cells, whatever font fell back for it (`⎿` is
+                // 13 points wide in Hiragino).
                 let mut origin = at(s);
                 if s.alone {
                     origin.x = on_pixel(origin.x + (cell.width * s.cells as f32 - line.width) / 2., device);
                 }
-                // The baseline on a whole pixel (GPUI puts it `(height - ascent - descent) / 2 + ascent`
-                // down): a fractional one rasterises every row's strokes at a quarter-pixel offset.
-                let baseline = origin.y + (cell.height - line.ascent - line.descent) / 2. + line.ascent;
-                origin.y += on_pixel(baseline, device) - baseline;
-                let _ = line.paint(origin, cell.height, window, cx);
+                // The baseline on a whole pixel (where GPUI would put it: `(height - ascent - descent) / 2
+                // + ascent` down): a fractional one rasterises every row at a quarter-pixel offset.
+                let baseline =
+                    on_pixel(origin.y + (cell.height - line.ascent - line.descent) / 2. + line.ascent, device);
+                for run in &line.runs {
+                    for glyph in &run.glyphs {
+                        // A plain run is ASCII, a byte a column: each glyph on its own column's whole
+                        // pixel, never where the font's advance would carry it (GPUI's forced width
+                        // moves a glyph only once it is a point off).
+                        let x = if s.alone {
+                            origin.x + glyph.position.x
+                        } else {
+                            origin.x + cell.width * glyph.index as f32
+                        };
+                        let at = point(x, baseline);
+                        let _ = match glyph.is_emoji {
+                            true => window.paint_emoji(at, run.font_id, glyph.id, line.font_size),
+                            false => window.paint_glyph(at, run.font_id, glyph.id, line.font_size, color),
+                        };
+                    }
+                }
+                // Its underline and strikethrough across its cells, where GPUI puts them.
+                let width = if s.alone { line.width } else { cell.width * s.cells as f32 };
+                if let Some(u) = s.underline {
+                    let color = Some(u.color.map_or(color, |c| rgb(c).into()));
+                    let style = UnderlineStyle { thickness: px(1.), color, wavy: u.curly };
+                    window.paint_underline(point(origin.x, baseline + line.descent * 0.618), width, &style);
+                }
+                if s.strike {
+                    let style = StrikethroughStyle { thickness: px(1.), color: Some(color) };
+                    let y = origin.y + (line.ascent * 0.5 + (baseline - origin.y)) * 0.5;
+                    window.paint_strikethrough(point(origin.x, y), width, &style);
+                }
             }
         }
         // A link under the pointer while ⌘ is held: underlined, in the text's colour.

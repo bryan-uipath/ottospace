@@ -1041,6 +1041,8 @@ struct Workspace {
     drawer: talk::Drawer,
     /// One terminal character cell.
     cell: Size<Pixels>,
+    /// The window's display scale, as last drawn: where a terminal's grid starts (`terminal::grid_origin`).
+    scale: f32,
     /// The terminal pane a mouse drag is selecting in.
     dragging: Option<PaneId>,
     /// The terminal whose program got a press, the button, and the cell last reported.
@@ -1868,6 +1870,7 @@ impl Workspace {
             titles: HashMap::new(),
             drawer: talk::Drawer::default(),
             cell: terminal::cell_size(window),
+            scale: window.scale_factor(),
             dragging: None,
             reporting: None,
             hovered: None,
@@ -3887,7 +3890,7 @@ impl Workspace {
     fn cell_position(&self, pane: Option<PaneId>, x: f32, y: f32) -> Result<(PaneId, gpui::Point<Pixels>), String> {
         let id = pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)).ok_or("no terminal pane")?;
         let bounds = self.cells.get(&id).map(|c| c.get()).filter(|b| b.size.width > px(1.)).ok_or("not laid out")?;
-        Ok((id, bounds.origin + point(self.cell.width * x, self.cell.height * y)))
+        Ok((id, terminal::grid_origin(bounds.origin, self.scale) + point(self.cell.width * x, self.cell.height * y)))
     }
 
     /// The inbox as JSON rows: each task with the group it is listed under.
@@ -5774,7 +5777,8 @@ impl Workspace {
             return;
         };
         let rows = terminal.grid_size().1 as f32 * f32::from(self.cell.height);
-        let lines = edge_scroll(f32::from(at.y - bounds.origin.y), rows, self.cell.height.into());
+        let top = terminal::grid_origin(bounds.origin, self.scale).y;
+        let lines = edge_scroll(f32::from(at.y - top), rows, self.cell.height.into());
         if let (true, Some(cell)) = (lines != 0, self.cell_under(id, at)) {
             terminal.select_scrolling(lines, cell);
             cx.notify();
@@ -5806,7 +5810,7 @@ impl Workspace {
     /// The terminal cell under a window position, from the same bounds the grid is painted in.
     fn cell_under(&self, id: PaneId, position: gpui::Point<Pixels>) -> Option<CellPoint> {
         let (bounds, terminal) = (self.cells.get(&id)?.get(), self.terminals.get(&id)?);
-        let local = position - bounds.origin;
+        let local = position - terminal::grid_origin(bounds.origin, self.scale);
         let cell = (self.cell.width.into(), self.cell.height.into());
         Some(cell_at(local.x.into(), local.y.into(), cell, terminal.grid_size()))
     }
@@ -7852,7 +7856,7 @@ impl Workspace {
             });
             let grid = canvas(
                 |_, _, _| {},
-                move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, has_keys, &underline, window, cx),
+                move |bounds, _, window, _| terminal::paint(&screen, bounds, cell, has_keys, &underline, window),
             )
             .size_full();
             // A copy's cells pulse in the focus colour, over the text.
@@ -9625,6 +9629,7 @@ impl Render for Workspace {
         self.renders += 1;
         // The cell on this display's pixel grid: again once the window moves to another scale.
         self.cell = terminal::cell_size(window);
+        self.scale = window.scale_factor();
         // Each state drawn: the program whose terminal got or lost the focus hears it.
         self.tell_focus(cx);
         // A frame: the tick runs each frame for a while, to take what follows it.

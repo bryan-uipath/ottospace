@@ -283,11 +283,11 @@ impl Workspace {
             let (screen, cell) = (terminal.screen(), self.cell);
             // A small tile: its rows as bars, nothing shaped.
             let blocks = scale * f32::from(self.zooming.area.get().size.width) < TEXT;
-            let paint = move |bounds, _, window: &mut Window, cx: &mut gpui::App| match blocks {
+            let paint = move |bounds, _, window: &mut Window, _: &mut gpui::App| match blocks {
                 true => {
                     terminal::paint_blocks(&screen, bounds, gpui::size(cell.width * scale, cell.height * scale), window)
                 }
-                false => terminal::paint_scaled(&screen, bounds, (cell, scale), false, &[], window, cx),
+                false => terminal::paint_scaled(&screen, bounds, (cell, scale), false, &[], window),
             };
             body.child(canvas(|_, _, _| {}, paint).size_full())
         } else if let Some((buffer, _)) = self.hosted.get(&id).and_then(|hosted| hosted.held()) {
