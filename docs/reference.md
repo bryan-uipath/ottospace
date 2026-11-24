@@ -113,7 +113,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘P | [Go to](#go-to): a place by name, Tab or `/` for its files, `>` for the commands |
 | ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | ⌘⌘ or F18 | From any app: take the keyboard back and bring ottospace forward |
-| ⌘T | New tab, with an empty pane: ⌘E picks what goes in it. Opened from a tab that keeps a checkout (`open_repo` made it), it keeps that checkout too: its code city, and a terminal there starts in it (until the tab moves to another workspace, or ottospace restarts) |
+| ⌘T | New tab, with an empty pane: ⌘E picks what goes in it. Opened from a tab that keeps a checkout (`open_repo` made it), it keeps that checkout too: its code city, and a terminal there starts in it (until the tab moves to another workspace; kept across a restart). Pressed in a folded-out window, the new tab opens in the main window with that window's tab's checkout |
 | ⌘1 … ⌘9 | Select a tab of the selected task (the second row) |
 | ⌘⇧] / ⌘⇧[ or ⌃Tab / ⌃⇧Tab | Next / previous tab of the selected task |
 | ⌘⌃1 … ⌘⌃9 | Select a space of the top row: the first, Home, then each open task and workspace. Not ⌥1…⌥9: ⌥ is Meta in a terminal |

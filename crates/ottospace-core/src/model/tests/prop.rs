@@ -263,8 +263,15 @@ impl Gen<'_> {
         let split =
             Node::Split { axis: self.axis(), ratio: 0.5, a: Box::new(Node::Leaf(1)), b: Box::new(Node::Leaf(2)) };
         let layout = self.rng.pick(&[Some(Node::Leaf(1)), Some(split), Some(Node::Leaf(9)), None]);
-        let tab =
-            TabRecord { title: self.name(WORDS), task: None, focused: Some(1), layout, panes, extra: self.extra() };
+        let tab = TabRecord {
+            title: self.name(WORDS),
+            task: None,
+            focused: Some(1),
+            layout,
+            panes,
+            folder: None,
+            extra: self.extra(),
+        };
         Workbook {
             id: 0,
             version: self.rng.pick(&[workbook::VERSION, 1, 3]),
@@ -903,6 +910,7 @@ impl Gen<'_> {
                 title: self.name(&["Tab 1", "app"]),
                 task: self.rng.one_in(3).then(|| self.task()),
                 focused: self.rng.one_in(3).then(|| self.rng.below(5) as u32),
+                folder: None,
                 layout: (!shown.is_empty()).then(|| self.tree(&shown)),
                 panes: listed.into_iter().map(|id| self.record(id)).collect(),
                 extra: self.extra(),

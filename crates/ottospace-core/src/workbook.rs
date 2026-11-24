@@ -812,7 +812,8 @@ impl Model {
         if self.tabs.get(index).is_some_and(|tab| tab.space == crate::model::Owner::Decisions) {
             return Err(crate::model::decisions::UNKEPT.into());
         }
-        let record = self.tab_record(index, cwds, histories).ok_or("no tab to save")?;
+        // A workbook's tab opens in that workbook's space: its checkout is the layout file's alone.
+        let record = TabRecord { folder: None, ..self.tab_record(index, cwds, histories).ok_or("no tab to save")? };
         if record.panes.iter().all(|pane| pane.kind == RecordKind::Empty) {
             return Err(EMPTY.into());
         }
@@ -859,7 +860,8 @@ impl Model {
             }
         }
         let title = marks::kept_title(&tab.title, 256);
-        Some(TabRecord { title, task: None, focused, layout, panes, extra: Extra::new() })
+        let folder = tab.folder.clone();
+        Some(TabRecord { title, task: None, focused, layout, panes, folder, extra: Extra::new() })
     }
 
     /// Why the tab on show cannot be saved, for the shell to say.

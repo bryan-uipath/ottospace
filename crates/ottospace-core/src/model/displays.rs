@@ -455,6 +455,12 @@ impl Model {
         }
         match action {
             Action::NewTab | Action::NewEmptyTab | Action::CycleTab { .. } => {
+                // A new tab opens in the main window, carrying the checkout of the tab the key
+                // was pressed in.
+                if matches!(action, Action::NewTab | Action::NewEmptyTab) {
+                    let tab = self.tabs.get(self.active);
+                    self.new_tab_from = tab.map(|tab| (tab.space.clone(), tab.folder.clone()));
+                }
                 self.key_main(effects);
                 action
             }
@@ -515,6 +521,30 @@ mod tests {
         m.update(Action::TabOut { tab: None });
         assert_eq!((m.tabs_out(), id(&m), m.away), (vec![], 1, None));
         assert_eq!(m.tabs[1].display, None);
+    }
+
+    /// ⌘T pressed in a folded-out window: the new tab opens in the main window (as before) and
+    /// carries the checkout of the folded-out tab, not the main window's.
+    #[test]
+    fn a_new_tab_from_a_folded_out_window_carries_its_tabs_checkout() {
+        let mut m = two();
+        (m.tabs[0].folder, m.tabs[1].folder) = (Some("/code/app".into()), Some("/code/web".into()));
+        m.update(Action::TabOut { tab: None });
+        assert_eq!((id(&m), main_id(&m)), (2, 1));
+        m.update(Action::NewTab);
+        assert_eq!(m.active, m.main_at(), "in the main window");
+        assert_eq!(m.tabs[m.active].folder.as_deref(), Some("/code/web"));
+        // From the main window: its tab's, as before.
+        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::NewTab);
+        assert_eq!(m.tabs[m.active].folder.as_deref(), Some("/code/app"));
+        // The main window on another space: a folded-out tab's checkout is not carried into it.
+        let mut m = two();
+        m.tabs[1].folder = Some("/code/web".into());
+        m.update(Action::TabOut { tab: None });
+        m.update(Action::SpaceOpen { space: Owner::Home });
+        m.update(Action::NewTab);
+        assert_eq!(m.tabs[m.active].folder, None);
     }
 
     /// A workspace of one tab, a terminal in it.
