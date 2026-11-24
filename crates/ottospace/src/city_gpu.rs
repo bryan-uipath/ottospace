@@ -221,6 +221,15 @@ impl Gpu {
         Ok(Self { device, queue, pipeline, glass, layout })
     }
 
+    /// One draw of a one-box city at 16×16, its picture dropped: the first picture shown pays no
+    /// first draw's setup (60 ms in the bench). Its failure is no failure of the GPU.
+    pub fn warm(&self) {
+        let one = ottospace_core::atlas::atlas(&ottospace_core::atlas::repo(&[("a/b.rs".into(), 900)]));
+        let scene = ottospace_core::scene::scene(&one, &[], 1., &ottospace_core::scene::View::default());
+        let warmed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.render(&scene, 16, 16, 1., true)));
+        drop(warmed);
+    }
+
     /// `scene` as a picture `width` × `height` pixels, `rise` (0 to 1) of the way through its
     /// buildings' rise (1: standing), its buildings of glass or not, or why there is none.
     pub fn render(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {

@@ -255,6 +255,14 @@ impl Model {
         self.cameras.grab.is_some()
     }
 
+    /// The place's camera is moving: a drag of its own camera in flight that has moved it from
+    /// where the drag began. A press that has not moved, or another place's drag, is no motion
+    /// (its picture stays full size and named).
+    pub fn camera_moving(&self, at: At) -> bool {
+        let Some(grab) = &self.cameras.grab else { return false };
+        grab.place.0 == at && self.camera_of(at).as_ref() == Some(&grab.place.1) && self.city_view(at) != grab.from
+    }
+
     /// Moves a place's camera by the user's `step`. Clamped: never under the ground, never
     /// past the city's footprint, never nearer than a building or farther than the whole city.
     pub(crate) fn camera(&mut self, at: At, step: CameraStep) {
@@ -683,6 +691,23 @@ mod tests {
     }
 
     /// Esc during a drag puts the camera back where the drag began; a drag let go keeps it.
+    #[test]
+    fn a_drag_is_motion_once_it_moves_and_only_for_its_own_checkout() {
+        let mut m = task_in_app();
+        let at = m.empty_places()[0];
+        let go = |m: &mut Model, step| drop(m.update(Action::CityCamera { at, step }));
+        go(&mut m, CameraStep::Grab);
+        assert!(m.camera_grabbed() && !m.camera_moving(at), "a press that has not moved");
+        go(&mut m, CameraStep::Orbit { yaw: 10., pitch: 0. });
+        assert!(m.camera_moving(at));
+        // Another place of no checkout of this drag: none.
+        m.update(Action::SpaceOpen { space: Owner::Home });
+        assert!(m.empty_places().iter().all(|other| *other == at || !m.camera_moving(*other)));
+        m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
+        go(&mut m, CameraStep::Let);
+        assert!(!m.camera_moving(at));
+    }
+
     #[test]
     fn a_cancelled_drag_puts_the_camera_back() {
         let mut m = task_in_app();

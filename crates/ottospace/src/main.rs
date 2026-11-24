@@ -1290,6 +1290,8 @@ struct Workspace {
     /// A test's `mouse` request holds the middle button: its moves are the middle button's drag.
     middle_held: bool,
     city_ease: Cell<Option<(ottospace_core::model::city::At, ottospace_core::scene::View, std::time::Instant)>>,
+    /// The code city's last wheel or trackpad step: its place moves until `city::WHEELING` after it.
+    city_wheeled: Cell<Option<(ottospace_core::model::city::At, std::time::Instant)>>,
     city_frames: Cell<usize>,
     status_fit: Cell<ottospace_core::status_bar::Fit>,
     status_said: Option<(u64, Option<u64>, bool)>,
@@ -1944,6 +1946,7 @@ impl Workspace {
             city_drag: None,
             middle_held: false,
             city_ease: Cell::new(None),
+            city_wheeled: Cell::new(None),
             city_frames: Cell::new(0),
             status_fit: Cell::default(),
             status_said: None,

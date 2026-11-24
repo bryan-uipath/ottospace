@@ -25,7 +25,7 @@ use ottospace_core::city_labels::{self, Candidate, Tier};
 use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::model::Origin;
 use ottospace_core::model::city::{At, CameraStep, Who};
-use ottospace_core::scene::{self, Camera, Kind, Scene, View};
+use ottospace_core::scene::{self, Camera, Kind, Layout, Scene, View};
 use ottospace_core::settings::expand_home;
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{status_bar, theme};
@@ -75,7 +75,7 @@ const FADE: Duration = Duration::from_millis(120);
 /// grow, district by district); where a frame of the rise renders slower than `RISE_BUDGET_US`,
 /// its standing picture fades in over `FADE_IN` instead.
 const RISE: Duration = Duration::from_millis(400);
-const RISE_BUDGET_US: u64 = 12_000;
+const RISE_BUDGET_US: u64 = 16_000;
 const FADE_IN: Duration = Duration::from_millis(250);
 /// Pictures no place shows, kept so a tab come back shows its city at once: the newest this many.
 const KEPT_PICTURES: usize = 2;
@@ -287,6 +287,8 @@ struct Key {
     lower: u32,
     /// `city_folder_colors`: folder name to colour name.
     folders: Vec<(String, String)>,
+    /// The user's drag (or a reset's ease) moves its camera: rendered at half size, unnamed.
+    moving: bool,
 }
 
 impl Key {
@@ -300,6 +302,19 @@ impl Key {
     /// The same picture standing (not a frame of its rise).
     fn standing(&self) -> Key {
         Key { rise: 1000, ..self.clone() }
+    }
+
+    /// What its layout depends on (`scene::Layout`): not its camera, rise or motion. A camera
+    /// move lays nothing out again.
+    fn laid(&self) -> Key {
+        Key { rise: 1000, view: [0; 5], moving: false, ..self.clone() }
+    }
+
+    /// Rendered at half size while it moves or rises: a quarter of the GPU's work, the copy out
+    /// and the upload, stretched for a moment; standing, at full size.
+    fn render_size(&self) -> (u32, u32) {
+        let (w, h) = self.size;
+        if self.moving || self.rise < 1000 { ((w / 2).max(1), (h / 2).max(1)) } else { (w, h) }
     }
 }
 
@@ -325,6 +340,8 @@ struct Made {
     places: usize,
     groups: usize,
     render_us: u64,
+    /// The GPU's part of it: what a rise's frame costs once the city is laid out.
+    gpu_us: u64,
     /// When a place last painted it: the newest unused are kept (`KEPT_PICTURES`).
     used: Instant,
 }
@@ -442,68 +459,117 @@ pub type Shared = Rc<RefCell<Drawn>>;
 type PaintJob = (Floor, Key, Arc<Atlas>);
 
 /// Renders pictures on a thread of its own, the newest each place asked for only (a camera or a
-/// size that moved on is skipped: `latest_each`). The GPU is opened at the first and kept; none
-/// (or `OTTOSPACE_CITY_NO_GPU` in a test run) and every picture fails.
+/// size that moved on is skipped: `latest_each`). The GPU is opened at the first, or before it
+/// (`warm`), and kept; none (or `OTTOSPACE_CITY_NO_GPU` in a test run) and every picture fails.
 pub struct Painter {
     jobs: Sender<PaintJob>,
     made: Receiver<(PaintJob, Option<Result<Made, String>>)>,
+    gpu: Locked<Option<Result<Gpu, String>>>,
+    /// The GPU's early opening was started (`warm`): once, never waited on.
+    warming: Arc<std::sync::atomic::AtomicBool>,
+}
+
+/// Owned by the picture's thread and, while it opens the GPU early, the warming one.
+type Locked<T> = Arc<std::sync::Mutex<T>>;
+
+/// The GPU, opened and warmed (`Gpu::new`, `Gpu::warm`); or why not. A panic opening it is a
+/// failure, never a poisoned lock.
+fn open_gpu() -> Result<Gpu, String> {
+    let refused = std::env::var_os("OTTOSPACE_E2E").and(std::env::var_os("OTTOSPACE_CITY_NO_GPU"));
+    if refused.is_some() {
+        return Err("no GPU (test)".into());
+    }
+    let gpu = std::panic::catch_unwind(Gpu::new).unwrap_or_else(|_| Err("opening the GPU panicked".into()))?;
+    gpu.warm();
+    Ok(gpu)
+}
+
+/// The GPU's lock, whatever panicked while another held it.
+fn lock_gpu(gpu: &Locked<Option<Result<Gpu, String>>>) -> std::sync::MutexGuard<'_, Option<Result<Gpu, String>>> {
+    gpu.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 impl Painter {
     pub fn new() -> Self {
-        let mut gpu: Option<Result<Gpu, String>> = None;
-        // The last scene made, by its key standing: a rise's frames build it once.
-        let mut last: Option<(Key, Scene)> = None;
+        let gpu: Locked<Option<Result<Gpu, String>>> = Arc::default();
+        let held = gpu.clone();
+        // The layouts made and their colours, by what they depend on, the newest last: a rise's
+        // frames and a camera's moves lay one out once (two places of one checkout, two sizes).
+        let mut last: Layouts = Vec::new();
         let (jobs, made) = latest_each(
             |job: &PaintJob| job.0,
             move |(_, key, plan): &PaintJob| {
-                let opened = gpu.get_or_insert_with(|| {
-                    let refused = std::env::var_os("OTTOSPACE_E2E").and(std::env::var_os("OTTOSPACE_CITY_NO_GPU"));
-                    if refused.is_some() { Err("no GPU (test)".into()) } else { Gpu::new() }
-                });
+                let mut gpu = lock_gpu(&held);
+                let opened = gpu.get_or_insert_with(open_gpu);
                 // A panic in the GPU's code fails this picture, and the GPU is opened again next time.
                 let picture = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     opened.as_ref().map_err(Clone::clone).and_then(|gpu| make(gpu, key, plan, &mut last))
                 }));
                 picture.unwrap_or_else(|_| {
-                    gpu = None;
+                    *gpu = None;
                     Err("the render panicked".into())
                 })
             },
         );
-        Self { jobs, made }
+        Self { jobs, made, gpu, warming: Arc::default() }
+    }
+
+    /// Opens the GPU on a thread of its own, if not yet: a city on show asks before its first
+    /// picture, so that picture waits for no device nor first draw.
+    /// Never waits: the main thread takes no lock the picture's thread holds while it renders.
+    pub fn warm(&self) {
+        if !self.warming.swap(true, std::sync::atomic::Ordering::Relaxed) {
+            let gpu = self.gpu.clone();
+            std::thread::spawn(move || drop(lock_gpu(&gpu).get_or_insert_with(open_gpu)));
+        }
     }
 }
 
+/// Layouts kept, newest last, with their folders' colours: by `Key::laid`.
+type Layouts = Vec<(Key, Layout, Vec<Option<(u32, u32)>>)>;
+
+/// Layouts kept for camera moves: a place or two of one checkout, at their sizes.
+const KEPT_LAYOUTS: usize = 4;
+
+/// A wheel or trackpad step moves its city's camera this long: its pictures are small and
+/// unnamed until the steps stop.
+pub(crate) const WHEELING: Duration = Duration::from_millis(150);
+
 /// The scene of `plan` and its picture, on the picture's thread.
-fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Option<(Key, Scene)>) -> Result<Made, String> {
+fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<Made, String> {
     let started = Instant::now();
-    let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
     let (w, h) = key.size;
-    let standing = key.standing();
-    let scene = match last.take() {
-        Some((was, scene)) if was == standing => scene,
-        _ => {
-            let mut scene =
-                scene::scene_lowered(plan, &lit, w as f32 / h as f32, &key.view(), f32::from_bits(key.lower));
+    let laid = key.laid();
+    let kept = last.iter().position(|(was, ..)| *was == laid).map(|at| last.remove(at));
+    let (layout, tints) = match kept {
+        Some((_, layout, tints)) => (layout, tints),
+        None => {
+            let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
+            let layout = scene::layout(plan, &lit, w as f32 / h as f32, f32::from_bits(key.lower));
             // Each building in its folder's colour (`city_colours`).
             let user = key.folders.iter().cloned().collect();
             let rule = FolderColours::new(&user).unwrap_or_else(|_| FolderColours::built_in());
-            scene.tints = city_colours::tints(plan, &scene.blocks, &rule);
-            scene
+            let tints = city_colours::tints(plan, &layout.blocks, &rule);
+            (layout, tints)
         }
     };
-    *last = Some((standing, scene.clone()));
+    let mut scene = layout.scene(&key.view());
+    scene.tints = tints.clone();
+    last.push((laid, layout, tints));
+    if last.len() > KEPT_LAYOUTS {
+        last.remove(0);
+    }
     let scene_us = started.elapsed().as_micros() as u64;
+    let (rw, rh) = key.render_size();
     let Picture { width, height, bgra, gpu_us, copy_us } =
-        gpu.render(&scene, w, h, f32::from(key.rise) / 1000., key.glass)?;
+        gpu.render(&scene, rw, rh, f32::from(key.rise) / 1000., key.glass)?;
     let camera = scene.camera.ok_or("no camera")?;
     let made_at = Instant::now();
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
     let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
     // Where a picture's time goes, for the bench (`scripts/bench`'s city motion): numbers only.
     let image_us = made_at.elapsed().as_micros() as u64;
-    let fields = serde_json::json!({ "scene_us": scene_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": w, "h": h });
+    let fields = serde_json::json!({ "scene_us": scene_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": rw, "h": rh });
     crate::trace::record("city_picture", fields);
     // Each lit building's bounds, and the middle of its top (never hidden).
     let lit = (scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))))
@@ -514,9 +580,10 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Option<(Key, Scene)>
         })
         .collect();
     // What may be named: the top two folder tiers on their front wall, deeper folders and files
-    // over their top (folders in capitals). None while the city rises.
-    let rising = key.rise < 1000;
-    let marks = (scene.blocks.iter().enumerate())
+    // over their top (folders in capitals). None while the city rises or its camera moves.
+    let rising = key.rise < 1000 || key.moving;
+    let marks_at = Instant::now();
+    let marks: Vec<Mark> = (scene.blocks.iter().enumerate())
         .filter(|_| !rising)
         .filter_map(|(i, b)| {
             let place = b.place?;
@@ -535,10 +602,13 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Option<(Key, Scene)>
             Some(Mark { place, tier, text, bounds: camera.bounds(b)?, edge })
         })
         .collect();
+    if !rising {
+        crate::trace::record("city_marks", serde_json::json!({ "us": marks_at.elapsed().as_micros() as u64 }));
+    }
     let groups = plan.places.iter().filter(|p| p.group).count();
     let render_us = started.elapsed().as_micros() as u64;
     let (places, plan, used) = (plan.places.len(), plan.clone(), Instant::now());
-    Ok(Made { key: key.clone(), image, lit, marks, scene, plan, places, groups, render_us, used })
+    Ok(Made { key: key.clone(), image, lit, marks, scene, plan, places, groups, render_us, gpu_us, used })
 }
 
 impl Drawn {
@@ -613,7 +683,7 @@ impl Drawn {
             .collect();
         serde_json::json!({
             "on": on(floor), "places": made.map(|made| made.places), "groups": made.map(|made| made.groups),
-            "picture": made.map(|made| made.key.size), "bounds": [x, y, w, h], "scale": scale,
+            "picture": made.map(|made| made.key.render_size()), "bounds": [x, y, w, h], "scale": scale,
             "lit": lit, "labels": names.len(), "names": names, "spots": made.map(|made| spots(made, [x, y, w, h])), "failed": failed, "reads": reads,
             "renders": self.renders, "paints": self.paints, "render_us": made.map(|made| made.render_us),
             "hovered": hovered, "lit_tops": tops, "lit_beams": lit_beams, "pictures": self.in_use(),
@@ -671,6 +741,10 @@ impl Workspace {
                     lit.push(one);
                 }
             }
+        }
+        // A checkout read with files to show: its GPU opens before its first picture is asked.
+        if on_show.keys().any(|dir| self.city.held.contains_key(dir)) {
+            self.city_painter.warm();
         }
         self.city.ask(on_show);
         let mut redraw = self.city.take();
@@ -768,6 +842,10 @@ impl Workspace {
         let Some(city) = self.model.city_at(at) else { return lattice };
         let view = self.eased_view(at, city.view);
         let easing = self.city_ease.get().is_some_and(|(of, ..)| of == at);
+        // Its camera moving: the user's drag of it that has moved, a reset easing back, or a
+        // wheel or trackpad step under `WHEELING` ago (`city_wheel` draws again after it).
+        let wheeled = self.city_wheeled.get().is_some_and(|(of, when)| of == at && when.elapsed() < WHEELING);
+        let moving = easing || wheeled || self.model.camera_moving(at);
         // Not read yet (or too large): the place is still laid out, so its size is known.
         let plan = self.city.held.get(city.dir).cloned();
         // The checkout's own name: a file in its root is labelled with it.
@@ -850,6 +928,7 @@ impl Workspace {
                     lower: lower.to_bits(),
                     folders: crate::config::live().city_folder_colors.clone().unwrap_or_default().into_iter().collect(),
                     glass: !crate::config::live().developer.city_opaque,
+                    moving,
                 });
                 key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
                 // Another folder in the same place (the main window's tab switched): its own first
@@ -1095,6 +1174,13 @@ impl Workspace {
             }
         };
         if let Some(step) = step {
+            // Moving until the steps stop: then once more, full size and named.
+            self.city_wheeled.set(Some((at, Instant::now())));
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(WHEELING + Duration::from_millis(20)).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
             self.city_step(at, step, window, cx);
             cx.stop_propagation();
         }
@@ -1267,7 +1353,9 @@ fn paint(
     let drawn = &mut *drawn;
     let made = drawn.places.get(&floor).and_then(|place| drawn.picture(place));
     // A frame of the rise rendered too slowly: no rise for this city, its standing picture fades in.
-    let slow = made.is_some_and(|made| made.key.rise < 1000 && made.render_us > RISE_BUDGET_US);
+    // The GPU's time: the layout (made once, before the first frame) and names (none while it
+    // rises) are no frame's cost.
+    let slow = made.is_some_and(|made| made.key.rise < 1000 && made.gpu_us > RISE_BUDGET_US);
     let Some(made) = made.filter(|_| !slow) else {
         // Its lattice shows while it waits: its first picture will rise, or fade in.
         if let Some(place) = drawn.places.get_mut(&floor) {
@@ -1284,7 +1372,9 @@ fn paint(
         window.request_animation_frame();
     }
     let shown = made.key.clone();
+    let painted = Instant::now();
     let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
+    crate::trace::record("city_paint", serde_json::json!({ "us": painted.elapsed().as_micros() as u64 }));
     // A first picture after the lattice waited fades in from the background; one made already
     // (a tab come back) shows at once, as under Reduce Motion.
     let fade = fade.or_else(|| (waited && first_ms.is_none() && !rising).then(Instant::now));
