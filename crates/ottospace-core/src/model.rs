@@ -4468,9 +4468,10 @@ pub struct Model {
     pub decisions: Option<decisions::Run>,
     /// The overview of the space's tabs, while zoomed out (`zoom_out`). In the state: tab ids.
     pub zoom: Option<zoom::Zoom>,
-    /// Each space's canvas camera as the user left it (`zoom_out`), kept in `layout.json`.
+    /// Each space's canvas camera as the user left it (`zoom_out`), kept in `layout.json`, with the
+    /// tabs it was left over: over other tabs, the canvas is fitted again.
     #[serde(skip)]
-    pub(crate) canvases: std::collections::HashMap<Owner, canvas::Camera>,
+    pub(crate) canvases: std::collections::HashMap<Owner, (canvas::Camera, Vec<u32>)>,
     /// Tiles the user placed on the canvas, by tab id: each one's corner. Kept in `layout.json`.
     #[serde(skip)]
     pub(crate) placed: std::collections::HashMap<u32, [f32; 2]>,

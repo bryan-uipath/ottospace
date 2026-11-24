@@ -104,6 +104,9 @@ pub struct SavedSpace {
     /// Its zoomed-out canvas's camera as the user left it (`zoom_out`): scale, then centre.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canvas: Option<[f32; 3]>,
+    /// How many tiles it was kept over (none in an older file: fitted again).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas_tiles: Option<usize>,
 }
 
 /// The right drawer. Its conversation is never started again here: it is shown, to go on with.
@@ -325,8 +328,21 @@ impl Model {
             let tasks: Vec<TaskId> = space.joined.iter().copied().filter(|id| known(Some(*id)).is_some()).collect();
             let front = self.front(&space.of).filter(|id| tasks.contains(id));
             let hidden = space.hidden;
-            let canvas = self.canvases.get(&space.of).map(|cam| [cam.scale, cam.center[0], cam.center[1]]);
-            let saved = SavedSpace { kind: kind.into(), task, workbook, name, hidden, tab: None, tasks, front, canvas };
+            let kept = self.canvases.get(&space.of);
+            let canvas = kept.map(|(cam, _)| [cam.scale, cam.center[0], cam.center[1]]);
+            let canvas_tiles = kept.map(|(_, tabs)| tabs.len());
+            let saved = SavedSpace {
+                kind: kind.into(),
+                task,
+                workbook,
+                name,
+                hidden,
+                tab: None,
+                tasks,
+                front,
+                canvas,
+                canvas_tiles,
+            };
             Some((space.of.clone(), space.last, saved))
         };
         let mut spaces: Vec<(Owner, Option<u32>, SavedSpace)> = self.spaces.iter().filter_map(kept).collect();
@@ -606,9 +622,15 @@ impl Model {
         for (of, saved) in owners.iter().zip(&layout.spaces) {
             let live = |id: &TaskId| self.tasks.live(*id).is_some();
             let joined: Vec<TaskId> = saved.tasks.iter().copied().filter(live).collect();
-            // Its canvas's camera; kept inside its bounds when zoomed out (`Camera::clamped`).
+            // Its canvas's camera, over its tabs as restored if as many were kept over (a tab id
+            // is this run's); else none, and it is fitted again. Kept inside its bounds when
+            // zoomed out (`Camera::clamped`).
             if let Some([scale, x, y]) = saved.canvas.filter(|_| *of != Owner::Home) {
-                self.canvases.insert(of.clone(), crate::model::canvas::Camera { scale, center: [x, y] });
+                let camera = crate::model::canvas::Camera { scale, center: [x, y] };
+                let tabs: Vec<u32> = self.space_tabs(of).into_iter().map(|at| self.tabs[at].id).collect();
+                let tabs: Vec<u32> = tabs.into_iter().filter(|id| *id != HOME_TAB).collect();
+                let tabs = if saved.canvas_tiles == Some(tabs.len()) { tabs } else { Vec::new() };
+                self.canvases.insert(of.clone(), (camera, tabs));
             }
             if let Some(space) = self.spaces.iter_mut().find(|space| space.of == *of && *of != Owner::Home) {
                 space.hidden = saved.hidden;
@@ -806,7 +828,14 @@ mod tests {
         let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
         assert_eq!(file.spaces.iter().filter(|s| s.canvas.is_some()).count(), 1, "{:?}", file.spaces);
         let (back, _) = restored(&m, file, &[], false);
-        assert_eq!(back.canvases.get(&of).copied(), camera);
+        assert_eq!(back.canvases.get(&of).map(|(cam, _)| *cam), camera);
+        let count = |m: &Model| m.canvases.get(&of).map(|(_, tabs)| tabs.len());
+        assert_eq!(count(&back), count(&m));
+        // An older file, with no count: no tabs, so the canvas is fitted again.
+        let mut older = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        older.spaces.iter_mut().for_each(|space| space.canvas_tiles = None);
+        let (back, _) = restored(&m, older, &[], false);
+        assert_eq!(back.canvases.get(&of).map(|(_, tabs)| tabs.len()), Some(0));
         assert!(camera.is_some_and(|c: Camera| c.scale < 0.5));
     }
 
