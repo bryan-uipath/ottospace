@@ -330,7 +330,7 @@ impl Model {
             let hidden = space.hidden;
             let kept = self.canvases.get(&space.of);
             let canvas = kept.map(|(cam, _)| [cam.scale, cam.center[0], cam.center[1]]);
-            let canvas_tiles = kept.map(|(_, n)| *n);
+            let canvas_tiles = kept.map(|(_, tabs)| tabs.len());
             let saved = SavedSpace {
                 kind: kind.into(),
                 task,
@@ -622,10 +622,15 @@ impl Model {
         for (of, saved) in owners.iter().zip(&layout.spaces) {
             let live = |id: &TaskId| self.tasks.live(*id).is_some();
             let joined: Vec<TaskId> = saved.tasks.iter().copied().filter(live).collect();
-            // Its canvas's camera; kept inside its bounds when zoomed out (`Camera::clamped`).
+            // Its canvas's camera, over its tabs as restored if as many were kept over (a tab id
+            // is this run's); else none, and it is fitted again. Kept inside its bounds when
+            // zoomed out (`Camera::clamped`).
             if let Some([scale, x, y]) = saved.canvas.filter(|_| *of != Owner::Home) {
                 let camera = crate::model::canvas::Camera { scale, center: [x, y] };
-                self.canvases.insert(of.clone(), (camera, saved.canvas_tiles.unwrap_or(0)));
+                let tabs: Vec<u32> = self.space_tabs(of).into_iter().map(|at| self.tabs[at].id).collect();
+                let tabs: Vec<u32> = tabs.into_iter().filter(|id| *id != HOME_TAB).collect();
+                let tabs = if saved.canvas_tiles == Some(tabs.len()) { tabs } else { Vec::new() };
+                self.canvases.insert(of.clone(), (camera, tabs));
             }
             if let Some(space) = self.spaces.iter_mut().find(|space| space.of == *of && *of != Owner::Home) {
                 space.hidden = saved.hidden;
@@ -824,7 +829,13 @@ mod tests {
         assert_eq!(file.spaces.iter().filter(|s| s.canvas.is_some()).count(), 1, "{:?}", file.spaces);
         let (back, _) = restored(&m, file, &[], false);
         assert_eq!(back.canvases.get(&of).map(|(cam, _)| *cam), camera);
-        assert_eq!(back.canvases.get(&of).map(|(_, n)| *n), m.canvases.get(&of).map(|(_, n)| *n));
+        let count = |m: &Model| m.canvases.get(&of).map(|(_, tabs)| tabs.len());
+        assert_eq!(count(&back), count(&m));
+        // An older file, with no count: no tabs, so the canvas is fitted again.
+        let mut older = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        older.spaces.iter_mut().for_each(|space| space.canvas_tiles = None);
+        let (back, _) = restored(&m, older, &[], false);
+        assert_eq!(back.canvases.get(&of).map(|(_, tabs)| tabs.len()), Some(0));
         assert!(camera.is_some_and(|c: Camera| c.scale < 0.5));
     }
 

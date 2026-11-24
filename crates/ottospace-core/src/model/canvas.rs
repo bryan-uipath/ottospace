@@ -147,6 +147,11 @@ impl Camera {
             return Camera::fit(extent);
         }
         let scale = self.scale.clamp(farthest(extent), NEAREST);
+        // Every tile in view (a fit of tiles far apart): as it is.
+        let all = Camera { scale, ..self }.on_screen(extent);
+        if all.x >= -1e-4 && all.y >= -1e-4 && all.x + all.w <= 1. + 1e-4 && all.y + all.h <= 1. + 1e-4 {
+            return Camera { scale, ..self };
+        }
         // Half the view, in world units; the view spans center ± half.
         let half = 0.5 / scale;
         let keep = 2. * half * KEEP;
@@ -330,5 +335,15 @@ mod tests {
         // The second placed left of the first: Left from the first reaches it, Right does not.
         let placed = vec![grid_spot(0, 2), Rect { x: -1.5, y: 0., w: 1., h: 1. }];
         assert_eq!((neighbour(&placed, 0, Dir::Left), neighbour(&placed, 0, Dir::Right)), (Some(1), None));
+    }
+
+    /// Two tiles far apart, fitted: kept as fitted, both in view, by the clamp and a tile shown.
+    #[test]
+    fn a_fit_of_tiles_far_apart_is_kept_as_it_is() {
+        let t = [grid_spot(0, 2), Rect { x: 100., y: 0., w: 1., h: 1. }];
+        let fit = Camera::fit(extent(&t));
+        assert_eq!((fit.clamped(&t), fit.showing(t[0], &t)), (fit, fit));
+        let seen = |cam: Camera| t.iter().all(|r| in_view(cam.on_screen(*r)));
+        assert!(seen(fit), "{fit:?}");
     }
 }
