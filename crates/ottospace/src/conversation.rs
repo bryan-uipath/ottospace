@@ -658,9 +658,13 @@ impl Workspace {
     }
 
     /// The wheel over the transcript: scrolled up, it stays; back at the bottom, it follows again.
-    fn chat_wheel(&mut self, subject: &Subject, cx: &mut Context<Self>) {
+    /// The user scrolled the transcript: `up`, back from the latest, leaves it however little
+    /// (a trackpad's first points are fewer than `LATEST`, and the next frame would pin it back),
+    /// when there is anything to leave it for.
+    fn chat_wheel(&mut self, subject: &Subject, up: bool, cx: &mut Context<Self>) {
         if let Some(look) = self.drawer.looks.get_mut(subject) {
-            look.away = extent(&look.scroll, Axis::Down).beyond(LATEST).1;
+            let extent = extent(&look.scroll, Axis::Down);
+            look.away = (up && extent.content > extent.viewport) || extent.beyond(LATEST).1;
         }
         cx.notify();
     }
@@ -714,7 +718,12 @@ impl Workspace {
             .children((t.unread_lines() > 0).then(|| self.chat_unread(subject, t, cx)))
             .on_scroll_wheel(cx.listener({
                 let subject = subject.clone();
-                move |this, _: &ScrollWheelEvent, _, cx| this.chat_wheel(&subject, cx)
+                move |this, e: &ScrollWheelEvent, window, cx| {
+                    // Up, and mostly up: a sideways swipe over a code block leaves the latest alone.
+                    let d = e.delta.pixel_delta(window.line_height());
+                    let up = d.y > px(0.) && d.y.abs() > d.x.abs();
+                    this.chat_wheel(&subject, up, cx)
+                }
             }))
             // A press selects text, as in a text field; one elsewhere takes the keys from it.
             .on_mouse_down(
@@ -731,7 +740,7 @@ impl Workspace {
             .child(self.transcript_listener(subject, cx));
         // A drag or a page of the bar leaves the latest, as a wheel does.
         let (this, who) = (cx.entity().downgrade(), subject.clone());
-        let moved = move |cx: &mut gpui::App| drop(this.update(cx, |this, cx| this.chat_wheel(&who, cx)));
+        let moved = move |cx: &mut gpui::App| drop(this.update(cx, |this, cx| this.chat_wheel(&who, false, cx)));
         let bar = self.bars.follow(
             &format!("chat:{key}"),
             Axis::Down,
