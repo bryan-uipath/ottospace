@@ -149,10 +149,10 @@ impl Shared {
         });
     }
 
-    /// New output, or a scroll: the main loop takes it at its next run.
+    /// New output, or a scroll: taken at once, and drawn on the display's next frame (`wake::draw`).
     fn set_dirty(&self) {
         self.dirty.store(true, Relaxed);
-        ottospace_mac::wake::post();
+        ottospace_mac::wake::draw();
     }
 
     fn set_exited(&self) {

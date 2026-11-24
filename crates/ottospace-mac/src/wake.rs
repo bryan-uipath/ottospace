@@ -2,6 +2,8 @@
 //! zoom, a display change, a socket request, a terminal's output), posts a wakeup: `post`, from
 //! any thread. The loop waits on `woken` and takes the wakeup with `take`. A routine result
 //! (a file's unchanged stamp) only `nudge`s: the loop runs, but nothing is said to have happened.
+//! Output to draw (a terminal's) also rings `DRAW` (`draw`): a task of its own on the main thread
+//! takes it at once, as the loop runs at most each frame, out of step with the display.
 
 use std::future::Future;
 use std::pin::Pin;
@@ -31,6 +33,48 @@ pub fn nudge() {
 fn wake_waiter() {
     if let Some(waker) = WAITER.lock().ok().and_then(|mut waiter| waiter.take()) {
         waker.wake();
+    }
+}
+
+/// Output to draw came: `DRAW` rings, and the loop runs as at any `post`.
+pub fn draw() {
+    DRAW.ring();
+    post();
+}
+
+/// Rung by `draw`: awaited by the main thread's task that takes the output and asks for a frame.
+pub static DRAW: Bell = Bell::new();
+
+/// A signal from any thread to one waiter: rung, and awaited (`rung`). Cheap when rung again
+/// before it was taken.
+#[derive(Default)]
+pub struct Bell {
+    rung: AtomicBool,
+    waiter: Mutex<Option<Waker>>,
+}
+
+impl Bell {
+    pub const fn new() -> Self {
+        Bell { rung: AtomicBool::new(false), waiter: Mutex::new(None) }
+    }
+
+    pub fn ring(&self) {
+        if !self.rung.swap(true, SeqCst)
+            && let Some(waker) = self.waiter.lock().ok().and_then(|mut waiter| waiter.take())
+        {
+            waker.wake();
+        }
+    }
+
+    /// Ready once rung since the last time it was.
+    pub fn rung(&self) -> impl Future<Output = ()> + '_ {
+        std::future::poll_fn(move |cx| {
+            // The waker first, then the flag: a ring between the two is seen by the flag.
+            if let Ok(mut waiter) = self.waiter.lock() {
+                *waiter = Some(cx.waker().clone());
+            }
+            if self.rung.swap(false, SeqCst) { Poll::Ready(()) } else { Poll::Pending }
+        })
     }
 }
 
@@ -95,5 +139,23 @@ mod tests {
         assert!(Pin::new(&mut woken).poll(&mut cx).is_ready());
         assert!(!take());
         assert!(Pin::new(&mut woken).poll(&mut cx).is_pending());
+    }
+
+    /// A ring wakes the one waiting, once; rung again before it was taken, it wakes no one. Taken,
+    /// it is pending again.
+    #[test]
+    fn a_ring_wakes_the_waiter_once_and_is_taken_once() {
+        let bell = Bell::new();
+        let count = Arc::new(Count(Default::default()));
+        let waker = Waker::from(count.clone());
+        let mut cx = Context::from_waker(&waker);
+        let mut rung = std::pin::pin!(bell.rung());
+        assert!(rung.as_mut().poll(&mut cx).is_pending());
+        bell.ring();
+        bell.ring();
+        assert_eq!(count.0.load(SeqCst), 1);
+        assert!(rung.as_mut().poll(&mut cx).is_ready());
+        let mut again = std::pin::pin!(bell.rung());
+        assert!(again.as_mut().poll(&mut cx).is_pending());
     }
 }

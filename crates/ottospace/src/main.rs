@@ -1599,6 +1599,23 @@ impl Workspace {
             }
         })
         .detach();
+        // A terminal's output: taken and its frame asked for at once, not at the tick's next run
+        // (up to a frame later, out of step with the display: a key's echo waited for it).
+        cx.spawn_in(window, async move |this, cx| {
+            loop {
+                ottospace_mac::wake::DRAW.rung().await;
+                let took = this.update_in(cx, |this, window, cx| {
+                    this.with_origin(Origin::System, |this| {
+                        this.sync_terminals(window, cx);
+                        this.sync_agents(window, cx);
+                    })
+                });
+                if took.is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
         // The tick: answer control calls, redraw on new output, keep windows matched to panes;
         // every ~500ms, also look for new and closed windows of hosted apps. Each frame while
         // something moves or waits, or just happened; else asleep until woken, or the next slow
