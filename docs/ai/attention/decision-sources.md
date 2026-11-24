@@ -588,7 +588,7 @@ From #424 (owner, 2026-11-23), standing unless marked:
    `.md`), case-insensitive; a task's `#tag` that matches one is that project.
 4. ~~W from the drag only~~. **Replaced**: priority comes from the week's focus (§5, §6); the
    drag order feeds nothing but the Projects section.
-5. **Nothing interrupts** in these slices (see Open 5 for an on-call rule).
+5. **Nothing interrupts** in these slices (an on-call rule comes after slice 2: Decided 15).
 6. **Retention**: closed decisions deleted after 14 days; Forget for sooner.
 7. **No per-card "first" pin**; `t` (take now) in triage is a sort, for today only.
 8. **A dismissed thread comes back** only when more urgent, and then to triage.
@@ -605,6 +605,11 @@ Added (owner, 2026-11-23):
     that read the weekly note (`focus_set`) and confirmed by the user. ottospace never reads or
     writes the note.
 14. **Expiry tied to its asker** where ottospace can check it (working default, reversible).
+15. **An "urgent" rule for an on-call week** (owner, 2026-11-23): a rule the user sets may raise
+    `needs you`. By source and scope only (a routine such as `dri`, a pager channel; the scopes of
+    the key formats), never by keyword (a keyword matches untrusted text, so anyone in a channel
+    could raise it); it ends on a date the user sets; it raises the count and puts the card first,
+    with no sound, notice or focus change. Built after slice 2.
 
 ## 11. Open questions (the owner's)
 
@@ -615,11 +620,7 @@ Added (owner, 2026-11-23):
 3. **Promotion scope**: a whole source, or a source and key prefix (a channel, a routine)?
    Recommend the prefix: one noisy channel should not ride on a trusted one.
 4. **Stalled after 2 working days with nothing moved?** Recommend yes; a setting only if asked.
-5. **An "urgent" rule for an on-call week**: a rule the user sets that may raise `needs you`.
-   Recommend: by source and key prefix only (`routine:dri:`, a pager channel), never by keyword
-   (a keyword matches untrusted text, so anyone in a channel could raise it); bounded by an end
-   date the user sets (or the week a "DRI" area is in focus); it raises the count and puts the
-   card first, with no sound, notice or focus change. Built after slice 2.
+5. *Decided: see Decided 15.*
 6. **A second `gh` read** (pull requests merged this week in linked repositories) for progress:
    read-only, a fixed argv, beside `repos_prs`. Recommend yes; AGENTS.md's network line changes
    with it.
