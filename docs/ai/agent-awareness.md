@@ -258,9 +258,9 @@ pane's header (the robot, or ⌘⌃V)." The same string `ottospace ctl` prints: 
 core's, the shim passes it on.
 
 **Permission prompts.** Claude asks through ottospace's own `--permission-prompt-tool stdio`, so an
-MCP call is a card in the drawer unless allowed; rules name `mcp__ottospace__<tool>`
+MCP call is a card in the drawer unless allowed; rules name `mcp__ottospace_task__<tool>`
 (code.claude.com/docs/en/permissions). Recommend: the read-only tools pre-allowed in the start
-(`--allowedTools mcp__ottospace__workspace …`), every later tool that acts left to a card. Codex:
+(`--allowedTools mcp__ottospace_task__workspace …`), every later tool that acts left to a card. Codex:
 `-c mcp_servers.ottospace.default_tools_approval_mode="writes"` prompts only for tools not marked
 read-only; the shim marks the first set `readOnlyHint`.
 
@@ -288,10 +288,10 @@ names a turn, cached. Codex: not documented; at worst six schemas, about 1k toke
   (`ottospace-agents/tests/fakes`) records its argv: a test sees `--mcp-config` naming this binary
   for a task's agent in both views, and none for a session not a task's.
 - **The owner's smoke check, real CLIs:** start a task with Claude Code from ottospace; in the
-  terminal view type `/mcp` (Codex: the same in its TUI): `ottospace` is listed and connected.
+  terminal view type `/mcp` (Codex: the same in its TUI): `ottospace_task` is listed and connected.
   (`claude mcp list` and `codex mcp list` list configured servers only, so not this per-run one.)
   Then ask "What is in this workspace, and can you see the Slack pane?". Expected: a
-  `mcp__ottospace__workspace` call, then `app_look` or, at Off, "ask the user to choose See", and no
+  `mcp__ottospace_task__workspace` call, then `app_look` or, at Off, "ask the user to choose See", and no
   `screencapture`.
 
 **Trade-off.**
