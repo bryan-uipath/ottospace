@@ -36,6 +36,15 @@ import type {
   Captured,
   Note,
   NoteReply,
+  DecisionAct,
+  DecisionAt,
+  DecisionChoice,
+  DecisionEvidence,
+  DecisionFileReply,
+  DecisionProvenance,
+  DecisionReply,
+  Filed,
+  FiledRow,
   Meeting,
   TimeSpan,
   NativeChat,
@@ -881,6 +890,141 @@ export function noteReply(value: unknown): NoteReply {
   return { ok: true, task: num(o.task, "task"), note: note(o.note, "note") };
 }
 
+const decisionSource = oneOf(
+  ["agent_session", "terminal_session", "slack", "jira", "pr_review", "calendar", "routine"] as const,
+  "a decision's source",
+);
+const decisionStatus = oneOf(["open", "withdrawn", "expired"] as const, "a decision's status");
+const decisionTriage = oneOf(["pending", "skipped"] as const, "triage");
+const via = oneOf(["socket"] as const, "how a decision came");
+
+export function decisionFileReply(value: unknown): DecisionFileReply {
+  const o = fields(value, "reply");
+  return {
+    ok: true,
+    id: num(o.id, "id"),
+    revision: num(o.revision, "revision"),
+    status: decisionStatus(o.status, "status"),
+    triage: decisionTriage(o.triage, "triage"),
+  };
+}
+
+function decisionAct(value: unknown, at: string): DecisionAct {
+  if (value === "answer" || value === "go_to_pane") return value;
+  const o = fields(value, at);
+  if (o.start_task !== undefined) {
+    const t = fields(o.start_task, `${at}.start_task`);
+    return { start_task: { title: str(t.title, `${at}.start_task.title`), brief: str(t.brief, `${at}.start_task.brief`) } };
+  }
+  if (o.draft_reply !== undefined) {
+    return { draft_reply: { text: str(fields(o.draft_reply, `${at}.draft_reply`).text, `${at}.draft_reply.text`) } };
+  }
+  if (o.next_action !== undefined) {
+    return { next_action: { text: str(fields(o.next_action, `${at}.next_action`).text, `${at}.next_action.text`) } };
+  }
+  if (o.open_link !== undefined) {
+    return { open_link: { url: str(fields(o.open_link, `${at}.open_link`).url, `${at}.open_link.url`) } };
+  }
+  throw wrong(at, "an act", value);
+}
+
+function decisionChoice(value: unknown, at: string): DecisionChoice {
+  const o = fields(value, at);
+  return {
+    label: str(o.label, `${at}.label`),
+    consequence: str(o.consequence, `${at}.consequence`),
+    act: orNull(decisionAct)(o.act, `${at}.act`),
+  };
+}
+
+function decisionAt(value: unknown, at: string): DecisionAt {
+  if (typeof value === "string") return value;
+  const o = fields(value, at);
+  return { path: str(o.path, `${at}.path`), lines: orNull(pair)(o.lines, `${at}.lines`) };
+}
+
+function decisionEvidence(value: unknown, at: string): DecisionEvidence {
+  const o = fields(value, at);
+  const provenance = (v: unknown, p: string): DecisionProvenance => {
+    const f = fields(v, p);
+    return {
+      source: decisionSource(f.source, `${p}.source`),
+      when: orNull(num)(f.when, `${p}.when`),
+      who: oneOf(["person", "bot", "filer"] as const, "who")(f.who, `${p}.who`),
+    };
+  };
+  return {
+    kind: oneOf(["quote", "link", "file"] as const, "an evidence kind")(o.kind, `${at}.kind`),
+    text: str(o.text, `${at}.text`),
+    at: orNull(decisionAt)(o.at, `${at}.at`),
+    provenance: orNull(provenance)(o.provenance, `${at}.provenance`),
+  };
+}
+
+export function decisionReply(value: unknown): DecisionReply {
+  const d = fields(fields(value, "reply").decision, "decision");
+  const at = (key: string) => `decision.${key}`;
+  const suggest = fields(d.suggest, at("suggest"));
+  const claims = fields(d.claims, at("claims"));
+  return {
+    ok: true,
+    decision: {
+      ...labelled(d, "decision"),
+      id: num(d.id, at("id")),
+      source: decisionSource(d.source, at("source")),
+      key: str(d.key, at("key")),
+      via: via(d.via, at("via")),
+      revision: num(d.revision, at("revision")),
+      filed: num(d.filed, at("filed")),
+      updated: num(d.updated, at("updated")),
+      summary: str(d.summary, at("summary")),
+      question: str(d.question, at("question")),
+      options: list(decisionChoice)(d.options, at("options")),
+      recommend: orNull(num)(d.recommend, at("recommend")),
+      why: str(d.why, at("why")),
+      evidence: list(decisionEvidence)(d.evidence, at("evidence")),
+      suggest: {
+        projects: list(str)(suggest.projects, at("suggest.projects")),
+        role: orNull(oneOf(["core", "ancillary"] as const, "a role"))(suggest.role, at("suggest.role")),
+        role_why: str(suggest.role_why, at("suggest.role_why")),
+      },
+      claims: {
+        due: orNull(num)(claims.due, at("claims.due")),
+        person_waits: bool(claims.person_waits, at("claims.person_waits")),
+        blocks: list(num)(claims.blocks, at("claims.blocks")),
+      },
+      triage: decisionTriage(d.triage, at("triage")),
+      expires: num(d.expires, at("expires")),
+      task: orNull(num)(d.task, at("task")),
+      status: decisionStatus(d.status, at("status")),
+      closed: orNull(num)(d.closed, at("closed")),
+    },
+  };
+}
+
+function filedRow(value: unknown, at: string): FiledRow {
+  const o = fields(value, at);
+  return {
+    id: num(o.id, `${at}.id`),
+    source: decisionSource(o.source, `${at}.source`),
+    via: via(o.via, `${at}.via`),
+    triage: decisionTriage(o.triage, `${at}.triage`),
+    status: decisionStatus(o.status, `${at}.status`),
+    revision: num(o.revision, `${at}.revision`),
+    filed: num(o.filed, `${at}.filed`),
+    updated: num(o.updated, `${at}.updated`),
+    expires: num(o.expires, `${at}.expires`),
+    task: orNull(num)(o.task, `${at}.task`),
+    options: num(o.options, `${at}.options`),
+    evidence: num(o.evidence, `${at}.evidence`),
+  };
+}
+
+function filed(value: unknown, at: string): Filed {
+  const o = fields(value, at);
+  return { open: num(o.open, `${at}.open`), to_sort: num(o.to_sort, `${at}.to_sort`), rows: list(filedRow)(o.rows, `${at}.rows`) };
+}
+
 export function taskBriefReply(value: unknown): TaskBriefReply {
   const o = fields(value, "reply");
   return {
@@ -1515,7 +1659,7 @@ function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
   if (value === "overlay_panels" || value === "decisions" || value === "code_city") return value;
-  if (value === "session_waits" || value === "projects" || value === "terminal_tasks" || value === "zoom_out") return value;
+  if (value === "session_waits" || value === "projects" || value === "terminal_tasks" || value === "zoom_out" || value === "decision_sources") return value;
   throw wrong(at, "a feature", value);
 }
 
@@ -2406,6 +2550,7 @@ export function snapshot(value: unknown): Snapshot {
     sessions_bar: sessionsBar(o.sessions_bar, "sessions_bar"),
     repos_bar: list(reposGroup)(o.repos_bar, "repos_bar"),
     projects_bar: projectsBar(o.projects_bar, "projects_bar"),
+    filed: orNull(filed)(o.filed, "filed"),
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     city: orNull(cityDrawn)(o.city, "city"),

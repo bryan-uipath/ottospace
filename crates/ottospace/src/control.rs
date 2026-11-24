@@ -583,6 +583,44 @@ pub enum Request {
     Note {
         task: TaskId,
     },
+    /// Files a decision (`decision_sources`): `{"cmd":"decision_file","source":"slack",
+    /// "key":"slack:C0MADEUP:1763500000.000100","question":"Reply today, or hand it over?",..}`. The
+    /// same `source` and `key` again is the next revision of its decision, not another. The reply
+    /// is `{"ok":true,"id":..,"revision":..,"status":"open","triage":"pending"}`. Every word in it
+    /// is kept as untrusted text; nothing it says is done but by the user's key.
+    DecisionFile {
+        source: ottospace_core::filed::Source,
+        key: String,
+        #[serde(default)]
+        summary: String,
+        question: String,
+        #[serde(default)]
+        options: Vec<ottospace_core::filed::Choice>,
+        #[serde(default)]
+        recommend: Option<usize>,
+        #[serde(default)]
+        why: String,
+        #[serde(default)]
+        evidence: Vec<ottospace_core::filed::Evidence>,
+        #[serde(default)]
+        suggest: ottospace_core::filed::Suggest,
+        #[serde(default)]
+        claims: ottospace_core::filed::Claims,
+        #[serde(default)]
+        expires: Option<u64>,
+        #[serde(default)]
+        task: Option<TaskId>,
+    },
+    /// The decision of `source` and `key` is moot: it closes as withdrawn.
+    DecisionWithdraw {
+        source: ottospace_core::filed::Source,
+        key: String,
+    },
+    /// A filed decision, its words labelled untrusted: `{"ok":true,"decision":{"untrusted":true,
+    /// "warning":"..","id":..,"status":"open",..}}`, not the state. Read-only.
+    Decision {
+        id: u64,
+    },
     /// The marks, in the user's order: `{"ok":true,"marks":[{"name":"notes","key":"n",
     /// "kind":"terminal","open":true,"available":true,..}]}`, not the state.
     Marks,
@@ -794,6 +832,9 @@ pub fn feature_refusal(request: &Request, features: &Features) -> Option<&'stati
         | Request::MarkRemove { .. }
         | Request::MarkRename { .. } => Feature::Marks,
         Request::ListenEnd { .. } => Feature::Transcripts,
+        Request::DecisionFile { .. } | Request::DecisionWithdraw { .. } | Request::Decision { .. } => {
+            Feature::DecisionSources
+        }
         // `ax_tree` says so itself: an app-window test run reads it with the flag off.
         Request::AppRead { .. } | Request::AppLook { .. } => Feature::AgentMode,
         Request::Section { section } => section.feature()?,

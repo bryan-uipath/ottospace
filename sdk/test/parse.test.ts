@@ -6,7 +6,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
 
-import { calendarReply, snapshot } from "../src/parse.ts";
+import { calendarReply, decisionReply, snapshot } from "../src/parse.ts";
 
 /** A real `state` reply of an empty app, with `ax_overlay` put in. */
 function replyWith(overlay: unknown): Record<string, unknown> {
@@ -143,6 +143,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     sessions_bar: { count: 0, total: 0, range: "today", collapsed: true, rows: [], enabled: false, reads: 0, slow_reads: 0 },
     repos_bar: [],
     projects_bar: { on: false, rows: [] },
+    filed: null,
     home: { nodes: [], needs_you: [], counts: { needs_you: 0, running: 0, captured: 0, on_hold: 0, done: 0 } },
     home_drawn: { area: [0, 30, 1400, 846], panel: [80, 300, 520, 120], nodes: {}, heading: "Home", lattice_builds: 1, lattice_paints: 2 },
     city: {
@@ -347,4 +348,24 @@ test("a calendar reply parses whole, and with no feed says only that", () => {
   assert.deepEqual(calendarReply({ ok: true, configured: false }), { ok: true, configured: false });
   const meetings = [{ start: "a", end: "b", all_day: false, title: "t", location: null, has_call_link: false, status: "maybe" }];
   assert.throws(() => calendarReply({ ...raw, meetings }), /meetings\[0\]\.status should be busy, tentative, free or away/);
+});
+
+test("a filed decision parses: the state's row, and its words labelled untrusted", () => {
+  const row = {
+    id: 9, source: "slack", via: "socket", triage: "pending", status: "open", revision: 2, filed: 1, updated: 2,
+    expires: 3, task: null, options: 1, evidence: 1,
+  };
+  const filed = snapshot({ ...replyWith(null), filed: { open: 1, to_sort: 1, rows: [row] } }).filed;
+  assert.deepEqual(filed?.rows[0], row);
+  const decision = {
+    untrusted: true, warning: "w", id: 9, source: "slack", key: "slack:C0:1.0", via: "socket", revision: 2, filed: 1,
+    updated: 2, summary: "s", question: "q?", recommend: 0, why: "", triage: "pending", expires: 3, task: null,
+    status: "open", closed: null,
+    options: [{ label: "Draft", consequence: "", act: { draft_reply: { text: "made-up" } } }],
+    evidence: [{ kind: "file", text: "", at: { path: "/code/app/a.rs", lines: [3, 9] }, provenance: null }],
+    suggest: { projects: ["beacon"], role: "core", role_why: "" },
+    claims: { due: null, person_waits: true, blocks: [] },
+  };
+  assert.deepEqual(decisionReply({ ok: true, decision }).decision, decision);
+  assert.throws(() => decisionReply({ ok: true, decision: { ...decision, untrusted: false } }), /untrusted/);
 });

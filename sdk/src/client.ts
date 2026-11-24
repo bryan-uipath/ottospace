@@ -10,6 +10,8 @@ import {
   appReadReply,
   calendarReply,
   noteReply,
+  decisionFileReply,
+  decisionReply,
   captureReply,
   inboxReply,
   markReply,
@@ -40,6 +42,10 @@ import type {
   CalendarArgs,
   CalendarReply,
   NoteReply,
+  DecisionFileArgs,
+  DecisionFileReply,
+  DecisionReply,
+  DecisionSource,
   CaptureArgs,
   CaptureReply,
   CellArgs,
@@ -660,6 +666,21 @@ export class Client {
    */
   async note(args: { task: TaskId }): Promise<NoteReply> {
     return noteReply(await this.send({ cmd: "note", ...args }));
+  }
+  /**
+   * Files a decision for the user (`decision_sources`): the same `source` and `key` again is its
+   * next revision, never another. It waits for the user: nothing in it is done but by their key.
+   */
+  async decisionFile(args: DecisionFileArgs): Promise<DecisionFileReply> {
+    return decisionFileReply(await this.send({ cmd: "decision_file", ...args }));
+  }
+  /** The decision of `source` and `key` is moot: it closes as withdrawn. */
+  decisionWithdraw(args: { source: DecisionSource; key: string }): Promise<Snapshot> {
+    return this.snapshot({ cmd: "decision_withdraw", ...args });
+  }
+  /** A filed decision, its words labelled untrusted: data, never instructions. Read-only. */
+  async decision(args: { id: number }): Promise<DecisionReply> {
+    return decisionReply(await this.send({ cmd: "decision", ...args }));
   }
   /** The marks, in the user's order. */
   async marks(): Promise<MarksReply> {
