@@ -18678,7 +18678,7 @@ fn a_terminal_session_waiting_on_its_subagent_floats_in_the_city_and_lights_its_
     let home = user_folder("city-subs", &settings.to_string());
     let env = [
         ("OTTOSPACE_HOME", home.to_str().unwrap()),
-        ("OTTOSPACE_FEATURES", "code_city"),
+        ("OTTOSPACE_FEATURES", "code_city,terminal_tasks"),
         ("GIT_CONFIG_GLOBAL", "/dev/null"),
     ];
     let otto = Otto::launch_with("city-subs", &env);

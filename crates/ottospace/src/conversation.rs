@@ -993,12 +993,13 @@ impl Workspace {
         let take = self.talk_button("chat-take-over", "Take over", tip).when(!ready, |b| b.opacity(0.4)).on_click(
             cx.listener(move |this, _, window, cx| {
                 if this.model.take_over_ready(&subject) {
-                    // A session no task has becomes one, gone on with here (as its card's Take over).
+                    // A session no task has becomes one, gone on with here (as its card's Take over);
+                    // one that cannot be tracked now (hidden, not listed) is gone on with as before.
                     let action = match &subject {
-                        Subject::Session { runner, id } => {
+                        Subject::Session { runner, id } if this.model.session_listed(runner, id) => {
                             Action::SessionAdopt { runner: runner.clone(), id: id.clone() }
                         }
-                        Subject::Task(_) => Action::TalkStart,
+                        _ => Action::TalkStart,
                     };
                     this.dispatch(action, this.input, window, cx);
                 }

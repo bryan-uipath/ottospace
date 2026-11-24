@@ -8496,6 +8496,8 @@ impl Model {
             }
             _ => start,
         };
+        // Asked to go on with it (Resume, Take over): never looked at in place, it gets its space.
+        let asked = start;
         let brief = match &subject {
             Subject::Task(id) => match self.tasks.get(*id) {
                 Some(task) => task.materials_dir().map(str::to_string),
@@ -8507,7 +8509,9 @@ impl Model {
                     || self.agent_runs(&subject)
                     || self.drawn_cards().iter().any(|c| (&c.row.runner, &c.row.id) == (runner, id))
                     || (!self.tasks.adopted(runner, id) && self.spaces.iter().any(|s| s.of == Owner::of(&subject)))
-                    || self.glanced(&subject) =>
+                    || self.glanced(&subject)
+                    // Its agent in a city on show (hidden from the lists, still drawn there).
+                    || (!self.tasks.adopted(runner, id) && self.at_work.iter().any(|s| (&s.runner, &s.id) == (runner, id))) =>
             {
                 None
             }
@@ -8535,15 +8539,16 @@ impl Model {
         }
         // The Decisions card's conversation is talked over where it is: Decisions stays on show,
         // the keyboard in a tab out's window too.
-        let card =
-            *self.shown_space() == Owner::Decisions && self.space_subject(&Owner::Decisions).as_ref() == Some(&subject);
+        // The card's own task, not a session looked at in place over Decisions.
+        let card = *self.shown_space() == Owner::Decisions
+            && self.front(&Owner::Decisions).map(Subject::Task).as_ref() == Some(&subject);
         // With `terminal_tasks`, a session no task has is looked at where the user is: its
         // conversation over the space on show, no tab. Going on with it here gives it its own.
         let own = self.spaces.iter().any(|space| space.of == Owner::of(&subject));
         let glance = matches!(subject, Subject::Session { .. })
             && self.features.on(Feature::TerminalTasks)
-            && start.is_none()
             && !own
+            && !asked
             && !self.agent_runs(&subject);
         if glance {
             self.glance = Some((self.shown_space().clone(), subject.clone()));
@@ -18303,6 +18308,35 @@ mod tests {
         m.update(Action::SessionAdopt { runner: "claude".into(), id: "h".into() });
         assert!(m.glance.is_none() && m.tasks.adopted("claude", "h"));
         assert!(m.talk.as_ref().is_some_and(|t| t.task.task().is_some()), "its task's conversation");
+    }
+
+    /// What ends a session looked at in place, besides another space: a client tracking it (the
+    /// drawer is then the space's again, not a session a task now has). Resume never looks in
+    /// place. A hidden session's agent in a city still opens.
+    #[test]
+    fn a_session_in_place_gives_way_to_its_task_and_to_the_spaces_own() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let open = || Action::SessionOpen { runner: "claude".into(), id: "h".into() };
+        let held = Found { held: true, active: true, ..session("claude", "h", "/code/app", false, now) };
+        m.update(Action::SetSessions { found: vec![held.clone()], day: 0 }.sent_by(Origin::System));
+        m.update(open());
+        m.update(Action::SessionAdopt { runner: "claude".into(), id: "h".into() }.sent_by(Origin::Socket));
+        assert!(m.glance.is_none(), "a task has it now");
+        // Resume: its own space, not in place.
+        let mut m = cards_model(now);
+        let idle =
+            Found { held: false, ..session("claude", "11111111-1111-4111-8111-111111111111", "/code/app", false, 1) };
+        m.update(Action::SetSessions { found: vec![idle], day: 0 }.sent_by(Origin::System));
+        m.update(Action::SessionOpen { runner: "claude".into(), id: "11111111-1111-4111-8111-111111111111".into() });
+        m.update(Action::TalkStart);
+        assert!(m.glance.is_none() && matches!(m.shown_space(), Owner::Session { .. }));
+        // Hidden, its agent still in a city: the user's click opens it.
+        let mut m = cards_model(now);
+        m.update(Action::SetSessions { found: vec![held], day: 0 }.sent_by(Origin::System));
+        m.update(Action::SessionHide { runner: "claude".into(), id: "h".into() });
+        m.update(open());
+        assert!(m.glanced(&Subject::Session { runner: "claude".into(), id: "h".into() }));
     }
 
     /// The drawer's place line reads Repos: a worktree outside its repository's folder is the

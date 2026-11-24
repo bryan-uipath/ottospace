@@ -299,6 +299,10 @@ impl Model {
     /// Puts a task in front in its space. The space is not selected by it.
     pub(crate) fn set_front(&mut self, task: TaskId) {
         let of = self.task_space(task);
+        // A task put in front of its space (a click on it in the rail) takes the drawer back.
+        if self.glance.as_ref().is_some_and(|(over, _)| *over == of) {
+            self.glance = None;
+        }
         if let Some(space) = self.spaces.iter_mut().find(|space| space.of == of) {
             space.front = Some(task);
         }
@@ -744,8 +748,9 @@ impl Model {
     /// agent shows none. Changed, it opens as the drawer was (or as the new task in it was), the
     /// keyboard in it only if it was there, the change was the user's and its agent runs.
     pub(crate) fn follow_space(&mut self, origin: Origin, drawer_keys: bool) {
-        // A session looked at in place goes with the space it was opened over.
-        if self.glance.as_ref().is_some_and(|(over, _)| over != self.shown_space()) {
+        // A session looked at in place goes with the space it was opened over, or once a task has it.
+        let adopted = |s: &Subject| matches!(s, Subject::Session { runner, id } if self.tasks.adopted(runner, id));
+        if self.glance.as_ref().is_some_and(|(over, s)| over != self.shown_space() || adopted(s)) {
             self.glance = None;
         }
         if let Some(talk) = &self.talk {

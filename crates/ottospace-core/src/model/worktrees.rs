@@ -84,9 +84,7 @@ impl Model {
     pub fn where_at(&self, dir: &str, home: Option<&str>) -> crate::talk::Where {
         use crate::talk::Checkout;
         let checkout = self.checkout_at(dir);
-        let repo = self.repos.iter().find(|repo| {
-            checkout.is_some_and(|at| repo.path == at || repo.worktrees.iter().any(|tree| tree.path == at))
-        });
+        let repo = self.repos.iter().find(|repo| checkout.is_some_and(|at| paths(repo).any(|path| path == at)));
         let tree = repo.and_then(|repo| repo.worktrees.iter().find(|tree| Some(tree.path.as_str()) == checkout));
         let worktree =
             tree.map(|tree| Checkout { name: tree.branch.as_deref().unwrap_or(&tree.name), path: &tree.path });
