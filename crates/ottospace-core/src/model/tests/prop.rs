@@ -2391,16 +2391,12 @@ fn check_zoom(m: &Model) -> Result<(), String> {
     // The camera inside its range, and never with every tile off screen: some reaches into the view.
     use crate::model::canvas::{self, NEAREST};
     let cam = zoom.camera;
-    let spots: Vec<_> = m.zoom_spots().into_iter().map(|(_, r)| r).collect();
+    let laid = m.zoom_spots();
+    let spots: Vec<_> = laid.iter().map(|(_, r)| *r).collect();
     // A tile on the grid never lies under one the user placed.
-    let placed: Vec<_> =
-        m.zoom_spots().into_iter().filter(|(id, _)| m.placed.contains_key(id)).map(|(_, r)| r).collect();
-    let free = m.zoom_spots().into_iter().filter(|(id, _)| !m.placed.contains_key(id)).map(|(_, r)| r);
-    let under = |a: &crate::layout::Rect, b: &crate::layout::Rect| {
-        a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
-    };
-    for r in free {
-        ensure!(!placed.iter().any(|p| under(&r, p)), "grid tile {r:?} under a placed one {placed:?}");
+    let (placed, free): (Vec<_>, Vec<_>) = laid.iter().partition(|(id, _)| m.placed.contains_key(id));
+    for (_, r) in &free {
+        ensure!(!placed.iter().any(|(_, p)| canvas::overlaps(r, p)), "grid tile {r:?} under a placed one {placed:?}");
     }
     let far = canvas::farthest(canvas::extent(&spots));
     ensure!((far..=NEAREST).contains(&cam.scale), "camera scale {}", cam.scale);

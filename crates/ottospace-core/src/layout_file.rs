@@ -594,9 +594,7 @@ impl Model {
                 }
             }
             // Its tile where the user placed it; a corner not snapped is not read.
-            if let Some(at) =
-                saved.placed.and_then(crate::model::canvas::snapped).filter(|at| Some(*at) == saved.placed)
-            {
+            if let Some(at) = saved.placed.filter(|at| crate::model::canvas::snapped(*at) == Some(*at)) {
                 self.placed.insert(tab, at);
             }
             built.push((tab, panes));

@@ -19100,7 +19100,7 @@ fn zoomed_out_a_dragged_tile_stays_placed_and_tidy_puts_it_back() {
             (tiles.iter().map(|t| [t[0] - base[0], t[1] - base[1]]).collect::<Vec<_>>(), base)
         };
         let (grid, first) = layout(&otto);
-        let h = first[3];
+        let (w, h) = (first[2], first[3]);
         let same = |a: &[[f64; 2]], b: &[[f64; 2]]| {
             a.iter().zip(b).all(|(p, q)| (p[0] - q[0]).abs() <= 1. && (p[1] - q[1]).abs() <= 1.)
         };
@@ -19108,15 +19108,15 @@ fn zoomed_out_a_dragged_tile_stays_placed_and_tidy_puts_it_back() {
         // A client's drag of the fourth tile places nothing.
         let fourth = rect(&otto.drawn()["zoom_tiles"][&ids[3]]);
         let from = at(fourth, 0.5, 0.5);
-        let to = [from[0], from[1] + 1.3 * h];
+        // 0.4 of a tile down: its corner (1.12, 1.52) snaps to (1, 1.5).
+        let to = [from[0], from[1] + 0.4 * h];
         otto.drag(from, to);
         assert!(same(&layout(&otto).0, &grid), "{size}");
-        // The user's: placed 1.3 tiles lower, snapped to a quarter tile; the others stay.
+        // The user's: placed there, snapped to a quarter tile; the others stay.
         otto.user_drag(from, to);
         let (placed, _) = layout(&otto);
-        let moved = placed[3][1] - grid[3][1];
-        assert!((moved - 1.25 * h).abs() <= 2. || (moved - 1.5 * h).abs() <= 2., "{size}: moved {moved} of {h}");
-        assert!((placed[3][0] - grid[3][0]).abs() <= 2., "{size}: {placed:?}");
+        let corner = [placed[3][0] / w, placed[3][1] / h];
+        assert!((corner[0] - 1.).abs() < 0.02 && (corner[1] - 1.5).abs() < 0.02, "{size}: {corner:?} of {grid:?}");
         assert!(same(&placed[..3], &grid[..3]), "{size}: {placed:?}");
         assert!(otto.control_opt("zoom-tidy").is_some(), "{size}: Tidy offered");
         // A click on a tile still goes in; opened again, it is where it was put.
@@ -19125,7 +19125,10 @@ fn zoomed_out_a_dragged_tile_stays_placed_and_tidy_puts_it_back() {
         assert!(entered["state"]["zoom"].is_null(), "{size}");
         otto.user_key("cmd-|");
         let again = layout(&otto).0;
-        assert!((again[3][1] - grid[3][1] - moved).abs() <= 2., "{size}: {again:?}");
+        assert!(
+            (again[3][0] - placed[3][0]).abs() <= 1. && (again[3][1] - placed[3][1]).abs() <= 1.,
+            "{size}: {again:?}"
+        );
         // T: back on the grid, and no Tidy.
         otto.user_key("t");
         assert!(same(&layout(&otto).0, &grid), "{size}");

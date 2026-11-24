@@ -60,26 +60,53 @@ pub fn snapped(at: [f32; 2]) -> Option<[f32; 2]> {
     at.iter().all(|v| v.is_finite() && v.abs() <= REACH).then(|| [snap(at[0]), snap(at[1])])
 }
 
-/// Each of `n` tiles' place: `placed[at]` where the user put it, else the next grid cell that no
-/// placed tile covers (a new tab takes the next free cell; nothing placed moves).
+/// Whether `a` and `b` share some area.
+pub fn overlaps(a: &Rect, b: &Rect) -> bool {
+    a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h
+}
+
+/// Each of `n` tiles' place: `placed[at]` where the user put it, else its own grid cell, or, if a
+/// placed tile covers that (or it is taken), the next free one. A tile placed elsewhere moves no
+/// other; a new tab takes its own cell.
 pub fn spots(placed: &[Option<[f32; 2]>]) -> Vec<Rect> {
     let n = placed.len();
     let fixed: Vec<Rect> = placed.iter().flatten().map(|p| Rect { x: p[0], y: p[1], w: 1., h: 1. }).collect();
-    let overlaps = |a: &Rect, b: &Rect| a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-    let mut cell = 0;
+    let mut taken: Vec<usize> = Vec::new();
     placed
         .iter()
-        .map(|p| match p {
+        .enumerate()
+        .map(|(at, p)| match p {
             Some(p) => Rect { x: p[0], y: p[1], w: 1., h: 1. },
-            None => loop {
-                let spot = grid_spot(cell, n);
-                cell += 1;
-                if !fixed.iter().any(|f| overlaps(f, &spot)) {
-                    break spot;
+            None => {
+                let mut cell = at;
+                while taken.contains(&cell) || fixed.iter().any(|f| overlaps(f, &grid_spot(cell, n))) {
+                    cell += 1;
                 }
-            },
+                taken.push(cell);
+                grid_spot(cell, n)
+            }
         })
         .collect()
+}
+
+/// The tile `dir` of tile `at`: the nearest whose middle lies that way
+/// (within about 27°; straight across beats diagonal). None at the canvas's edge.
+pub fn neighbour(tiles: &[Rect], at: usize, dir: crate::layout::Dir) -> Option<usize> {
+    use crate::layout::Dir;
+    let middle = |r: &Rect| (r.x + r.w / 2., r.y + r.h / 2.);
+    let (x, y) = middle(tiles.get(at)?);
+    let score = |r: &Rect| {
+        let (dx, dy) = (middle(r).0 - x, middle(r).1 - y);
+        let (along, across) = match dir {
+            Dir::Left => (-dx, dy.abs()),
+            Dir::Right => (dx, dy.abs()),
+            Dir::Up => (-dy, dx.abs()),
+            Dir::Down => (dy, dx.abs()),
+        };
+        (along > 1e-3 && 2. * across < along).then_some(along + 2. * across)
+    };
+    let found = tiles.iter().enumerate().filter(|(i, _)| *i != at).filter_map(|(i, r)| Some((i, score(r)?)));
+    found.min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i)
 }
 
 /// The box round `tiles`; a unit box at the origin when there are none.
@@ -279,15 +306,29 @@ mod tests {
     fn a_placed_tile_snaps_and_the_others_take_the_free_cells() {
         assert_eq!(snapped([0.3, -1.12]), Some([0.25, -1.]));
         assert_eq!((snapped([f32::NAN, 0.]), snapped([1e9, 0.])), (None, None));
-        // Four tabs, the second placed over the third's cell: the third and fourth go on.
+        // Four tabs, the second placed over the third's cell: the first stays, the third goes on
+        // to the next free cell, the fourth after it.
         let placed = [None, Some([0., 1.12]), None, None];
         let s = super::spots(&placed);
         assert_eq!(s[1], Rect { x: 0., y: 1.12, w: 1., h: 1. });
-        assert_eq!((s[0], s[2]), (grid_spot(0, 4), grid_spot(1, 4)));
-        assert_eq!(s[3], grid_spot(3, 4), "the cell under the placed tile is skipped");
-        let overlap = |a: Rect, b: Rect| a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
-        assert!([0, 2, 3].iter().all(|at| !overlap(s[*at], s[1])), "{s:?}");
+        assert_eq!((s[0], s[2], s[3]), (grid_spot(0, 4), grid_spot(3, 4), grid_spot(4, 4)));
+        assert!([0, 2, 3].iter().all(|at| !overlaps(&s[*at], &s[1])), "{s:?}");
+        // The first dragged far away: the others keep their own cells.
+        let s = super::spots(&[Some([-9., 0.]), None, None, None]);
+        assert_eq!((s[1], s[2], s[3]), (grid_spot(1, 4), grid_spot(2, 4), grid_spot(3, 4)));
         // None placed: the grid.
         assert_eq!(super::spots(&[None, None]), vec![grid_spot(0, 2), grid_spot(1, 2)]);
+    }
+
+    #[test]
+    fn the_arrows_go_to_the_nearest_tile_that_way() {
+        use crate::layout::Dir;
+        let g: Vec<Rect> = (0..7).map(|at| grid_spot(at, 7)).collect();
+        assert_eq!((neighbour(&g, 0, Dir::Right), neighbour(&g, 0, Dir::Down)), (Some(1), Some(3)));
+        assert_eq!((neighbour(&g, 6, Dir::Right), neighbour(&g, 4, Dir::Down)), (None, None), "the edges");
+        assert_eq!((neighbour(&g, 0, Dir::Left), neighbour(&g, 0, Dir::Up)), (None, None));
+        // The second placed left of the first: Left from the first reaches it, Right does not.
+        let placed = vec![grid_spot(0, 2), Rect { x: -1.5, y: 0., w: 1., h: 1. }];
+        assert_eq!((neighbour(&placed, 0, Dir::Left), neighbour(&placed, 0, Dir::Right)), (Some(1), None));
     }
 }

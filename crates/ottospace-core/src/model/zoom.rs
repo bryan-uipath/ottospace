@@ -47,18 +47,6 @@ pub fn between(a: Rect, b: Rect, t: f32) -> Rect {
     Rect { x: at(a.x, b.x), y: at(a.y, b.y), w: at(a.w, b.w), h: at(a.h, b.h) }
 }
 
-/// The place `dir` of tile `at` on a grid of `n`, if there is a tile there.
-fn step(at: usize, n: usize, dir: Dir) -> Option<usize> {
-    let (cols, _) = grid(n);
-    let to = match dir {
-        Dir::Left => (!at.is_multiple_of(cols)).then(|| at - 1),
-        Dir::Right => (at % cols + 1 < cols).then_some(at + 1),
-        Dir::Up => at.checked_sub(cols),
-        Dir::Down => Some(at + cols),
-    };
-    to.filter(|to| *to < n)
-}
-
 impl Model {
     /// The tiles, by tab id in tab order: the tabs of the main window's space, not Home's own.
     pub fn zoom_tabs(&self) -> Vec<u32> {
@@ -169,20 +157,18 @@ impl Model {
         }
     }
 
-    /// The selection one tile `dir`; it stops at the grid's edges.
+    /// The selection one tile `dir`: the nearest tile that way; it stops at the canvas's edge.
     pub(super) fn zoom_move(&mut self, dir: Dir) {
-        let tabs = self.zoom_tabs();
+        let (tabs, spots) = (self.zoom_tabs(), self.zoom_spots());
+        let tiles: Vec<Rect> = spots.iter().map(|(_, r)| *r).collect();
+        let of = self.shown_space().clone();
         let Some(zoom) = self.zoom.as_mut() else { return };
         let at = tabs.iter().position(|id| *id == zoom.selected).unwrap_or(0);
-        let Some(to) = step(at, tabs.len(), dir) else { return };
+        let Some(to) = canvas::neighbour(&tiles, at, dir) else { return };
         zoom.selected = tabs[to];
         // The camera follows the selection into view.
-        let (tiles, spots, of) = (self.zoom_tiles(), self.zoom_spots(), self.shown_space().clone());
-        let Some(zoom) = self.zoom.as_mut() else { return };
-        if let Some((_, spot)) = spots.iter().find(|(id, _)| *id == zoom.selected) {
-            zoom.camera = zoom.camera.showing(*spot, &tiles);
-            self.canvases.insert(of, zoom.camera);
-        }
+        zoom.camera = zoom.camera.showing(tiles[to], &tiles);
+        self.canvases.insert(of, zoom.camera);
     }
 
     /// Into `tab`, or the selected tile: the tab it opened on is the way back; any other is
