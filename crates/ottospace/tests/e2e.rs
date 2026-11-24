@@ -14706,12 +14706,17 @@ fn the_first_message_is_the_users_words_and_the_dot_holds_what_ottospace_added()
     assert!(!chat(&otto).to_string().contains("You run inside ottospace"), "never its words in the state");
     // The top of the transcript in view: the dot, then the first message.
     let body = rect(&otto.drawn()["drawer"]["body"]);
-    for _ in 0..30 {
-        if otto.controls().iter().any(|(id, _)| id == "chat-context:1") {
-            break;
+    // The dot on screen: the transcript wheeled back until it shows (what comes in may move it).
+    let to_dot = || {
+        for _ in 0..30 {
+            if let Some((_, at)) = otto.controls().into_iter().find(|(id, _)| id == "chat-context:1") {
+                return at;
+            }
+            otto.wheel([body[0] + body[2] / 2., body[1] + body[3] / 2.], 5., false);
         }
-        otto.wheel([body[0] + body[2] / 2., body[1] + body[3] / 2.], 5., false);
-    }
+        panic!("the context dot never came into view");
+    };
+    to_dot();
     // The bubble is the line as typed, its tag a pill: no `Task: `, nothing of ottospace's.
     let first = |controls: Vec<(String, [f64; 4])>| {
         let copies = controls
@@ -14727,9 +14732,9 @@ fn the_first_message_is_the_users_words_and_the_dot_holds_what_ottospace_added()
     otto.call(json!({"cmd": "mouse", "action": "move", "x": inside[0], "y": inside[1], "as": "user"}));
     assert_eq!(otto.user_click(at(copy, 0.5, 0.5))["copied"], "plan the week >app");
     // The dot's list opens on a click, and shuts again.
-    otto.user_click(at(otto.control("chat-context:1"), 0.5, 0.5));
+    otto.user_click(at(to_dot(), 0.5, 0.5));
     assert_eq!(chat(&otto)["context"]["open"], true);
-    otto.user_click(at(otto.control("chat-context:1"), 0.5, 0.5));
+    otto.user_click(at(to_dot(), 0.5, 0.5));
     assert_eq!(chat(&otto)["context"]["open"], false);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
