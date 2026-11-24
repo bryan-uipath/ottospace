@@ -847,6 +847,8 @@ impl Gen<'_> {
             title: self.rng.coin().then(|| self.name(&["Fix the form", "#tag >repo @agent p0\nnext line\u{202e}"])),
             model: self.rng.coin().then(|| self.name(&["claude-opus-4-7", "gpt-6", "not a model"])),
             held: self.rng.coin(),
+            subagents: self.rng.below(3),
+            sub_files: (0..self.rng.below(3)).map(|_| self.name(&["src/main.rs", "docs/a.md"])).collect(),
         }
     }
 
@@ -1467,10 +1469,6 @@ const MAKERS: &[Make] = &[
         Action::SessionsInPanes { found: (0..g.rng.below(3)).map(|_| at(g)).collect() }
     },
     |_| Action::TerminalAgentGo,
-    |g| {
-        let found = (0..g.rng.below(3)).map(|_| g.found()).collect();
-        Action::SessionsAtWork { found }
-    },
     |g| {
         let agent = |g: &mut Gen| {
             let (runner, _) = g.session();
@@ -5871,10 +5869,7 @@ impl Run {
                     let asked = matches!(action, Action::SessionHide { .. } | Action::SessionUnhide { .. });
                     let read = matches!(
                         action,
-                        Action::SetSessions { .. }
-                            | Action::SessionsAtWork { .. }
-                            | Action::SessionsInPanes { .. }
-                            | Action::Tick { .. }
+                        Action::SetSessions { .. } | Action::SessionsInPanes { .. } | Action::Tick { .. }
                     );
                     ensure!(
                         (asked || read) && m.features.on(Feature::TerminalTasks),
@@ -6424,6 +6419,8 @@ const BASES: &[(&str, Setup)] = &[
                     title: None,
                     model: None,
                     held: false,
+                    subagents: 0,
+                    sub_files: Vec::new(),
                 };
                 Action::SetSessions {
                     found: vec![s.clone(), Found { id: "s2".into(), active: false, last_activity: Some(5), ..s }],
@@ -7332,6 +7329,8 @@ fn going_to_an_agent_in_a_terminal_selects_its_tab() {
         title: None,
         model: None,
         held: false,
+        subagents: 0,
+        sub_files: Vec::new(),
     };
     let in_pane = |id: &str| InPane {
         pane: 1,
@@ -7551,6 +7550,8 @@ fn seed_513_a_waiting_sessions_row_does_not_change_the_tab() {
         title: None,
         model: None,
         held: false,
+        subagents: 0,
+        sub_files: Vec::new(),
     };
     replay(&[
         Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
@@ -7814,7 +7815,7 @@ fn seed_60520_the_selection_history_never_names_a_tab_out() {
 fn seed_81412_a_worktree_answer_takes_no_task_from_the_front() {
     replay(&[
         Action::SetRepos { repos: vec![Repo { name: "app".into(), path: "/code/app".into(), branch: Some("main".into()), worktrees: vec![Worktree { name: "app-2".into(), path: "/code/app-2".into(), branch: None }] }] }.sent_by(Origin::User),
-        Action::SetSessions { found: vec![Found { runner: "claude".into(), id: "s1".into(), cwd: "/code/app".into(), repo: "/code/app".into(), started: Some(1), last_activity: Some(999000), active: true, station: None, label: None, title: None, model: None, held: false }, Found { runner: "claude".into(), id: "s2".into(), cwd: "/code/app".into(), repo: "/code/app".into(), started: Some(1), last_activity: Some(5), active: false, station: None, label: None, title: None, model: None, held: false }], day: 0 }.sent_by(Origin::User),
+        Action::SetSessions { found: vec![Found { runner: "claude".into(), id: "s1".into(), cwd: "/code/app".into(), repo: "/code/app".into(), started: Some(1), last_activity: Some(999000), active: true, station: None, label: None, title: None, model: None, held: false, subagents: 0, sub_files: Vec::new() }, Found { runner: "claude".into(), id: "s2".into(), cwd: "/code/app".into(), repo: "/code/app".into(), started: Some(1), last_activity: Some(5), active: false, station: None, label: None, title: None, model: None, held: false, subagents: 0, sub_files: Vec::new() }], day: 0 }.sent_by(Origin::User),
         Action::SessionAdopt { runner: "claude".into(), id: "s1".into() }.sent_by(Origin::User),
         Action::TaskFromLine { line: "#\"\u{202e}abcمرحبا  $deploy  >canvas  $code-review".into(), known: Known { names: Names { agents: vec!["claude".into(), "claude".into()], skills: vec!["code-review".into(), "\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}\u{feff}".into()] }, paths: vec![], entries: vec!["~/My Notes/".into(), "~/My Notes/".into()] }, open: true }.sent_by(Origin::User),
         Action::RepoClick { path: "/code/app-2".into(), axis: Axis::Right }.sent_by(Origin::User),
@@ -8841,6 +8842,8 @@ fn a_brief_goes_with_its_tab() {
                     title: None,
                     model: None,
                     held: false,
+                    subagents: 0,
+                    sub_files: Vec::new(),
                 },
                 Found {
                     runner: "claude".into(),
@@ -8855,6 +8858,8 @@ fn a_brief_goes_with_its_tab() {
                     title: None,
                     model: None,
                     held: false,
+                    subagents: 0,
+                    sub_files: Vec::new(),
                 },
             ],
             day: 0,
@@ -9511,6 +9516,8 @@ fn seed_53188_a_failed_worktrees_list_moves_a_task_with_its_agent() {
         title: None,
         model: None,
         held: false,
+        subagents: 0,
+        sub_files: Vec::new(),
     };
     let work = r#"{"runner":"claude","session":"s2","clock":{"ms":0,"last":1,"day":6001,"day_ms":0},"tokens":[],"context":null,"window":null}"#;
     let worktree =

@@ -3966,16 +3966,8 @@ impl Workspace {
             cx.notify();
         }
         if tasks != self.sessions_tasks && open {
-            // Tasks closed into Repos: its list goes at once. Either way, read again now.
+            // Tasks opened or closed into Repos: read again now.
             self.sessions_tasks = tasks;
-            if !tasks && self.sessions_listed {
-                self.dispatch(
-                    Action::SetSessions { found: Vec::new(), day: day_start(now) },
-                    Origin::System,
-                    window,
-                    cx,
-                );
-            }
             if let Some(poller) = &mut self.sessions {
                 poller.again();
             }
@@ -4040,11 +4032,8 @@ impl Workspace {
             self.sessions_listed = open && !stopped;
             // The time too: ages and the range are counted from it.
             self.dispatch(Action::Tick { now }, Origin::System, window, cx);
-            let read = match tasks || found.is_empty() {
-                true => Action::SetSessions { found, day: day_start(now) },
-                false => Action::SessionsAtWork { found },
-            };
-            self.dispatch(read, Origin::System, window, cx);
+            // Whichever section asked, one list: the counts, the cards and the city read the same.
+            self.dispatch(Action::SetSessions { found, day: day_start(now) }, Origin::System, window, cx);
             cx.notify();
         }
         if stopped && !self.sessions_stopped {

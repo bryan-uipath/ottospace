@@ -313,8 +313,10 @@ searches play once over the picture with no render (`glance`, `Glimpse`): a read
 search's sweep over its scope, its result's files lit 1.5 s; within 250 ms one ripple, one sweep at
 a time (`counts.city_glimmer_frames`)
 (`Scene::marks`, tested). A session no task has, at work in the checkout (a `claude` the user
-runs in a terminal: the Repos dot's `SessionsAtWork`), floats too, as its runner's glyph in the
-colour of work going on, its file lit; its title on hover. Moving to another file, an icon
+runs in a terminal, read while the city is on show), floats too, as its runner's glyph in the
+colour of work going on, its file lit; its title on hover. A live one whose own file is quiet
+while its sub-agents work (their files under its folder, written lately) is at work too: their
+count on its icon, and each sub-agent's file lit by name, wherever its worktree is. Moving to another file, an icon
 glides there over 280 ms (at once under Reduce Motion; `counts.city_agent_frames`, none at rest).
 Icons and cones are drawn by GPUI over the picture at projected points, as the beam is: an agent
 that moves renders nothing again, and a glide needs no render. The user's pointer on an icon

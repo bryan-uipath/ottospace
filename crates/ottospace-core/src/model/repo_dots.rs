@@ -196,8 +196,10 @@ mod tests {
             title: None,
             model: None,
             held: false,
+            subagents: 0,
+            sub_files: Vec::new(),
         };
-        m.update(Action::SessionsAtWork { found: read.iter().map(found).collect() });
+        m.update(Action::SetSessions { found: read.iter().map(found).collect(), day: 0 });
     }
 
     fn dot(m: &Model, path: &str) -> (Activity, Option<TaskId>) {
@@ -219,8 +221,8 @@ mod tests {
         assert_eq!(dot(&m, WT), (Activity::Idle, None));
         sessions(&mut m, WT, &[("s1", true)]);
         assert_eq!(dot(&m, WT), (Activity::Working, None));
-        // Read with Repos open: never listed in the Elsewhere group.
-        assert_eq!(m.sessions_bar().total, 0);
+        // Read with Repos open, it is listed as with Tasks open: one list, whichever section read it.
+        assert_eq!(m.sessions_bar().total, 1);
         assert_eq!(dot(&m, APP), (Activity::Idle, None), "only its own checkout");
     }
 

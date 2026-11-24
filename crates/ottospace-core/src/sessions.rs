@@ -322,6 +322,12 @@ pub struct Found {
     /// The runner records a live process for it: idle or not, a program has it open.
     #[serde(default)]
     pub held: bool,
+    /// Its sub-agents at work now: their calls not ended in its file, or their own files written lately.
+    #[serde(default)]
+    pub subagents: usize,
+    /// The files its sub-agents are at now, as `label` names one (the last two parts of a path).
+    #[serde(default)]
+    pub sub_files: Vec<String>,
 }
 
 /// `dir` is `root` or below it, part by part, with no `..` in it. A check of the words only:
@@ -491,7 +497,23 @@ mod tests {
         let (runner, id, cwd, repo) = (runner.to_string(), id.to_string(), cwd.to_string(), cwd.to_string());
         let (station, label, title, model, held) = (None, None, None, None, false);
         let (started, last_activity) = (None, Some(at));
-        Found { runner, id, cwd, repo, started, last_activity, active, station, label, title, model, held }
+        let (subagents, sub_files) = (0, Vec::new());
+        Found {
+            runner,
+            id,
+            cwd,
+            repo,
+            started,
+            last_activity,
+            active,
+            station,
+            label,
+            title,
+            model,
+            held,
+            subagents,
+            sub_files,
+        }
     }
 
     #[test]
