@@ -9623,6 +9623,8 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        // The cell on this display's pixel grid: again once the window moves to another scale.
+        self.cell = terminal::cell_size(window);
         // Each state drawn: the program whose terminal got or lost the focus hears it.
         self.tell_focus(cx);
         // A frame: the tick runs each frame for a while, to take what follows it.

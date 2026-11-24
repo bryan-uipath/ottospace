@@ -68,12 +68,19 @@ pub fn font_in_use() -> serde_json::Value {
     serde_json::json!({ "name": font.font, "size": font.font_size })
 }
 
-/// Size of one character cell: the font's advance by the line height.
+/// Size of one character cell: the font's advance, rounded up to whole device pixels (as Ghostty
+/// does: every column's glyph then lands on the pixel grid alike), by the line height.
 pub fn cell_size(window: &Window) -> Size<Pixels> {
     let (text, chosen) = (window.text_system(), terminal_font());
     let size_px = px(chosen.font_size);
     let width = text.em_advance(text.resolve_font(&font(chosen.font.clone())), size_px).unwrap_or(size_px * 0.6);
-    size(width, px(chosen.line_height()))
+    let scale = window.scale_factor();
+    size(px((f32::from(width) * scale).ceil() / scale), px(chosen.line_height()))
+}
+
+/// `v` on the nearest whole device pixel at `scale`: 12.6 → 13 at 1x, 12.6 → 12.5 at 2x.
+fn on_pixel(v: Pixels, scale: f32) -> Pixels {
+    px((f32::from(v) * scale).round() / scale)
 }
 
 /// State the PTY reader thread shares with the UI thread.
@@ -1252,6 +1259,10 @@ pub fn paint_scaled(
 ) {
     let chosen = terminal_font();
     let cell = size(cell.width * scale, cell.height * scale);
+    // The grid's origin on the pixel grid, so each cell's (whole-pixel wide) is too.
+    let device = window.scale_factor();
+    let bounds =
+        Bounds { origin: point(on_pixel(bounds.origin.x, device), on_pixel(bounds.origin.y, device)), ..bounds };
     let mut art = 0;
     window.with_content_mask(Some(ContentMask { bounds }), |window| {
         for (r, spans) in screen.rows.iter().enumerate() {
@@ -1316,8 +1327,12 @@ pub fn paint_scaled(
                 let line = window.text_system().shape_line(text, px(chosen.font_size * scale), &[run], force);
                 let mut origin = at(s);
                 if s.alone {
-                    origin.x += (cell.width * s.cells as f32 - line.width) / 2.;
+                    origin.x = on_pixel(origin.x + (cell.width * s.cells as f32 - line.width) / 2., device);
                 }
+                // The baseline on a whole pixel (GPUI puts it `(height - ascent - descent) / 2 + ascent`
+                // down): a fractional one rasterises every row's strokes at a quarter-pixel offset.
+                let baseline = origin.y + (cell.height - line.ascent - line.descent) / 2. + line.ascent;
+                origin.y += on_pixel(baseline, device) - baseline;
                 let _ = line.paint(origin, cell.height, window, cx);
             }
         }
