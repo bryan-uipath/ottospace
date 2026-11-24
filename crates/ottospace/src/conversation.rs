@@ -1433,7 +1433,7 @@ impl Workspace {
                 let code = div().relative().cursor_text().child(styled).children(note);
                 let body = match prose {
                     // Wrapped to the drawer: nothing to scroll across.
-                    true => div().child(code.font_family(crate::terminal::font_family()).text_xs().px_2().py_1()),
+                    true => div().child(code_font(code).px_2().py_1()),
                     false => {
                         let body = div()
                             .id(ElementId::Name(id.clone().into()))
@@ -1485,7 +1485,9 @@ impl Workspace {
                 // One column for the marks, as wide as the widest number: `9.` and `10.` end on
                 // one edge, and every item's text starts on one.
                 let last = start.map(|n| n + items.len().saturating_sub(1) as u64);
-                let column = last.map_or(10., |n| (n.to_string().len() + 1) as f32 * 8. + 2.);
+                // A bullet's, or a task box's (12, kept square).
+                let marks = if items.iter().any(|item| item.task.is_some()) { 14. } else { 10. };
+                let column = last.map_or(marks, |n| (n.to_string().len() + 1) as f32 * 8. + 2.);
                 div()
                     .flex()
                     .flex_col()
@@ -1509,7 +1511,7 @@ impl Workspace {
                                     .text_color(rgb(theme::MUTED))
                                     .child(mark),
                             )
-                            .child(div().flex_1().min_w_0().child(blocks(&item.blocks, &at, cx)))
+                            .child(blocks(&item.blocks, &at, cx))
                     }))
                     .into_any_element()
             }
@@ -1599,8 +1601,9 @@ impl Workspace {
             let look = span.style.look();
             let style = HighlightStyle {
                 color: (link || span.style.mention).then(|| rgb(theme::PRIMARY).into()),
-                font_weight: look.bold.then_some(FontWeight::BOLD),
-                font_style: look.italic.then_some(FontStyle::Italic),
+                // Code at its regular weight and upright, also in a heading or a bold table head.
+                font_weight: if look.mono { Some(FontWeight::NORMAL) } else { look.bold.then_some(FontWeight::BOLD) },
+                font_style: if look.mono { Some(FontStyle::Normal) } else { look.italic.then_some(FontStyle::Italic) },
                 background_color: look.boxed.then(|| rgb(theme::SELECTED).into()),
                 underline: link.then(|| UnderlineStyle { thickness: px(1.), ..Default::default() }),
                 strikethrough: span
@@ -2607,7 +2610,12 @@ fn code_text(text: &str) -> Div {
 
 /// `code_text`'s look on a div of its own (a selectable text's).
 fn code_style(d: Div) -> Div {
-    d.font_family(crate::terminal::font_family()).text_xs().whitespace_nowrap()
+    code_font(d).whitespace_nowrap()
+}
+
+/// Code's family and size: a fence's, wrapped or not.
+fn code_font(d: Div) -> Div {
+    d.font_family(crate::terminal::font_family()).text_xs()
 }
 
 /// A key or click on a question card: the drawer's `TalkAsk`, or the Decisions card's.
@@ -2627,6 +2635,7 @@ fn ask_controls(host: Option<TaskId>) -> &'static str {
 fn task_box(done: bool) -> Div {
     let tick = div().text_size(px(9.)).text_color(rgb(theme::BACKGROUND)).child("✓");
     div()
+        .flex_none()
         .mt(px(4.))
         .size(px(12.))
         .rounded_sm()

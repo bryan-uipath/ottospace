@@ -74,10 +74,10 @@ impl Style {
     }
 }
 
-/// A fence drawn as prose: soft-wrapped, and no label: none, or a plain-text one (`text`).
+/// A fence drawn as prose: soft-wrapped, its label not shown: one labelled as plain text
+/// (`text`). An unlabelled one keeps its lines: a tree or a box drawn in it would break.
 pub fn plain_fence(label: Option<&str>) -> bool {
-    label
-        .is_none_or(|label| matches!(label.trim().to_lowercase().as_str(), "" | "text" | "txt" | "plain" | "plaintext"))
+    label.is_some_and(|label| matches!(label.trim().to_lowercase().as_str(), "text" | "txt" | "plain" | "plaintext"))
 }
 
 /// A link that may open: what `links::target` made of `raw`, the destination as written
@@ -978,10 +978,11 @@ mod look {
 
     #[test]
     fn a_plain_fence_is_prose() {
-        for label in [None, Some("text"), Some("TXT"), Some(" plain "), Some("")] {
+        for label in [Some("text"), Some("TXT"), Some(" plain ")] {
             assert!(plain_fence(label), "{label:?}");
         }
-        for label in [Some("rust"), Some("sh"), Some("src/main.rs")] {
+        // Unlabelled: a tree or a box keeps its lines, and scrolls across.
+        for label in [None, Some(""), Some("rust"), Some("sh"), Some("src/main.rs")] {
             assert!(!plain_fence(label), "{label:?}");
         }
     }

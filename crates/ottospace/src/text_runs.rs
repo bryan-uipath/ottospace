@@ -51,15 +51,24 @@ pub(crate) fn runs(
     cuts.retain(|at| *at <= len);
     cuts.sort_unstable();
     cuts.dedup();
+    // Both lists are sorted and apart: one pass over each, however many pieces.
+    let (mut s, mut f) = (0, 0);
+    let ranges = family.map_or(&[][..], |(_, ranges)| ranges);
     cuts.windows(2)
         .map(|w| {
             let (start, end) = (w[0], w[1]);
+            while styles.get(s).is_some_and(|(r, _)| r.end <= start) {
+                s += 1;
+            }
+            while ranges.get(f).is_some_and(|r| r.end <= start) {
+                f += 1;
+            }
             let mut style = base.clone();
-            if let Some((_, highlight)) = styles.iter().find(|(r, _)| r.start <= start && end <= r.end) {
+            if let Some((_, highlight)) = styles.get(s).filter(|(r, _)| r.start <= start && end <= r.end) {
                 style = style.highlight(*highlight);
             }
-            if let Some((name, ranges)) = family
-                && ranges.iter().any(|r| r.start <= start && end <= r.end)
+            if let Some((name, _)) = family
+                && ranges.get(f).is_some_and(|r| r.start <= start && end <= r.end)
             {
                 style.font_family = name.clone();
             }
