@@ -92,7 +92,8 @@ impl Model {
         let (tiles, of) = (self.zoom_tiles(), self.shown_space().clone());
         if let Some(zoom) = self.zoom.as_mut() {
             zoom.camera = zoom.camera.clamped(&tiles);
-            self.canvases.insert(of, zoom.camera);
+            let n = tiles.len();
+            self.canvases.insert(of, (zoom.camera, n));
         }
     }
 
@@ -104,8 +105,9 @@ impl Model {
     /// The camera of the space on show: as the user left it, else every tile fitted.
     fn kept_camera(&self) -> Camera {
         let tiles = self.zoom_tiles();
-        let kept = self.canvases.get(self.shown_space());
-        kept.map_or_else(|| Camera::fit(canvas::extent(&tiles)), |cam| cam.clamped(&tiles))
+        // Kept over another number of tiles (a tab added or closed since): fitted again.
+        let kept = self.canvases.get(self.shown_space()).filter(|(_, n)| *n == tiles.len());
+        kept.map_or_else(|| Camera::fit(canvas::extent(&tiles)), |(cam, _)| cam.clamped(&tiles))
     }
 
     /// The camera zoomed, panned or fitted by the user, and kept for the space.
@@ -114,7 +116,7 @@ impl Model {
         let of = self.shown_space().clone();
         let Some(zoom) = self.zoom.as_mut() else { return };
         zoom.camera = zoom.camera.stepped(step, &extent);
-        self.canvases.insert(of, zoom.camera);
+        self.canvases.insert(of, (zoom.camera, extent.len()));
     }
 
     /// ⌘⇧\: the overview of the tab on show's space, or back to where it opened.
@@ -138,7 +140,7 @@ impl Model {
         let spot = self.zoom_spots().into_iter().find(|(id, _)| *id == from).map(|(_, r)| r);
         let camera = self.kept_camera();
         let camera = spot.map_or(camera, |spot| camera.showing(spot, &self.zoom_tiles()));
-        self.canvases.insert(self.shown_space().clone(), camera);
+        self.canvases.insert(self.shown_space().clone(), (camera, self.zoom_tabs().len()));
         self.zoom = Some(Zoom { from, selected: from, camera, live });
     }
 
@@ -168,7 +170,7 @@ impl Model {
         zoom.selected = tabs[to];
         // The camera follows the selection into view.
         zoom.camera = zoom.camera.showing(tiles[to], &tiles);
-        self.canvases.insert(of, zoom.camera);
+        self.canvases.insert(of, (zoom.camera, tiles.len()));
     }
 
     /// Into `tab`, or the selected tile: the tab it opened on is the way back; any other is
@@ -479,5 +481,24 @@ mod tests {
         let at = m.tabs.iter().position(|t| t.id == ids[1]);
         m.update(Action::CloseTab { index: at });
         assert!(m.placed.is_empty());
+    }
+
+    /// A camera kept over four tiles is fitted again over five: the new tab is in view.
+    #[test]
+    fn a_tab_added_since_fits_the_canvas_again() {
+        let mut m = tabs(4);
+        m.update(Action::ZoomOut);
+        m.update(Action::ZoomCamera { step: CanvasStep::Zoom { factor: 3., about: [0., 0.] } });
+        let kept = m.zoom.as_ref().map(|z| z.camera);
+        m.update(Action::ZoomOut);
+        // The same tiles: as near as it was left (moved only to show the tab it opens on).
+        m.update(Action::ZoomOut);
+        assert_eq!(m.zoom.as_ref().map(|z| z.camera.scale), kept.map(|c| c.scale));
+        m.update(Action::ZoomOut);
+        m.update(Action::NewTab);
+        m.update(Action::SelectVisibleTab { index: 0 });
+        m.update(Action::ZoomOut);
+        let fitted = Camera::fit(canvas::extent(&m.zoom_tiles()));
+        assert_eq!(m.zoom.as_ref().map(|z| z.camera), Some(fitted));
     }
 }

@@ -104,6 +104,9 @@ pub struct SavedSpace {
     /// Its zoomed-out canvas's camera as the user left it (`zoom_out`): scale, then centre.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub canvas: Option<[f32; 3]>,
+    /// How many tiles it was kept over (none in an older file: fitted again).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas_tiles: Option<usize>,
 }
 
 /// The right drawer. Its conversation is never started again here: it is shown, to go on with.
@@ -325,8 +328,21 @@ impl Model {
             let tasks: Vec<TaskId> = space.joined.iter().copied().filter(|id| known(Some(*id)).is_some()).collect();
             let front = self.front(&space.of).filter(|id| tasks.contains(id));
             let hidden = space.hidden;
-            let canvas = self.canvases.get(&space.of).map(|cam| [cam.scale, cam.center[0], cam.center[1]]);
-            let saved = SavedSpace { kind: kind.into(), task, workbook, name, hidden, tab: None, tasks, front, canvas };
+            let kept = self.canvases.get(&space.of);
+            let canvas = kept.map(|(cam, _)| [cam.scale, cam.center[0], cam.center[1]]);
+            let canvas_tiles = kept.map(|(_, n)| *n);
+            let saved = SavedSpace {
+                kind: kind.into(),
+                task,
+                workbook,
+                name,
+                hidden,
+                tab: None,
+                tasks,
+                front,
+                canvas,
+                canvas_tiles,
+            };
             Some((space.of.clone(), space.last, saved))
         };
         let mut spaces: Vec<(Owner, Option<u32>, SavedSpace)> = self.spaces.iter().filter_map(kept).collect();
@@ -608,7 +624,8 @@ impl Model {
             let joined: Vec<TaskId> = saved.tasks.iter().copied().filter(live).collect();
             // Its canvas's camera; kept inside its bounds when zoomed out (`Camera::clamped`).
             if let Some([scale, x, y]) = saved.canvas.filter(|_| *of != Owner::Home) {
-                self.canvases.insert(of.clone(), crate::model::canvas::Camera { scale, center: [x, y] });
+                let camera = crate::model::canvas::Camera { scale, center: [x, y] };
+                self.canvases.insert(of.clone(), (camera, saved.canvas_tiles.unwrap_or(0)));
             }
             if let Some(space) = self.spaces.iter_mut().find(|space| space.of == *of && *of != Owner::Home) {
                 space.hidden = saved.hidden;
@@ -806,7 +823,8 @@ mod tests {
         let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
         assert_eq!(file.spaces.iter().filter(|s| s.canvas.is_some()).count(), 1, "{:?}", file.spaces);
         let (back, _) = restored(&m, file, &[], false);
-        assert_eq!(back.canvases.get(&of).copied(), camera);
+        assert_eq!(back.canvases.get(&of).map(|(cam, _)| *cam), camera);
+        assert_eq!(back.canvases.get(&of).map(|(_, n)| *n), m.canvases.get(&of).map(|(_, n)| *n));
         assert!(camera.is_some_and(|c: Camera| c.scale < 0.5));
     }
 

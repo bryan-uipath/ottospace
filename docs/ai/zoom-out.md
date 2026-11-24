@@ -39,7 +39,8 @@ needs no window size: the shell maps world to points by the area's width and hei
   it for slice 3's things. Farther shows nothing more.
 - **Bounds:** the pan keeps the area's middle inside the tiles' box grown by half a view: some
   tile is always in view. ⌘0 (fit) always recovers: it shows every tile, centred.
-- **⌘⇧\\:** opens fitted (every tile, centred; never nearer than 0.5), the zoom out flies from
+- **⌘⇧\\:** opens where it was left, fitted (every tile, centred; never nearer than 0.5) the first time and
+  once the number of tabs changed since, the zoom out flies from
   the tab to there; again, or Esc, flies back into the tab you came from. ↵, a click or a double
   click on a tile flies into it.
 

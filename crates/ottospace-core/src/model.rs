@@ -4470,7 +4470,8 @@ pub struct Model {
     pub zoom: Option<zoom::Zoom>,
     /// Each space's canvas camera as the user left it (`zoom_out`), kept in `layout.json`.
     #[serde(skip)]
-    pub(crate) canvases: std::collections::HashMap<Owner, canvas::Camera>,
+    /// With the number of tiles it was kept over: another number fits the canvas again.
+    pub(crate) canvases: std::collections::HashMap<Owner, (canvas::Camera, usize)>,
     /// Tiles the user placed on the canvas, by tab id: each one's corner. Kept in `layout.json`.
     #[serde(skip)]
     pub(crate) placed: std::collections::HashMap<u32, [f32; 2]>,
