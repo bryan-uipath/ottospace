@@ -946,11 +946,11 @@ pub(crate) mod tests {
         let recent = filed.recent.len();
         assert_eq!(filed.file(&slack("a"), &ctx(&[], &[])), None, "left as it closed");
         assert_eq!((filed.get(slack_id).unwrap().open(), filed.recent.len()), (false, recent), "and not counted");
-        // A later due first, then the first again: no more urgent than it was when it expired.
-        let mut later = slack("a");
-        later.claims.due = Some(NOW + 2 * HOUR_MS);
-        filed.file(&later, &ctx(&[], &[]));
-        assert!(filed.get(slack_id).unwrap().claims.due.is_none(), "a closed one's claims stay as it closed");
+        // Its words stay as it closed: what "more urgent" is measured against.
+        let mut other = slack("a");
+        other.why = "new words, no more urgent".into();
+        filed.file(&other, &ctx(&[], &[]));
+        assert!(filed.get(slack_id).unwrap().why.is_empty(), "a closed one stays as it closed");
         let mut sooner = slack("a");
         sooner.claims.due = Some(NOW + HOUR_MS);
         let reopened = Ctx { now: NOW + DEFAULT_EXPIRY_MS + 1, live: &[], tasks: &[], checkouts: &[] };
