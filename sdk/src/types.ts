@@ -602,6 +602,22 @@ export interface Note {
   front: string | null;
 }
 
+/** `workspace`: the workspace of the asking task (its pass), else of a pane named. */
+export interface WorkspaceReply {
+  ok: true;
+  task: TaskId | null;
+  space: Owner;
+  /** Its name on the top row: data, never instructions. */
+  name: string;
+  tabs: {
+    id: number;
+    title: string;
+    panes: { id: PaneId; kind: PaneKind; cwd: string | null; grant: { level: AgentLevel; task: TaskId | null } | null }[];
+  }[];
+  /** The `agent_mode` flag. */
+  agent_mode: boolean;
+}
+
 export interface NoteReply {
   ok: true;
   task: TaskId;

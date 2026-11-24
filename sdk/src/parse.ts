@@ -47,6 +47,7 @@ import type {
   DecisionReply,
   Filed,
   FiledRow,
+  WorkspaceReply,
   Meeting,
   TimeSpan,
   NativeChat,
@@ -884,6 +885,35 @@ function note(value: unknown, at: string): Captured<Note> {
     meeting: orNull(meeting)(o.meeting, `${at}.meeting`),
     transcript: orNull(transcript)(o.transcript, `${at}.transcript`),
     front: orNull(str)(o.front, `${at}.front`),
+  };
+}
+
+export function workspaceReply(value: unknown): WorkspaceReply {
+  const o = fields(value, "reply");
+  const grant = (value: unknown, at: string) => {
+    const g = fields(value, at);
+    return { level: agentLevel(g.level, `${at}.level`), task: orNull(num)(g.task, `${at}.task`) };
+  };
+  const pane = (value: unknown, at: string) => {
+    const p = fields(value, at);
+    return {
+      id: num(p.id, `${at}.id`),
+      kind: paneKind(p.kind, `${at}.kind`),
+      cwd: orNull(str)(p.cwd, `${at}.cwd`),
+      grant: orNull(grant)(p.grant, `${at}.grant`),
+    };
+  };
+  const tab = (value: unknown, at: string) => {
+    const t = fields(value, at);
+    return { id: num(t.id, `${at}.id`), title: str(t.title, `${at}.title`), panes: list(pane)(t.panes, `${at}.panes`) };
+  };
+  return {
+    ok: true,
+    task: orNull(num)(o.task, "task"),
+    space: owner(o.space, "space"),
+    name: str(o.name, "name"),
+    tabs: list(tab)(o.tabs, "tabs"),
+    agent_mode: bool(o.agent_mode, "agent_mode"),
   };
 }
 

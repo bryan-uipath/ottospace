@@ -113,6 +113,7 @@ mod listen_live;
 mod listen_meter;
 mod markdown;
 mod marks;
+mod mcp;
 mod menus;
 mod new_task;
 mod notices;
@@ -3356,6 +3357,19 @@ impl Workspace {
                         None
                     }
                 },
+                Request::Workspace { pane } => {
+                    let caller = self.caller(pass.as_ref());
+                    let message = match self.model.workspace_view(caller, pane).map(serde_json::to_value) {
+                        Ok(Ok(mut view)) => {
+                            view["ok"] = true.into();
+                            view.to_string()
+                        }
+                        Ok(Err(err)) => control::error(&err.to_string()),
+                        Err(why) => control::error(&why),
+                    };
+                    let _ = reply.send(message);
+                    continue;
+                }
                 Request::TaskBrief { id, tab } => {
                     let caller = self.caller(pass.as_ref());
                     let _ = reply.send(self.serve_brief(id, caller, tab));
@@ -9728,6 +9742,10 @@ fn main() {
     if args.get(1).is_some_and(|a| a == "ctl") {
         ctl(&args[2..]);
     }
+    // The MCP server of a task's agent: a client of the socket, as `ctl`, its pass kept.
+    if args.get(1).is_some_and(|a| a == "mcp") {
+        mcp::main();
+    }
     // Started from a task agent's shell (a dev build): that pass is its, not for our children.
     // SAFETY: no thread has started yet.
     unsafe { std::env::remove_var(pass::VAR) };
@@ -9762,7 +9780,7 @@ fn main() {
     // open a second window and restore the running instance's hosted windows.
     if let Some(unknown) = args.get(1) {
         eprintln!(
-            "unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | skill [--stub] | rescue | --version]"
+            "unknown command: {unknown}\nusage: ottospace [ctl '<json request>' | mcp | skill [--stub] | rescue | --version]"
         );
         std::process::exit(2);
     }
