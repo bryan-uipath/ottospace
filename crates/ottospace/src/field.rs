@@ -43,9 +43,10 @@ pub struct Drawn {
     pub menu: Bounds<Pixels>,
     /// The new-task box's status line in full, and as it fit its room when last drawn.
     pub status: (String, String),
-    /// A field of several lines (the conversation's composer): each line drawn, where it starts
-    /// in the text and its top; and the pointer's last height, to pick the line it is over.
-    rows: Vec<(usize, ShapedLine, Pixels)>,
+    /// A field of several lines (the conversation's composer): every row it wraps into, and the
+    /// first one shown; and the pointer's last height, to pick the row it is over.
+    rows: Vec<Row>,
+    first: usize,
     pointer_y: Pixels,
 }
 
@@ -75,8 +76,12 @@ impl Workspace {
     pub fn field_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) -> bool {
         let (key, m) = (&event.keystroke.key, event.keystroke.modifiers);
         let mods = crate::mods(m);
+        let vertical = matches!(key.as_str(), "up" | "down") && !m.platform && !m.alt && !m.control;
         match edit::key(key, mods) {
             _ if self.model.field().is_none() => return false,
+            _ if let Some(at) = self.field_row_move(key == "down").filter(|_| vertical) => {
+                self.edit(Edit::Move { to: edit::Motion::At(at), select: m.shift }, window, cx)
+            }
             Some(Key::Edit(edit)) => self.edit(edit, window, cx),
             Some(Key::Copy) => drop(self.field_copy(false, window, cx)),
             Some(Key::Cut) => drop(self.field_copy(true, window, cx)),
@@ -84,6 +89,18 @@ impl Workspace {
             None => return m.control,
         }
         true
+    }
+
+    /// ↑ or ↓ in a field of several rows: the byte under the cursor on the row drawn above or below.
+    /// None on the first or last row (the field's own ↑ and ↓ go to its start or end).
+    fn field_row_move(&self, down: bool) -> Option<usize> {
+        let (_, field) = self.model.field()?;
+        let drawn = self.drawn();
+        let drawn = drawn.borrow();
+        let on = drawn.rows.iter().rposition(|row| row.range.start <= field.cursor())?;
+        let to = if down { on + 1 } else { on.checked_sub(1)? };
+        let x = drawn.rows[on].x(field.cursor().min(drawn.rows[on].range.end));
+        Some(drawn.rows.get(to)?.index(x))
     }
 
     /// ⌘C or ⌘X in a field. False: no field has the keyboard.
@@ -148,10 +165,11 @@ impl Workspace {
         let drawn = self.drawn();
         let drawn = drawn.borrow();
         let empty = self.model.field().is_none_or(|(_, field)| field.text().is_empty());
-        // Several lines: the one the pointer is over, else the last above it.
-        let row = drawn.rows.iter().rev().find(|(_, _, top)| *top <= drawn.pointer_y).or(drawn.rows.first());
-        if let Some((start, line, _)) = row.filter(|_| !empty) {
-            return start + line.closest_index_for_x(x - drawn.bounds.left() + drawn.scroll);
+        // Several rows: the one the pointer is over, else the last above it.
+        let shown = drawn.rows.iter().filter(|row| row.top.is_some());
+        let row = shown.clone().rev().find(|row| row.top <= Some(drawn.pointer_y)).or(shown.clone().next());
+        if let Some(row) = row.filter(|_| !empty) {
+            return row.index(x - drawn.bounds.left());
         }
         match &drawn.line {
             Some(line) if !empty => line.closest_index_for_x(x - drawn.bounds.left() + drawn.scroll),
@@ -382,6 +400,55 @@ impl EntityInputHandler for Workspace {
     }
 }
 
+/// A row of a field of several lines: its bytes, the line of the text it is cut from (shaped
+/// whole), where that line starts, and its top while it shows.
+#[derive(Clone)]
+struct Row {
+    range: Range<usize>,
+    line: ShapedLine,
+    from: usize,
+    top: Option<Pixels>,
+}
+
+impl Row {
+    /// Where byte `at` is drawn, from the row's left edge.
+    fn x(&self, at: usize) -> Pixels {
+        self.line.x_for_index(at - self.from) - self.line.x_for_index(self.range.start - self.from)
+    }
+
+    /// The byte nearest `x` from the row's left edge, on this row. A row its line goes on past
+    /// ends before its last character: its end is where the next row starts.
+    fn index(&self, x: Pixels) -> usize {
+        let at = self.from + self.line.closest_index_for_x(x + self.line.x_for_index(self.range.start - self.from));
+        let last = match self.range.end == self.from + self.line.len() {
+            true => self.range.end,
+            false => {
+                self.line.text[..self.range.end - self.from].char_indices().last().map_or(0, |(i, _)| i) + self.from
+            }
+        };
+        at.clamp(self.range.start, last.max(self.range.start))
+    }
+}
+
+/// `text` cut into rows no wider than `width`: each line (`\n`) shaped by `shape`, then wrapped.
+fn cut(text: &str, width: Pixels, mut shape: impl FnMut(Range<usize>) -> ShapedLine) -> Vec<Row> {
+    let (mut rows, mut from) = (Vec::new(), 0);
+    for words in text.split('\n') {
+        let line = shape(from..from + words.len());
+        // Where each glyph starts, by its byte: one shaping for the whole line, looked up per byte.
+        let mut xs: Vec<(usize, f32)> =
+            line.runs.iter().flat_map(|run| run.glyphs.iter().map(|g| (g.index, f32::from(g.position.x)))).collect();
+        xs.sort_by_key(|(index, _)| *index);
+        let end = f32::from(line.width);
+        let x = |at: usize| xs.get(xs.partition_point(|(index, _)| *index < at)).map_or(end, |(_, x)| *x);
+        for row in edit::wrap(words, f32::from(width), x) {
+            rows.push(Row { range: from + row.start..from + row.end, line: line.clone(), from, top: None });
+        }
+        from += words.len() + 1;
+    }
+    rows
+}
+
 /// Paints the line, the selection and the caret, and registers the input handler.
 struct FieldElement {
     workspace: Entity<Workspace>,
@@ -397,7 +464,7 @@ struct FieldElement {
     marked: Option<Range<usize>>,
     placeholder: SharedString,
     accent: u32,
-    /// The most lines it shows: 1, one line that scrolls sideways; more, a line per `\n`.
+    /// The most rows it shows: 1, one line that scrolls sideways; more, each line wrapped.
     rows: usize,
 }
 
@@ -433,9 +500,39 @@ impl Element for FieldElement {
     ) -> (LayoutId, ()) {
         let mut style = Style::default();
         style.size.width = relative(1.).into();
-        let lines = self.text.split('\n').count().clamp(1, self.rows);
-        style.size.height = (window.line_height() * lines as f32).into();
-        (window.request_layout(style, [], cx), ())
+        let line_height = window.line_height();
+        if self.rows == 1 {
+            style.size.height = line_height.into();
+            return (window.request_layout(style, [], cx), ());
+        }
+        // Several rows: as many as the text wraps into at the width it is given, at most `rows`.
+        let text_style = window.text_style();
+        let (font, font_size) = (text_style.font(), text_style.font_size.to_pixels(window.rem_size()));
+        let (text, rows) = (if self.text.is_empty() { self.placeholder.clone() } else { self.text.clone() }, self.rows);
+        let measure = move |known: gpui::Size<Option<Pixels>>,
+                            _: gpui::Size<gpui::AvailableSpace>,
+                            window: &mut Window,
+                            _: &mut App| {
+            let width = known.width.unwrap_or(px(0.));
+            let run = |len| TextRun {
+                len,
+                font: font.clone(),
+                color: gpui::black(),
+                background_color: None,
+                underline: None,
+                strikethrough: None,
+            };
+            let shape = |range: Range<usize>| {
+                window.text_system().shape_line(
+                    text[range.clone()].to_string().into(),
+                    font_size,
+                    &[run(range.len())],
+                    None,
+                )
+            };
+            size(width, line_height * cut(&text, width, shape).len().clamp(1, rows) as f32)
+        };
+        (window.request_measured_layout(style, measure), ())
     }
 
     fn prepaint(
@@ -564,8 +661,8 @@ impl FieldElement {
         caret_on
     }
 
-    /// A field of several lines: a line per `\n`, at most `rows`, those around the cursor; the
-    /// selection and the caret on the lines they are on. Long lines are cut at the edge.
+    /// A field of several lines: each line wrapped at the field's width, at most `rows` rows,
+    /// those around the cursor; the selection and the caret on the rows they are on.
     fn paint_rows(&mut self, bounds: Bounds<Pixels>, window: &mut Window, cx: &mut App) {
         let style = window.text_style();
         let empty = self.text.is_empty();
@@ -575,54 +672,58 @@ impl FieldElement {
         };
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line_height = window.line_height();
-        let mut starts = vec![0];
-        starts.extend(shown.match_indices('\n').map(|(at, _)| at + 1));
-        let on = starts.iter().rposition(|start| *start <= self.cursor).unwrap_or(0);
-        let first = (on + 1).saturating_sub(self.rows);
+        let run = |len: usize, underline: bool| TextRun {
+            len,
+            font: style.font(),
+            color,
+            background_color: None,
+            underline: underline.then_some(UnderlineStyle { color: Some(color), thickness: px(1.), wavy: false }),
+            strikethrough: None,
+        };
+        // A composition in progress is underlined, on the line it is in.
+        let shape = |line: Range<usize>| {
+            let marked = self.marked.clone().filter(|m| !empty && m.start >= line.start && m.end <= line.end);
+            let runs = match marked {
+                Some(m) => {
+                    let parts = [(m.start - line.start, false), (m.end - m.start, true), (line.end - m.end, false)];
+                    parts.into_iter().filter(|(len, _)| *len > 0).map(|(len, under)| run(len, under)).collect()
+                }
+                None => vec![run(line.len(), false)],
+            };
+            window.text_system().shape_line(shown[line].to_string().into(), font_size, &runs, None)
+        };
+        let mut rows = cut(&shown, bounds.size.width, shape);
+        let on = rows.iter().rposition(|row| row.range.start <= self.cursor).unwrap_or(0);
         let mut drawn = self.drawn.borrow_mut();
+        // The rows shown move only as far as the cursor needs.
+        let first =
+            drawn.first.min(on).max((on + 1).saturating_sub(self.rows)).min(rows.len().saturating_sub(self.rows));
         let caret_on = self.blink(&mut drawn, cx);
-        drawn.rows.clear();
         window.with_content_mask(Some(ContentMask { bounds }), |window| {
-            for (row, start) in starts.iter().copied().enumerate().skip(first).take(self.rows) {
-                let end = starts.get(row + 1).map_or(shown.len(), |next| next - 1);
-                let text: SharedString = shown[start..end].to_string().into();
-                let marked = self.marked.clone().filter(|m| !empty && m.start >= start && m.end <= end);
-                let run = |len: usize, underline: bool| TextRun {
-                    len,
-                    font: style.font(),
-                    color,
-                    background_color: None,
-                    underline: underline.then_some(UnderlineStyle {
-                        color: Some(color),
-                        thickness: px(1.),
-                        wavy: false,
-                    }),
-                    strikethrough: None,
-                };
-                let runs = match marked {
-                    Some(m) => {
-                        let parts = [(m.start - start, false), (m.end - m.start, true), (end - m.end, false)];
-                        parts.into_iter().filter(|(len, _)| *len > 0).map(|(len, under)| run(len, under)).collect()
-                    }
-                    None => vec![run(text.len(), false)],
-                };
-                let line = window.text_system().shape_line(text, font_size, &runs, None);
-                let top = bounds.top() + line_height * (row - first) as f32;
-                let x = |index: usize| bounds.left() + if empty { px(0.) } else { line.x_for_index(index - start) };
+            for (at, row) in rows.iter_mut().enumerate().skip(first).take(self.rows) {
+                let top = bounds.top() + line_height * (at - first) as f32;
+                row.top = Some(top);
+                let x = |index: usize| bounds.left() + if empty { px(0.) } else { row.x(index) };
+                let (start, end) = (row.range.start, row.range.end);
                 let (from, to) = (self.selection.start.max(start), self.selection.end.min(end));
                 if from < to || (self.selection.start < start && self.selection.end > end) {
                     let quad = Bounds::from_corners(point(x(from), top), point(x(to.max(from)), top + line_height));
                     window.paint_quad(fill(quad, rgb(theme::SELECTION)));
                 }
-                let _ = line.paint(point(bounds.left(), top), line_height, window, cx);
-                if self.selection.is_empty() && caret_on && self.active && row == on {
+                // The whole line, seen through the row's own width: the rest of it is on other rows.
+                let lead = row.line.x_for_index(start - row.from);
+                let clip = Bounds::from_corners(point(x(start), top), point(x(end), top + line_height));
+                window.with_content_mask(Some(ContentMask { bounds: clip }), |window| {
+                    let _ = row.line.paint(point(bounds.left() - lead, top), line_height, window, cx);
+                });
+                if self.selection.is_empty() && caret_on && self.active && at == on {
                     let caret = Bounds::new(point(x(self.cursor), top), size(px(2.), line_height));
                     window.paint_quad(fill(caret, rgb(self.accent)));
                 }
-                drawn.rows.push((start, line, top));
             }
         });
-        drawn.line = drawn.rows.iter().find(|(start, ..)| *start == starts[on]).map(|(_, line, _)| line.clone());
+        drawn.line = rows.get(on).map(|row| row.line.clone());
+        (drawn.rows, drawn.first) = (rows, first);
         drawn.scroll = px(0.);
         drawn.bounds = bounds;
         drawn.viewport = window.viewport_size().height;

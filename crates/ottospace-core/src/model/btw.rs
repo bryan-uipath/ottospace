@@ -69,14 +69,14 @@ impl Btw {
         answered.collect()
     }
 
-    /// What a key does in its input: ↵ asks, ⇧↵ a new line, Esc or ⌘⇧K back to the composer.
+    /// What a key does in its input: ↵ asks, ⇧↵ or ⌥↵ a new line, Esc or ⌘⇧K back to the composer.
     pub fn key(key: &str, mods: crate::keys::Mods) -> Key {
         let bare = !mods.ctrl && !mods.alt && !mods.shift && !mods.cmd;
         match key {
             _ if is_key(key, mods) => Key::Act(Action::BtwKeys { on: false }),
             _ if mods.cmd => Key::Pass,
             "escape" => Key::Act(Action::BtwKeys { on: false }),
-            "enter" if mods.shift && !mods.ctrl && !mods.alt => Key::Newline,
+            "enter" if (mods.shift || mods.alt) && !mods.ctrl => Key::Newline,
             "enter" if bare => Key::Act(Action::BtwAsk),
             _ => Key::Field,
         }

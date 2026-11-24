@@ -208,9 +208,9 @@ pub(crate) fn lifted(d: Div) -> Div {
         .child(light)
 }
 
-/// A field set slightly into a `lifted` dialog: the darkest fill, its edge in `accent`, and a
-/// shade along its top edge, as if under a lip.
-pub(crate) fn well(d: Div, accent: u32) -> Div {
+/// A field set slightly into a `lifted` dialog: the darkest fill, a quiet edge (a dialog's text
+/// box's), and a shade along its top edge, as if under a lip.
+pub(crate) fn well(d: Div) -> Div {
     let shade = div().absolute().top_0().left_0().right_0().h(px(3.)).rounded_t(px(crate::dialog::INNER_RADIUS)).bg(
         gpui::linear_gradient(
             180.,
@@ -222,7 +222,7 @@ pub(crate) fn well(d: Div, accent: u32) -> Div {
         .rounded(px(crate::dialog::INNER_RADIUS))
         .bg(rgb(theme::BACKGROUND))
         .border_1()
-        .border_color(rgb(accent))
+        .border_color(rgb(theme::BORDER_STRONG))
         .child(shade)
 }
 

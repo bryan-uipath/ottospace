@@ -601,7 +601,7 @@ impl Workspace {
             .children(self.agent_picker(cx))
             .child(self.compose_button(quick, cx))
             .child(self.controls.mark("compose-edge"));
-        let field = ui::well(div().flex().flex_col(), theme::COMPOSE).child(line).children(attached).child(edge);
+        let field = ui::well(div().flex().flex_col()).child(line).children(attached).child(edge);
         let sheet_open = self.model.compose_hint().is_some();
         let tags = ui::button(
             "compose-sheet",

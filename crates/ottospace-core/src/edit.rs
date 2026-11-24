@@ -21,6 +21,9 @@ pub enum Motion {
     WordRight,
     Start,
     End,
+    /// To byte `at` (snapped back to a character): the shell's ↑ or ↓ in a field of several lines,
+    /// to the row it drew above or below.
+    At(usize),
 }
 
 /// One change to a field.
@@ -298,6 +301,7 @@ impl Field {
             }
             Motion::Start => 0,
             Motion::End => self.text.len(),
+            Motion::At(at) => self.snap(at),
         }
     }
 
@@ -512,6 +516,39 @@ fn clean(text: &str, breaks: bool) -> String {
     text.chars().filter(|c| !c.is_control()).collect()
 }
 
+/// One line cut into rows no wider than `max`, where `x(byte)` is where that byte is drawn: after
+/// a space where one fits (spaces may hang past the edge), else at a character. Never an empty row
+/// but for an empty line. e.g. "fix the zoom" at 7 wide: "fix the " | "zoom".
+pub fn wrap(line: &str, max: f32, x: impl Fn(usize) -> f32) -> Vec<Range<usize>> {
+    let mut rows = Vec::new();
+    let mut start = 0;
+    while start < line.len() || rows.is_empty() {
+        let base = x(start);
+        let (mut fit, mut space) = (start, None);
+        for (at, g) in line[start..].grapheme_indices(true) {
+            let end = start + at + g.len();
+            let blank = g.chars().all(char::is_whitespace);
+            if !blank && x(end) - base > max {
+                break;
+            }
+            fit = end;
+            if blank {
+                space = Some(end);
+            }
+        }
+        let cut = match space {
+            _ if fit == line.len() => fit,
+            Some(space) => space,
+            None if fit > start => fit,
+            // Not even one character fits: it has the row alone.
+            None => line[start..].graphemes(true).next().map_or(line.len(), |g| start + g.len()),
+        };
+        rows.push(start..cut);
+        start = cut;
+    }
+    rows
+}
+
 /// Random edits for the property tests, the same on every run.
 #[cfg(test)]
 pub(crate) mod fuzz {
@@ -563,9 +600,9 @@ pub(crate) mod fuzz {
         }
 
         pub(crate) fn edit(&mut self, len: usize) -> Edit {
-            let to = [Left, Right, WordLeft, WordRight, Start, End][self.below(6)];
             // Bytes and UTF-16 offsets from anywhere, inside a character and past the end too.
             let at = self.below(len + 3);
+            let to = [Left, Right, WordLeft, WordRight, Start, End, At(at)][self.below(7)];
             match self.below(16) {
                 0 | 1 => Edit::Insert(self.text()),
                 2 => Edit::Paste(self.text()),
@@ -777,6 +814,52 @@ pub(crate) mod tests {
         assert_eq!(f.selected(), "two three\nfour");
         f.apply(Edit::Click { at: 99, count: 3, shift: false });
         assert_eq!(f.selected(), "four");
+    }
+
+    #[test]
+    fn a_line_wraps_after_a_space_else_at_a_character() {
+        // One unit per character, as a monospace font draws it.
+        let rows = |line: &str, max: f32| {
+            let x = |at: usize| line[..at].chars().count() as f32;
+            wrap(line, max, x).into_iter().map(|row| line[row].to_string()).collect::<Vec<_>>()
+        };
+        assert_eq!(rows("fix the zoom", 7.), ["fix the ", "zoom"]);
+        assert_eq!(rows("fix the zoom", 99.), ["fix the zoom"]);
+        assert_eq!(rows("", 7.), [""]);
+        // A space past the edge hangs: the next row starts with a word.
+        assert_eq!(rows("abcdefg hij", 7.), ["abcdefg ", "hij"]);
+        assert_eq!(rows("abcdefghij", 4.), ["abcd", "efgh", "ij"]);
+        // Too narrow for one character: one each, never an empty row.
+        assert_eq!(rows("日本", 0.5), ["日", "本"]);
+        assert_eq!(rows("e\u{301}e\u{301}", 1.5), ["e\u{301}", "e\u{301}"]);
+        // Every row joins back into the line, and fits unless it is one character or hangs a space.
+        let mut rng = Rng(0x5eed);
+        for _ in 0..2_000 {
+            let line: String = rng.text().replace(['\n', '\r'], "");
+            let max = rng.below(6) as f32;
+            let x = |at: usize| line[..at].chars().count() as f32;
+            let cut = wrap(&line, max, x);
+            assert_eq!(cut.first().map(|row| row.start), Some(0), "{line:?}");
+            assert!(cut.windows(2).all(|w| w[0].end == w[1].start && !w[0].is_empty()), "{line:?} {cut:?}");
+            assert_eq!(cut.last().map(|row| row.end), Some(line.len()));
+            for row in cut {
+                let words = line[row.clone()].trim_end();
+                let one = words.graphemes(true).count() <= 1;
+                assert!(one || x(row.start + words.len()) - x(row.start) <= max, "{line:?} {row:?} at {max}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_move_to_a_byte_lands_on_a_character() {
+        let mut f = Field::of_lines("one\nt\u{e9}a");
+        f.apply(Edit::Move { to: At(2), select: false });
+        assert_eq!(f.cursor(), 2);
+        // Inside é: back to its start. Past the end: the end.
+        f.apply(Edit::Move { to: At(6), select: true });
+        assert_eq!((f.cursor(), f.selected()), (5, "e\nt"));
+        f.apply(Edit::Move { to: At(99), select: false });
+        assert_eq!(f.cursor(), f.text().len());
     }
 
     #[test]

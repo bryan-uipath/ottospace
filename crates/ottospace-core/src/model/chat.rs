@@ -111,7 +111,7 @@ fn unqueue(chat: &mut Chat) {
 pub enum Key {
     /// Dispatch this action.
     Act(Action),
-    /// ⇧↵: a new line in the draft.
+    /// ⇧↵ or ⌥↵: a new line in the draft.
     Newline,
     /// To the composer's field: an editing key, or text the input method types.
     Field,
@@ -125,7 +125,7 @@ pub enum Key {
 /// written) or not.
 /// On a card ↵ does nothing, so an Allow is never a reflex: `a` allows, `d` denies, `s` shows
 /// all, `m` writes a message for the Deny. In the composer ↵ sends (or denies with the message),
-/// ⇧↵ starts a new line, Esc leaves, or stops a turn when pressed twice. ⌃G, card or not: the
+/// ⇧↵ or ⌥↵ starts a new line, Esc leaves, or stops a turn when pressed twice. ⌃G, card or not: the
 /// draft in the user's editor, or back to the editor that has it.
 pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
     if mods.cmd {
@@ -142,7 +142,7 @@ pub fn key(key: &str, mods: crate::keys::Mods, card: Option<u64>) -> Key {
             "m" if bare => Key::Act(Action::TalkDenyNote),
             _ => Key::Swallow,
         },
-        "enter" if mods.shift => Key::Newline,
+        "enter" if mods.shift || mods.alt => Key::Newline,
         "enter" if bare => Key::Act(Action::TalkSend),
         _ => Key::Field,
     }
@@ -1301,6 +1301,7 @@ mod tests {
         assert_eq!(key("escape", none, card), Key::Act(Action::TalkEscape));
         assert_eq!(key("enter", none, None), Key::Act(Action::TalkSend));
         assert_eq!(key("enter", shift, None), Key::Newline);
+        assert_eq!(key("enter", Mods { alt: true, ..Mods::default() }, None), Key::Newline);
         assert_eq!((key("a", none, None), key("l", cmd, card)), (Key::Field, Key::Pass));
         let ctrl = Mods { ctrl: true, ..Mods::default() };
         let edit = Key::Act(Action::EditorOpen);

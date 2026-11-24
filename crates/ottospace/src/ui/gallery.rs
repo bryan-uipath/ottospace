@@ -75,7 +75,7 @@ fn pickers() -> Div {
 
 /// Depth: a lifted dialog with a well in it.
 fn depth() -> Div {
-    let well = super::well(div().h(px(36.)), theme::COMPOSE);
+    let well = super::well(div().h(px(36.)));
     let dialog = super::lifted(div().w(px(260.)).p(px(theme::SPACE_3))).child(well);
     group("lifted, well", [case("dialog", dialog)])
 }
