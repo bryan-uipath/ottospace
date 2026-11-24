@@ -18091,9 +18091,10 @@ fn a_citys_names_stay_apart_and_a_hovered_folder_is_outlined() {
     let renders = city(&otto)["renders"].as_u64();
     let p = [b[0] + b[2] / 2., b[1] + b[3] * 0.8];
     otto.call(json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dy": 4, "as": "user"}));
-    // Drawn again and named again (a paint may land before the render's state is read).
+    // Drawn again and named again (a paint may land before the render's state is read; the
+    // wheel's own pictures are half size and unnamed, #437).
     let zoomed = otto.wait_for("names placed again", |o| {
-        Some(city(o)).filter(|c| c["renders"].as_u64() > renders && c["names"] != first["names"])
+        Some(city(o)).filter(|c| c["renders"].as_u64() > renders && named(c) && c["names"] != first["names"])
     });
     assert_ne!(check(&zoomed), fitted, "names follow the camera");
     drop(otto);
