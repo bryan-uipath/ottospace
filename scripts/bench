@@ -26,6 +26,12 @@ temp folder, `/bin/sh` terminals, no apps, no repositories or sessions of the us
   city_2000_ms, city_20000_ms   with `code_city` on, a repository's tab emptied (its terminal
                        closed) to its code city's picture in the state, for a made-up tree of
                        2,000 and 20,000 files (scripts/shot's): read, render and painted.
+  motion               the code city moving, at CI's window (1024×674), 2,000 and 20,000 files:
+                       while its first picture rises, and while the user's left drag turns it
+                       (120 moves of 3 points). Per frame (the trace's `frame`: render to paint
+                       on the main thread) the median and p95 time and how many took over
+                       16.7 ms; the frames' spacing; per picture made (`city_picture`) the scene,
+                       the GPU, the copy out of its read buffer and the image made of it.
 
 Startups: median and p90 of --runs launches (cold: --cold-runs). With --compare, both sides
 run alternately, so drift of the machine falls on both; the deltas are printed and the exit
@@ -299,6 +305,72 @@ def city(binary, scratch, files):
         inst.close()
 
 
+def trace_events(inst):
+    """The app's trace ring, oldest first: `{"ms", "ev", ..}` each."""
+    said = inst.call({"cmd": "trace"})
+    return [json.loads(line) for line in (said.get("trace") or "").splitlines() if line.strip()]
+
+
+def pct(values, p):
+    """The nearest-rank percentile `p` of `values` (none: None)."""
+    values = sorted(values)
+    return values[min(len(values) - 1, max(0, -(-len(values) * p // 100) - 1))] if values else None
+
+
+def motion_of(events, start, end):
+    """Frame and picture times of the trace's events from `start` to `end` (its ms)."""
+    inside = [e for e in events if start <= e.get("ms", -1) <= end]
+    frames = [e for e in inside if e.get("ev") == "frame"]
+    took = [e["took_ms"] for e in frames]
+    at = [e["ms"] for e in frames]
+    gaps = [b - a for a, b in zip(at, at[1:])]
+    pictures = [e for e in inside if e.get("ev") == "city_picture"]
+    med = lambda key: statistics.median([e[key] / 1000 for e in pictures]) if pictures else None
+    p95 = lambda key: pct([e[key] / 1000 for e in pictures], 95) if pictures else None
+    return {
+        "frames": len(frames), "frame_median": statistics.median(took) if took else None,
+        "frame_p95": pct(took, 95), "over_16": sum(1 for t in took if t > 16.7),
+        "gap_median": statistics.median(gaps) if gaps else None, "gap_p95": pct(gaps, 95),
+        "gaps_over_16": sum(1 for g in gaps if g > 16.7), "pictures": len(pictures),
+        "scene_ms": med("scene_us"), "gpu_ms": med("gpu_us"), "gpu_p95": p95("gpu_us"),
+        "copy_ms": med("copy_us"), "copy_p95": p95("copy_us"), "image_ms": med("image_us"),
+    }
+
+
+def city_motion(binary, scratch, files):
+    """The code city's frames as it rises and as the user's drag turns it (`motion_of`), a
+    made-up tree of `files` files, at CI's window."""
+    tree = os.path.realpath(os.path.join(scratch, f"city-{files}"))
+    if not os.path.isdir(tree):
+        shot.made_up_tree(tree, files)
+    env = {"OTTOSPACE_FEATURES": "code_city", "GIT_CONFIG_GLOBAL": "/dev/null", "OTTOSPACE_E2E_WINDOW": "1024x674"}
+    inst = launch(binary, env)
+    last = lambda: max([e.get("ms", 0) for e in trace_events(inst)] or [0])
+    try:
+        inst.ok({"cmd": "repo_add", "path": tree})
+        inst.wait("the repository listed", lambda: shot.path_get(inst.state(), "repos_bar.0") is not None)
+        inst.ok({"cmd": "open_repo", "path": tree})
+        inst.ok({"cmd": "key", "keys": "cmd-shift-r", "as": "user"})
+        start = last()
+        inst.ok({"cmd": "close"})
+        inst.wait("the city standing", lambda: shot.path_get(inst.state(), "city.first_ms") is not None, timeout=60)
+        time.sleep(1)
+        rise = motion_of(trace_events(inst), start, last())
+        b = shot.path_get(inst.state(), "city.bounds")
+        x, y = b[0] + b[2] * 0.35, b[1] + b[3] * 0.8
+        mouse = lambda action, x: inst.ok({"cmd": "mouse", "action": action, "x": x, "y": y, "button": "left", "as": "user"})
+        start = last()
+        mouse("down", x)
+        for i in range(1, 121):
+            mouse("move", x + 3 * i)
+        mouse("up", x + 360)
+        time.sleep(0.5)
+        turn = motion_of(trace_events(inst), start, last())
+        return {"rise": rise, "turn": turn}
+    finally:
+        inst.close()
+
+
 def stats(values):
     values = sorted(values)
     p90 = values[min(len(values) - 1, max(0, -(-len(values) * 9 // 10) - 1))]  # nearest rank
@@ -381,11 +453,14 @@ def bench(sides, args, scratch):
         for name in order_of(names, i):
             for files in cities[name]:
                 cities[name][files].append(city(sides[name], scratch, files))
+    say("code city in motion ...")
+    motion = {name: {files: city_motion(sides[name], scratch, files) for files in (2000, 20000)} for name in names}
     result = {}
     for name in names:
         say(f"memory and CPU, {name} ({IDLE_S + STREAM_S + 20} s) ...")
         result[name] = {**startup_stats(raw[name]), **{k: v if v is None else round(v, 2) for k, v in long_run(sides[name]).items()}}
         result[name].update({f"city_{files}_ms": stats(runs) for files, runs in cities[name].items()})
+        result[name]["motion"] = motion[name]
     return result, sorted(held)
 
 
@@ -443,6 +518,23 @@ def regressions(before, after, held):
     return [f"{k}: {value(before, k):.1f} → {value(after, k):.1f}" for k in keys]
 
 
+def motion_table(result):
+    """The code city in motion, each side: a row a phase and size."""
+    f = lambda v, d=1: "—" if v is None else f"{v:.{d}f}"
+    lines = ["", "Code city in motion, at 1024×674 (frame: render to paint on the main thread; gap: from one frame to the next; picture: made on its own thread):", "",
+             "| side | phase | files | frames | frame median / p95 (ms) | over 16.7 | gap median / p95 (ms) | gaps over 16.7 | pictures | scene / GPU (p95) / copy out (p95) / image (ms) |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
+    for name, side in result.items():
+        for files, phases in (side.get("motion") or {}).items():
+            for phase in ("rise", "turn"):
+                m = phases[phase]
+                lines.append(
+                    f"| {name} | {phase} | {files:,} | {m['frames']} | {f(m['frame_median'])} / {f(m['frame_p95'])} | {m['over_16']} | "
+                    f"{f(m['gap_median'])} / {f(m['gap_p95'])} | {m['gaps_over_16']} | {m['pictures']} | "
+                    f"{f(m['scene_ms'])} / {f(m['gpu_ms'])} ({f(m['gpu_p95'])}) / {f(m['copy_ms'])} ({f(m['copy_p95'])}) / {f(m['image_ms'])} |")
+    return lines
+
+
 def table(result, meta):
     names = list(result)
     first = result[names[0]]
@@ -451,7 +543,7 @@ def table(result, meta):
     if len(names) == 1:
         lines += ["| | value |", "|---|---|"]
         lines += [f"| {label} | {cell(result[names[0]], key)} |" for key, label in ROWS]
-        return "\n".join(lines) + "\n"
+        return "\n".join(lines + motion_table(result)) + "\n"
     b, a = result[names[0]], result[names[1]]
     lines += [f"| | {names[0]} | {names[1]} | Δ |", "|---|---|---|---|"]
     for key, label in ROWS:
@@ -464,6 +556,7 @@ def table(result, meta):
     found = regressions(b, a, meta["startup_held"])
     lines += ["", "**Past a threshold:** " + "; ".join(found) if found else "No metric past a threshold."]
     lines += ["", "Thresholds: " + LIMITS]
+    lines += motion_table(result)
     return "\n".join(lines) + "\n"
 
 
