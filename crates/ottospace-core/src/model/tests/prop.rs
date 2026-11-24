@@ -1896,6 +1896,11 @@ const MAKERS: &[Make] = &[
         };
         Action::ZoomCamera { step }
     },
+    |g| {
+        let n = |g: &mut Gen| g.rng.pick(&[0., 1.12, -1.3, 2.6, 1e9, f32::NAN]);
+        Action::ZoomPlace { tab: g.tab_id(), at: [n(g), n(g)] }
+    },
+    |_| Action::ZoomTidy,
     |_| Action::TalkDenyNote,
     |_| Action::TalkEscape,
     |_| Action::TalkInterrupt,
@@ -2373,6 +2378,11 @@ fn check_out(m: &Model) -> Result<(), String> {
 /// Zoomed out: with its flag, on tabs of the main window's space (never Home's), no app live over
 /// it, the keyboard in the main window.
 fn check_zoom(m: &Model) -> Result<(), String> {
+    // A placed tile is a tab's, at a snapped, finite corner.
+    for (id, at) in &m.placed {
+        ensure!(m.tabs.iter().any(|tab| tab.id == *id), "tab {id} placed, gone");
+        ensure!(crate::model::canvas::snapped(*at) == Some(*at), "tab {id} placed at {at:?}");
+    }
     let Some(zoom) = &m.zoom else { return Ok(()) };
     ensure!(m.features.on(Feature::ZoomOut), "zoomed out with the flag off");
     let tabs = m.zoom_tabs();
@@ -2381,7 +2391,13 @@ fn check_zoom(m: &Model) -> Result<(), String> {
     // The camera inside its range, and never with every tile off screen: some reaches into the view.
     use crate::model::canvas::{self, NEAREST};
     let cam = zoom.camera;
-    let spots: Vec<_> = m.zoom_spots().into_iter().map(|(_, r)| r).collect();
+    let laid = m.zoom_spots();
+    let spots: Vec<_> = laid.iter().map(|(_, r)| *r).collect();
+    // A tile on the grid never lies under one the user placed.
+    let (placed, free): (Vec<_>, Vec<_>) = laid.iter().partition(|(id, _)| m.placed.contains_key(id));
+    for (_, r) in &free {
+        ensure!(!placed.iter().any(|(_, p)| canvas::overlaps(r, p)), "grid tile {r:?} under a placed one {placed:?}");
+    }
     let far = canvas::farthest(canvas::extent(&spots));
     ensure!((far..=NEAREST).contains(&cam.scale), "camera scale {}", cam.scale);
     let seen = spots.iter().any(|r| canvas::in_view(cam.on_screen(*r)));

@@ -47,18 +47,6 @@ pub fn between(a: Rect, b: Rect, t: f32) -> Rect {
     Rect { x: at(a.x, b.x), y: at(a.y, b.y), w: at(a.w, b.w), h: at(a.h, b.h) }
 }
 
-/// The place `dir` of tile `at` on a grid of `n`, if there is a tile there.
-fn step(at: usize, n: usize, dir: Dir) -> Option<usize> {
-    let (cols, _) = grid(n);
-    let to = match dir {
-        Dir::Left => (!at.is_multiple_of(cols)).then(|| at - 1),
-        Dir::Right => (at % cols + 1 < cols).then_some(at + 1),
-        Dir::Up => at.checked_sub(cols),
-        Dir::Down => Some(at + cols),
-    };
-    to.filter(|to| *to < n)
-}
-
 impl Model {
     /// The tiles, by tab id in tab order: the tabs of the main window's space, not Home's own.
     pub fn zoom_tabs(&self) -> Vec<u32> {
@@ -66,11 +54,46 @@ impl Model {
         tabs.filter(|id| *id != HOME_TAB).collect()
     }
 
-    /// Each tile's place on the canvas, by tab id, in tab order: the grid's.
+    /// Each tile's place on the canvas, by tab id, in tab order: where the user placed it, else
+    /// the next free grid cell.
     pub fn zoom_spots(&self) -> Vec<(u32, Rect)> {
         let tabs = self.zoom_tabs();
-        let n = tabs.len();
-        tabs.into_iter().enumerate().map(|(at, id)| (id, canvas::grid_spot(at, n))).collect()
+        let placed: Vec<Option<[f32; 2]>> = tabs.iter().map(|id| self.placed.get(id).copied()).collect();
+        tabs.into_iter().zip(canvas::spots(&placed)).collect()
+    }
+
+    /// Whether any tile of the space on show is placed by hand: Tidy has something to do.
+    pub fn zoom_placed(&self) -> bool {
+        self.zoom_tabs().iter().any(|id| self.placed.contains_key(id))
+    }
+
+    /// The user's drag put tile `tab` with its corner at `at` (snapped), zoomed out.
+    pub(super) fn zoom_place(&mut self, tab: u32, at: [f32; 2]) {
+        let Some(at) = canvas::snapped(at).filter(|_| self.zoom.is_some() && self.zoom_tabs().contains(&tab)) else {
+            return;
+        };
+        self.placed.insert(tab, at);
+        self.zoom_keep();
+    }
+
+    /// Tidy: every tile of the space on show back on the grid.
+    pub(super) fn zoom_tidy(&mut self) {
+        if self.zoom.is_none() {
+            return;
+        }
+        for id in self.zoom_tabs() {
+            self.placed.remove(&id);
+        }
+        self.zoom_keep();
+    }
+
+    /// The camera kept inside the tiles' new bounds, for the space.
+    fn zoom_keep(&mut self) {
+        let (tiles, of) = (self.zoom_tiles(), self.shown_space().clone());
+        if let Some(zoom) = self.zoom.as_mut() {
+            zoom.camera = zoom.camera.clamped(&tiles);
+            self.canvases.insert(of, zoom.camera);
+        }
     }
 
     /// Every tile's place on the canvas.
@@ -134,20 +157,18 @@ impl Model {
         }
     }
 
-    /// The selection one tile `dir`; it stops at the grid's edges.
+    /// The selection one tile `dir`: the nearest tile that way; it stops at the canvas's edge.
     pub(super) fn zoom_move(&mut self, dir: Dir) {
-        let tabs = self.zoom_tabs();
+        let (tabs, spots) = (self.zoom_tabs(), self.zoom_spots());
+        let tiles: Vec<Rect> = spots.iter().map(|(_, r)| *r).collect();
+        let of = self.shown_space().clone();
         let Some(zoom) = self.zoom.as_mut() else { return };
         let at = tabs.iter().position(|id| *id == zoom.selected).unwrap_or(0);
-        let Some(to) = step(at, tabs.len(), dir) else { return };
+        let Some(to) = canvas::neighbour(&tiles, at, dir) else { return };
         zoom.selected = tabs[to];
         // The camera follows the selection into view.
-        let (tiles, spots, of) = (self.zoom_tiles(), self.zoom_spots(), self.shown_space().clone());
-        let Some(zoom) = self.zoom.as_mut() else { return };
-        if let Some((_, spot)) = spots.iter().find(|(id, _)| *id == zoom.selected) {
-            zoom.camera = zoom.camera.showing(*spot, &tiles);
-            self.canvases.insert(of, zoom.camera);
-        }
+        zoom.camera = zoom.camera.showing(tiles[to], &tiles);
+        self.canvases.insert(of, zoom.camera);
     }
 
     /// Into `tab`, or the selected tile: the tab it opened on is the way back; any other is
@@ -171,6 +192,11 @@ impl Model {
     /// or once an app is live or the keyboard is in a tab out's window. A tile gone: the selection
     /// goes back to where it opened.
     pub(super) fn settle_zoom(&mut self) {
+        // A tab gone takes its place with it.
+        if !self.placed.is_empty() {
+            let tabs: Vec<u32> = self.tabs.iter().map(|tab| tab.id).collect();
+            self.placed.retain(|id, _| tabs.contains(id));
+        }
         if self.zoom.is_none() {
             return;
         }
@@ -421,5 +447,37 @@ mod tests {
         let spot = m.zoom_spots().into_iter().find(|(id, _)| *id == zoom.from).map(|(_, r)| r).expect("tile");
         let r = zoom.camera.on_screen(spot);
         assert!(r.x >= -1e-3 && r.y >= -1e-3 && r.x + r.w <= 1.001 && r.y + r.h <= 1.001, "{r:?}");
+    }
+
+    #[test]
+    fn a_tile_placed_by_the_user_stays_and_tidy_puts_it_back() {
+        let mut m = tabs(4);
+        let ids = m.zoom_tabs();
+        m.update(Action::ZoomPlace { tab: ids[3], at: [-1.3, 0.1] });
+        assert!(m.placed.is_empty(), "only zoomed out");
+        m.update(Action::ZoomOut);
+        let place = Action::ZoomPlace { tab: ids[3], at: [-1.3, 0.1] };
+        assert_eq!(m.refusal(&place, Origin::Socket), Some(USERS_ALONE));
+        m.update(place);
+        let spot = |m: &Model, id: u32| m.zoom_spots().into_iter().find(|(t, _)| *t == id).map(|(_, r)| (r.x, r.y));
+        assert_eq!(spot(&m, ids[3]), Some((-1.25, 0.)), "snapped");
+        assert!(m.zoom_placed());
+        // Kept when it closes and opens again; a new tab takes the next free cell.
+        m.update(Action::ZoomOut);
+        m.update(Action::NewTab);
+        m.update(Action::SelectVisibleTab { index: 0 });
+        m.update(Action::ZoomOut);
+        assert_eq!(spot(&m, ids[3]), Some((-1.25, 0.)));
+        // Not a number: nothing moves. Tidy: back on the grid.
+        m.update(Action::ZoomPlace { tab: ids[0], at: [f32::NAN, 0.] });
+        assert_eq!(m.placed.len(), 1);
+        m.update(Action::ZoomTidy);
+        assert!(!m.zoom_placed() && spot(&m, ids[3]) == Some((canvas::grid_spot(3, 5).x, canvas::grid_spot(3, 5).y)));
+        // A placed tab closed takes its place with it.
+        m.update(Action::ZoomPlace { tab: ids[1], at: [5., 5.] });
+        m.update(Action::ZoomOut);
+        let at = m.tabs.iter().position(|t| t.id == ids[1]);
+        m.update(Action::CloseTab { index: at });
+        assert!(m.placed.is_empty());
     }
 }

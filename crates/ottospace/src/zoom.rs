@@ -4,8 +4,9 @@
 //! click. Design: `docs/ai/zoom-out.md`.
 
 use gpui::{
-    AnyElement, Bounds, BoxShadow, Context, Div, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, Pixels,
-    Point, ScrollDelta, ScrollWheelEvent, Window, actions, black, canvas, div, prelude::*, px, rgb, surface,
+    AnyElement, Bounds, BoxShadow, Context, Div, KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, Pixels, Point, ScrollDelta, ScrollWheelEvent, Window, actions, black, canvas, div, prelude::*, px,
+    rgb, surface,
 };
 use ottospace_core::model::canvas::{Camera, CanvasStep, KEY_STEP, in_view};
 use ottospace_core::model::zoom::{ZOOM_MS, between};
@@ -43,7 +44,21 @@ pub(crate) struct Zooming {
     camera: Option<Camera>,
     /// A drag of the empty canvas: where the pointer was last.
     drag: Option<Point<Pixels>>,
+    /// A press on a tile: a click goes in, a drag past `MOVES` places it.
+    press: Option<Press>,
 }
+
+/// A press on tile `tab` at `from`, the pointer now at `now`.
+#[derive(Clone, Copy)]
+struct Press {
+    tab: u32,
+    from: Point<Pixels>,
+    now: Point<Pixels>,
+    moving: bool,
+}
+
+/// Points a press travels before it is a drag, not a click.
+const MOVES: f32 = 4.;
 
 /// The room around a tile's label, above it.
 const LABEL: f32 = 20.;
@@ -60,6 +75,10 @@ impl Workspace {
             self.zooming.frames += 1;
             window.request_animation_frame();
         }
+        if !shown {
+            // A press or a drag does not outlive the overview.
+            (self.zooming.press, self.zooming.drag) = (None, None);
+        }
         if !shown && !moving {
             return (None, false);
         }
@@ -72,14 +91,25 @@ impl Workspace {
         let camera = self.model.zoom.as_ref().map(|zoom| zoom.camera).or(self.zooming.camera);
         let Some(camera) = camera else { return (None, false) };
         self.zooming.camera = Some(camera);
-        let tiles: Vec<AnyElement> = spots
-            .iter()
-            .enumerate()
+        // The tile a drag carries is drawn last: over the others, where it would land.
+        let carried = self.zooming.press.filter(|press| press.moving).map(|press| press.tab);
+        let mut order: Vec<(usize, &(u32, Rect))> = spots.iter().enumerate().collect();
+        order.sort_by_key(|(_, (id, _))| Some(*id) == carried);
+        let tiles: Vec<AnyElement> = order
+            .into_iter()
             .filter_map(|(place, (id, spot))| {
                 // On screen, in the area's points; off it, not drawn.
                 let f = camera.on_screen(*spot);
                 let cell = Rect { x: f.x * whole.w, y: f.y * whole.h, w: f.w * whole.w, h: f.h * whole.h };
                 let rect = if *id == grows { between(whole, cell, t) } else { cell };
+                // The tile a drag carries follows the pointer; it lands where it is dropped.
+                let rect = match self.zooming.press.filter(|press| press.moving && press.tab == *id) {
+                    Some(press) => {
+                        let d = press.now - press.from;
+                        Rect { x: rect.x + f32::from(d.x), y: rect.y + f32::from(d.y), ..rect }
+                    }
+                    None => rect,
+                };
                 // Off screen, also the one growing at rest: not drawn.
                 let shown = Rect { x: rect.x / whole.w, y: rect.y / whole.h, w: rect.w / whole.w, h: rect.h / whole.h };
                 if !in_view(shown) {
@@ -107,11 +137,20 @@ impl Workspace {
                 cx.listener(|this, e: &MouseDownEvent, _, cx| {
                     // The press is the canvas's: nothing under it takes it.
                     cx.stop_propagation();
-                    this.zooming.drag = Some(e.position);
+                    (this.zooming.drag, this.zooming.press) = (Some(e.position), None);
                 }),
             )
             .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, window, cx| this.canvas_drag(e, window, cx)))
-            .on_mouse_up(MouseButton::Left, cx.listener(|this, _, _, _| this.zooming.drag = None));
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseUpEvent, window, cx| this.canvas_release(e.position, window, cx)),
+            )
+            // Let go over the rails or the bars: the drop lands where the pointer is.
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, e: &MouseUpEvent, window, cx| this.canvas_release(e.position, window, cx)),
+            )
+            .children(self.render_tidy(cx));
         let layer = match shown {
             true => layer.occlude().into_any_element(),
             false => Inert(layer.into_any_element()).into_any_element(),
@@ -179,9 +218,10 @@ impl Workspace {
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, window, cx| {
+                cx.listener(move |this, e: &MouseDownEvent, _, cx| {
+                    // A click goes in on the release; a drag places it.
                     cx.stop_propagation();
-                    this.dispatch(Action::ZoomEnter { tab: Some(id) }, this.input, window, cx);
+                    this.zooming.press = Some(Press { tab: id, from: e.position, now: e.position, moving: false });
                 }),
             )
             .children(panes)
@@ -295,8 +335,74 @@ impl Workspace {
         self.dispatch(Action::ZoomCamera { step }, self.input, window, cx);
     }
 
-    /// A drag of the empty canvas pans it: the canvas follows the pointer.
+    /// The button up: a press on a tile that moved places it where it is dropped (the model snaps
+    /// it); one that did not goes in. A drag of the canvas ends.
+    fn canvas_release(&mut self, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        self.zooming.drag = None;
+        let Some(mut press) = self.zooming.press.take() else { return };
+        press.now = at;
+        press.moving |= travelled(press.from, at);
+        if !press.moving {
+            return drop(self.dispatch(Action::ZoomEnter { tab: Some(press.tab) }, self.input, window, cx));
+        }
+        let area = self.zooming.area.get();
+        let (w, h) = (f32::from(area.size.width), f32::from(area.size.height));
+        let spot = self.model.zoom_spots().into_iter().find(|(id, _)| *id == press.tab).map(|(_, r)| r);
+        let scale = self.model.zoom.as_ref().map(|zoom| zoom.camera.scale);
+        let (Some(spot), Some(scale)) = (spot, scale) else { return };
+        let d = press.now - press.from;
+        if w > 0. && h > 0. {
+            let at = [spot.x + f32::from(d.x) / (w * scale), spot.y + f32::from(d.y) / (h * scale)];
+            self.dispatch(Action::ZoomPlace { tab: press.tab, at }, self.input, window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Tidy, at the canvas's top right while a tile is placed by hand: every tile back on the grid.
+    fn render_tidy(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let placed = self.model.zoom.is_some() && self.model.zoom_placed();
+        placed.then(|| {
+            div()
+                .id("zoom-tidy")
+                .absolute()
+                .top(px(8.))
+                .right(px(8.))
+                .px_2()
+                .py_1()
+                .rounded_md()
+                .bg(rgb(theme::RAISED))
+                .border_1()
+                .border_color(rgb(theme::BORDER))
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .cursor_pointer()
+                .hover(|s| s.text_color(rgb(theme::TEXT)))
+                .child("Tidy  T")
+                .child(self.controls.mark("zoom-tidy"))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _, window, cx| {
+                        cx.stop_propagation();
+                        this.dispatch(Action::ZoomTidy, this.input, window, cx);
+                    }),
+                )
+                .into_any_element()
+        })
+    }
+
+    /// A drag of the empty canvas pans it: the canvas follows the pointer. A drag of a tile
+    /// carries it.
     fn canvas_drag(&mut self, e: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some(press) = self.zooming.press.as_mut() {
+            if e.pressed_button != Some(MouseButton::Left) {
+                self.zooming.press = None;
+                return;
+            }
+            press.now = e.position;
+            press.moving |= travelled(press.from, e.position);
+            cx.stop_propagation();
+            return cx.notify();
+        }
         let Some(last) = self.zooming.drag.filter(|_| e.pressed_button == Some(MouseButton::Left)) else {
             self.zooming.drag = None;
             return;
@@ -331,6 +437,7 @@ impl Workspace {
             "escape" | "enter" if event.is_held => None,
             "escape" => Some(Action::ZoomOut),
             "enter" => Some(Action::ZoomEnter { tab: None }),
+            "t" if !event.is_held => Some(Action::ZoomTidy),
             "left" | "h" => Some(Action::ZoomMove { dir: Dir::Left }),
             "right" | "l" => Some(Action::ZoomMove { dir: Dir::Right }),
             "up" | "k" => Some(Action::ZoomMove { dir: Dir::Up }),
@@ -356,4 +463,11 @@ fn name_of(place: usize, title: &str) -> String {
 /// ⌘= and ⌘-: one key step nearer or farther, about the area's middle.
 pub(crate) fn key_step(nearer: bool) -> CanvasStep {
     CanvasStep::Zoom { factor: if nearer { KEY_STEP } else { KEY_STEP.recip() }, about: [0.5, 0.5] }
+}
+
+/// A press that went past `MOVES` points, as the crow flies, from where it began: a drag.
+fn travelled(from: Point<Pixels>, to: Point<Pixels>) -> bool {
+    let d = to - from;
+    let (x, y) = (f32::from(d.x), f32::from(d.y));
+    x * x + y * y > MOVES * MOVES
 }

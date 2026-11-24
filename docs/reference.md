@@ -1804,6 +1804,11 @@ number and name; the tab you came from says "you were here", the selected tile h
   out to a tab a twelfth of it (a 4 × 4 workspace is then a third of the area wide); it never pans
   every tile out of view. No pinch yet. The camera is kept per workspace or task, also across a
   restart (`layout.json`): ⌘⇧\\ opens where you left it, fitted the first time.
+- Drag a tile to place it: it lands where you drop it, its corner on a quarter-tile grid, and
+  stays there (also across a restart). The others keep their own grid cells (one a placed tile
+  covers takes the next free cell); a new tab takes its own. The arrows go to the nearest tile that
+  way. Tidy (T, or the button at the canvas's top right, shown while a tile is placed) puts
+  every tile back on the grid. A click on a tile still goes in. Only your own drag places.
 - A tile shows its terminals' text from 360 points wide, their rows as bars down to 120, and under
   that the tab's name alone.
 - Arrows or H J K L move the selection, and the canvas follows it into view; ↵ or a click goes into that tab; Esc or ⌘⇧\\ again goes
