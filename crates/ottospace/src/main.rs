@@ -1316,6 +1316,8 @@ struct Workspace {
     sessions_listed: bool,
     /// The agent CLIs our panes run, as last told to the core (`PaneAgents`).
     pane_agents: Vec<ottospace_core::sessions::PaneAgent>,
+    /// When the panes' processes were last read for it: at most once a second.
+    pane_agents_read: Option<Instant>,
     /// The last read went to the Tasks section's list (else only to the Repos section's dots).
     sessions_tasks: bool,
     /// The core was told the `session_quiet_minutes` setting.
@@ -1966,6 +1968,7 @@ impl Workspace {
             sessions: sessions::Poller::start(),
             sessions_listed: false,
             pane_agents: Vec::new(),
+            pane_agents_read: None,
             sessions_tasks: false,
             sessions_stopped: false,
             sessions_quiet_told: false,
@@ -3866,7 +3869,11 @@ impl Workspace {
         let open = tasks || self.model.sidebar == Some(Section::Repos) || city;
         // The agent CLIs our panes run, by their processes alone: a city's agents, no setting
         // needed. Read only while a city is on show; told only when they change.
-        let read = if city { pane_runners(&self.terminals) } else { Vec::new() };
+        let due = self.pane_agents_read.is_none_or(|at| at.elapsed() >= Duration::from_secs(1));
+        if due || !city {
+            self.pane_agents_read = Some(Instant::now());
+        }
+        let read = if city && due { pane_runners(&self.terminals) } else { Vec::new() };
         let in_panes: Vec<ottospace_core::sessions::PaneAgent> = (read.into_iter())
             .map(|(pane, runner, _, cwd)| ottospace_core::sessions::PaneAgent {
                 pane,
@@ -3874,7 +3881,7 @@ impl Workspace {
                 cwd: cwd.to_string_lossy().into_owned(),
             })
             .collect();
-        if in_panes != self.pane_agents {
+        if (due || !city) && in_panes != self.pane_agents {
             self.pane_agents = in_panes.clone();
             self.dispatch(Action::PaneAgents { found: in_panes }, Origin::System, window, cx);
             cx.notify();
