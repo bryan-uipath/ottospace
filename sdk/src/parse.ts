@@ -101,6 +101,7 @@ import type {
   HomeDrawn,
   CityDrawn,
   CityAgent,
+  CityGlimmer,
   CityHovered,
   CityName,
   CitySpots,
@@ -2446,7 +2447,13 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     view: cityView(o.view, `${at}.view`),
     grabbed: bool(o.grabbed, `${at}.grabbed`),
     agents: list(cityAgent)(o.agents, `${at}.agents`),
+    glimmer: orNull(cityGlimmer)(o.glimmer, `${at}.glimmer`),
   };
+}
+
+function cityGlimmer(value: unknown, at: string): CityGlimmer {
+  const o = fields(value, at);
+  return { flash: num(o.flash, `${at}.flash`), sweep: num(o.sweep, `${at}.sweep`), found: num(o.found, `${at}.found`) };
 }
 
 function cityAgent(value: unknown, at: string): CityAgent {

@@ -105,6 +105,12 @@ fn commands(line: &str) -> Vec<(Vec<String>, bool)> {
     out
 }
 
+/// One path's word (a tool's argument, a result's line) as a path in `checkout`, relative to
+/// it ("": the checkout itself); none outside it. A relative word is from the checkout.
+pub fn path(word: &str, checkout: &str) -> Option<String> {
+    inside(word, checkout.trim_end_matches('/'), Some(""))
+}
+
 /// `word` as a path in the checkout, relative to it, from `cwd`; none if it is not one (a flag,
 /// a variable, a glob, a `..`, a URL) or lies outside.
 fn inside(word: &str, checkout: &str, cwd: Option<&str>) -> Option<String> {
@@ -112,7 +118,14 @@ fn inside(word: &str, checkout: &str, cwd: Option<&str>) -> Option<String> {
     if word.is_empty() || word.len() > 256 || word.starts_with('-') || word.contains("://") || word.contains(odd) {
         return None;
     }
-    let rel = match word.strip_prefix(checkout) {
+    // macOS's `/tmp` and `/var` are `/private/tmp` and `/private/var`: either names the same place.
+    let plain = |p: &'_ str| -> String {
+        let bare = p.strip_prefix("/private").filter(|rest| rest.starts_with("/tmp/") || rest.starts_with("/var/"));
+        bare.unwrap_or(p).to_string()
+    };
+    let (word_plain, checkout) = (plain(word), plain(checkout));
+    let word = word_plain.as_str();
+    let rel = match word.strip_prefix(checkout.as_str()) {
         Some("") => "",
         Some(rest) => rest.strip_prefix('/')?,
         None if word.starts_with('/') => return None,
@@ -174,6 +187,9 @@ mod tests {
         assert_eq!(paths(&through, APP), Vec::<String>::new());
         // A checkout with a space, quoted.
         assert_eq!(paths("cd \"/code/my app\" && cat src/a.rs", "/code/my app"), ["src/a.rs"]);
+        // `/private/tmp` is `/tmp`.
+        assert_eq!(paths("cat /private/tmp/r/a.rs /tmp/r/b.rs", "/tmp/r"), ["a.rs", "b.rs"]);
+        assert_eq!(path("/tmp/r/c.rs", "/private/tmp/r").as_deref(), Some("c.rs"));
         // Cut inside a character: no panic.
         assert_eq!(paths(&"é".repeat(MOST_BYTES), APP), Vec::<String>::new());
     }

@@ -24,7 +24,7 @@ use ottospace_core::city_filter;
 use ottospace_core::city_labels::{self, Candidate, Tier};
 use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::model::Origin;
-use ottospace_core::model::city::{At, CameraStep, Who};
+use ottospace_core::model::city::{At, CameraStep, Glimpse, Who};
 use ottospace_core::scene::{self, Camera, Kind, Layout, Scene, View};
 use ottospace_core::settings::expand_home;
 use ottospace_core::tasks::{Group, TaskId};
@@ -390,6 +390,50 @@ struct Place {
     /// The agents' icons the last paint drew, and the one under the user's pointer (its key).
     icons: Vec<Icon>,
     hovered_agent: Option<String>,
+    /// Its agents' reads and searches playing (`glimmer`).
+    glimmer: Glimmer,
+}
+
+/// A read's flash, a search's sweep, and the files a search's result named, lit: this long each.
+const FLASH: Duration = Duration::from_millis(450);
+const SWEEP: Duration = Duration::from_millis(800);
+const FOUND: Duration = Duration::from_millis(1500);
+/// Glimpses this close together play as one: a burst of 20 reads is one ripple, not 20.
+const TOGETHER: Duration = Duration::from_millis(250);
+
+#[derive(Clone, Copy, PartialEq)]
+enum Play {
+    Flash,
+    Sweep,
+    Found,
+}
+
+impl Play {
+    fn length(self) -> Duration {
+        match self {
+            Play::Flash => FLASH,
+            Play::Sweep => SWEEP,
+            Play::Found => FOUND,
+        }
+    }
+}
+
+/// One effect playing: over these boxes (a sweep over `whole`: the ground), in this colour.
+struct Effect {
+    play: Play,
+    blocks: Vec<usize>,
+    whole: bool,
+    colour: u32,
+    since: Instant,
+}
+
+/// The glimpses a place has played (by id; a search's result as `<id>#found`), and what plays.
+/// Those there at its first paint are taken as played: opening a city replays nothing.
+#[derive(Default)]
+struct Glimmer {
+    seen: HashSet<String>,
+    began: bool,
+    effects: Vec<Effect>,
 }
 
 /// An agent working in the city, to draw: its task (none: a session no task has) and a key
@@ -457,6 +501,9 @@ pub struct Drawn {
     agent_frames: u64,
     /// Frames a busy agent's pulse asked for: none once its calls end, none under Reduce Motion.
     pulse_frames: u64,
+    /// Frames a read's flash, a search's sweep or its result's light asked for: none once they
+    /// end, none under Reduce Motion.
+    glimmer_frames: u64,
     /// Pictures no place shows: GPUI keeps each in the window's atlas until it is dropped.
     retired: Vec<Arc<RenderImage>>,
 }
@@ -696,6 +743,10 @@ impl Drawn {
             "first_ms": place.and_then(|place| place.first_ms),
             "glass": made.map(|made| made.key.glass),
             "agents": agents,
+            "glimmer": place.map(|place| {
+                let n = |play: Play| place.glimmer.effects.iter().filter(|e| e.play == play).count();
+                serde_json::json!({ "flash": n(Play::Flash), "sweep": n(Play::Sweep), "found": n(Play::Found) })
+            }),
             "lower": made.map(|made| f32::from_bits(made.key.lower)),
             "folder_colors": made.map(|made| made.key.folders.len()),
         })
@@ -865,6 +916,7 @@ impl Workspace {
             })
             .collect();
         let badges = self.badges.borrow();
+        let glimpses = city.glimpses.clone();
         let floating: Vec<Floating> = (city.agents.iter())
             .filter_map(|agent| {
                 // A label two files share (`a/src/main.rs`, `b/src/main.rs`): at no known file.
@@ -981,7 +1033,7 @@ impl Workspace {
             },
             // The hints as this frame laid them out.
             move |_, drawn: Shared, window, cx| {
-                paint(&drawn, floor, home.borrow().hints_at(floor), &floating, window, cx)
+                paint(&drawn, floor, home.borrow().hints_at(floor), &floating, &glimpses, window, cx)
             },
         );
         // A press on an agent's icon: the user's own goes to its task (`Model::city_agent_click`).
@@ -1306,6 +1358,11 @@ impl Workspace {
     pub(crate) fn city_pulse_frames(&self) -> u64 {
         self.city_drawn.borrow().pulse_frames
     }
+
+    /// Frames the reads' and searches' effects asked for: for the counts of a test run.
+    pub(crate) fn city_glimmer_frames(&self) -> u64 {
+        self.city_drawn.borrow().glimmer_frames
+    }
 }
 
 /// For the state of a test run: a point of the picture (window points) over a folder's own
@@ -1359,6 +1416,7 @@ fn paint(
     floor: Floor,
     hints: Bounds<Pixels>,
     floating: &[Floating],
+    glimpses: &[Glimpse],
     window: &mut Window,
     cx: &mut gpui::App,
 ) {
@@ -1370,6 +1428,7 @@ fn paint(
     place.lit_beams.clear();
     let (bounds, hovered, pointer) = (place.bounds, place.hovered, place.pointer);
     let was = std::mem::take(&mut place.icons);
+    let mut glimmer = std::mem::take(&mut place.glimmer);
     let (waited, fade, first_ms, laid) = (place.waited, place.fade, place.first_ms, place.since);
     let drawn = &mut *drawn;
     let made = drawn.places.get(&floor).and_then(|place| drawn.picture(place));
@@ -1493,6 +1552,7 @@ fn paint(
             lit_beams.push([foot.x, foot.y, end.x, end.y].map(f32::from));
         }
     }
+    let glimmering = glance(&mut glimmer, made, glimpses, bounds, window);
     let (icons, gliding, pulsing) = agents(made, floating, &was, bounds, clear, window, cx, &shape);
     // The last painted is on top.
     let over_icon = pointer.and_then(|at| icons.iter().rev().find(|icon| icon.rect.contains(&at)));
@@ -1521,7 +1581,7 @@ fn paint(
     if fades {
         window.request_animation_frame();
     }
-    if gliding || pulsing {
+    if gliding || pulsing || glimmering {
         window.request_animation_frame();
     }
     drawn.paints += 1;
@@ -1530,6 +1590,7 @@ fn paint(
     drawn.rise_frames += u64::from(rising);
     drawn.agent_frames += u64::from(gliding);
     drawn.pulse_frames += u64::from(pulsing);
+    drawn.glimmer_frames += u64::from(glimmering);
     if let Some(made) = drawn.pictures.get_mut(&shown) {
         made.used = Instant::now();
     }
@@ -1537,8 +1598,92 @@ fn paint(
         (place.names, place.beacon, place.shown) = (names, beacon, Some(shown));
         (place.fading, place.lit_beams) = (since, lit_beams);
         (place.fade, place.first_ms) = (fade, first_ms);
-        (place.icons, place.hovered_agent) = (icons, hovered_agent);
+        (place.icons, place.hovered_agent, place.glimmer) = (icons, hovered_agent, glimmer);
     }
+}
+
+/// The agents' reads and searches (`Glimpse`), each played once, on the picture as it is (no
+/// render): a read flashes its building's top; a search sweeps a band of light across what it
+/// covers (its folders' plinths, the whole ground when unscoped), and the files its result names
+/// stay lit a moment. Glimpses `TOGETHER` play as one; one sweep at a time; none under Reduce
+/// Motion. Returns whether one still plays.
+fn glance(g: &mut Glimmer, made: &Made, glimpses: &[Glimpse], bounds: Bounds<Pixels>, window: &mut Window) -> bool {
+    let (now, calm) = (Instant::now(), crate::dial::calm());
+    let block_of = |path: &str| {
+        let at = made.plan.places.iter().position(|place| place.id == path)?;
+        made.scene.blocks.iter().position(|block| block.place == Some(at))
+    };
+    g.effects.retain(|e| e.since.elapsed() < e.play.length());
+    let mut present = HashSet::new();
+    for glimpse in glimpses {
+        let search = if glimpse.search { Play::Sweep } else { Play::Flash };
+        let whole = glimpse.search && glimpse.scope.is_empty();
+        let found = format!("{}#found", glimpse.id);
+        for (key, play, paths, whole) in
+            [(glimpse.id.clone(), search, &glimpse.scope, whole), (found, Play::Found, &glimpse.found, false)]
+        {
+            // A result not known yet is not played yet.
+            if play == Play::Found && paths.is_empty() {
+                continue;
+            }
+            present.insert(key.clone());
+            if !g.seen.insert(key) || !g.began || calm {
+                continue;
+            }
+            let blocks: Vec<usize> = paths.iter().filter_map(|path| block_of(path)).collect();
+            if blocks.is_empty() && !whole {
+                continue;
+            }
+            let colour = theme::identity(glimpse.colour);
+            if let Some(e) = g.effects.iter_mut().find(|e| e.play == play && now - e.since < TOGETHER) {
+                e.blocks.extend(blocks);
+                e.whole |= whole;
+            } else if !(play == Play::Sweep && g.effects.iter().any(|e| e.play == Play::Sweep)) {
+                g.effects.push(Effect { play, blocks, whole, colour, since: now });
+            }
+        }
+    }
+    g.seen.retain(|key| present.contains(key));
+    g.began = true;
+    let Some(camera) = made.scene.camera else { return false };
+    let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
+    let at = |(x, y): (f32, f32)| bounds.origin + point(px(x * w), px(y * h));
+    let face = |i: usize| made.scene.outline(i).map(|corners| corners.map(at));
+    let ground = || {
+        let b = made.scene.blocks.iter().find(|b| b.kind == Kind::Ground)?;
+        let corners =
+            [[b.min[0], 0., b.min[2]], [b.max[0], 0., b.min[2]], [b.max[0], 0., b.max[2]], [b.min[0], 0., b.max[2]]];
+        let [a, b, c, d] = corners.map(|p| camera.project(p).map(at));
+        Some([a?, b?, c?, d?])
+    };
+    let fill_face = |face: &[Point<Pixels>; 4], colour: Hsla, window: &mut Window| {
+        let mut path = PathBuilder::fill();
+        path.move_to(face[0]);
+        for corner in &face[1..] {
+            path.line_to(*corner);
+        }
+        path.close();
+        crate::dial::stroke(window, path, colour);
+    };
+    for e in &g.effects {
+        let t = (e.since.elapsed().as_secs_f32() / e.play.length().as_secs_f32()).min(1.);
+        let colour = Hsla::from(rgb(e.colour));
+        let faces = e.blocks.iter().filter_map(|i| face(*i)).chain(ground().filter(|_| e.whole));
+        for f in faces {
+            match e.play {
+                Play::Flash => fill_face(&f, colour.opacity(0.6 * (1. - t)), window),
+                Play::Found => fill_face(&f, colour.opacity(0.45 * (1. - ((t - 0.6) / 0.4).clamp(0., 1.))), window),
+                // A band across the face, from one side to the other, brightest midway.
+                Play::Sweep => {
+                    let (s0, s1) = ((t * 1.2 - 0.2).clamp(0., 1.), (t * 1.2).clamp(0., 1.));
+                    let lerp = |p: Point<Pixels>, q: Point<Pixels>, s: f32| p + (q - p) * s;
+                    let band = [lerp(f[0], f[1], s0), lerp(f[0], f[1], s1), lerp(f[3], f[2], s1), lerp(f[3], f[2], s0)];
+                    fill_face(&band, colour.opacity(0.4 * (t * std::f32::consts::PI).sin()), window);
+                }
+            }
+        }
+    }
+    !g.effects.is_empty()
 }
 
 /// The hovered icon's name: its task's title beside it, right of it or else left, on a backing.

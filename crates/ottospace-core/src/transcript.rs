@@ -12,6 +12,7 @@ use crate::activity::{Activity, Dial, Is, Pulse, Station};
 use crate::ask::{Chosen, Form, FormShape, Question};
 use crate::diff::{Diff, DiffShape};
 use crate::gist::{self, Gist};
+use crate::glance::Glances;
 
 /// Text a model, a tool or the CLI wrote. Never `Serialize`; `Debug` prints its length only.
 #[derive(Clone, Default, PartialEq, Eq)]
@@ -528,6 +529,8 @@ pub struct Transcript {
     /// Its shell calls that run, by id, their command lines: kept apart from the rows, which a
     /// long transcript drops (at most `MOST_SHELLS`, the newest).
     shells: Vec<(String, Text)>,
+    /// What its agent read and searched lately: the code city's brief effects.
+    pub glances: Glances,
 }
 
 /// The most running shell calls whose lines are kept.
@@ -767,6 +770,7 @@ impl Transcript {
             Event::ToolStart { id, sub, tool, station, label, detail, diff, gist } => {
                 self.settle();
                 self.activity.start(&id, station, &label, at);
+                self.glances.start(&id, &tool, station, detail.text());
                 if station == Station::Shell {
                     if self.shells.len() == MOST_SHELLS {
                         self.shells.remove(0);
@@ -781,6 +785,7 @@ impl Transcript {
             }
             Event::ToolEnd { id, failed, output } => {
                 self.activity.end(&id, failed, at);
+                self.glances.end(&id, output.as_ref().map(Text::text));
                 self.shells.retain(|(of, _)| *of != id);
                 let call = self.items.iter_mut().rev().find_map(|item| match &mut item.entry {
                     Entry::Tool { id: of, state, gist, output, .. } if *of == id => Some((state, gist, output)),

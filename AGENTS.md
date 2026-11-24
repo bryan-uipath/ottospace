@@ -231,13 +231,15 @@ Design note: `docs/ai/attention/plan.md`.
     a share of its height: `developer.city_frame`), `folder_colors` (how many `city_folder_colors` the
     picture's colours had), `first_ms` (the place laid out to its first picture painted),
     `read_us` (the last file list's read), `agents` (each agent's icon drawn: `task` (null: a session no
-    task has), `rect`, `cone` (it shines on a building), `fan` `[k, n]`, `hovered`, `pulsing` (a call of it runs)). `counts.city_reads`: the reads, a city on show or not;
+    task has), `rect`, `cone` (it shines on a building), `fan` `[k, n]`, `hovered`, `pulsing` (a call of it runs)), `glimmer` (the reads' flashes, searches' sweeps and
+    found files' lights playing now: `flash`, `sweep`, `found`, counts). `counts.city_reads`: the reads, a city on show or not;
     `counts.city_beam_frames`: the frames the hovered beam's fade asked for (none under Reduce Motion);
     `counts.city_fade_frames`: the frames a first picture's fade-in over the lattice asked for, and
     `counts.city_rise_frames` those its rise painted (none at rest, none under Reduce Motion);
     `counts.city_agent_frames`: the frames an icon gliding to another file asked for (none at rest
     or under Reduce Motion); `counts.city_pulse_frames` those a busy agent's pulse asked for (none
-    once its calls end, none under Reduce Motion). `view` (its camera: `yaw`, `pitch`, `zoom`, `pan`), `grabbed` (a drag of a
+    once its calls end, none under Reduce Motion); `counts.city_glimmer_frames` those the reads' and
+    searches' effects asked for (none once they end, none under Reduce Motion). `view` (its camera: `yaw`, `pitch`, `zoom`, `pan`), `grabbed` (a drag of a
     city's camera is in flight); `counts.city_frames`: frames a camera's reset asked for while easing
     back (none at rest, none under Reduce Motion). Never a path or a name; a task's title is drawn, never in the state.
     Null outside a test run and while none is on show. `OTTOSPACE_CITY_NO_GPU` (read only under

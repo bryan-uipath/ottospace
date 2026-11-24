@@ -18302,6 +18302,87 @@ fn a_shell_line_in_the_city_stands_its_agent_over_the_path_it_names_and_pulses()
     }
 }
 
+/// Reads and searches in the code city, each played once on the picture (no render): a read
+/// flashes its building, a search sweeps its folder, and the files its result names stay lit a
+/// moment; then nothing plays and no frame is asked for. Under Reduce Motion nothing plays.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_read_flashes_and_a_search_sweeps_then_lights_what_it_found() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    for calm in [false, true] {
+        let mut extra = vec![("OTTOSPACE_FEATURES", "code_city"), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+        extra.extend(calm.then_some(("OTTOSPACE_REDUCE_MOTION", "1")));
+        let name = if calm { "city-glimmer-calm" } else { "city-glimmer" };
+        let (root, _, env) = native_setup(name, &[], &extra);
+        let app = root.join("repos/app");
+        git(&app, &["init", "-q"]);
+        for (file, bytes) in
+            [("src/main.rs", 3000), ("src/ui/mod.rs", 9000), ("src/ui/view.rs", 4000), ("docs/a.md", 500)]
+        {
+            let path = app.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x".repeat(bytes)).unwrap();
+        }
+        let app = app.canonicalize().unwrap();
+        let call = |id: &str, tool: &str, input: Value| {
+            let call = json!({"type": "tool_use", "id": id, "name": tool, "input": input});
+            format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#)
+        };
+        let result = |id: &str, text: &str| {
+            let r = json!({"type": "tool_result", "tool_use_id": id, "content": text, "is_error": false});
+            format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{r}]}}}}"#)
+        };
+        let init =
+            format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+        let done = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01}"#;
+        let found = format!("{}:3:x\n{}:1:y", app.join("src/main.rs").display(), app.join("src/ui/mod.rs").display());
+        let lines = [
+            init,
+            r#"{"_sleep":4}"#.into(),
+            call("r1", "Read", json!({"file_path": app.join("docs/a.md")})),
+            result("r1", "ok"),
+            r#"{"_sleep":2}"#.into(),
+            call("g1", "Grep", json!({"pattern": "x", "path": app.join("src")})),
+            r#"{"_sleep":0.3}"#.into(),
+            result("g1", &found),
+            r#"{"_sleep":4}"#.into(),
+            done.into(),
+        ];
+        std::fs::write(root.join("fixtures/turn1.jsonl"), lines.join("\n") + "\n").unwrap();
+        let otto = launch_env(name, &env);
+        otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+        otto.call(json!({"cmd": "section", "section": "tasks"}));
+        otto.start_task(1);
+        otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+        let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+        let playing = |o: &Otto, play: &str| state(o)["city"]["glimmer"][play].as_u64().unwrap_or(0);
+        let frames = |o: &Otto| state(o)["counts"]["city_glimmer_frames"].as_u64().unwrap();
+        if calm {
+            // The turn plays out (about 11 s): nothing plays, no frame.
+            otto.wait_for("the agent at work", |o| {
+                Some(()).filter(|_| state(o)["city"]["agents"].as_array().is_some_and(|a| !a.is_empty()))
+            });
+            std::thread::sleep(Duration::from_secs(12));
+            assert_eq!((frames(&otto), playing(&otto, "found")), (0, 0), "none under Reduce Motion");
+        } else {
+            otto.wait_for("a read's flash", |o| Some(()).filter(|_| playing(o, "flash") > 0));
+            otto.wait_for("a search's sweep", |o| Some(()).filter(|_| playing(o, "sweep") > 0));
+            otto.wait_for("what it found, lit", |o| Some(()).filter(|_| playing(o, "found") > 0));
+            otto.wait_for("all played", |o| {
+                Some(()).filter(|_| ["flash", "sweep", "found"].iter().all(|p| playing(o, p) == 0))
+            });
+            std::thread::sleep(Duration::from_millis(300));
+            let rest = frames(&otto);
+            assert!(rest > 0, "frames while it played");
+            std::thread::sleep(Duration::from_millis(600));
+            assert_eq!(frames(&otto), rest, "no frames at rest");
+        }
+        assert!(!state(&otto)["city"].to_string().contains("docs"), "no path in the state");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
 /// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a 3D
 /// picture rendered on the GPU, where the lattice was, as large as the tab in pixels. The file
 /// the agent reads is lit, and only it, its agent's icon over it; an ignored file is no building;
