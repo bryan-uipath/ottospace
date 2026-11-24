@@ -270,8 +270,9 @@ Design note: `docs/ai/attention/plan.md`.
     cannot unplug one). The shell then kicks GPUI to draw again, as after a real change
     (`stall.rs`, `ottospace_mac::window::redraw`); the state's `counts.redraws` counts the kicks.
     Outside a test run only macOS says the displays changed.
-  - `ui_gallery` (`"on"`, `"dialogs"`): every component of `ui/` in every state over the window
-    (`docs/ai/ui.md`), for `scripts/shot ui-gallery`; `dialogs`: the dialogs' page (`ui-dialogs`). Outside a test run no client covers the
+  - `ui_gallery` (`"on"`, `"page"`): every component of `ui/` in every state over the window
+    (`docs/ai/ui.md`), for `scripts/shot ui-gallery`; `"page":"dialogs"` or `"examples"`: the
+    dialogs' parts, or a question and a form whole (`ui-dialogs`). Outside a test run no client covers the
     user's workspace.
   - `displays_set` (`"displays": [{"uid", "frame": [x, y, w, h], "scale"}]`, `"main"`: a uid, default
     the first): made-up displays in place of the real ones from then on, sent to the core as the

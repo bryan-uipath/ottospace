@@ -3659,8 +3659,7 @@ impl Workspace {
                     display::note_change();
                     None
                 }
-                Request::UiGallery { on, dialogs } => {
-                    let page = if dialogs { ui::gallery::Page::Dialogs } else { ui::gallery::Page::Components };
+                Request::UiGallery { on, page } => {
                     self.gallery = on.then_some(page);
                     cx.notify();
                     None

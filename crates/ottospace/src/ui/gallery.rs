@@ -218,7 +218,7 @@ fn dialog_buttons() -> Div {
         ("danger primary", Button::DangerPrimary("Delete worktree".into()), &["⌘", "↵"]),
     ];
     let rows = kinds.into_iter().map(|(name, kind, keys)| {
-        let cases = [State::Rest, State::Hover, State::Focus, State::Disabled].map(|state| {
+        let cases = State::ALL.map(|state| {
             let button = dialog::action(id(format!("dialog-{name}{state:?}")), kind.clone(), keys, state);
             case(format!("{state:?}"), button)
         });
@@ -280,8 +280,8 @@ fn dialog_controls() -> Div {
         .child(group("windows that match", [case("one of two", div().w(px(360.)).child(dialog::window_list(windows)))]))
 }
 
-/// A question and a form, whole, as a dialog draws them.
-fn dialog_examples() -> Div {
+/// A question and a form, whole, as a dialog draws them: the questions left, the form right.
+fn dialog_examples() -> (Div, Div) {
     let x = |name: &str| dialog::close(id(format!("x-{name}")), State::Rest);
     let quit = dialog::frame(
         dialog::QUESTION,
@@ -332,24 +332,25 @@ fn dialog_examples() -> Div {
             vec![dialog::action("f-keep", Button::Primary("Keep slot".into()), &["↵"], State::Rest).into_any_element()],
         ),
     );
-    div().flex().flex_col().gap(px(theme::SPACE_3)).child(quit).child(delete).child(form)
+    (div().flex().flex_col().gap(px(theme::SPACE_3)).child(quit).child(delete), div().child(form))
 }
 
-/// Which page `ui_gallery` shows.
-#[derive(Clone, Copy)]
+/// Which page `ui_gallery` shows: each fits CI's 1024×674 window.
+#[derive(Clone, Copy, Debug, Default, PartialEq, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub(crate) enum Page {
+    #[default]
     Components,
     Dialogs,
+    Examples,
 }
 
 /// The gallery, over the whole window.
 pub(crate) fn view(page: Page) -> Div {
     let (left, right) = match page {
         Page::Components => (components_left(), components_right()),
-        Page::Dialogs => (
-            div().flex().flex_col().gap(px(theme::SPACE_3)).child(dialog_buttons()).child(dialog_controls()),
-            dialog_examples(),
-        ),
+        Page::Dialogs => (div().w(px(560.)).flex_none().child(dialog_buttons()), dialog_controls()),
+        Page::Examples => dialog_examples(),
     };
     div()
         .absolute()

@@ -56,8 +56,17 @@ pub(crate) fn frame(
 
 /// × at the top right: the same as Esc and Cancel. Never drawn with a key.
 pub(crate) fn close(id: impl Into<ElementId>, state: State) -> Stateful<Div> {
+    // The glyph paints in its own colour: it brightens with its group's hover.
+    let group = SharedString::from("dialog-close");
+    let ink = if state == State::Hover { theme::TEXT } else { theme::MUTED };
+    let glyph = svg().path("icons/dismiss.svg").size(px(theme::ICON_SM)).text_color(rgb(ink));
+    let glyph = match state {
+        State::Rest | State::Focus => glyph.group_hover(group.clone(), |s| s.text_color(rgb(theme::TEXT))),
+        _ => glyph,
+    };
     let d = div()
         .id(id)
+        .group(group)
         .relative()
         .flex_none()
         .size(px(CONTROL - 4.))
@@ -65,10 +74,9 @@ pub(crate) fn close(id: impl Into<ElementId>, state: State) -> Stateful<Div> {
         .items_center()
         .justify_center()
         .rounded(px(theme::RADIUS_MD))
-        .text_color(rgb(theme::MUTED))
         .cursor_pointer()
-        .child(svg().path("icons/dismiss.svg").size(px(theme::ICON_SM)).text_color(rgb(theme::MUTED)));
-    states(d, state, |s| s.bg(rgb(theme::SELECTED)).text_color(rgb(theme::TEXT)), None)
+        .child(glyph);
+    states(d, state, |s| s.bg(rgb(theme::SELECTED)), None)
         .when(state == State::Focus, |d| d.child(super::ring(0., theme::RADIUS_MD)))
 }
 
@@ -175,7 +183,10 @@ pub(crate) fn segment(
         .text_size(px(theme::TEXT_XS))
         .text_color(rgb(if on { theme::TEXT } else { theme::MUTED }))
         .cursor_pointer()
-        .when(on, |d| d.bg(rgb(theme::SELECTED)).border_1().border_color(rgb(theme::BORDER_STRONG)))
+        // Every option has its edge, so choosing one moves nothing.
+        .border_1()
+        .border_color(gpui::transparent_black())
+        .when(on, |d| d.bg(rgb(theme::SELECTED)).border_color(rgb(theme::BORDER_STRONG)))
         .child(label.into())
         .children(key.map(|key| cap(key, false)));
     states(d, state, |s| s.text_color(rgb(theme::TEXT)), None)

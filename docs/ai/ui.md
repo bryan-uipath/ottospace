@@ -69,6 +69,9 @@ action row.
 - **Words**: sentence case; a button names its result (`Keep slot`, `Quit`), never `OK`.
 - **Backdrop**: one dim, 0.45, under every centred dialog.
 
+The slot dialog and the questions (`confirm.rs`) move onto this system in the pull requests
+stacked on this one; until then they keep their footer keys line and their own dims.
+
 The new-task box (`lifted`, `well`, `picker`, `chip`) is its own design (#394–#401) and not yet on
 this system: its keys line and legend stay.
 
@@ -90,6 +93,7 @@ this system: its keys line and legend stay.
 ## Gallery
 
 `{"cmd":"ui_gallery","on":true}` (a test run only, `control::test_refusal`) draws every component
-in every state over the window; with `"dialogs":true`, the dialogs' page. `scripts/shot ui-gallery`
+in every state over the window; with `"page":"dialogs"` the dialogs' parts, `"examples"` a question
+and a form whole. `scripts/shot ui-gallery`
 and `scripts/shot ui-dialogs` picture them, so `shots.yml` compares a change to any component. A new
 component or variant goes in `ui/gallery.rs`.

@@ -553,11 +553,11 @@ pub enum Request {
     DisplayChange,
     /// For tests (`test_refusal`): the components' gallery (`ui::gallery`) over the whole window,
     /// every component in every state, or the workspace again (`on`: false). For `scripts/shot`.
-    /// `dialogs`: the dialogs' page (`ui::dialog`) instead.
+    /// `page`: `dialogs` (`ui::dialog`'s parts) or `examples` (a question and a form, whole).
     UiGallery {
         on: bool,
         #[serde(default)]
-        dialogs: bool,
+        page: crate::ui::gallery::Page,
     },
     /// For tests (`test_refusal`): made-up displays (`uid`, `frame` as `[x, y, w, h]` global,
     /// top-left origin, `scale`) in place of the real ones from now on, as the watcher would

@@ -150,7 +150,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.modifierFlags({ changes: [{ at: 0, cmd: true }, { at: 80, cmd: false, others: false, input_at: null }] }),
   (c) => c.displayChange(),
   (c) => c.uiGallery({ on: true }),
-  (c) => c.uiGallery({ on: true, dialogs: true }),
+  (c) => c.uiGallery({ on: true, page: "dialogs" }),
   (c) =>
     c.displaysSet({
       displays: [
