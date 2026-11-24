@@ -1,6 +1,7 @@
 //! The shell's components, one builder each with its variants (`docs/ai/ui.md`). Each draws its
 //! look only: the caller adds its control mark (its sneak label), tooltip and click.
 
+pub(crate) mod dialog;
 pub(crate) mod gallery;
 
 use std::cell::Cell;
@@ -80,12 +81,16 @@ pub(crate) enum Face {
 /// A button's kind. One `Primary` per pane: what the pane is for. `Secondary`: outlined and
 /// filled, beside a primary. `Icon`: an outlined arrow or glyph that reads as a button (the
 /// rails' collapse arrows). `Ghost`: no outline at rest, a header's small words and icons.
+/// `Danger`: a destructive act beside others, red words, no fill, never the default.
+/// `DangerPrimary`: what a dialog that exists to destroy is for, red-filled.
 #[derive(Clone)]
 pub(crate) enum Button {
     Primary(SharedString),
     Secondary(SharedString),
     Icon(&'static str),
     Ghost(Face),
+    Danger(SharedString),
+    DangerPrimary(SharedString),
 }
 
 /// A button in `state`. A label is `CONTROL` tall; an icon `ICON_SM`, in a 28-point square when ghost.
@@ -126,6 +131,11 @@ pub(crate) fn button(id: impl Into<ElementId>, kind: Button, state: State) -> St
         Button::Ghost(Face::Icon(path)) => {
             let d = d.size(px(ROW)).justify_center().rounded(px(theme::RADIUS_MD)).child(icon(path));
             states(d.text_color(rgb(theme::MUTED)), state, fill_lit, Some(held))
+        }
+        Button::Danger(text) => states(label(d, text).text_color(rgb(theme::CONFIRM)), state, fill, Some(held)),
+        Button::DangerPrimary(text) => {
+            let d = label(d, text).bg(rgb(theme::CONFIRM)).text_color(rgb(theme::BACKGROUND));
+            states(d.font_weight(FontWeight::SEMIBOLD), state, |s| s.opacity(0.9), Some(|s| s.opacity(0.8)))
         }
     };
     d.when(state == State::Focus, |d| d.child(ring(0., radius)))

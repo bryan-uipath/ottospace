@@ -56,10 +56,12 @@ pub const SPACE_1: f32 = 4.;
 pub const SPACE_1_5: f32 = 6.;
 pub const SPACE_2: f32 = 8.;
 pub const SPACE_3: f32 = 12.;
-/// Type sizes in points: a small key cap, `text_xs`, a sidebar row.
+pub const SPACE_4: f32 = 16.;
+/// Type sizes in points: a small key cap, `text_xs`, a sidebar row, a dialog's title.
 pub const TEXT_2XS: f32 = 10.;
 pub const TEXT_XS: f32 = 12.;
 pub const TEXT_ROW: f32 = 13.;
+pub const TEXT_SM: f32 = 14.;
 /// Corner radii in points: `rounded_sm`, `rounded_md`.
 pub const RADIUS_SM: f32 = 4.;
 pub const RADIUS_MD: f32 = 6.;
