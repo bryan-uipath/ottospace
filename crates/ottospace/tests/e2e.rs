@@ -6705,10 +6705,11 @@ fn the_wheel_over_a_scrollbar_scrolls_what_is_under_it() {
 }
 
 /// The conversation drawer over the panes (`overlay_panels`), a terminal behind it, a long
-/// made-up reply with inline code and a code block wider than the drawer: the user's wheel over
-/// its text, over the code block and over its bar scrolls the transcript (its thumb moves), never
-/// the terminal behind; a vertical wheel over the code block does not slide the block; a drag of
-/// the thumb moves it too; at its foot, a small turn of the wheel leaves the latest.
+/// made-up reply with inline code and a code block wider than the drawer: at its foot a sideways
+/// swipe over the code block slides the block and leaves the transcript on its latest; a vertical
+/// wheel over it scrolls the transcript, not the block; a small turn up over the text leaves the
+/// latest; the wheel over the text and over the bar, and a drag of the thumb, scroll it, never the
+/// terminal behind.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_users_wheel_and_thumb_scroll_the_conversation_over_the_panes() {
@@ -6746,49 +6747,69 @@ fn the_users_wheel_and_thumb_scroll_the_conversation_over_the_panes() {
         let (id, _) = bars.iter().find(|(id, _)| id.starts_with("chat:"))?;
         scrollbar(reply, id)
     };
-    let (track, thumb, _) = otto.wait_for("the transcript's bar", |o| chat_bar(&o.drawn()));
+    let (track, _, _) = otto.wait_for("the transcript's bar", |o| chat_bar(&o.drawn()));
+    // How far down the transcript is, 0 its top to 1 its foot, from the bar as drawn in that reply.
+    let down = |reply: &Value| {
+        let (track, thumb, _) = chat_bar(reply)?;
+        Some(((thumb[1] - track[1]) / (track[3] - thumb[3]).max(1.)).clamp(0., 1.))
+    };
+    let away = |reply: &Value| reply["drawer"]["native"]["chats"]["1"]["away"].clone();
     let behind = |reply: &Value| reply["terminals"]["1"]["display_offset"].as_u64();
     let user_wheel = |p: [f64; 2], dy: f64, dx: f64| {
         otto.call(json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dx": dx, "dy": dy, "precise": true, "as": "user"}))
     };
-    // At its foot to begin with; a small turn up over its text leaves the latest.
+    let foot = down(&otto.drawn()).unwrap();
+    assert!(foot > 0.99, "at its foot to begin with: {foot}");
+    // At the foot the code block shows: a sideways swipe over it slides the block, not the
+    // transcript, which stays on its latest.
+    let code = otto.wait_for("the code block", |o| {
+        let reply = o.drawn();
+        let bars = reply["scrollbars"].as_object()?;
+        bars.keys().find(|id| id.starts_with("chat-code:")).cloned()
+    });
+    let code_bar = |reply: &Value| scrollbar(reply, &code).map(|(_, thumb, _)| thumb);
+    let (code_track, code_thumb, _) = scrollbar(&otto.drawn(), &code).unwrap();
+    let over = [code_track[0] + 40., code_track[1] - 10.];
+    let swiped = user_wheel(over, 0.5, -60.);
+    assert!(code_bar(&swiped).unwrap()[0] > code_thumb[0], "a sideways swipe slides it");
+    assert_eq!(
+        (down(&swiped).unwrap() > 0.99, away(&swiped)),
+        (true, json!(false)),
+        "the transcript stays on its latest"
+    );
+    // A vertical wheel over it scrolls the transcript, never the block across.
+    let slid = code_bar(&swiped).unwrap();
+    let wheeled = user_wheel(over, 60., 0.);
+    assert_eq!(code_bar(&wheeled).map(|t| t[0]), Some(slid[0]), "a vertical wheel does not slide the block");
+    assert!(down(&wheeled).unwrap() < 0.99, "over the code block the transcript scrolls: {}", wheeled["scrollbars"]);
+    // Back to the foot; then a small turn up over its text leaves the latest.
     let middle = [track[0] - 120., track[1] + track[3] * 0.5];
-    let after = user_wheel(middle, 3., 0.);
-    let moved = chat_bar(&after).map(|(_, t, _)| t[1]);
-    assert!(moved.is_some_and(|y| y < thumb[1]), "a small turn: {thumb:?} {moved:?}");
-    let after = user_wheel(middle, 200., 0.);
-    let up = chat_bar(&after).map(|(_, t, _)| t[1]).unwrap_or(thumb[1]);
-    assert!(up < thumb[1] - 5., "over its text: {thumb:?} {up}");
-    assert_eq!(behind(&after), Some(0), "the terminal behind does not scroll: {}", after["terminals"]);
+    user_wheel(middle, -5000., 0.);
+    let at_foot = otto.wait_for("the foot again", |o| Some(o.drawn()).filter(|r| down(r).is_some_and(|d| d > 0.99)));
+    assert_eq!(away(&at_foot), json!(false));
+    let small = user_wheel(middle, 3., 0.);
+    let after = otto.drawn();
+    assert!(
+        down(&after).unwrap() < 0.999 && away(&after) == json!(true),
+        "a small turn: {} {}",
+        down(&small).unwrap_or(1.),
+        away(&after)
+    );
+    // A big turn over the text; the terminal behind never scrolls.
+    let up = user_wheel(middle, 200., 0.);
+    let high = down(&up).unwrap();
+    assert!(high < down(&after).unwrap(), "over its text: {high}");
+    assert_eq!(behind(&up), Some(0), "the terminal behind does not scroll: {}", up["terminals"]);
     // Over its bar's lane.
     let lane = [track[0] + track[2] * 0.5, track[1] + track[3] * 0.5];
-    let down = chat_bar(&user_wheel(lane, -80., 0.)).map(|(_, t, _)| t[1]).unwrap_or(up);
-    assert!(down > up, "over its bar: {up} {down}");
+    let lower = down(&user_wheel(lane, -80., 0.)).unwrap();
+    assert!(lower > high, "over its bar: {high} {lower}");
     // A drag of the thumb moves it.
     let (_, now, _) = chat_bar(&otto.drawn()).unwrap();
     let grab = [now[0] + now[2] * 0.5, now[1] + now[3] * 0.5];
-    let dragged = otto.user_drag(grab, [grab[0], grab[1] - 60.]);
-    let (_, then, _) = chat_bar(&dragged).or_else(|| chat_bar(&otto.drawn())).unwrap();
-    assert!(then[1] < now[1] - 20., "dragged: {now:?} {then:?}");
-    // Over the code block: a vertical wheel scrolls the transcript, never the block across.
-    let code = otto.wait_for("the code block", |o| {
-        let reply = o.drawn();
-        let bars = reply["scrollbars"].as_object()?.clone();
-        bars.keys().find(|id| id.starts_with("chat-code:")).cloned()
-    });
-    let code_bar = |reply: &Value| scrollbar(reply, &code).map(|(track, thumb, _)| (track, thumb));
-    let (code_track, code_thumb) = code_bar(&otto.drawn()).unwrap();
-    let over = [code_track[0] + 40., code_track[1] - 10.];
-    let before = chat_bar(&otto.drawn()).unwrap().1[1];
-    // Down, the way that has room after the thumb was dragged up.
-    let after = user_wheel(over, -120., 0.);
-    let (_, code_after) = code_bar(&after).unwrap_or((code_track, code_thumb));
-    let scrolled = chat_bar(&after).unwrap().1[1];
-    assert!(scrolled > before + 5., "over the code block: {before} {scrolled}");
-    assert_eq!(code_after[0], code_thumb[0], "a vertical wheel does not slide the block");
-    // A sideways wheel over it does.
-    let (_, across) = code_bar(&user_wheel(over, 0., -60.)).unwrap();
-    assert!(across[0] > code_thumb[0], "a sideways wheel slides it: {code_thumb:?} {across:?}");
+    otto.user_drag(grab, [grab[0], grab[1] - 60.]);
+    let dragged = down(&otto.drawn()).unwrap();
+    assert!(dragged < lower - 0.02, "dragged: {lower} {dragged}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }

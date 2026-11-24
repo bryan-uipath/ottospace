@@ -655,10 +655,12 @@ impl Workspace {
 
     /// The wheel over the transcript: scrolled up, it stays; back at the bottom, it follows again.
     /// The user scrolled the transcript: `up`, back from the latest, leaves it however little
-    /// (a trackpad's first points are fewer than `LATEST`, and the next frame would pin it back).
+    /// (a trackpad's first points are fewer than `LATEST`, and the next frame would pin it back),
+    /// when there is anything to leave it for.
     fn chat_wheel(&mut self, subject: &Subject, up: bool, cx: &mut Context<Self>) {
         if let Some(look) = self.drawer.looks.get_mut(subject) {
-            look.away = up || extent(&look.scroll, Axis::Down).beyond(LATEST).1;
+            let extent = extent(&look.scroll, Axis::Down);
+            look.away = (up && extent.content > extent.viewport) || extent.beyond(LATEST).1;
         }
         cx.notify();
     }
@@ -713,7 +715,9 @@ impl Workspace {
             .on_scroll_wheel(cx.listener({
                 let subject = subject.clone();
                 move |this, e: &ScrollWheelEvent, window, cx| {
-                    let up = e.delta.pixel_delta(window.line_height()).y > px(0.);
+                    // Up, and mostly up: a sideways swipe over a code block leaves the latest alone.
+                    let d = e.delta.pixel_delta(window.line_height());
+                    let up = d.y > px(0.) && d.y.abs() > d.x.abs();
                     this.chat_wheel(&subject, up, cx)
                 }
             }))
