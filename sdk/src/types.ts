@@ -1926,6 +1926,8 @@ export interface CityAgent {
   hovered: boolean;
   /** A call of it runs: it pulses (none under Reduce Motion). */
   pulsing: boolean;
+  /** The sub-agents it runs (a chat's; none known for a session read from its file). */
+  subagents: number;
 }
 
 export interface CityView {

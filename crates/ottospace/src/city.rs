@@ -84,6 +84,10 @@ const KEPT_PICTURES: usize = 2;
 const ICON: f32 = 22.;
 const FAN_GAP: f32 = 4.;
 const GLIDE: Duration = Duration::from_millis(280);
+/// The most sub-agents drawn under an agent's icon, each a square this wide, this far apart.
+const SUBS: usize = 8;
+const SUB: f32 = 5.;
+const SUB_GAP: f32 = 2.;
 /// A busy agent's pulse: once this long.
 const PULSE: Duration = Duration::from_millis(1600);
 /// Room kept between a name and the empty tab's hints, in points.
@@ -469,6 +473,8 @@ struct Floating {
     at: Option<String>,
     /// A call of it runs: its building, or the icon at no file, pulses (`PULSE`).
     busy: bool,
+    /// The sub-agents it runs: small squares under its icon (`SUBS` at most, then `+n`).
+    subagents: usize,
 }
 
 /// An agent's icon as a paint drew it: its centre, where it glides to and since when (window
@@ -485,6 +491,7 @@ struct Icon {
     cone: bool,
     fan: (usize, usize),
     pulsing: bool,
+    subagents: usize,
 }
 
 /// A hovered box's beacon as drawn: whether a file's, whether lit; a file's beam (foot and end)
@@ -742,7 +749,7 @@ impl Drawn {
                 let hovered = place.is_some_and(|place| place.hovered_agent.as_ref() == Some(&i.key));
                 serde_json::json!({
                     "task": i.task, "rect": rect(i.rect), "cone": i.cone, "fan": [i.fan.0, i.fan.1], "hovered": hovered,
-                    "pulsing": i.pulsing,
+                    "pulsing": i.pulsing, "subagents": i.subagents,
                 })
             })
             .collect();
@@ -954,21 +961,21 @@ impl Workspace {
                         .find_map(|path| places.iter().find(|place| place.id == *path))
                         .map(|p| p.id.clone())
                 });
-                let busy = agent.busy;
+                let (busy, subagents) = (agent.busy, agent.subagents);
                 Some(match agent.who {
                     Who::Task(task) => {
                         let subject = ottospace_core::talk::Subject::Task(task);
                         let mono = badges.iter().find(|(of, _)| *of == subject)?.1.clone();
                         let title = self.model.tasks.live(task)?.title.clone();
                         let (key, colour) = (format!("task:{task}"), theme::identity(agent.colour));
-                        Floating { task: Some(task), key, colour, mono, title, at, busy }
+                        Floating { task: Some(task), key, colour, mono, title, at, busy, subagents }
                     }
                     // A session no task has: its runner's glyph, in the colour of work going on.
                     Who::Session { runner, id, title } => {
                         let spec = ottospace_core::runner::RunnerId::named(runner)?.spec();
                         let title = title.unwrap_or(spec.display).to_string();
                         let (key, colour) = (format!("session:{runner}:{id}"), theme::task(Group::Running));
-                        Floating { task: None, key, colour, mono: spec.glyph.to_string(), title, at, busy }
+                        Floating { task: None, key, colour, mono: spec.glyph.to_string(), title, at, busy, subagents }
                     }
                 })
             })
@@ -1855,7 +1862,34 @@ fn agents(
         let mono = shape(&agent.mono, Hsla::from(rgb(theme::TEXT)), (ICON * 0.4).max(9.), window);
         let _ = mono.paint(point(shown.x - mono.width / 2., shown.y - px(7.)), px(14.), window, cx);
         let (task, key, cone) = (agent.task, agent.key.clone(), corners.is_some());
-        icons.push(Icon { task, key, shown, from, to, since, rect, cone, fan: mark.fan, pulsing: pulse.is_some() });
+        // Its sub-agents: small squares in its colour in a row under it, then `+n`.
+        let shown_subs = agent.subagents.min(SUBS);
+        let row = shown_subs as f32 * (SUB + SUB_GAP) - SUB_GAP;
+        for k in 0..shown_subs {
+            let x = shown.x - px(row / 2.) + px(k as f32 * (SUB + SUB_GAP));
+            let sub = Bounds { origin: point(x, rect.bottom() + px(3.)), size: gpui::size(px(SUB), px(SUB)) };
+            window.paint_quad(fill(sub, colour.opacity(0.85)).corner_radii(px(2.)));
+        }
+        if agent.subagents > SUBS {
+            let more =
+                shape(&format!("+{}", agent.subagents - SUBS), Hsla::from(rgb(theme::TEXT)), theme::TEXT_XS, window);
+            let at = point(shown.x + px(row / 2. + 3.), rect.bottom() + px(3. + SUB / 2. - 7.));
+            let _ = more.paint(at, px(14.), window, cx);
+        }
+        let subagents = agent.subagents;
+        icons.push(Icon {
+            task,
+            key,
+            shown,
+            from,
+            to,
+            since,
+            rect,
+            cone,
+            fan: mark.fan,
+            pulsing: pulse.is_some(),
+            subagents,
+        });
     }
     (icons, gliding, pulsing)
 }

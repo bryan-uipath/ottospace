@@ -231,7 +231,7 @@ Design note: `docs/ai/attention/plan.md`.
     a share of its height: `developer.city_frame`), `folder_colors` (how many `city_folder_colors` the
     picture's colours had), `first_ms` (the place laid out to its first picture painted),
     `read_us` (the last file list's read), `agents` (each agent's icon drawn: `task` (null: a session no
-    task has), `rect`, `cone` (it shines on a building), `fan` `[k, n]`, `hovered`, `pulsing` (a call of it runs)), `glimmer` (the reads' flashes, searches' sweeps and
+    task has), `rect`, `cone` (it shines on a building), `fan` `[k, n]`, `hovered`, `pulsing` (a call of it runs), `subagents` (the sub-agents it runs)), `glimmer` (the reads' flashes, searches' sweeps and
     found files' lights playing now: `flash`, `sweep`, `found`, counts). `counts.city_reads`: the reads, a city on show or not;
     `counts.city_beam_frames`: the frames the hovered beam's fade asked for (none under Reduce Motion);
     `counts.city_fade_frames`: the frames a first picture's fade-in over the lattice asked for, and
