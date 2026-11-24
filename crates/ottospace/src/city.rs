@@ -319,13 +319,14 @@ impl Key {
 }
 
 /// A thing the picture may name (`city_labels`): its place, how it is named, its name, its
-/// bounds and the edge its name hangs from, in shares of the picture.
+/// bounds and the middle of its top (where its name is centred), in shares of the picture.
 struct Mark {
     place: usize,
     tier: Tier,
     text: String,
     bounds: [f32; 4],
-    edge: [(f32, f32); 2],
+    top: (f32, f32),
+    face: [(f32, f32); 4],
 }
 
 /// A picture made: where, in shares of it, the lit buildings and the things it may name are;
@@ -593,13 +594,10 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
                 Kind::Building | Kind::Lit(_) => Tier::File,
                 Kind::Ground => return None,
             };
-            let edge = match tier {
-                Tier::Wall => scene.front_edge(i)?,
-                _ => camera.project(b.top()).map(|top| [top, top])?,
-            };
+            let top = camera.project(b.top())?;
             let label = &plan.places[place].label;
             let text = if tier == Tier::File { label.clone() } else { label.to_uppercase() };
-            Some(Mark { place, tier, text, bounds: camera.bounds(b)?, edge })
+            Some(Mark { place, tier, text, bounds: camera.bounds(b)?, top, face: scene.outline(i)? })
         })
         .collect();
     if !rising {
@@ -1423,10 +1421,11 @@ fn paint(
     let mut marks: Vec<(&Mark, [f32; 4])> = (made.marks.iter())
         .filter(|m| !m.text.contains(char::is_control))
         .map(|m| (m, [m.bounds[0] * w, m.bounds[1] * h, m.bounds[2] * w, m.bounds[3] * h]))
-        .filter(|(m, b)| city_labels::sized(m.tier, *b, [w, h]))
+        .filter(|(_, b)| city_labels::sized(*b, [w, h]))
         .collect();
     let extent = |b: &[f32; 4]| b[2].max(b[3]);
-    marks.sort_by(|a, b| a.0.tier.cmp(&b.0.tier).then(extent(&b.1).total_cmp(&extent(&a.1))));
+    // In `city_labels::place`'s order: the largest first, whatever its tier.
+    marks.sort_by(|a, b| extent(&b.1).total_cmp(&extent(&a.1)).then(a.0.place.cmp(&b.0.place)));
     marks.truncate(SHAPED);
     let style_of = |tier: Tier| match tier {
         Tier::Wall => (theme::TEXT_XS, Hsla::from(rgb(theme::MUTED))),
@@ -1440,7 +1439,8 @@ fn paint(
             key: m.place,
             tier: m.tier,
             bounds: *b,
-            edge: m.edge.map(at),
+            top: at(m.top),
+            face: m.face.map(at),
             size: [f32::from(line.width), style_of(m.tier).0 + 4.],
         })
         .collect();
