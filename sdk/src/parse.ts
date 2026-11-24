@@ -1741,7 +1741,7 @@ function pickItem(value: unknown, at: string): PickItem {
 
 function field(value: unknown, at: string): Field {
   const o = fields(value, at);
-  const owners = ["compose", "picker", "palette", "clone", "inspector", "apps", "mark", "workbook", "worktree", "note", "talk", "btw", "bug", "slot"];
+  const owners = ["compose", "picker", "palette", "clone", "inspector", "apps", "mark", "workbook", "tab", "worktree", "note", "talk", "btw", "bug", "slot"];
   if (typeof o.of !== "string" || !owners.includes(o.of)) {
     throw wrong(`${at}.of`, "compose, picker, apps, mark, workbook, note or talk", o.of);
   }
@@ -1981,6 +1981,7 @@ function markInput(value: unknown, at: string): MarkInput {
     const typing = { type: "workbook" as const, workbook: num(o.workbook, `${at}.workbook`), text: str(o.text, `${at}.text`) };
     return o.tab === undefined ? typing : { ...typing, tab: num(o.tab, `${at}.tab`) };
   }
+  if (o.type === "tab") return { type: "tab", tab: num(o.tab, `${at}.tab`), text: str(o.text, `${at}.text`) };
   if (o.type === "worktree") return { type: "worktree", repo: str(o.repo, `${at}.repo`), text: str(o.text, `${at}.text`) };
   throw wrong(`${at}.type`, "what a mark waits for", o.type);
 }

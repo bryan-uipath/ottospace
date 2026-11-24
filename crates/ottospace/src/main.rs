@@ -8504,7 +8504,9 @@ impl Workspace {
     fn render_space_tabs(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let of = self.model.shown_space().clone();
         let places = self.model.space_tabs(&of);
-        if places.len() < 2 {
+        // One tab: no strip, unless its name is being typed (Rename Tab).
+        let renaming = matches!(self.model.mark_input, Some(MarkInput::Tab { .. }));
+        if places.len() < 2 && !renaming {
             // Back on this row (e.g. from Home), its tab on show scrolls into view again.
             self.tabs_shown.set(None);
             return None;

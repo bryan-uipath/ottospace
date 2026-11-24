@@ -1145,7 +1145,7 @@ export type PickItem =
 /** The text field that has the keyboard. Offsets are UTF-16 units: JavaScript string indexes. */
 export interface Field {
   /** Whose it is: the new-task line, the picker's or the Apps section's filter, a mark's name, a note on a capture, or a native conversation's composer (`talk`). */
-  of: "compose" | "picker" | "palette" | "clone" | "inspector" | "apps" | "mark" | "workbook" | "worktree" | "note" | "talk" | "btw" | "bug" | "slot";
+  of: "compose" | "picker" | "palette" | "clone" | "inspector" | "apps" | "mark" | "workbook" | "tab" | "worktree" | "note" | "talk" | "btw" | "bug" | "slot";
   text: string;
   cursor: number;
   /** Start and end, in text order. Equal: only a cursor. */
@@ -1364,6 +1364,8 @@ export type MarkInput =
   | { type: "set_key"; mark: number }
   /** A workspace's name is being typed in its row; with `tab`, the title of that tab of it. */
   | { type: "workbook"; workbook: number; tab?: number; text: string }
+  /** An open tab's name is being typed in the tab (`tab`: its id; the user's alone). */
+  | { type: "tab"; tab: number; text: string }
   /** A new worktree's branch is being typed in the rows of the repository at `repo` (the user's alone). */
   | { type: "worktree"; repo: string; text: string };
 

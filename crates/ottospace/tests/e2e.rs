@@ -1359,7 +1359,9 @@ fn git(dir: &Path, args: &[&str]) {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_tab_is_renamed_in_place_from_its_right_click_or_a_double_click() {
     let otto = Otto::launch("tab-rename");
+    // Two tabs: the strip shows only then.
     otto.call(json!({"cmd": "split", "axis": "right"}));
+    otto.call(json!({"cmd": "new_tab"}));
     let tab = |o: &Otto| {
         let state = o.call(json!({"cmd": "state"}))["state"].clone();
         let at = state["active"].as_u64().unwrap() as usize;
@@ -7723,7 +7725,7 @@ fn a_deleted_workspace_is_offered_back_on_a_toast_and_nothing_moves() {
     assert_eq!(names(&otto.user_key("u")).len(), 2);
 }
 
-/// A temporary workspace's item on the top row has a …: Keep, the user's alone. Kept, it has none.
+/// A temporary workspace's item on the top row has a …: Rename, Keep, the user's alone. Kept, it has none.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_temporary_workspaces_dots_on_the_top_row_keep_it() {
@@ -7736,10 +7738,10 @@ fn a_temporary_workspaces_dots_on_the_top_row_keep_it() {
     let open = otto.user_click(dots);
     let menu = &open["row_menu"];
     assert_eq!(
-        (&menu["space"], &menu["workbook"], &menu["items"][0]["label"]),
-        (&json!(true), &json!(1), &json!("Keep"))
+        (&menu["space"], &menu["workbook"], &menu["items"][0]["label"], &menu["items"][1]["label"]),
+        (&json!(true), &json!(1), &json!("Rename"), &json!("Keep"))
     );
-    let kept = otto.user_click(at(rect(&otto.drawn()["row_menu"]["items"][0]["rect"]), 0.5, 0.5));
+    let kept = otto.user_click(at(rect(&otto.drawn()["row_menu"]["items"][1]["rect"]), 0.5, 0.5));
     assert_eq!((&kept["row_menu"], space_kept(&kept, 1)), (&Value::Null, json!(true)), "{}", kept["spaces"]);
     assert!(otto.control_opt("space-menu:1").is_none(), "a kept one has no …");
 }

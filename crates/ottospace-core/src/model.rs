@@ -10676,7 +10676,10 @@ impl Model {
 
     /// The lowest "Tab n" no tab has: closing "Tab 5" and opening one gives "Tab 5" again.
     pub(crate) fn free_title(&self) -> String {
-        let taken = |n: &u32| self.tabs.iter().any(|t| t.title == format!("Tab {n}"));
+        // Also one under the user's name: clearing it brings it back.
+        let taken = |n: &u32| {
+            self.tabs.iter().any(|t| [t.title.as_str(), t.auto_title()].contains(&format!("Tab {n}").as_str()))
+        };
         format!("Tab {}", (1..).find(|n| !taken(n)).unwrap_or(self.next_tab))
     }
 

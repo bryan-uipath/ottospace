@@ -3322,7 +3322,7 @@ fn check(m: &Model) -> Result<(), String> {
     if let Some((of, field)) = m.open_field() {
         let most = match of {
             "compose" => MAX_TITLE,
-            "mark" | "workbook" => marks::MAX_NAME,
+            "mark" | "workbook" | "tab" => marks::MAX_NAME,
             "worktree" => crate::repos::MAX_BRANCH,
             "note" => capture::MAX_NOTE,
             _ => MAX_FILTER,
@@ -5447,6 +5447,9 @@ impl Run {
             // A branch being typed goes with its repository (`repo_field_gone`).
             let gone = gone
                 || matches!(&mark_input, Some(MarkInput::Worktree { repo, .. }) if !m.repos.iter().any(|r| r.path == *repo));
+            // A tab's name being typed goes with its tab (`settle_tab_name`).
+            let gone =
+                gone || matches!(&mark_input, Some(MarkInput::Tab { tab, .. }) if !m.tabs.iter().any(|t| t.id == *tab));
             // Marks turned off take a mark's wait with them; an action of a feature off ends none.
             let gone = gone || (!m.features.on(Feature::Marks) && matches!(action, Action::SetFeatures { .. }));
             let kept =

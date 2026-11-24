@@ -131,6 +131,21 @@ mod tests {
         assert_eq!(title(&m), "app");
     }
 
+    /// Review: `Tab 1` renamed, a new tab took `Tab 1`, and clearing the name made two.
+    #[test]
+    fn a_new_tab_never_takes_the_automatic_title_under_a_name() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None });
+        let id = m.tabs[m.active].id;
+        m.tab_rename(id, "Build");
+        m.update(Action::NewTab);
+        assert_ne!(title(&m), "Tab 1");
+        m.tab_rename(id, "");
+        let titles: Vec<&str> = m.tabs.iter().map(|tab| tab.title.as_str()).filter(|t| t.starts_with("Tab ")).collect();
+        assert_eq!(titles.len(), 2);
+        assert_ne!(titles[0], titles[1]);
+    }
+
     #[test]
     fn only_the_user_names_a_tab() {
         let mut m = Model::default();
