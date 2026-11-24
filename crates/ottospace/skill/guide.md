@@ -589,7 +589,11 @@ ottospace ctl '{"cmd":"decision","id":1763500000000}'
 
 - `source`: `slack`, `jira`, `pr_review`, `calendar`, `routine`, or `agent_session` with your own
   live `task` (an agent's question for its own task). `terminal_session` is ottospace's own.
-- `key`: 1 to 128 of `A-Z a-z 0-9 : . _ -`.
+- `key`: its source's format, else refused: `slack:<channel>:<ts>` (`C0MADEUP`, `1763500000.000100`),
+  `jira:<PROJECT>-<n>`, `pr_review:<owner>:<repo>:<n>`, `routine:<name>:<incident>`, and
+  `agent_session:<id>` or `calendar:<id>`. The user may let a channel, a project, a repository or
+  a routine skip triage: then what you file under it is taken on your word, so name the real one.
+  Changing what an item says after the user sorted it puts it back in triage.
 - `question` (one line), `summary` (one line: what came in; default the question), up to 6
   `options` (`label`, `consequence`, `act`), `recommend` (an option's index) and `why`.
 - An option's `act`, by source: `answer` (`agent_session`), `start_task` (`title`, `brief`),

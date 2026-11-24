@@ -249,16 +249,31 @@ The suggested area is preselected when the filer's suggestion names a project li
 
 ### Earning the right to skip triage
 
-- **Only the user promotes**: a source, or a source and key prefix (`routine:dri:`, a channel
-  `slack:C0MADEUP:`), from the Sort card's menu or the Decisions strip's source menu ("Skip
-  triage for this source"). Its items then rank at once with the filer's suggestions and claims
-  accepted, marked `by: trusted source`.
+- **Only the user promotes, and only a named scope.** Each source's key has a closed format
+  (`slack:<channel>:<ts>`, `jira:<PROJECT>-<n>`, `pr_review:<owner>:<repo>:<n>`,
+  `routine:<name>:<incident>`; `agent_session:<id>` and `calendar:<id>` have no scope); a filing
+  whose key is not its source's is refused. P promotes the scope of the item on show, a field of
+  that format (the channel, the project, the repository, the routine), which the card names before
+  the key ("p skip triage for Slack channel C0MADEUP"). Never a free prefix, never a whole source:
+  there is no way to promote one (built, slice 1b). Its items then rank at once with the filer's
+  suggestions and claims accepted.
+- **What a promotion means.** The socket cannot prove who filed: any same-user client can file
+  under a promoted channel, and its claims count at once. So promotion trusts the *filers* of that
+  scope, not only the people in it. It stays bounded: the caps hold for a promoted scope (20 open
+  per source, 30 filings per source an hour), and in slice 2 the three-in-a-row rule spaces its
+  cards like any source's.
+- **New words are new triage.** An update that changes what a sorted item says (summary, question,
+  options, why, evidence, suggestion, claims, task) puts it back in triage, takes back what the
+  user accepted (its claims, its role), and the card says what changed ("Changed since you sorted
+  it: question, claims"). Only a new time (`expires`) leaves it sorted. Under a promoted scope the
+  filer's word stands for each new revision. Every acceptance names the revision it was given to,
+  and a property check holds that none stands for other words (built, slice 1b).
 - **ottospace may offer, never decide**: at the end of a sort run where the last 10 items from one
   prefix were all slotted as suggested, one line: "↻ dri: 10 of 10 as suggested. Let it skip
   triage?" ↵ promotes; anything else and it is not asked again for 10 more.
 - **Revocable at once**: the same menu, or `!` on any card from it ("back to triage"), which puts
   its open items back in triage too.
-- Kept in `<home>/decisions/trust.json` (the prefixes and when promoted). A test run writes none
+- Kept in `<home>/decisions/trust.json` (the scopes promoted). A test run writes none
   without `OTTOSPACE_HOME`. Not in the state as text: counts only.
 
 ## 5. The week's focus
@@ -504,6 +519,11 @@ default, which the user sets per card); sorting; setting focus; promoting a sour
 - **Retention**: `<home>/decisions/<id>.json`, 0600, deleted 14 days after it closed; Forget at
   once. `focus.json` keeps weeks' areas and counts; the user may clear a week.
 - **People**: an author is kept only inside a quote's text; the record says `a person`.
+- **Promotion and updates** (built, slice 1b): a promotion trusts one named scope of its
+  source's key format, shown on the card before P, never a prefix or a whole source; anyone who
+  can reach the socket can file under it, within the caps. An update that changes a sorted item's
+  words returns it to triage and takes back what the user accepted; see "Earning the right to
+  skip triage".
 - **The guide** (`skill/guide.md`, a new "Decisions" section): file decision-ready items with a
   one-line summary; one key per thread, update rather than file again, withdraw when moot; put
   others' words in evidence quotes; suggest a project and a role with a reason, and claims only

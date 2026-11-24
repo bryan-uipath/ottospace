@@ -3,7 +3,7 @@
 
 use super::decisions::Undo;
 use super::{Action, Effect, Model};
-use crate::filed::{Ctx, Filing, Role, prefix_of};
+use crate::filed::{Ctx, Filing, Role};
 use crate::tasks::{State, TaskId};
 
 impl Model {
@@ -72,13 +72,18 @@ impl Model {
                 let core = sort.role == Some(Role::Core);
                 next.role = Some(if core { Role::Ancillary } else { Role::Core });
             }
+            // Its scope only (the channel, the project, the repository, the routine), as its card
+            // names it; a key with none promotes nothing.
             Action::SortPromote { id } if shown(id) => {
-                let Some(d) = self.filed.get(id) else { return };
-                let (source, prefix) = (d.source, prefix_of(&d.key).to_string());
-                let ids = self.filed.promote(source, &prefix);
-                next.done += ids.len();
-                changed.extend(ids.iter().copied());
-                next.undo.push(Undo::Promoted { source, prefix, ids });
+                let Some((source, key)) = self.filed.get(id).map(|d| (d.source, d.key.clone())) else { return };
+                let Some(scope) = self.filed.promote(source, &key) else { return };
+                let ids = self.filed.in_scope(source, &scope);
+                next.done += ids
+                    .iter()
+                    .filter(|id| self.filed.get(**id).is_some_and(|d| d.triage == crate::filed::Triage::Skipped))
+                    .count();
+                changed.extend(ids);
+                next.undo.push(Undo::Promoted { source, scope });
                 effects.push(Effect::SaveTrust { trusted: self.filed.trusted.clone() });
             }
             Action::SortUndo => match next.undo.pop() {
@@ -90,12 +95,14 @@ impl Model {
                         (next.claims, next.role) = (false, self.filed.get(id).and_then(|d| d.suggest.role));
                     }
                 }
-                Some(Undo::Promoted { source, prefix, ids }) => {
-                    self.filed.demote(source, &prefix, &ids);
-                    changed.extend(ids.iter().copied());
-                    next.done = next.done.saturating_sub(ids.len());
+                Some(Undo::Promoted { source, scope }) => {
+                    self.filed.demote(source, &scope);
+                    let ids = self.filed.in_scope(source, &scope);
+                    let back = ids.iter().filter(|id| self.filed.get(**id).is_some_and(|d| d.to_sort(now))).count();
+                    next.done = next.done.saturating_sub(back);
                     let first = ids.iter().copied().find(|id| self.filed.get(*id).is_some_and(|d| d.to_sort(now)));
                     next.item = first.or(next.item);
+                    changed.extend(ids);
                     effects.push(Effect::SaveTrust { trusted: self.filed.trusted.clone() });
                 }
                 None => return,
@@ -260,6 +267,8 @@ mod tests {
         assert!(m.filed.get(b).unwrap().later.is_some());
         key(&mut m, "d");
         assert_eq!(m.filed.get(c).unwrap().status, Status::Dismissed);
+        // The one filed under the channel while it was trusted waits again, the promotion taken back.
+        key(&mut m, "n");
         assert!(m.decisions.is_none(), "nothing left to sort");
         // S on the card: not in this run.
         file(&mut m, Source::Jira, "jira:ABC-2", 1_000);

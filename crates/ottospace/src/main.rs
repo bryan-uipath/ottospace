@@ -1800,8 +1800,8 @@ impl Workspace {
         let keeping = kept.error.is_none();
         model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest }.sent_by(Origin::System));
         // After the tasks: an agent's question whose task is there is not taken for an orphan.
-        let (kept, trusted) = (config::load_decisions(), config::load_trust());
-        model.update(Action::RestoreDecisions { kept, trusted }.sent_by(Origin::System));
+        let (decisions, trusted) = (config::load_decisions(), config::load_trust());
+        model.update(Action::RestoreDecisions { kept: decisions, trusted }.sent_by(Origin::System));
         // The first problem found at start, for the toast: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);

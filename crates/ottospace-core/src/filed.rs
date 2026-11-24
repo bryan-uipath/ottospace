@@ -311,14 +311,17 @@ pub struct Accepted {
     pub claims: bool,
     /// Taken now (`t`): first of its tier until then.
     pub now_until: Option<u64>,
+    /// The revision it was given to: an update that changes what it says takes it back.
+    #[serde(default)]
+    pub revision: u32,
 }
 
-/// A source's prefix of keys the user promoted: its items skip triage. `slack:C0MADEUP:`, or ``
-/// for the whole source.
+/// A scope the user promoted out of triage: a field of its source's key format (a Slack channel,
+/// a Jira project, a repository, a routine), never a free prefix and never a whole source.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Prefix {
+pub struct Trust {
     pub source: Source,
-    pub prefix: String,
+    pub scope: String,
 }
 
 /// How the user sorts an item: one key each.
@@ -336,9 +339,81 @@ pub enum Sort {
     Dismiss,
 }
 
-/// The part of a key a promotion covers: up to its last `:`, else the whole source.
-pub fn prefix_of(key: &str) -> &str {
-    key.rfind(':').map_or("", |at| &key[..=at])
+/// A key in its source's own format: `Ok(Some(scope))` the part a promotion may trust, `Ok(None)`
+/// a key no promotion covers, `Err(format)` a key that is not its source's.
+///
+/// | Source | Key | Scope |
+/// |---|---|---|
+/// | slack | `slack:<channel>:<ts>` (`C0MADEUP`, `1763500000.000100`) | the channel |
+/// | jira | `jira:<PROJECT>-<n>` | the project |
+/// | pr_review | `pr_review:<owner>:<repo>:<n>` | `owner:repo` |
+/// | routine | `routine:<name>:<incident>` | the routine |
+/// | agent_session, calendar, terminal_session | `<source>:<id>` | none |
+pub fn scope_of(source: Source, key: &str) -> Result<Option<&str>, &'static str> {
+    let word = |s: &str, max: usize, ok: fn(char) -> bool| !s.is_empty() && s.len() <= max && s.chars().all(ok);
+    let id = |c: char| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | '-');
+    let digits = |s: &str| word(s, 12, |c| c.is_ascii_digit());
+    let rest = key.strip_prefix(source.name()).and_then(|rest| rest.strip_prefix(':'));
+    let parts: Vec<&str> = rest.map(|rest| rest.split(':').collect()).unwrap_or_default();
+    let (scope, format) = match (source, parts.as_slice()) {
+        (Source::Slack, [channel, ts]) => {
+            let ts_ok = ts.split_once('.').is_some_and(|(s, f)| digits(s) && digits(f));
+            let channel_ok = word(channel, 20, |c| c.is_ascii_uppercase() || c.is_ascii_digit());
+            ((channel_ok && ts_ok).then_some(Some(*channel)), "slack:<channel>:<ts>")
+        }
+        (Source::Jira, [issue]) => {
+            let ok = issue.split_once('-').filter(|(p, n)| {
+                p.starts_with(|c: char| c.is_ascii_uppercase())
+                    && word(p, 20, |c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
+                    && digits(n)
+            });
+            (ok.map(|(project, _)| Some(project)), "jira:<PROJECT>-<n>")
+        }
+        (Source::PrReview, [owner, repo, n]) => {
+            let ok = word(owner, 39, |c| c.is_ascii_alphanumeric() || c == '-') && word(repo, 100, id) && digits(n);
+            let scope = rest.and_then(|rest| rest.rfind(':').map(|at| &rest[..at]));
+            (ok.then_some(scope).filter(Option::is_some), "pr_review:<owner>:<repo>:<n>")
+        }
+        (Source::Routine, [name, incident]) => {
+            let ok = word(name, 40, |c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '-'))
+                && word(incident, 80, id);
+            (ok.then_some(Some(*name)), "routine:<name>:<incident>")
+        }
+        (Source::AgentSession | Source::Calendar | Source::TerminalSession, [one]) => {
+            (word(one, 100, id).then_some(None), "<source>:<id>")
+        }
+        (Source::Slack, _) => (None, "slack:<channel>:<ts>"),
+        (Source::Jira, _) => (None, "jira:<PROJECT>-<n>"),
+        (Source::PrReview, _) => (None, "pr_review:<owner>:<repo>:<n>"),
+        (Source::Routine, _) => (None, "routine:<name>:<incident>"),
+        _ => (None, "<source>:<id>"),
+    };
+    scope.ok_or(format)
+}
+
+/// What a promotion of `key`'s scope trusts, in words for its card: `Slack channel C0MADEUP`.
+pub fn scope_label(source: Source, key: &str) -> Option<String> {
+    let scope = scope_of(source, key).ok().flatten()?;
+    let what = match source {
+        Source::Slack => "Slack channel",
+        Source::Jira => "Jira project",
+        Source::PrReview => "repository",
+        Source::Routine => "routine",
+        _ => return None,
+    };
+    Some(format!("{what} {}", scope.replace(':', "/")))
+}
+
+/// Whether `scope` is one a key of `source` can have: what a kept promotion must be.
+pub fn valid_scope(source: Source, scope: &str) -> bool {
+    let key = match source {
+        Source::Slack => format!("slack:{scope}:1.1"),
+        Source::Jira => format!("jira:{scope}-1"),
+        Source::PrReview => format!("pr_review:{scope}:1"),
+        Source::Routine => format!("routine:{scope}:x"),
+        _ => return false,
+    };
+    scope_of(source, &key) == Ok(Some(scope))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -386,6 +461,10 @@ pub struct Decision {
     pub later: Option<u64>,
     #[serde(default)]
     pub accepted: Accepted,
+    /// What an update changed since the user sorted it (`question`, `claims`, ..): it waits in
+    /// triage again, and its card says so. Empty once sorted again.
+    #[serde(default)]
+    pub revised: Vec<String>,
 }
 
 impl Decision {
@@ -448,7 +527,7 @@ pub struct Shown {
 pub struct Filed {
     pub list: Vec<Decision>,
     /// Prefixes the user promoted: their items skip triage. Kept in `<home>/decisions/trust.json`.
-    pub trusted: Vec<Prefix>,
+    pub trusted: Vec<Trust>,
     /// When each counted filing came, by source: for `PER_HOUR`.
     recent: Vec<(Source, u64)>,
 }
@@ -480,7 +559,8 @@ impl Filed {
 
     /// Whether the user promoted `key` of `source`.
     pub fn trusts(&self, source: Source, key: &str) -> bool {
-        self.trusted.iter().any(|p| p.source == source && key.starts_with(p.prefix.as_str()))
+        let scope = scope_of(source, key).ok().flatten();
+        scope.is_some_and(|scope| self.trusted.iter().any(|t| t.source == source && t.scope == scope))
     }
 
     /// Sorts item `id` as the user said, with the claims and the role they left on it. What it
@@ -489,9 +569,9 @@ impl Filed {
         let d = self.list.iter_mut().find(|d| d.id == id && d.to_sort(now))?;
         let before = d.clone();
         let take = |d: &mut Decision, until: Option<u64>| {
-            d.triage = Triage::Sorted;
+            (d.triage, d.revised) = (Triage::Sorted, Vec::new());
             let project = d.suggest.projects.first().cloned();
-            d.accepted = Accepted { project, role, claims, now_until: until };
+            d.accepted = Accepted { project, role, claims, now_until: until, revision: d.revision };
         };
         match how {
             Sort::Keep => take(d, None),
@@ -504,38 +584,66 @@ impl Filed {
         Some(before)
     }
 
-    /// Puts a decision back as it was (undo of a sort). True if it was there to put back.
+    /// Puts back what the user did to a decision (undo of a sort): its triage, acceptance, put off
+    /// and status as `before` had them. Its words stay the filer's latest. True if it was there.
     pub fn put_back(&mut self, before: Decision) -> bool {
         let Some(d) = self.list.iter_mut().find(|d| d.id == before.id) else { return false };
-        *d = before;
+        (d.triage, d.accepted, d.later, d.status, d.closed) =
+            (before.triage, before.accepted, before.later, before.status, before.closed);
+        d.revised = before.revised;
+        // An acceptance given to other words is not given back.
+        if d.triage == Triage::Sorted && d.accepted.revision != d.revision {
+            (d.triage, d.accepted) = (Triage::Pending, Accepted::default());
+        }
+        self.align_triage();
         true
     }
 
-    /// The user promotes `prefix` of `source`: its open items waiting in triage skip it now, and
-    /// its next ones never enter it. The items moved, for undo; none if it was promoted already.
-    pub fn promote(&mut self, source: Source, prefix: &str) -> Vec<u64> {
-        let p = Prefix { source, prefix: prefix.to_string() };
-        if self.trusted.contains(&p) {
-            return Vec::new();
+    /// The user promotes the scope of `key` (its channel, project, repository or routine, as
+    /// `scope_label` shows it): that scope's open items waiting in triage skip it now, and its
+    /// next ones never enter it. The scope trusted, or `None`: the key has no scope to promote.
+    pub fn promote(&mut self, source: Source, key: &str) -> Option<String> {
+        let scope = scope_of(source, key).ok().flatten()?.to_string();
+        let trust = Trust { source, scope: scope.clone() };
+        if !self.trusted.contains(&trust) {
+            self.trusted.push(trust);
         }
-        self.trusted.push(p);
-        let moved = |d: &Decision| d.open() && d.triage == Triage::Pending && d.source == source;
-        let mut ids = Vec::new();
-        for d in self.list.iter_mut().filter(|d| moved(d) && d.key.starts_with(prefix)) {
-            (d.triage, d.accepted.claims) = (Triage::Skipped, true);
-            d.accepted.project = d.suggest.projects.first().cloned();
-            d.accepted.role = d.suggest.role;
-            ids.push(d.id);
-        }
-        ids
+        self.align_triage();
+        Some(scope)
     }
 
-    /// Takes a promotion back: the prefix goes, and `ids` (still open, skipped) wait in triage again.
-    pub fn demote(&mut self, source: Source, prefix: &str, ids: &[u64]) {
-        self.trusted.retain(|p| !(p.source == source && p.prefix == prefix));
-        for d in self.list.iter_mut().filter(|d| ids.contains(&d.id) && d.open() && d.triage == Triage::Skipped) {
-            (d.triage, d.accepted) = (Triage::Pending, Accepted::default());
+    /// Takes a promotion back: the scope goes, and its open items it let skip triage wait in it again.
+    pub fn demote(&mut self, source: Source, scope: &str) {
+        self.trusted.retain(|t| !(t.source == source && t.scope == scope));
+        self.align_triage();
+    }
+
+    /// Each open item of a source that triages: skipped exactly while its scope is trusted, taking
+    /// the filer's word for its current revision; otherwise waiting to be sorted. Sorted ones stay.
+    fn align_triage(&mut self) {
+        for at in 0..self.list.len() {
+            let d = &self.list[at];
+            let trusted = self.trusts(d.source, &d.key);
+            let d = &mut self.list[at];
+            if !d.open() || !d.source.spec().triage || d.triage == Triage::Sorted {
+                continue;
+            }
+            match (trusted, d.triage) {
+                (true, _) if d.triage == Triage::Pending || d.accepted.revision != d.revision => {
+                    let (project, role) = (d.suggest.projects.first().cloned(), d.suggest.role);
+                    d.triage = Triage::Skipped;
+                    d.accepted = Accepted { project, role, claims: true, now_until: None, revision: d.revision };
+                }
+                (false, Triage::Skipped) => (d.triage, d.accepted) = (Triage::Pending, Accepted::default()),
+                _ => {}
+            }
         }
+    }
+
+    /// The decisions of `source` whose key has `scope`.
+    pub fn in_scope(&self, source: Source, scope: &str) -> Vec<u64> {
+        let of = |d: &&Decision| d.source == source && scope_of(source, &d.key) == Ok(Some(scope));
+        self.list.iter().filter(of).map(|d| d.id).collect()
     }
 
     /// What the state says of them.
@@ -627,10 +735,18 @@ impl Filed {
             }
             Some(at) => {
                 let d = &mut self.list[at];
+                let revised = changes(d, &kept);
                 set(d, kept, ctx.now, filing.expires);
                 d.revision = d.revision.saturating_add(1);
                 if opens && !d.open() {
                     (d.status, d.closed, d.triage, d.later) = (Status::Open, None, triage, None);
+                    d.accepted = Accepted::default();
+                } else if d.triage == Triage::Sorted && !trusted {
+                    // Sorted for other words: back in triage, the acceptance taken back, the change said.
+                    (d.triage, d.accepted, d.revised) = (Triage::Pending, Accepted::default(), revised);
+                } else if d.triage == Triage::Sorted {
+                    // Its scope is trusted: what the user gave stands for the filer's new words too.
+                    d.accepted.revision = d.revision;
                 }
                 d.id
             }
@@ -664,12 +780,14 @@ impl Filed {
                     closed,
                     later: None,
                     accepted: Accepted::default(),
+                    revised: Vec::new(),
                 };
                 set(&mut d, kept, ctx.now, filing.expires);
                 self.list.push(d);
                 id
             }
         };
+        self.align_triage();
         self.recent.retain(|(_, at)| at.saturating_add(HOUR_MS) > ctx.now);
         self.recent.push((filing.source, ctx.now));
         Some(id)
@@ -715,30 +833,42 @@ impl Filed {
 
     /// The decisions read at start. Each file is input: kept as a filing would be, once per id
     /// and per open key, at most `OPEN_ALL` open; the rest are left out.
-    pub fn restore(&mut self, kept: Vec<Decision>, trusted: Vec<Prefix>) {
-        let fits = |p: &Prefix| p.prefix.is_empty() || (valid_key(&p.prefix) && p.prefix.ends_with(':'));
-        self.trusted = trusted.into_iter().filter(fits).take(OPEN_ALL).collect();
-        self.trusted.dedup();
+    pub fn restore(&mut self, kept: Vec<Decision>, trusted: Vec<Trust>) {
+        self.trusted = Vec::new();
+        for trust in trusted.into_iter().filter(|t| valid_scope(t.source, &t.scope)).take(OPEN_ALL) {
+            if !self.trusted.contains(&trust) {
+                self.trusted.push(trust);
+            }
+        }
         let mut list: Vec<Decision> = Vec::new();
         for d in kept {
             let clash =
                 list.iter().any(|e| e.id == d.id || (d.open() && e.open() && e.source == d.source && e.key == d.key));
             let full = d.open() && list.iter().filter(|e| e.open()).count() >= OPEN_ALL;
             let per_source = list.iter().filter(|e| e.open() && e.source == d.source).count();
-            let d = clean(d);
+            let mut d = clean(d);
             // As a filing is checked, where no context is needed: its key, its source, its acts.
             let spec = d.source.spec();
             let acts: Vec<&Act> = d.options.iter().filter_map(|c| c.act.as_ref()).collect();
             let acts_ok = acts.iter().all(|a| spec.acts.contains(&a.name()) && act_fault(a).is_none());
             let source_ok = spec.filer != Filer::Derived && (spec.filer == Filer::ForTask) == d.task.is_some();
-            let bad = !valid_key(&d.key) || d.question.is_empty() || !acts_ok || !source_ok;
+            let bad = !valid_key(&d.key)
+                || scope_of(d.source, &d.key).is_err()
+                || d.question.is_empty()
+                || !acts_ok
+                || !source_ok;
             if clash || full || bad || (d.open() && per_source >= OPEN_PER_SOURCE) {
                 continue;
+            }
+            // An acceptance given to other words than these is not kept.
+            if d.triage == Triage::Sorted && d.accepted.revision != d.revision {
+                (d.triage, d.accepted) = (Triage::Pending, Accepted::default());
             }
             list.push(d);
         }
         list.sort_by_key(|d| d.id);
         self.list = list;
+        self.align_triage();
     }
 }
 
@@ -822,6 +952,21 @@ fn unchanged(was: &Decision, kept: &Kept, filing: &Filing, now: u64) -> bool {
     was.content() == content_of(kept) && time
 }
 
+/// The fields an update changes, by name, for the card: `question`, `claims`.
+fn changes(d: &Decision, k: &Kept) -> Vec<String> {
+    let fields = [
+        ("summary", d.summary != k.summary),
+        ("question", d.question != k.question),
+        ("options", d.options != k.options || d.recommend != k.recommend),
+        ("why", d.why != k.why),
+        ("evidence", d.evidence != k.evidence),
+        ("suggestion", d.suggest != k.suggest),
+        ("claims", d.claims != k.claims),
+        ("task", d.task != k.task),
+    ];
+    fields.into_iter().filter(|(_, changed)| *changed).map(|(name, _)| name.to_string()).collect()
+}
+
 fn choice(c: &Choice) -> Choice {
     let act = c.act.as_ref().map(Act::kept);
     Choice { label: plain(&c.label, MAX_LABEL), consequence: plain(&c.consequence, MAX_LINE), act }
@@ -866,6 +1011,8 @@ fn invalid(f: &Filing, ctx: &Ctx) -> Option<String> {
     let ahead = |at: u64| at > ctx.now.saturating_add(MAX_AHEAD_MS) || at.saturating_add(MAX_AHEAD_MS) < ctx.now;
     let fault = if !valid_key(&f.key) {
         format!("key: 1 to {MAX_KEY} of A-Z a-z 0-9 : . _ -")
+    } else if let Err(format) = scope_of(f.source, &f.key) {
+        format!("key: {name}'s are {format}")
     } else if spec.filer == Filer::Derived {
         format!("{name} is ottospace's own: no client files it")
     } else if spec.filer == Filer::ForTask && !f.task.is_some_and(|t| ctx.live.contains(&t)) {
@@ -949,10 +1096,15 @@ pub(crate) mod tests {
         slack("slack:C0MADEUP:1763500000.000100")
     }
 
-    fn slack(key: &str) -> Filing {
+    /// A made-up Slack thread's key: `a` is `slack:CA:1.0`; a whole key stays as it is.
+    fn key(name: &str) -> String {
+        if name.contains(':') { name.into() } else { format!("slack:C{}:1.0", name.to_uppercase()) }
+    }
+
+    fn slack(name: &str) -> Filing {
         Filing {
             source: Source::Slack,
-            key: key.into(),
+            key: key(name),
             summary: "Asked in #made-up whether the flag can flip".into(),
             question: "Reply today, or hand it over?".into(),
             options: vec![Choice { label: "Draft a reply".into(), consequence: String::new(), act: None }],
@@ -1044,7 +1196,7 @@ pub(crate) mod tests {
         f.why = "more".into();
         assert_eq!(filed.refusal(&f, &c(later)), None);
         // Withdrawn, one more fits.
-        filed.withdraw(Source::Slack, "s1", later);
+        filed.withdraw(Source::Slack, &key("s1"), later);
         assert_eq!(filed.refusal(&slack("one-more"), &c(later)), None);
         // Thirty in an hour from one source, then no more until it passes.
         let mut filed = Filed::default();
@@ -1055,7 +1207,7 @@ pub(crate) mod tests {
         }
         assert!(filed.refusal(&slack("k9"), &c(NOW + 100)).is_some_and(|why| why.contains("last hour")));
         let mut jira = slack("j");
-        jira.source = Source::Jira;
+        (jira.source, jira.key) = (Source::Jira, "jira:ABC-1".into());
         assert_eq!(filed.refusal(&jira, &c(NOW + 100)), None, "another source is not held back");
         assert_eq!(filed.refusal(&slack("k9"), &c(NOW + HOUR_MS + 1)), None);
     }
@@ -1120,18 +1272,88 @@ pub(crate) mod tests {
         for n in 0..=KEEP_CLOSED {
             let c = Ctx { now: NOW + n as u64 * HOUR_MS, live: &[], tasks: &[], checkouts: &[] };
             filed.file(&slack(&format!("x{n}")), &c);
-            filed.withdraw(Source::Slack, &format!("x{n}"), c.now);
+            filed.withdraw(Source::Slack, &key(&format!("x{n}")), c.now);
         }
         let (_, removed) = filed.settle(NOW + KEEP_CLOSED as u64 * HOUR_MS, &[]);
         assert_eq!(removed.len(), 1, "the oldest closed goes");
     }
 
     #[test]
+    fn a_key_is_its_sources_format_and_a_promotion_trusts_its_scope_alone() {
+        assert_eq!(scope_of(Source::Slack, "slack:C0MADEUP:1763500000.000100"), Ok(Some("C0MADEUP")));
+        assert_eq!(scope_of(Source::Jira, "jira:ABC-123"), Ok(Some("ABC")));
+        assert_eq!(scope_of(Source::PrReview, "pr_review:made-up:app:7"), Ok(Some("made-up:app")));
+        assert_eq!(scope_of(Source::Routine, "routine:dri:availability"), Ok(Some("dri")));
+        assert_eq!(scope_of(Source::Calendar, "calendar:evt-1"), Ok(None), "nothing to promote");
+        for (source, key) in [
+            (Source::Slack, "slack::1.0"),
+            (Source::Slack, "slack:C1"),
+            (Source::Slack, "slack:c1:1.0"),
+            (Source::Slack, "jira:ABC-1"),
+            (Source::Jira, "jira:abc-1"),
+            (Source::Jira, "jira:ABC"),
+            (Source::Routine, "routine::x"),
+        ] {
+            assert!(scope_of(source, key).is_err(), "{key}");
+            let mut f = slack("a");
+            (f.source, f.key) = (source, key.into());
+            assert!(Filed::default().refusal(&f, &ctx(&[], &[])).is_some_and(|why| why.starts_with("key")), "{key}");
+        }
+        assert_eq!(scope_label(Source::PrReview, "pr_review:made-up:app:7").as_deref(), Some("repository made-up/app"));
+        // Promoting one item trusts its channel: not another channel, not the source.
+        let mut filed = Filed::default();
+        let ids: Vec<u64> = ["slack:C1:1.0", "slack:C1:2.0", "slack:C2:1.0"]
+            .iter()
+            .filter_map(|k| filed.file(&slack(k), &ctx(&[], &[])))
+            .collect();
+        assert_eq!(filed.promote(Source::Slack, "slack:C1:1.0").as_deref(), Some("C1"));
+        let triage: Vec<Triage> = ids.iter().map(|id| filed.get(*id).unwrap().triage).collect();
+        assert_eq!(triage, [Triage::Skipped, Triage::Skipped, Triage::Pending]);
+        assert_eq!(filed.promote(Source::Calendar, "calendar:evt-1"), None);
+        assert!(filed.trusted.iter().all(|t| valid_scope(t.source, &t.scope)));
+        // Restored, a free prefix or a whole source is no promotion.
+        let wide = vec![
+            Trust { source: Source::Slack, scope: String::new() },
+            Trust { source: Source::Slack, scope: "slack:".into() },
+        ];
+        filed.restore(filed.list.clone(), wide);
+        assert!(filed.trusted.is_empty() && ids.iter().all(|id| filed.get(*id).unwrap().triage == Triage::Pending));
+    }
+
+    #[test]
+    fn new_words_after_a_sort_go_back_to_triage_and_the_acceptance_with_them() {
+        let mut filed = Filed::default();
+        let mut f = slack("a");
+        let id = filed.file(&f, &ctx(&[], &[])).unwrap();
+        filed.sort(id, Sort::Keep, true, Some(Role::Core), NOW).unwrap();
+        assert_eq!(filed.get(id).unwrap().accepted.revision, 1);
+        // Only a new time: it stays sorted, its acceptance with it.
+        f.expires = Some(NOW + 2 * DAY_MS);
+        filed.file(&f, &ctx(&[], &[]));
+        assert_eq!((filed.get(id).unwrap().triage, filed.get(id).unwrap().accepted.claims), (Triage::Sorted, true));
+        // New claims: back to triage, nothing accepted, and what changed said.
+        (f.claims.due, f.claims.person_waits) = (Some(NOW + HOUR_MS), true);
+        f.question = "Approve the made-up rollout now?".into();
+        filed.file(&f, &ctx(&[], &[]));
+        let d = filed.get(id).unwrap();
+        assert_eq!(
+            (d.triage, &d.accepted, &d.revised),
+            (Triage::Pending, &Accepted::default(), &vec!["question".to_string(), "claims".to_string()])
+        );
+        // Under a promoted channel the filer's word stands for each revision.
+        filed.promote(Source::Slack, &f.key);
+        f.why = "made up".into();
+        filed.file(&f, &ctx(&[], &[]));
+        let d = filed.get(id).unwrap();
+        assert_eq!((d.triage, d.accepted.revision), (Triage::Skipped, d.revision));
+    }
+
+    #[test]
     fn a_withdrawn_key_filed_again_opens_its_decision_again() {
         let mut filed = Filed::default();
         let id = filed.file(&slack("a"), &ctx(&[], &[])).unwrap();
-        assert_eq!(filed.withdraw(Source::Slack, "a", NOW), Some(id));
-        assert_eq!(filed.withdraw(Source::Slack, "a", NOW), None, "nothing open");
+        assert_eq!(filed.withdraw(Source::Slack, &key("a"), NOW), Some(id));
+        assert_eq!(filed.withdraw(Source::Slack, &key("a"), NOW), None, "nothing open");
         assert_eq!(filed.file(&slack("a"), &ctx(&[], &[])), Some(id));
         let d = filed.get(id).unwrap();
         assert_eq!((d.open(), d.revision, d.closed), (true, 2, None));

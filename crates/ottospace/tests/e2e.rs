@@ -18408,6 +18408,10 @@ fn a_filed_decision_waits_to_be_sorted_updates_by_key_and_keeps_its_words_out_of
         reply["error"].as_str().unwrap_or_default().to_string()
     };
     assert!(refused(&|f| f["key"] = json!("../x")).contains("key"));
+    assert!(
+        refused(&|f| f["key"] = json!("slack:general:1.0")).contains("slack:<channel>:<ts>"),
+        "its source's format"
+    );
     assert!(refused(&|f| f["source"] = json!("terminal_session")).contains("ottospace's own"));
     let http = json!({"open_link": {"url": "http://example.com/"}});
     assert!(refused(&|f| f["options"][0]["act"] = http.clone()).contains("https"));
@@ -18421,10 +18425,12 @@ fn a_filed_decision_waits_to_be_sorted_updates_by_key_and_keeps_its_words_out_of
     assert_eq!(otto.raw(&json!({"cmd": "decision_withdraw", "source": "slack", "key": key}).to_string())["ok"], false);
     // Twenty open from one source at most.
     for n in 0..20 {
-        otto.call(json!({"cmd": "decision_file", "source": "slack", "key": format!("k{n}"), "question": "Made up?"}));
+        let key = format!("slack:C{n}:1.0");
+        otto.call(json!({"cmd": "decision_file", "source": "slack", "key": key, "question": "Made up?"}));
     }
-    let past =
-        otto.raw(&json!({"cmd": "decision_file", "source": "slack", "key": "k20", "question": "Made up?"}).to_string());
+    let past = otto.raw(
+        &json!({"cmd": "decision_file", "source": "slack", "key": "slack:C20:1.0", "question": "Made up?"}).to_string(),
+    );
     assert!(past["error"].as_str().unwrap_or_default().contains("20 open from slack"), "{past}");
     drop(otto);
 

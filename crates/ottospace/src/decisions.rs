@@ -126,6 +126,9 @@ impl Workspace {
                 let counted = if sort.claims { "counted (u)" } else { "not counted (u)" };
                 let claims = (!claims.is_empty()).then(|| format!("Claims: {} · {counted}", claims.join(" · ")));
                 let evidence = (!d.evidence.is_empty()).then(|| format!("{} pieces of evidence", d.evidence.len()));
+                // Sorted before, then changed by its filer: what changed, so it is not taken for what was sorted.
+                let revised =
+                    (!d.revised.is_empty()).then(|| format!("Changed since you sorted it: {}", d.revised.join(", ")));
                 let body = [
                     Some(muted(from).into_any_element()),
                     Some(
@@ -136,6 +139,7 @@ impl Workspace {
                     ),
                     Some(muted(d.question.clone()).into_any_element()),
                     Some(muted(suggest).into_any_element()),
+                    revised.map(|line| div().text_xs().text_color(rgb(theme::TEXT)).child(line).into_any_element()),
                     claims.map(|line| muted(line).into_any_element()),
                     evidence.map(|line| muted(line).into_any_element()),
                 ];
@@ -159,9 +163,17 @@ impl Workspace {
                 }
             }))
         });
-        let hint = match sort.item {
-            None => "↵ sort · s not now · Esc close",
-            Some(_) => "u count its claims · c core or ancillary · p skip triage for its source · z undo · Esc close",
+        // P trusts exactly the scope shown here: a channel, a project, a repository, a routine.
+        let scope =
+            sort.item.and_then(|id| self.model.filed.get(id)).map(|d| {
+                match ottospace_core::filed::scope_label(d.source, &d.key) {
+                    Some(scope) => format!(" · p skip triage for {scope} from now"),
+                    None => String::new(),
+                }
+            });
+        let hint = match scope {
+            None => "↵ sort · s not now · Esc close".to_string(),
+            Some(scope) => format!("u count its claims · c core or ancillary{scope} · z undo · Esc close"),
         };
         let header = div()
             .flex()
@@ -179,7 +191,7 @@ impl Workspace {
             .child(header)
             .children(body)
             .child(div().flex().flex_wrap().items_center().gap_1().pt_2().children(buttons))
-            .child(muted(hint.to_string()));
+            .child(muted(hint));
         div().size_full().flex().justify_center().child(column).into_any_element()
     }
 

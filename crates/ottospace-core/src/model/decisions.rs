@@ -60,7 +60,7 @@ pub struct Sorting {
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) enum Undo {
     Sorted(Box<crate::filed::Decision>),
-    Promoted { source: crate::filed::Source, prefix: String, ids: Vec<u64> },
+    Promoted { source: crate::filed::Source, scope: String },
 }
 
 /// The Decisions workspace while it is open.

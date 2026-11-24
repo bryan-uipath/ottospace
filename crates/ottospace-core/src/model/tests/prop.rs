@@ -416,8 +416,22 @@ impl Gen<'_> {
         let real: Vec<(crate::filed::Source, String)> =
             self.m.filed.list.iter().map(|d| (d.source, d.key.clone())).collect();
         self.one_of(&real, |g| {
-            let source = g.rng.pick(&crate::filed::SOURCES);
-            (source, g.rng.pick(&["slack:C1:1.0", "jira:ABC-1", "k", "", "../k", "a b"]).to_string())
+            use crate::filed::Source as S;
+            // Most in their source's format, two of one Slack channel; some not.
+            let good = [
+                (S::Slack, "slack:C1:1.0"),
+                (S::Slack, "slack:C1:2.0"),
+                (S::Slack, "slack:C2:1.0"),
+                (S::Jira, "jira:ABC-1"),
+                (S::Routine, "routine:dri:x"),
+                (S::Calendar, "calendar:e1"),
+                (S::AgentSession, "agent_session:q1"),
+            ];
+            let (source, key) = match g.rng.below(4) {
+                0 => (g.rng.pick(&crate::filed::SOURCES), g.rng.pick(&["k", "", "../k", "a b", "slack::1"])),
+                _ => g.rng.pick(&good),
+            };
+            (source, key.to_string())
         })
     }
 
@@ -1844,10 +1858,10 @@ const MAKERS: &[Make] = &[
             }
             kept.push(other);
         }
-        let trusted = g
-            .rng
-            .coin()
-            .then(|| crate::filed::Prefix { source: crate::filed::Source::Slack, prefix: "slack:C1:".into() });
+        let trusted = g.rng.coin().then(|| crate::filed::Trust {
+            source: crate::filed::Source::Slack,
+            scope: g.rng.pick(&["C1", "", "slack:"]).into(),
+        });
         Action::RestoreDecisions { kept, trusted: trusted.into_iter().collect() }
     },
     // Triage: its card's keys, on the item on show (else a stray one).
@@ -2526,6 +2540,22 @@ fn check_filed(m: &Model) -> Result<(), String> {
         ensure!(d.source != From::TerminalSession, "a client filed a terminal session's");
         let triaged = d.source.spec().triage || d.triage == Triage::Skipped;
         ensure!(triaged, "{:?} triaged as {:?}", d.source, d.triage);
+        // An open item skips triage exactly while the scope its key names is trusted.
+        let trusted = m.filed.trusts(d.source, &d.key);
+        if d.open() && d.source.spec().triage && d.triage != Triage::Sorted {
+            ensure!((d.triage == Triage::Skipped) == trusted, "{} triaged {:?}, trusted {trusted}", d.id, d.triage);
+        }
+        // No acceptance stands for other words than it was given to.
+        if d.triage == Triage::Sorted || (d.triage == Triage::Skipped && trusted) {
+            ensure!(
+                d.accepted.revision == d.revision,
+                "{} accepted at {}, now {}",
+                d.id,
+                d.accepted.revision,
+                d.revision
+            );
+        }
+        ensure!(crate::filed::scope_of(d.source, &d.key).is_ok(), "a key not its source's: {:?}", d.key);
         let line = |text: &str| text.chars().count() <= MAX_LINE + 1 && text.chars().all(crate::capture::shows);
         let one_line = line(&d.summary) && line(&d.question) && d.options.iter().all(|c| line(&c.label));
         ensure!(one_line && !d.question.is_empty(), "words not kept: {:?} {:?}", d.summary, d.question);
@@ -2539,6 +2569,10 @@ fn check_filed(m: &Model) -> Result<(), String> {
         }
     }
     ensure!(open.len() <= OPEN_ALL, "{} open", open.len());
+    // A promotion trusts a scope a key can name: never a free prefix or a whole source.
+    for t in &m.filed.trusted {
+        ensure!(crate::filed::valid_scope(t.source, &t.scope), "trusts {t:?}");
+    }
     for source in crate::filed::SOURCES {
         let of = open.iter().filter(|d| d.source == source).count();
         ensure!(of <= OPEN_PER_SOURCE, "{of} open from {source:?}");
@@ -5706,6 +5740,11 @@ impl Run {
                         m.filed.get(decision.id) == Some(&**decision),
                         "{action:?} wrote {decision:?}, not what is held"
                     );
+                }
+                // Only the user's P, or their Z of it, writes what skips triage; and it is what is held.
+                Effect::SaveTrust { trusted } => {
+                    let acts = user && matches!(action, Action::SortPromote { .. } | Action::SortUndo);
+                    ensure!(acts && *trusted == m.filed.trusted, "{origin:?}'s {action:?} wrote trust.json");
                 }
                 Effect::RemoveDecision { id } => {
                     let held = m.filed.get(*id).is_some();
