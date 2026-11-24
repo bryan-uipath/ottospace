@@ -6747,7 +6747,7 @@ impl Model {
                 }
             }
             Action::ComposeSubmit { open } => {
-                // ⇧↵ takes a row as ↵ does (`enter`). ⌘↵ always adds.
+                // ⌘⇧↵ takes a row as ↵ does (`enter`). ⌘↵ always adds.
                 match self.enter() {
                     _ if open => {}
                     Enter::Take(row) => return self.accept(row),
@@ -9002,17 +9002,26 @@ impl Model {
             let word = word.trim_end_matches(compose::clause_end);
             word.strip_prefix(mark).is_some_and(|rest| compose::taggable(mark, rest))
         };
-        for word in compose::spaced(line).into_iter().filter(|word| tag(&line[word.clone()])) {
+        // Only the title's tags: the body is text.
+        let (repo, pointed) =
+            (|name: &str| self.repo_named(name).is_some(), |name: &str| self.pointed(name, true).is_some());
+        let head = compose::read_body_start(line, repo, pointed, &self.known).unwrap_or(line.len());
+        let tags = compose::spaced(line).into_iter().filter(|word| word.start < head && tag(&line[word.clone()]));
+        for word in tags {
             text.push_str(&line[at..word.start]);
-            let space = line[word.end..].chars().next().filter(|c| c.is_whitespace());
+            let space = line[word.end..].chars().next().filter(|c| c.is_whitespace() && *c != '\n');
             at = word.end + space.map_or(0, char::len_utf8);
         }
         text.push_str(&line[at..]);
         if let Some(name) = name {
-            if !text.is_empty() && !text.ends_with(' ') {
-                text.push(' ');
+            // At the end of the title's line: in the body it would be read as text.
+            let end = compose::read_body_start(&text, repo, pointed, &self.known).map_or(text.len(), |at| at - 1);
+            let (mut head, body) = (text[..end].to_string(), text[end..].to_string());
+            if !head.is_empty() && !head.ends_with(' ') {
+                head.push(' ');
             }
-            text.push_str(&format!("{mark}{name} "));
+            head.push_str(&format!("{mark}{name} "));
+            text = head + &body;
         }
         field.fits(0..line.len(), &text).then_some(text)
     }
@@ -9135,6 +9144,12 @@ impl Model {
     /// The tag at the cursor of the new-task box, as the dropdown's state is kept for it.
     fn menu_key(&self) -> Option<(usize, char, String)> {
         let field = self.compose.as_ref()?;
+        // In the body no tag is read: nothing to finish there.
+        let (repo, pointed) =
+            (|name: &str| self.repo_named(name).is_some(), |name: &str| self.pointed(name, true).is_some());
+        if compose::read_body_start(field.text(), repo, pointed, &self.known).is_some_and(|at| field.cursor() >= at) {
+            return None;
+        }
         let before = &field.text()[..field.cursor()];
         let (mark, typed) = compose::completing(before)?;
         Some((compose::completion(before, "").0.start, mark, typed))
@@ -14462,7 +14477,7 @@ mod tests {
         // Its own `>repo` wins.
         join(&mut m, "third >app-2");
         assert_eq!(m.tasks.get(3).and_then(|task| task.repo.as_deref()), Some("/code/app-2"));
-        // For later (⇧↵), or a client's: in no workspace, and the front one stays.
+        // For later (⌘⇧↵), or a client's: in no workspace, and the front one stays.
         m.update(Action::OpenCompose { text: "later".into() });
         m.update(Action::ComposeSubmit { open: false });
         let theirs = Action::TaskFromLine { line: "theirs".into(), known: Default::default(), open: true };
@@ -15330,7 +15345,7 @@ mod tests {
         // The line names one: offered.
         m.update(Action::FieldEdit { edit: Edit::Insert(" >zed".into()) });
         assert_eq!(m.compose_worktree().map(|choice| (choice.repo, choice.new)), Some(("zed".into(), false)));
-        // ⇧↵ (for later) makes none.
+        // ⌘⇧↵ (for later) makes none.
         m.update(Action::ComposeWorktree { new: Some(true) });
         let effects = m.update(Action::ComposeSubmit { open: false });
         assert!(!effects.iter().any(|e| matches!(e, Effect::AddWorktree { .. })));
@@ -16582,7 +16597,7 @@ mod tests {
         assert!(m.welcome() && m.compose_host().is_none());
         m.update(Action::OpenCompose { text: "tidy up".into() });
         assert_eq!(m.compose_host(), Some(Host::Drawer));
-        // ⇧↵ files it for later: the box closes. Nothing is open but a task: no welcome.
+        // ⌘⇧↵ files it for later: the box closes. Nothing is open but a task: no welcome.
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!((m.tasks.list.len(), m.compose_host(), m.mode(), m.welcome()), (1, None, Mode::Normal, false));
         // ↵ adds and starts: its conversation opens, so the box goes.
@@ -19193,7 +19208,7 @@ mod tests {
 
     #[test]
     fn enter_with_rows_on_show_takes_one_and_never_files_a_half_typed_tag() {
-        // (line, what ↵ and ⇧↵ make of it: the line a row gives, or `None`: the task is added.)
+        // (line, what ↵ and ⌘⇧↵ make of it: the line a row gives, or `None`: the task is added.)
         let cases = [
             ("fix it >", Some("fix it >app ")),
             ("fix #", Some("fix #canvas ")),

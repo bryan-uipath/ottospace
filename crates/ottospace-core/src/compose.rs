@@ -74,7 +74,8 @@ fn words(line: &str) -> Vec<&str> {
 pub(crate) fn spaced(line: &str) -> Vec<std::ops::Range<usize>> {
     let (mut words, mut start, mut escaped) = (Vec::new(), None, false);
     for (at, c) in line.char_indices() {
-        let ends = c.is_whitespace() && !escaped;
+        // A line break ends a word even after a backslash: a word is on one line.
+        let ends = (c.is_whitespace() && !escaped) || c == '\n';
         match (ends, start) {
             (true, Some(from)) => {
                 words.push(from..at);
@@ -219,37 +220,42 @@ pub fn parse(line: &str, known: impl Fn(char, &str) -> bool) -> Draft {
             list.push(item);
         }
     };
-    // The title is the first line with words in it (tags apart); the lines after it, the body.
-    let mut rest = None;
-    for (at, text) in line.split('\n').scan(0, |at, text| Some((std::mem::replace(at, *at + text.len() + 1), text))) {
-        if !title.is_empty() {
-            rest.get_or_insert(at);
-        }
-        for word in words(text) {
-            let titled = rest.is_none();
-            match tag(word, &known) {
-                Some(('#', project)) => draft.project = Some(project),
-                Some(('>', repo)) => draft.repo = Some(repo),
-                Some(('@', agent)) => draft.agent = Some(agent),
-                Some(('$', skill)) => once(&mut draft.skills, skill),
-                Some(('/', path)) => {
-                    once(&mut draft.paths, path);
-                    if titled {
-                        title.push(word);
-                    }
-                }
-                Some(('^', name)) => once(&mut draft.refs, name),
-                Some((_, digit)) => draft.priority = digit.parse().ok(),
-                None if titled => title.push(word),
-                None => {}
+    // Tags count up to the title's line; the lines after it are the body, read as text.
+    let rest = body_start(line, &known);
+    for word in words(&line[..rest.unwrap_or(line.len())]) {
+        match tag(word, &known) {
+            Some(('#', project)) => draft.project = Some(project),
+            Some(('>', repo)) => draft.repo = Some(repo),
+            Some(('@', agent)) => draft.agent = Some(agent),
+            Some(('$', skill)) => once(&mut draft.skills, skill),
+            Some(('/', path)) => {
+                once(&mut draft.paths, path);
+                title.push(word);
             }
+            Some(('^', name)) => once(&mut draft.refs, name),
+            Some((_, digit)) => draft.priority = digit.parse().ok(),
+            None => title.push(word),
         }
     }
     draft.title = title.join(" ");
     // Its indentation kept: only blank lines around it go.
-    let body = rest.map(|at| line[at.min(line.len())..].trim_start_matches(['\n', '\r']).trim_end().to_string());
+    let body = rest.map(|at| line[at..].trim_start_matches(['\n', '\r']).trim_end().to_string());
     draft.body = body.filter(|body| !body.trim().is_empty());
     draft
+}
+
+/// Where the body of `line` starts: after the first line that has a word other than a tag (the
+/// title's). None: no line after it. e.g. `#web\nfix it\nslowly` → the byte of `slowly`.
+pub fn body_start(line: &str, known: impl Fn(char, &str) -> bool) -> Option<usize> {
+    let mut at = 0;
+    for text in line.split('\n') {
+        let next = at + text.len() + 1;
+        if words(text).into_iter().any(|word| matches!(tag(word, &known), None | Some(('/', _)))) {
+            return (next <= line.len()).then_some(next);
+        }
+        at = next;
+    }
+    None
 }
 
 /// A title longer than `most` characters cut with …, and asked whole first in the body.
@@ -257,7 +263,10 @@ pub(crate) fn cut_title(draft: &mut Draft, most: usize) {
     if draft.title.chars().count() > most {
         let whole = std::mem::take(&mut draft.title);
         draft.title = whole.chars().take(most - 1).chain(['…']).collect();
-        draft.body = Some(draft.body.take().map_or(whole.clone(), |body| format!("{whole}\n{body}")));
+        draft.body = Some(match draft.body.take() {
+            Some(body) => format!("{whole}\n{body}"),
+            None => whole,
+        });
     }
 }
 
@@ -265,7 +274,9 @@ pub(crate) fn cut_title(draft: &mut Draft, most: usize) {
 /// understood.
 pub fn spans(line: &str, known: impl Fn(char, &str) -> bool) -> Vec<Span> {
     let span = |range: std::ops::Range<usize>| tag(&line[range.clone()], &known).map(|(mark, _)| Span { range, mark });
-    spaced(line).into_iter().filter_map(span).collect()
+    // None in the body: it is read as text.
+    let head = body_start(line, &known).unwrap_or(line.len());
+    spaced(line).into_iter().filter(|word| word.start < head).filter_map(span).collect()
 }
 
 /// A part of the line a task was filed from, as its first message shows it: its words, or a tag
@@ -353,6 +364,16 @@ pub fn read(line: &str, repo: impl Fn(&str) -> bool, pointed: impl Fn(&str) -> b
 /// As `spans`, against what is known.
 pub fn read_spans(line: &str, repo: impl Fn(&str) -> bool, pointed: impl Fn(&str) -> bool, known: &Known) -> Vec<Span> {
     spans(line, knows(repo, pointed, known))
+}
+
+/// As `body_start`, against what is known.
+pub fn read_body_start(
+    line: &str,
+    repo: impl Fn(&str) -> bool,
+    pointed: impl Fn(&str) -> bool,
+    known: &Known,
+) -> Option<usize> {
+    body_start(line, knows(repo, pointed, known))
 }
 
 /// The first of `agent` and `skills` that names nothing known, for a caller that gives them
@@ -460,7 +481,8 @@ pub fn word_end(line: &str, cursor: usize) -> usize {
     // The backslashes right before the cursor, an odd number of them: the next character is kept.
     let mut escaped = line[..cursor].chars().rev().take_while(|c| *c == '\\').count() % 2 == 1;
     let rest = line[cursor..].char_indices().find(|(_, c)| {
-        let ends = c.is_whitespace() && !escaped;
+        // A line break ends a word even after a backslash: a word is on one line.
+        let ends = (c.is_whitespace() && !escaped) || *c == '\n';
         escaped = *c == '\\' && !escaped;
         ends
     });
@@ -520,12 +542,16 @@ mod tests {
 
     #[test]
     fn several_lines_are_a_title_and_a_body() {
-        // The first line with words is the title; the rest, indentation kept, the body; tags count anywhere.
-        let draft = parse("#canvas\nfix the zoom >app\n\n  it flickers\n  @codex p2\n", known);
+        // The first line with words is the title; the rest, indentation kept, the body. Tags count up
+        // to the title's line; in the body they are text (`#include`, "the p1 outage").
+        let draft = parse("#canvas\nfix the zoom >app\n\n  it flickers\n  @codex p2 #include\n", known);
         assert_eq!(draft.title, "fix the zoom");
-        assert_eq!(draft.body.as_deref(), Some("  it flickers\n  @codex p2"));
+        assert_eq!(draft.body.as_deref(), Some("  it flickers\n  @codex p2 #include"));
         let tags = (draft.project.as_deref(), draft.repo.as_deref(), draft.agent.as_deref(), draft.priority);
-        assert_eq!(tags, (Some("canvas"), Some("app"), Some("codex"), Some(2)));
+        assert_eq!(tags, (Some("canvas"), Some("app"), None, None));
+        assert_eq!(spans("fix\n#web", known), []);
+        // A backslash at a line's end keeps no line break in a word.
+        assert_eq!(words("run \\\n@claude"), ["run", "\\", "@claude"]);
         // One line: no body; blank lines after it: none either.
         assert_eq!(parse("fix it", known).body, None);
         assert_eq!(parse("fix it\n \n", known).body, None);
@@ -797,8 +823,10 @@ mod tests {
         check(drafted.resolved.len() == drafted.paths.len(), "a path was read and not found".into())?;
         check(drafted.skills.len() <= draft_all(line).skills.len(), "a skill came from nowhere".into())?;
         let _ = path_words(line);
-        // Every name offered for the word being typed finishes it as that tag, wherever the cursor is.
-        for cursor in (0..=line.len()).filter(|at| line.is_char_boundary(*at)) {
+        // Every name offered for the word being typed finishes it as that tag, wherever the cursor is
+        // in the title's lines (the box offers none in the body, `Model::menu_key`).
+        let head = body_start(line, known).unwrap_or(line.len());
+        for cursor in (0..=line.len()).filter(|at| line.is_char_boundary(*at) && *at < head) {
             let Some((mark, start)) = completing(&line[..cursor]) else { continue };
             // A path the shell lists is its folder and a name.
             let folder = path_folder(&start);

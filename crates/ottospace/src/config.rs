@@ -264,10 +264,11 @@ pub fn load_tasks() -> Kept {
     };
     let files = entries.flatten().map(|entry| entry.path());
     let files = files.filter(|path| path.extension().is_some_and(|ext| ext == "json"));
-    // A small regular file only: not a pipe, which would hang the read.
+    // A regular file only, not a pipe, which would hang the read; and under 1 MiB: room for the
+    // new-task box's text (`MAX_PROMPT`, as typed and as its body) and its queued messages.
     let read = |path: &PathBuf| {
         let meta = fs::metadata(path).ok()?;
-        (meta.is_file() && meta.len() < 65_536).then(|| fs::read_to_string(path).ok()).flatten()
+        (meta.is_file() && meta.len() < 1 << 20).then(|| fs::read_to_string(path).ok()).flatten()
     };
     let mut kept = Kept::default();
     for path in files {

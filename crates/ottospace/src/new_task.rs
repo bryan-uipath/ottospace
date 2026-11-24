@@ -53,8 +53,10 @@ impl Workspace {
             "enter" if m.platform => Action::ComposeSubmit { open: true },
             // In the agent's list: the highlighted one becomes the default.
             "enter" if m.alt && self.model.picker_default().is_some() => Action::ComposeDefault,
-            // A line break, in the box and not in the bar's one-line title.
-            "enter" if (m.shift || m.alt) && !m.control => {
+            // In the bar's one-line title ⇧↵ files for later, as ⌘⇧↵ does.
+            "enter" if m.shift && self.model.bar_draft().is_some() => Action::ComposeSubmit { open: false },
+            // A line break, in the box.
+            "enter" if (m.shift || m.alt) && !m.control && self.model.bar_draft().is_none() => {
                 let edit = ottospace_core::edit::Edit::Replace { range: None, text: "\n".into() };
                 Action::FieldEdit { edit }
             }

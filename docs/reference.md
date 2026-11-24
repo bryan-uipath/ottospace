@@ -205,7 +205,7 @@ a click that would put it aside waits too.
 |---|---|
 | ↵ | While the dropdown shows rows, takes the highlighted one: it never adds a half-typed tag. Adds the task and starts its agent (the drawer becomes its conversation) when there is nothing to finish: no dropdown, no rows ("no match", "new project"), the word that row's name already, or a folder's end (`~/notes/`). While a folder's rows are read again it waits. Esc first adds the line as typed |
 | ⌘⇧↵ | Adds the task for later: the box closes, nothing starts. With the dropdown open, as ↵: it takes the row first |
-| ⇧↵ or ⌥↵ | A new line. The first line with words is the task's title (a longer one is cut at 500 characters); the lines after it are asked of its agent after the title, as typed. The box wraps and grows to 8 rows, then scrolls |
+| ⇧↵ or ⌥↵ | A new line. The first line with words is the task's title (a longer one is cut at 500 characters); the lines after it are asked of its agent after the title, as typed. Tags count up to the title's line; in the lines after it they are text (no dropdown there). The box wraps and grows to 8 rows, then scrolls |
 | ⌘↵ | Adds the task and starts it, whatever is highlighted |
 | Tab | Takes the highlighted row, or the first |
 | ↑ / ↓ or ⌃P / ⌃N | Move over the dropdown's rows. With no dropdown: a row of the text up or down, from the first or last to its start or end (⌃P / ⌃N only the dropdown's) |
