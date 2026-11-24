@@ -180,7 +180,7 @@ impl Model {
 
     /// A key on triage: on its card ↵ sorts, S skips; on an item ↵ keeps it (under the project it
     /// suggests), T takes it now, L puts it off a day, N not mine, D dismisses, U counts its claims,
-    /// C flips its role, P promotes its source's prefix, Z takes the last back. Esc closes.
+    /// C flips its role, P promotes the scope its key names, Z takes the last back. Esc closes.
     fn sort_key(&self, sort: &Sorting, key: &str, bare: bool, now: u64) -> Key {
         // Today ends at the user's next midnight; with no day yet, twelve hours on.
         let day = crate::filed::DAY_MS;
