@@ -721,10 +721,13 @@ impl Workspace {
             let tools = (!added.tools.is_empty()).then(|| {
                 crate::ui::dialog::row("MCP server", small(format!("ottospace_task: {}", added.tools.join(", "))))
             });
-            let brief = added.briefed.then(|| crate::ui::dialog::row("Brief", small("its file, named in the first message".into())));
+            let brief = added
+                .briefed
+                .then(|| crate::ui::dialog::row("Brief", small("its file, named in the first message".into())));
             let skills = (!added.skills.is_empty())
                 .then(|| crate::ui::dialog::row("Skills", small(format!("asked for: {}", added.skills.join(", ")))));
-            let sent = crate::ui::dialog::row("Sent", small("`Task: ` before your words, the tags read out of them".into()));
+            let sent =
+                crate::ui::dialog::row("Sent", small("`Task: ` before your words, the tags read out of them".into()));
             let folder = added.folder.clone().map(|folder| crate::ui::dialog::row("Folder", small(folder)));
             let rows = div().flex().flex_col().gap_1().pl_3().child(sent).children(guidance).children(tools);
             rows.children(brief).children(skills).children(folder)

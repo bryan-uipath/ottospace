@@ -762,6 +762,7 @@ impl Gen<'_> {
             paths: self.names(DIRS, 2),
             resolved: self.names(DIRS, 2),
             skills: self.names(SKILLS, 2),
+            line: None,
             created: self.rng.coin().then(|| self.time()),
             session: self.rng.one_in(4).then(|| self.link()),
             refs: Vec::new(),

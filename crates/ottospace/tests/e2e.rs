@@ -14704,8 +14704,17 @@ fn the_first_message_is_the_users_words_and_the_dot_holds_what_ottospace_added()
     let context = json!({"items": 3, "via": "server", "tools": 7, "briefed": false, "folder": true, "open": false});
     assert_eq!((&chat(&otto)["context"], &chat(&otto)["asked_tags"]), (&context, &json!(1)), "`>app`: one pill");
     assert!(!chat(&otto).to_string().contains("You run inside ottospace"), "never its words in the state");
+    // The top of the transcript in view: the dot, then the first message.
+    let body = rect(&otto.drawn()["drawer"]["body"]);
+    otto.wheel([body[0] + body[2] / 2., body[1] + body[3] / 2.], 40., false);
     // The bubble is the line as typed, its tag a pill: no `Task: `, nothing of ottospace's.
-    let copy = otto.control("chat-copy:1:0");
+    let first = |controls: Vec<(String, [f64; 4])>| {
+        let copies = controls
+            .into_iter()
+            .filter_map(|(id, at)| Some((id.strip_prefix("chat-copy:1:")?.parse::<u64>().ok()?, at)));
+        copies.min_by_key(|(id, _)| *id).map(|(_, at)| at)
+    };
+    let copy = first(otto.controls()).expect("the first message's Copy");
     otto.call(json!({"cmd": "mouse", "action": "move", "x": copy[0] + 1., "y": copy[1] + 1., "as": "user"}));
     assert_eq!(otto.user_click(at(copy, 0.5, 0.5))["copied"], "plan the week >app");
     // The dot's list opens on a click, and shuts again.
