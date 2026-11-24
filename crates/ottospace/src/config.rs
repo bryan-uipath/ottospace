@@ -510,6 +510,44 @@ pub fn remove_workbook(uid: &str) -> io::Result<()> {
     removed(fs::remove_file(dir.join(name)))
 }
 
+/// Where filed decisions are kept: `decisions` in the user's folder. `None`: nothing is kept.
+fn decisions_dir() -> Option<PathBuf> {
+    Some(get().home.as_ref()?.join("decisions"))
+}
+
+/// The most decision files read, and the largest one: a folder is input, not trusted text.
+const MAX_DECISIONS: usize = 512;
+const MAX_DECISION_BYTES: u64 = 64 * 1024;
+
+/// Reads the decisions folder: each small regular `<id>.json` (not a link or a pipe) that
+/// parses. The core checks each again (`Filed::restore`).
+pub fn load_decisions() -> Vec<ottospace_core::filed::Decision> {
+    let Some(entries) = decisions_dir().and_then(|dir| fs::read_dir(dir).ok()) else { return Vec::new() };
+    let mut paths: Vec<PathBuf> = entries.flatten().map(|entry| entry.path()).collect();
+    paths.sort();
+    let named = |path: &PathBuf| {
+        let stem = path.file_stem().and_then(|stem| stem.to_str());
+        path.extension().is_some_and(|ext| ext == "json") && stem.is_some_and(|stem| stem.parse::<u64>().is_ok())
+    };
+    let read = |path: &PathBuf| crate::collect::read_plain(path, MAX_DECISION_BYTES);
+    let parse = |bytes: Vec<u8>| serde_json::from_slice::<ottospace_core::filed::Decision>(&bytes).ok();
+    paths.iter().filter(|path| named(path)).take(MAX_DECISIONS).filter_map(|path| read(path).and_then(parse)).collect()
+}
+
+/// Writes one decision to `<id>.json` in the decisions folder (0600), whole or not at all.
+/// Nothing in a test run that named no folder.
+pub fn save_decision(decision: &ottospace_core::filed::Decision) -> io::Result<()> {
+    let Some(dir) = decisions_dir() else { return Ok(()) };
+    let text = serde_json::to_string_pretty(decision).map_err(io::Error::other)? + "\n";
+    write_mode(&dir, &format!("{}.json", decision.id), text.as_bytes(), Some(0o600))
+}
+
+/// Removes a decision's file. One that is gone already is removed.
+pub fn remove_decision(id: u64) -> io::Result<()> {
+    let Some(dir) = decisions_dir() else { return Ok(()) };
+    removed(fs::remove_file(dir.join(format!("{id}.json"))))
+}
+
 /// A removal or a move of a file that is not there succeeded: it is gone.
 pub fn removed(result: io::Result<()>) -> io::Result<()> {
     match result {

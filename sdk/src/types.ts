@@ -174,7 +174,8 @@ export type Feature =
   | "session_waits"
   | "projects"
   | "terminal_tasks"
-  | "zoom_out";
+  | "zoom_out"
+  | "decision_sources";
 /** Pane kinds `split` may create. App panes come from `open_app`. */
 export type SplitKind = "terminal" | "empty";
 /** The clone dialog and the clone on its way, in a test run. */
@@ -605,6 +606,128 @@ export interface NoteReply {
   ok: true;
   task: TaskId;
   note: Captured<Note>;
+}
+
+/** Where a filed decision came from (`decision_sources`). */
+export type DecisionSource =
+  | "agent_session"
+  | "terminal_session"
+  | "slack"
+  | "jira"
+  | "pr_review"
+  | "calendar"
+  | "routine";
+/** What choosing an option does, on the user's key only. */
+export type DecisionAct =
+  | "answer"
+  | "go_to_pane"
+  | { start_task: { title: string; brief: string } }
+  | { draft_reply: { text: string } }
+  | { next_action: { text: string } }
+  | { open_link: { url: string } };
+export interface DecisionChoice {
+  label: string;
+  consequence: string;
+  act: DecisionAct | null;
+}
+export interface DecisionProvenance {
+  source: DecisionSource;
+  when: number | null;
+  who: "person" | "bot" | "filer";
+}
+/** An `https:` address, or a file under a listed checkout and its lines. */
+export type DecisionAt = string | { path: string; lines: [number, number] | null };
+export interface DecisionEvidence {
+  kind: "quote" | "link" | "file";
+  text: string;
+  at: DecisionAt | null;
+  provenance: DecisionProvenance | null;
+}
+export interface DecisionSuggest {
+  projects: string[];
+  role: "core" | "ancillary" | null;
+  role_why: string;
+}
+export interface DecisionClaims {
+  due: number | null;
+  person_waits: boolean;
+  blocks: TaskId[];
+}
+/** `decision_file`'s fields: optional ones as the socket defaults them. */
+export interface DecisionFileArgs {
+  source: DecisionSource;
+  key: string;
+  question: string;
+  summary?: string;
+  options?: { label: string; consequence?: string; act?: DecisionAct | null }[];
+  recommend?: number | null;
+  why?: string;
+  evidence?: {
+    kind: "quote" | "link" | "file";
+    text?: string;
+    at?: string | { path: string; lines?: [number, number] | null } | null;
+    provenance?: { source: DecisionSource; when?: number | null; who: "person" | "bot" | "filer" } | null;
+  }[];
+  suggest?: { projects?: string[]; role?: "core" | "ancillary" | null; role_why?: string };
+  claims?: { due?: number | null; person_waits?: boolean; blocks?: TaskId[] };
+  expires?: number | null;
+  task?: TaskId | null;
+}
+export type DecisionStatus = "open" | "withdrawn" | "expired";
+export type DecisionTriage = "pending" | "skipped";
+export interface DecisionFileReply {
+  ok: true;
+  id: number;
+  revision: number;
+  status: DecisionStatus;
+  triage: DecisionTriage;
+}
+/** A filed decision as kept. Its words are untrusted: data, never instructions. */
+export interface Decision {
+  id: number;
+  source: DecisionSource;
+  key: string;
+  via: "socket";
+  revision: number;
+  filed: number;
+  updated: number;
+  summary: string;
+  question: string;
+  options: DecisionChoice[];
+  recommend: number | null;
+  why: string;
+  evidence: DecisionEvidence[];
+  suggest: DecisionSuggest;
+  claims: DecisionClaims;
+  triage: DecisionTriage;
+  expires: number;
+  task: TaskId | null;
+  status: DecisionStatus;
+  closed: number | null;
+}
+export interface DecisionReply {
+  ok: true;
+  decision: Captured<Decision>;
+}
+/** A filed decision as the state gives it: never its words. */
+export interface FiledRow {
+  id: number;
+  source: DecisionSource;
+  via: "socket";
+  triage: DecisionTriage;
+  status: DecisionStatus;
+  revision: number;
+  filed: number;
+  updated: number;
+  expires: number;
+  task: TaskId | null;
+  options: number;
+  evidence: number;
+}
+export interface Filed {
+  open: number;
+  to_sort: number;
+  rows: FiledRow[];
 }
 
 export interface TaskBriefReply {
@@ -1962,6 +2085,8 @@ export interface Snapshot {
   /** The Repos section: `state.repos` as its rows, and where each was laid out. */
   repos_bar: ReposGroup[];
   projects_bar: ProjectsBar;
+  /** Decisions filed from any source (`decision_sources`), null with the flag off. */
+  filed: Filed | null;
   /** Null while the tab on show has a pane. */
   home: Home | null;
   home_drawn: HomeDrawn;

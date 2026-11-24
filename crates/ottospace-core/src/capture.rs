@@ -720,7 +720,7 @@ pub(crate) fn plain(text: &str, max: usize) -> String {
 
 /// Captured text as it is kept: a line break of any kind is a new line (a text area's value may
 /// have some), every other character that does not show goes, and it is cut to `max`.
-fn kept_text(text: &str, max: usize) -> String {
+pub(crate) fn kept_text(text: &str, max: usize) -> String {
     let clean: String =
         text.chars().map(|c| if is_break(c) { '\n' } else { c }).filter(|c| *c == '\n' || shows(*c)).collect();
     ax::truncate(&clean, max)

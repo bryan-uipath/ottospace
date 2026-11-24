@@ -42,10 +42,11 @@ pub enum Feature {
     Projects,
     TerminalTasks,
     ZoomOut,
+    DecisionSources,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 13] = [
+pub const ALL: [Feature; 14] = [
     Feature::Marks,
     Feature::AppsSection,
     Feature::Transcripts,
@@ -59,6 +60,7 @@ pub const ALL: [Feature; 13] = [
     Feature::Projects,
     Feature::TerminalTasks,
     Feature::ZoomOut,
+    Feature::DecisionSources,
 ];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
@@ -81,6 +83,7 @@ impl Feature {
             Feature::Projects => "projects",
             Feature::TerminalTasks => "terminal_tasks",
             Feature::ZoomOut => "zoom_out",
+            Feature::DecisionSources => "decision_sources",
         }
     }
 
@@ -98,7 +101,8 @@ impl Feature {
             | Feature::SessionWaits
             | Feature::Projects
             | Feature::TerminalTasks
-            | Feature::ZoomOut => Stage::Experimental,
+            | Feature::ZoomOut
+            | Feature::DecisionSources => Stage::Experimental,
         }
     }
 
@@ -123,6 +127,7 @@ impl Feature {
             Feature::Projects => "Projects",
             Feature::TerminalTasks => "Terminal sessions as tasks",
             Feature::ZoomOut => "Zoom out",
+            Feature::DecisionSources => "Decisions from any source",
         }
     }
 
@@ -164,6 +169,9 @@ impl Feature {
                 "A live Claude Code or Codex you started in a terminal is listed with the tasks, read-only, until it ends"
             }
             Feature::ZoomOut => "Every tab of the workspace on show at once, as tiles on a grid",
+            Feature::DecisionSources => {
+                "Agents and routines file decisions over the socket (Slack, Jira, a session): they wait to be sorted"
+            }
         }
     }
 
@@ -187,6 +195,7 @@ impl Feature {
             Feature::Projects => "feature off: projects",
             Feature::TerminalTasks => "feature off: terminal_tasks",
             Feature::ZoomOut => "feature off: zoom_out",
+            Feature::DecisionSources => "feature off: decision_sources",
         }
     }
 }
@@ -317,7 +326,8 @@ mod tests {
                 Feature::SessionWaits,
                 Feature::Projects,
                 Feature::TerminalTasks,
-                Feature::ZoomOut
+                Feature::ZoomOut,
+                Feature::DecisionSources
             ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
@@ -333,10 +343,11 @@ mod tests {
                 .with(Feature::SessionWaits, true)
                 .with(Feature::Projects, true)
                 .with(Feature::TerminalTasks, true)
-                .with(Feature::ZoomOut, true),
+                .with(Feature::ZoomOut, true)
+                .with(Feature::DecisionSources, true),
             Features::all()
         );
-        let list = " zoom_out,terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " decision_sources,zoom_out,terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));

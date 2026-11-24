@@ -1825,6 +1825,22 @@ pub enum Action {
     },
     /// Esc on the card, or its workspace closed: Decisions ends, nothing answered.
     DecisionsClose,
+    /// A client files a decision (`decision_file`), as of `now`: a new one, or the next revision
+    /// of its key's. Refused as `Filed::refusal` says (`decision_sources`).
+    DecisionFile {
+        filing: Box<crate::filed::Filing>,
+        now: u64,
+    },
+    /// A client says the decision of `key` is moot (`decision_withdraw`).
+    DecisionWithdraw {
+        source: crate::filed::Source,
+        key: String,
+        now: u64,
+    },
+    /// The decisions kept on disk, read at start. The shell's alone.
+    RestoreDecisions {
+        kept: Vec<crate::filed::Decision>,
+    },
     /// ⌘⇧\: every tab of the space on show as a tile (`zoom_out`); zoomed out, back to the tab it
     /// opened on. Only the user's.
     ZoomOut,
@@ -2892,6 +2908,9 @@ impl Action {
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose
+            | Action::DecisionFile { .. }
+            | Action::DecisionWithdraw { .. }
+            | Action::RestoreDecisions { .. }
             | Action::CityCamera { .. }
             | Action::ZoomMove { .. }
             | Action::ZoomEnter { .. } => false,
@@ -2929,6 +2948,7 @@ impl Action {
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose => Some(Feature::Decisions),
+            Action::DecisionFile { .. } | Action::DecisionWithdraw { .. } => Some(Feature::DecisionSources),
             Action::SessionUnhide { .. } => Some(Feature::TerminalTasks),
             Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. } => Some(Feature::ZoomOut),
             Action::ListenStart { .. }
@@ -3452,6 +3472,14 @@ pub enum Effect {
     SaveProjects {
         kept: crate::projects::Kept,
     },
+    /// A filed decision changed: write `<home>/decisions/<id>.json`.
+    SaveDecision {
+        decision: Box<crate::filed::Decision>,
+    },
+    /// A closed decision's time is up: remove its file.
+    RemoveDecision {
+        id: u64,
+    },
     /// The Repos list's entries changed: write them, in this order, as `repos` in the settings
     /// file.
     SaveRepos {
@@ -3831,6 +3859,7 @@ pub mod zones;
 
 pub mod decisions;
 pub mod displays;
+mod filed;
 pub mod rail;
 pub mod spaces;
 pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
@@ -4258,6 +4287,10 @@ pub struct Model {
     /// The Projects section's list. Not in the state: titles and paths are the user's (`projects_bar`).
     #[serde(skip)]
     pub projects: crate::projects::Projects,
+    /// Decisions filed from any source (`decision_sources`). Not in the state: their words are
+    /// others' (the shell's `filed` gives ids, kinds and counts).
+    #[serde(skip)]
+    pub filed: crate::filed::Filed,
     /// The features that are on (`SetFeatures`). In the state, their names.
     pub features: Features,
     /// The code city's camera of each tab and folder, and the drag in flight (`model::city`).
@@ -4474,6 +4507,7 @@ impl Default for Model {
             layout_kept: true,
             calendar: Calendar::default(),
             projects: crate::projects::Projects::default(),
+            filed: crate::filed::Filed::default(),
             // In this crate's tests every feature is on (a test of one that is off turns it off), but
             // `overlay_panels`: an experiment that changes how the sidebar and the drawer close.
             features: if cfg!(test) {
@@ -5368,6 +5402,7 @@ impl Model {
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
         self.settle_decisions(origin, drawer_keys, &mut effects);
+        self.settle_filed(&mut effects);
         self.settle_spaces(origin, &home);
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         // After the tabs out: a fold-in may move the main window's tab (seed 37143).
@@ -7453,6 +7488,9 @@ impl Model {
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose) => self.decisions_act(action, effects),
+            action @ (Action::DecisionFile { .. }
+            | Action::DecisionWithdraw { .. }
+            | Action::RestoreDecisions { .. }) => self.filed_act(action, effects),
             Action::ZoomOut => self.zoom_toggle(effects),
             Action::ZoomMove { dir } => self.zoom_move(dir),
             Action::ZoomEnter { tab } => self.zoom_enter(tab, effects),
@@ -11519,6 +11557,9 @@ mod tests {
         Action::DecisionsSkip { .. },
         Action::DecisionsLater { .. },
         Action::DecisionsClose,
+        Action::DecisionFile { .. },
+        Action::DecisionWithdraw { .. },
+        Action::RestoreDecisions { .. },
         Action::ZoomOut,
         Action::ZoomMove { .. },
         Action::ZoomEnter { .. },
@@ -11930,6 +11971,9 @@ mod tests {
             Action::DecisionsSkip { task: 1, ticket: 1 },
             Action::DecisionsLater { task: 1, ticket: 1, until: 0 },
             Action::DecisionsClose,
+            Action::DecisionFile { filing: Box::new(crate::filed::tests::filing()), now: 1 },
+            Action::DecisionWithdraw { source: crate::filed::Source::Slack, key: "k".into(), now: 1 },
+            Action::RestoreDecisions { kept: Vec::new() },
             Action::ZoomOut,
             Action::ZoomMove { dir: Dir::Right },
             Action::ZoomEnter { tab: None },

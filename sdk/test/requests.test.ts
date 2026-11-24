@@ -161,6 +161,18 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.calendar({ day: "tomorrow", days: 2 }),
   (c) => c.calendar({ day: "yesterday" }),
   (c) => c.note({ task: 7 }),
+  (c) =>
+    c.decisionFile({
+      source: "slack",
+      key: "slack:C0MADEUP:1763500000.000100",
+      question: "Reply today, or hand it over?",
+      options: [{ label: "Draft a reply", act: { draft_reply: { text: "Made-up draft." } } }],
+      recommend: 0,
+      evidence: [{ kind: "quote", text: "can we flip it?", provenance: { source: "slack", who: "person" } }],
+      claims: { person_waits: true },
+    }),
+  (c) => c.decisionWithdraw({ source: "slack", key: "slack:C0MADEUP:1763500000.000100" }),
+  (c) => c.decision({ id: 1763500000000 }),
   (c) => c.marks(),
   (c) => c.markAdd({ pane: 1, name: "notes", key: "n" }),
   (c) => c.markGo({ name: "notes", axis: "down" }),

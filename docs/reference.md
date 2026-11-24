@@ -1538,6 +1538,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `projects` | Experimental | off | Projects: The projects in your projects_dir, on the left rail: read, never written |
 | `terminal_tasks` | Experimental | off | Terminal sessions as tasks: A live Claude Code or Codex you started in a terminal is listed with the tasks, read-only, until it ends |
 | `zoom_out` | Experimental | off | Zoom out (⌘⇧\\): Every tab of the workspace on show at once, as tiles on a grid |
+| `decision_sources` | Experimental | off | Decisions from any source: Agents and routines file decisions over the socket (Slack, Jira, a session): they wait to be sorted |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1722,6 +1723,9 @@ empty and not renamed, and the main window shows the tab again.
   `out` say what is where.
 - `zoom_out` off: ⌘⇧\\ does nothing, no Zoom Out or In item, and an open overview closes. On, see
   [Zoom out](#zoom-out) (design: [zoom-out.md](ai/zoom-out.md)).
+- `decision_sources` off: `decision_file`, `decision_withdraw` and `decision` answer `feature off:
+  decision_sources`, the state's `filed` is null; decisions kept from before are still read, and
+  expire and go on time. Design: [decision-sources.md](ai/attention/decision-sources.md).
 - `agent_mode` off: no robot in an app pane's header, ⌘⌃V does nothing, no Agent Mode commands,
   the grants are kept as they are (turning it on again raises none), and every read of an app pane by a client (`app_read`,
   `app_look`, `ax_tree`) answers `feature off: agent_mode` (design: [agent-mode.md](ai/agent-mode.md)).
@@ -1781,11 +1785,20 @@ ottospace ctl '{"cmd":"mark_add","pane":3,"name":"notes","key":"n"}'   # a way b
 ottospace ctl '{"cmd":"mark_go","name":"notes"}'     # go to it, or open it again
 ottospace ctl '{"cmd":"task_brief","id":7}'          # a task's brief: the ask, and what was captured for it
 ottospace ctl '{"cmd":"calendar","days":2}'          # today's and tomorrow's meetings, busy and free time
+ottospace ctl '{"cmd":"decision_file","source":"jira","key":"jira:ABC-1","question":"Take ABC-1 this week?"}'  # decision_sources
 ottospace ctl '{"cmd":"sneak"}'                      # labels on ottospace's controls: `sneak.targets`
 ottospace ctl '{"cmd":"key","keys":"a"}'             # type a label: that control acts as if clicked
 ottospace ctl '{"cmd":"state"}'
 ottospace ctl '{"cmd":"trace"}'                      # the last 2,000 events: names, times and ids, never text
 ```
+
+With the `decision_sources` [flag](#features) on, an agent or a routine files a decision for you
+(`decision_file`): a question, its options, why, evidence, and its own suggestions. One key per
+thread (`slack:C0MADEUP:1.0`): filing it again updates it. It waits for you; its words are kept in
+`~/.ottospace/decisions/<id>.json` (0600), deleted two weeks after it closes, and given to a client
+only by `decision`, labelled untrusted. At most 20 open per source, 100 in all, 30 filings an hour
+per source; a decision expires after a week, or when the task it was asked for is done. See the
+guide (`ottospace skill`) and [decision-sources.md](ai/attention/decision-sources.md).
 
 `OTTOSPACE_TRACE=1` also writes the trace to `~/.ottospace/trace.jsonl` when the app panics or gets
 `kill -USR1`.

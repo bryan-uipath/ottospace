@@ -1784,6 +1784,7 @@ impl Workspace {
         let kept = config::read_projects();
         let restore = Action::RestoreProjects { placed: kept.placed, used: kept.used.into_iter().collect() };
         model.update(restore.sent_by(Origin::System));
+        model.update(Action::RestoreDecisions { kept: config::load_decisions() }.sent_by(Origin::System));
         // Before what a restore reads: a section behind a flag that is off is not put back.
         model.update(Action::SetFeatures { features: features::startup() }.sent_by(Origin::System));
         // A test run's fixture is a transcript's sound: a terminal pane may be heard.
@@ -2369,6 +2370,16 @@ impl Workspace {
                 Effect::SaveProjects { kept } => {
                     if let Err(err) = config::save_projects(kept) {
                         self.error = Some(format!("projects.json: {err}"));
+                    }
+                }
+                Effect::SaveDecision { decision } => {
+                    if let Err(err) = config::save_decision(decision) {
+                        self.error = Some(format!("decisions: {err}"));
+                    }
+                }
+                Effect::RemoveDecision { id } => {
+                    if let Err(err) = config::remove_decision(*id) {
+                        self.error = Some(format!("decisions: {err}"));
                     }
                 }
                 Effect::SaveRepos { dirs } => {
@@ -3404,6 +3415,73 @@ impl Workspace {
                     let _ = reply.send(self.serve_note(task));
                     continue;
                 }
+                Request::DecisionFile {
+                    source,
+                    key,
+                    summary,
+                    question,
+                    options,
+                    recommend,
+                    why,
+                    evidence,
+                    suggest,
+                    claims,
+                    expires,
+                    task,
+                } => {
+                    use ottospace_core::filed::Filing;
+                    let filing = Filing {
+                        source,
+                        key,
+                        summary,
+                        question,
+                        options,
+                        recommend,
+                        why,
+                        evidence,
+                        suggest,
+                        claims,
+                        expires,
+                        task,
+                    };
+                    let now = now_ms();
+                    let _ = reply.send(match self.model.filing_refusal(&filing, now) {
+                        Some(why) => control::error(&why),
+                        None => {
+                            let (source, key) = (filing.source, filing.key.clone());
+                            self.dispatch(Action::DecisionFile { filing: Box::new(filing), now }, Origin::Socket, window, cx);
+                            match self.model.filed.find(source, &key) {
+                                Some(d) => serde_json::json!({
+                                    "ok": true, "id": d.id, "revision": d.revision, "status": d.status, "triage": d.triage
+                                })
+                                .to_string(),
+                                None => control::error("not filed"),
+                            }
+                        }
+                    });
+                    continue;
+                }
+                Request::DecisionWithdraw { source, key } => {
+                    let open = self.model.filed.find(source, &key).is_some_and(|d| d.open());
+                    if !open {
+                        failure = Some(format!("no open decision of {} {key:?}", source.name()));
+                        None
+                    } else {
+                        Some(Action::DecisionWithdraw { source, key, now: now_ms() })
+                    }
+                }
+                Request::Decision { id } => {
+                    let _ = reply.send(match self.model.filed.get(id) {
+                        Some(d) => {
+                            let mut decision = serde_json::json!(d);
+                            decision["untrusted"] = true.into();
+                            decision["warning"] = ottospace_core::filed::WARNING.into();
+                            serde_json::json!({ "ok": true, "decision": decision }).to_string()
+                        }
+                        None => control::error(&format!("no decision {id}")),
+                    });
+                    continue;
+                }
                 Request::CalendarCall { in_call } => Some(Action::CallSeen { in_call, at: now_ms() }),
                 // As the shell would report it: the shell's news, and its line on the bar.
                 // An app pane with no window, as the user's pick or a client's.
@@ -4370,6 +4448,10 @@ impl Workspace {
             // its order: `placed`, `file`, `note`, `modified`, `used` and where it was drawn. Never a
             // project's title or path: those are the user's. Off and empty with the flag off.
             "projects_bar": self.projects_bar(),
+            // Decisions filed from any source (`decision_sources`), null with the flag off: `open`,
+            // `to_sort`, and each one's id, source, `via`, triage, status, revision, times and counts
+            // of options and evidence. Never its words: `decision` gives those, labelled untrusted.
+            "filed": self.on(Feature::DecisionSources).then(|| self.model.filed.shown()),
             // The home screen, or null while the tab on show has a pane: each task's node (its
             // lane, depth and crossing of the lattice) and the rows under "Needs you".
             "home": self.model.home(&self.home.borrow().keep_out()),

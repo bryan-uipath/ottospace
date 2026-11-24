@@ -20,6 +20,7 @@ const MARKS: (&str, &str) = ("OTTOSPACE_FEATURES", "marks");
 const APPS_SECTION: (&str, &str) = ("OTTOSPACE_FEATURES", "apps_section");
 const BOTH: (&str, &str) = ("OTTOSPACE_FEATURES", "marks,apps_section");
 const PROJECTS: (&str, &str) = ("OTTOSPACE_FEATURES", "projects");
+const DECISION_SOURCES: (&str, &str) = ("OTTOSPACE_FEATURES", "decision_sources");
 
 /// A running ottospace on a private socket. Killed on drop, so a failed assert leaves no window.
 struct Otto {
@@ -18275,4 +18276,94 @@ fn the_zoom_plays_both_ways_and_asks_for_no_frame_at_rest() {
     let at_rest = frames(&otto);
     std::thread::sleep(Duration::from_millis(400));
     assert_eq!(frames(&otto), at_rest, "a frame asked for at rest");
+}
+
+/// Decisions filed from any source (`decision_sources`): a made-up Slack thread filed over the
+/// socket waits to be sorted; the same key is its next revision; its words are given only by
+/// `decision`, labelled untrusted, never in the state; it is kept (0600) and comes back after a
+/// restart; a malformed one, one past a cap and any with the flag off are refused, saying why.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_filed_decision_waits_to_be_sorted_updates_by_key_and_keeps_its_words_out_of_the_state() {
+    use std::os::unix::fs::PermissionsExt;
+    let settings = json!({"repos": [], "restore_layout": false, "sessions": false});
+    let home = user_folder("decision-sources", &settings.to_string());
+    let launch = |n: &str| Otto::launch_with(n, &[("OTTOSPACE_HOME", home.to_str().unwrap()), DECISION_SOURCES]);
+    let otto = launch("decisions-filed-1");
+    let key = "slack:C0MADEUP:1763500000.000100";
+    let words = "MADEUPWORDS can we flip it before 5?";
+    let filing = json!({
+        "cmd": "decision_file", "source": "slack", "key": key,
+        "summary": "Asked in #made-up-rollout whether the flag can flip",
+        "question": "Reply to the rollout thread today, or hand it over?",
+        "options": [{"label": "Draft a reply", "act": {"draft_reply": {"text": "Made-up draft."}}}],
+        "recommend": 0,
+        "evidence": [{"kind": "quote", "text": words, "provenance": {"source": "slack", "who": "person"}}],
+        "claims": {"person_waits": true}
+    });
+    let filed = otto.call(filing.clone());
+    assert_eq!(
+        (&filed["revision"], &filed["status"], &filed["triage"]),
+        (&json!(1), &json!("open"), &json!("pending"))
+    );
+    let id = filed["id"].as_u64().unwrap();
+    let state = otto.call(json!({"cmd": "state"}));
+    assert_eq!((&state["filed"]["open"], &state["filed"]["to_sort"]), (&json!(1), &json!(1)), "{}", state["filed"]);
+    assert_eq!(
+        (state["filed"]["rows"][0]["id"].as_u64(), &state["filed"]["rows"][0]["evidence"]),
+        (Some(id), &json!(1))
+    );
+    assert!(!state.to_string().contains("MADEUPWORDS"), "others' words are never in the state");
+    // The same key again: its next revision, never another decision; the same twice, no change.
+    let mut again = filing.clone();
+    again["why"] = json!("the asker is blocked");
+    let updated = otto.call(again.clone());
+    assert_eq!((updated["id"].as_u64(), &updated["revision"]), (Some(id), &json!(2)));
+    assert_eq!(otto.call(again)["revision"], 2);
+    // Its words, labelled.
+    let read = otto.call(json!({"cmd": "decision", "id": id}));
+    let decision = &read["decision"];
+    assert_eq!((&decision["untrusted"], &decision["evidence"][0]["text"]), (&json!(true), &json!(words)));
+    // Malformed: refused, saying why.
+    let refused = |change: &dyn Fn(&mut Value)| {
+        let mut bad = filing.clone();
+        change(&mut bad);
+        let reply = otto.raw(&bad.to_string());
+        assert_eq!(reply["ok"], false, "{bad}");
+        reply["error"].as_str().unwrap_or_default().to_string()
+    };
+    assert!(refused(&|f| f["key"] = json!("../x")).contains("key"));
+    assert!(refused(&|f| f["source"] = json!("terminal_session")).contains("ottospace's own"));
+    let http = json!({"open_link": {"url": "http://example.com/"}});
+    assert!(refused(&|f| f["options"][0]["act"] = http.clone()).contains("https"));
+    assert!(refused(&|f| f["evidence"][0]["at"] = json!({"path": "/etc/hosts"})).contains("listed repository"));
+    // Kept on disk, the user's alone.
+    let file = home.join("decisions").join(format!("{id}.json"));
+    assert_eq!(std::fs::metadata(&file).unwrap().permissions().mode() & 0o777, 0o600);
+    // Withdrawn: closed; a second withdraw finds nothing open.
+    let withdrawn = otto.call(json!({"cmd": "decision_withdraw", "source": "slack", "key": key}));
+    assert_eq!(withdrawn["filed"]["rows"][0]["status"], "withdrawn", "{withdrawn}");
+    assert_eq!(otto.raw(&json!({"cmd": "decision_withdraw", "source": "slack", "key": key}).to_string())["ok"], false);
+    // Twenty open from one source at most.
+    for n in 0..20 {
+        otto.call(json!({"cmd": "decision_file", "source": "slack", "key": format!("k{n}"), "question": "Made up?"}));
+    }
+    let past =
+        otto.raw(&json!({"cmd": "decision_file", "source": "slack", "key": "k20", "question": "Made up?"}).to_string());
+    assert!(past["error"].as_str().unwrap_or_default().contains("20 open from slack"), "{past}");
+    drop(otto);
+
+    // Kept across a restart.
+    let otto = launch("decisions-filed-2");
+    let state = otto.call(json!({"cmd": "state"}));
+    let rows = state["filed"]["rows"].as_array().unwrap();
+    assert_eq!(rows.len(), 21);
+    assert!(rows.iter().any(|row| row["id"].as_u64() == Some(id) && row["status"] == "withdrawn"));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&home);
+
+    // The flag off: refused, and nothing in the state.
+    let otto = Otto::launch("decisions-filed-off");
+    assert_eq!(otto.raw(&filing.to_string())["error"], "feature off: decision_sources");
+    assert_eq!(otto.call(json!({"cmd": "state"}))["filed"], Value::Null);
 }

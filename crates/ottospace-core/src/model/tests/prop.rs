@@ -411,6 +411,74 @@ impl Gen<'_> {
     }
 
     /// The Decisions card on show, most of the time there is one; else a task and a ticket.
+    /// A filed decision's source and key: one there is half the time, else a few made-up ones.
+    fn filed_key(&mut self) -> (crate::filed::Source, String) {
+        let real: Vec<(crate::filed::Source, String)> =
+            self.m.filed.list.iter().map(|d| (d.source, d.key.clone())).collect();
+        self.one_of(&real, |g| {
+            let source = g.rng.pick(&crate::filed::SOURCES);
+            (source, g.rng.pick(&["slack:C1:1.0", "jira:ABC-1", "k", "", "../k", "a b"]).to_string())
+        })
+    }
+
+    /// A filing's time: the model's, an hour on, a week on (past the default expiry), or anything.
+    fn filed_time(&mut self) -> u64 {
+        let now = self.m.now;
+        let on = [crate::filed::HOUR_MS, crate::filed::DEFAULT_EXPIRY_MS].map(|ms| now.saturating_add(ms));
+        self.rng.pick(&[now, on[0], on[1], 0, u64::MAX])
+    }
+
+    /// What a client files: mostly well-formed, with hostile words; sometimes not.
+    fn filing(&mut self) -> crate::filed::Filing {
+        use crate::filed::{Act, At, Choice, Claims, Evidence, EvidenceKind, Filing, Role, Suggest};
+        let (source, key) = self.filed_key();
+        let act = |g: &mut Self| match g.rng.below(5) {
+            0 => None,
+            1 => Some(Act::DraftReply { text: g.text() }),
+            2 => Some(Act::OpenLink { url: g.rng.pick(&["https://example.com/a", "http://x", "https://"]).into() }),
+            3 => Some(Act::StartTask { title: g.text(), brief: g.text() }),
+            _ => Some(Act::Answer),
+        };
+        let options = (0..self.rng.pick(&[0, 1, 2, 7]))
+            .map(|_| Choice { label: self.text(), consequence: self.text(), act: act(self) })
+            .collect::<Vec<_>>();
+        let at = |g: &mut Self| match g.rng.below(3) {
+            0 => None,
+            1 => Some(At::Url(g.rng.pick(&["https://example.com/p1", "javascript:x"]).into())),
+            _ => Some(At::File {
+                path: g.rng.pick(DIRS).to_string() + "/f.rs",
+                lines: g.rng.maybe(|r| (r.pick(&[0, 1, 5]), 3)),
+            }),
+        };
+        let evidence = (0..self.rng.below(3))
+            .map(|_| Evidence {
+                kind: self.rng.pick(&[EvidenceKind::Quote, EvidenceKind::Link, EvidenceKind::File]),
+                text: self.text(),
+                at: at(self),
+                provenance: None,
+            })
+            .collect();
+        let task = self.rng.coin().then(|| self.task());
+        let blocks = self.rng.maybe(|r| r.below(4) as TaskId).into_iter().collect();
+        let claims =
+            Claims { due: self.rng.maybe(|r| r.pick(&[0, 1, u64::MAX])), person_waits: self.rng.coin(), blocks };
+        let suggest = Suggest { projects: vec![self.text()], role: Some(Role::Core), role_why: self.text() };
+        Filing {
+            source,
+            key,
+            summary: self.text(),
+            question: self.rng.pick(&["Reply today?", "", "\n"]).to_string() + &self.text(),
+            recommend: self.rng.maybe(|r| r.below(3)),
+            why: self.text(),
+            evidence,
+            suggest,
+            claims,
+            expires: self.rng.maybe(|r| r.pick(&[0, u64::MAX])),
+            task,
+            options,
+        }
+    }
+
     fn decision(&mut self) -> (TaskId, u64) {
         match self.m.decision_card().filter(|_| !self.rng.one_in(4)) {
             Some(card) => card,
@@ -1746,6 +1814,26 @@ const MAKERS: &[Make] = &[
         Action::DecisionsLater { task, ticket, until: g.time() }
     },
     |_| Action::DecisionsClose,
+    // Decisions filed by a client: a made-up thread, hostile words, a stray or a real task.
+    |g| Action::DecisionFile { filing: Box::new(g.filing()), now: g.filed_time() },
+    |g| {
+        let (source, key) = g.filed_key();
+        Action::DecisionWithdraw { source, key, now: g.filed_time() }
+    },
+    |g| {
+        // What was kept, sometimes changed on disk: twice, a key that is no key, words.
+        let mut kept = g.m.filed.list.clone();
+        if let Some(d) = kept.first().cloned().filter(|_| g.rng.coin()) {
+            let mut other = d.clone();
+            match g.rng.below(3) {
+                0 => other.key = "../x".into(),
+                1 => other.question = g.text(),
+                _ => other.id = other.id.wrapping_add(1),
+            }
+            kept.push(other);
+        }
+        Action::RestoreDecisions { kept }
+    },
     // Zoom-out: open or back, the selection, into a tile (else a stray tab).
     |_| Action::ZoomOut,
     |g| Action::ZoomMove { dir: g.dir() },
@@ -2378,6 +2466,39 @@ fn check_decisions(m: &Model) -> Result<(), String> {
 /// The workbooks are by name, or each has its own place, in order: none lost or doubled by a drag;
 /// the top row in that order.
 /// A drag in flight carries a row listed or a space shown (not Home's), to a place among them.
+/// Filed decisions: one open per key, the caps, every word as kept, nothing open past its time
+/// or its task, triage as its source says, nothing a client may not file.
+fn check_filed(m: &Model) -> Result<(), String> {
+    use crate::filed::{MAX_LINE, MAX_QUOTE, OPEN_ALL, OPEN_PER_SOURCE, Source as From, Triage};
+    let list = &m.filed.list;
+    let open: Vec<_> = list.iter().filter(|d| d.open()).collect();
+    for (i, d) in list.iter().enumerate() {
+        ensure!(list[..i].iter().all(|e| e.id != d.id), "decision id {} twice", d.id);
+        let twin = |e: &&crate::filed::Decision| e.id != d.id && e.source == d.source && e.key == d.key;
+        ensure!(!d.open() || !open.iter().any(twin), "two open of key {:?}", d.key);
+        ensure!(crate::filed::valid_key(&d.key), "a key that is no key: {:?}", d.key);
+        ensure!(d.source != From::TerminalSession, "a client filed a terminal session's");
+        ensure!((d.triage == Triage::Pending) == d.source.spec().triage, "{:?} triaged as {:?}", d.source, d.triage);
+        let line = |text: &str| text.chars().count() <= MAX_LINE + 1 && text.chars().all(crate::capture::shows);
+        let one_line = line(&d.summary) && line(&d.question) && d.options.iter().all(|c| line(&c.label));
+        ensure!(one_line && !d.question.is_empty(), "words not kept: {:?} {:?}", d.summary, d.question);
+        let quotes = d.evidence.iter().all(|e| e.text.chars().count() <= MAX_QUOTE + 1);
+        ensure!(quotes && d.options.len() <= crate::filed::MAX_OPTIONS, "evidence or options past their caps");
+        ensure!(d.recommend.is_none_or(|at| at < d.options.len()), "recommends no option: {:?}", d.recommend);
+        if d.open() {
+            ensure!(d.expires > m.now, "decision {} open past its time", d.id);
+            let live = |t: &TaskId| m.tasks.get(*t).is_some_and(|t| !t.dismissed && t.state != State::Done);
+            ensure!(d.task.is_none_or(|t| live(&t)), "decision {} open with its task gone", d.id);
+        }
+    }
+    ensure!(open.len() <= OPEN_ALL, "{} open", open.len());
+    for source in crate::filed::SOURCES {
+        let of = open.iter().filter(|d| d.source == source).count();
+        ensure!(of <= OPEN_PER_SOURCE, "{of} open from {source:?}");
+    }
+    Ok(())
+}
+
 fn check_reorder(m: &Model) -> Result<(), String> {
     let orders: Vec<Option<u32>> = m.workbooks.list.iter().map(|book| book.order).collect();
     let by_name = orders.iter().all(Option::is_none);
@@ -2425,6 +2546,7 @@ fn check_reorder(m: &Model) -> Result<(), String> {
 
 fn check(m: &Model) -> Result<(), String> {
     check_decisions(m)?;
+    check_filed(m)?;
     check_zoom(m)?;
     // A program's ask, and the "always" the user gave, last only while their pane does; an ask
     // past the cap holds no text.
