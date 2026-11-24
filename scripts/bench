@@ -75,7 +75,7 @@ shot = importlib.util.module_from_spec(_spec)
 _loader.exec_module(shot)
 Failed, say = shot.Failed, shot.say
 
-# A start is timed by these waits: look every 5 ms, not 50.
+# A start is timed by these waits: look every 5 ms, not 50. (A/A run: this line only.)
 shot.Instance.poll = 0.005
 
 IDLE_S, STREAM_S, TERMS, SCROLLBACK = 30, 10, 8, 5000
