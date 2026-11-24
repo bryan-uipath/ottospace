@@ -1531,6 +1531,8 @@ export interface Model {
 export interface Zoom {
   from: number;
   selected: number;
+  /** The canvas's camera: `scale` (1: one tab fills the area) and `center`, the world point at the area's middle (a tab is 1 × 1). */
+  camera: { scale: number; center: [number, number] };
 }
 
 /**

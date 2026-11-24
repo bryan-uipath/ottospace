@@ -101,6 +101,9 @@ pub struct SavedSpace {
     /// The task in front there, when not its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub front: Option<TaskId>,
+    /// Its zoomed-out canvas's camera as the user left it (`zoom_out`): scale, then centre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub canvas: Option<[f32; 3]>,
 }
 
 /// The right drawer. Its conversation is never started again here: it is shown, to go on with.
@@ -319,7 +322,8 @@ impl Model {
             let tasks: Vec<TaskId> = space.joined.iter().copied().filter(|id| known(Some(*id)).is_some()).collect();
             let front = self.front(&space.of).filter(|id| tasks.contains(id));
             let hidden = space.hidden;
-            let saved = SavedSpace { kind: kind.into(), task, workbook, name, hidden, tab: None, tasks, front };
+            let canvas = self.canvases.get(&space.of).map(|cam| [cam.scale, cam.center[0], cam.center[1]]);
+            let saved = SavedSpace { kind: kind.into(), task, workbook, name, hidden, tab: None, tasks, front, canvas };
             Some((space.of.clone(), space.last, saved))
         };
         let mut spaces: Vec<(Owner, Option<u32>, SavedSpace)> = self.spaces.iter().filter_map(kept).collect();
@@ -588,6 +592,10 @@ impl Model {
         for (of, saved) in owners.iter().zip(&layout.spaces) {
             let live = |id: &TaskId| self.tasks.live(*id).is_some();
             let joined: Vec<TaskId> = saved.tasks.iter().copied().filter(live).collect();
+            // Its canvas's camera; kept inside its bounds when zoomed out (`Camera::clamped`).
+            if let Some([scale, x, y]) = saved.canvas.filter(|_| *of != Owner::Home) {
+                self.canvases.insert(of.clone(), crate::model::canvas::Camera { scale, center: [x, y] });
+            }
             if let Some(space) = self.spaces.iter_mut().find(|space| space.of == *of && *of != Owner::Home) {
                 space.hidden = saved.hidden;
                 // A task's space only; what is unsound of it (a task twice, one with a space
@@ -768,6 +776,24 @@ mod tests {
         let mut odd = file;
         odd.cameras[0].folder = "app".into();
         assert!(odd.unsound().is_some(), "not a path");
+    }
+
+    /// The canvas camera the user left zoomed out (`zoom_out`) is kept with its space, and comes back.
+    #[test]
+    fn a_spaces_canvas_camera_is_kept_with_it() {
+        use crate::model::canvas::{Camera, CanvasStep};
+        let mut m = workspace();
+        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::ZoomOut);
+        m.update(Action::ZoomCamera { step: CanvasStep::Zoom { factor: 0.5, about: [0.2, 0.2] } });
+        let camera = m.zoom.as_ref().map(|z| z.camera);
+        let of = m.shown_space().clone();
+        m.update(Action::ZoomOut);
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        assert_eq!(file.spaces.iter().filter(|s| s.canvas.is_some()).count(), 1, "{:?}", file.spaces);
+        let (back, _) = restored(&m, file, &[], false);
+        assert_eq!(back.canvases.get(&of).copied(), camera);
+        assert!(camera.is_some_and(|c: Camera| c.scale < 0.5));
     }
 
     /// A fresh model with `m`'s tasks and workspaces, and the file of `m` restored into it.

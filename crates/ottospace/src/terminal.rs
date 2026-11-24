@@ -1213,6 +1213,32 @@ pub fn paint(
     paint_scaled(screen, bounds, (cell, 1.), focused, link, window, cx)
 }
 
+/// The grid as blocks, no glyph shaped: each run of text a bar of its colour, half a row high, and
+/// each background as it is. A zoomed-out tile too small to read (`zoom`): cheap at any size.
+pub fn paint_blocks(screen: &Screen, bounds: Bounds<Pixels>, cell: Size<Pixels>, window: &mut Window) {
+    window.with_content_mask(Some(ContentMask { bounds }), |window| {
+        for (r, spans) in screen.rows.iter().enumerate() {
+            let y = bounds.origin.y + cell.height * r as f32;
+            for s in spans {
+                let x = bounds.origin.x + cell.width * s.col as f32;
+                let width = cell.width * s.cells as f32;
+                if let Some(bg) = s.bg {
+                    window.paint_quad(fill(Bounds { origin: point(x, y), size: size(width, cell.height) }, rgb(bg)));
+                }
+                // The text's own length, its trailing spaces left out.
+                let len = s.text.trim_end().chars().count().min(s.cells);
+                if len > 0 && !s.text.trim().is_empty() {
+                    let bar = Bounds {
+                        origin: point(x, y + cell.height * 0.25),
+                        size: size(cell.width * len as f32, cell.height * 0.5),
+                    };
+                    window.paint_quad(fill(bar, Hsla::from(rgb(s.fg)).opacity(0.55)));
+                }
+            }
+        }
+    });
+}
+
 /// `paint`, every cell and glyph `scale` times its size: a zoomed-out tile's terminal (`zoom`).
 pub fn paint_scaled(
     screen: &Screen,
