@@ -246,10 +246,8 @@ impl Workspace {
         let plain = !event.keystroke.modifiers.modified();
         // Opened on the checkout on show: Esc closes, as the palette's does.
         let here = self.model.palette.as_ref().and_then(|p| p.goto.as_ref()?.drill.as_ref()).is_some_and(|d| d.here);
-        let cmd = event.keystroke.modifiers.platform && !event.keystroke.modifiers.shift;
         let goto = match (view, event.keystroke.key.as_str()) {
             (Some((View::Places, _)), "tab") if plain => Some(Action::GoToDrill),
-            (Some((View::Files, _)), "enter") if cmd => Some(Action::GoToSplit),
             (Some((View::Files, _)), "escape") if !here => Some(Action::GoToBack),
             (Some((View::Files, true)), "backspace") if plain => Some(Action::GoToBack),
             _ => None,

@@ -544,7 +544,8 @@ Repos click opened it there), else its space's (a task's worktree, a workspace's
 Repos section lists it. Type to find one: a match in a file's name ranks before one only in its
 folders, a name it starts before one it runs through, letters in a row and at word starts higher,
 then the files you opened recently, then the shorter path. Nothing typed: the recent ones first.
-↵ opens it in a viewer (in the focused pane if it is empty, else beside it), ⌘↵ in a split below.
+A query longer than 32 letters is found whole. ↵ opens it in a viewer (in the focused pane if it
+is empty, else beside it), ⌘↵ below it.
 Esc closes; ⌫ with nothing typed lists the places. Elsewhere (Home, a space with no listed
 checkout) ⌘P opens on the places.
 

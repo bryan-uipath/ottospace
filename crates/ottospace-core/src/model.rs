@@ -839,8 +839,8 @@ pub enum Action {
     PaletteGoTo,
     /// Tab in go-to: into the highlighted place's files.
     GoToDrill,
-    /// ⌘↵ in go-to's files: the highlighted file in a viewer split below, not in the focused
-    /// empty pane.
+    /// ⌘↵ in go-to's files: the highlighted file in a viewer below the focused pane (in it, if
+    /// it is empty, as ↵).
     GoToSplit,
     /// Out of a place's files, to the places again.
     GoToBack,
@@ -4372,7 +4372,9 @@ pub struct Model {
     pub edited: Vec<PaneId>,
     /// The command palette, while it is open.
     pub palette: Option<Palette>,
-    /// The files opened in a viewer, newest first, at most `goto::MOST_RECENT`: Go to ranks them first.
+    /// The files opened in a viewer, newest first, at most `goto::MOST_RECENT`: Go to ranks them
+    /// first. Paths: never in the state.
+    #[serde(skip)]
     pub(crate) recent_files: Vec<String>,
     /// The accessibility inspector, while it is open.
     pub inspector: Option<Inspector>,

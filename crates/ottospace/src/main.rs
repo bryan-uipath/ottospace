@@ -9446,7 +9446,12 @@ impl Workspace {
             }))
             // ⌘↵ is the new-task box's "start" while it has the keyboard; in a conversation, its Done.
             .on_action(cx.listener(|this, _: &TalkGo, window, cx| {
-                if this.model.bug.is_some() {
+                // ⌘↵ in Go to's files: the file below (its binding comes before the palette's keys).
+                let files =
+                    this.model.palette.as_ref().is_some_and(|p| p.view() == ottospace_core::commands::View::Files);
+                if files {
+                    this.dispatch(Action::GoToSplit, this.input, window, cx);
+                } else if this.model.bug.is_some() {
                     this.bug_send(window, cx);
                 } else if this.model.compose_keys() {
                     this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);

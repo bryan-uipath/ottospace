@@ -90,14 +90,10 @@ impl Model {
         let tab = self.tabs[self.main_at()].id;
         let Some(folder) = self.empty_folder(crate::model::city::At::Tab(tab)).map(String::from) else { return };
         let Some(goto) = self.palette.as_ref().and_then(|palette| palette.goto.as_ref()) else { return };
-        // Named as its Repos row is; on show, so a file opens here without going anywhere.
-        let listed = goto.places.iter().find(|row| row.place == Place::Checkout(folder.clone()));
-        let (name, detail) = listed.map_or_else(
-            || (crate::marks::directory_name(&folder).unwrap_or_default().to_string(), String::new()),
-            |row| (row.name.clone(), row.detail.clone()),
-        );
-        let row =
-            PlaceRow { place: Place::Checkout(folder.clone()), name, detail, folder: Some(folder), current: true };
+        // Its Repos row's (every listed checkout has one), on show: a file opens here without going anywhere.
+        let listed = goto.places.iter().find(|row| matches!(&row.place, Place::Checkout(path) if *path == folder));
+        let Some(mut row) = listed.cloned() else { return };
+        row.current = true;
         self.drill_into(row, String::new(), "", effects);
         if let Some(drill) = self.palette.as_mut().and_then(|p| p.goto.as_mut()).and_then(|goto| goto.drill.as_mut()) {
             drill.here = true;

@@ -11,13 +11,9 @@ const DETAIL: i64 = 1 << 40;
 
 /// The files listed at most: the best this many of a query's matches.
 pub const MOST_ROWS: usize = 200;
-/// What a match in a file's name is ahead of: any match in its folders alone. `src/model.rs`
-/// for "model" before `model/tests/a.rs`.
-const IN_NAME: i64 = 1 << 30;
-/// A name that starts with the query, ahead of one it runs through: "ma" `main.rs` before `format.rs`.
-const NAME_START: i64 = 1 << 24;
-/// A file opened recently, ahead of others of its kind of match, the latest most.
-const RECENT: i64 = 1 << 16;
+/// A query longer than this is matched as typed, in one piece, not letter by letter: the scorer's
+/// cost grows with the query times the path, and a pasted path over 50,000 files would stall.
+const MOST_SCORED: usize = 32;
 /// Recent files kept, newest first.
 pub const MOST_RECENT: usize = 50;
 
@@ -106,43 +102,53 @@ impl GoTo {
 
 /// The paths `query` runs through, best first: a match in the file's name before one in its
 /// folders, a name it starts before one it runs through, then by the scorer (word starts and
-/// runs), a recent file first, then shorter, then in their order; at most `MOST_ROWS`. Nothing
+/// runs), then a recent file, then shorter, then in their order; at most `MOST_ROWS`. Nothing
 /// typed: the recent files, then the shortest.
 pub fn file_matches(paths: &[String], query: &str, recent: &[&str]) -> Vec<String> {
     let query = letters(query);
-    let ranked = |path: &String| {
-        let at = recent.iter().position(|seen| *seen == path.as_str());
-        let bonus = at.map_or(0, |at| RECENT * (MOST_RECENT.saturating_sub(at)) as i64);
-        file_score(&query, path).map(|score| score + bonus)
+    let ranked = |at: usize, path: &String| {
+        let (kind, score) = file_score(&query, path)?;
+        let seen = recent.iter().position(|seen| *seen == path.as_str()).unwrap_or(usize::MAX);
+        Some((std::cmp::Reverse(kind), -score, seen, path.len(), at))
     };
-    let mut found: Vec<(i64, usize, usize)> =
-        paths.iter().enumerate().filter_map(|(at, path)| Some((ranked(path)?, path.len(), at))).collect();
+    let mut found: Vec<_> = paths.iter().enumerate().filter_map(|(at, path)| ranked(at, path)).collect();
     let most = MOST_ROWS.min(found.len());
-    let key = |&(score, len, at): &(i64, usize, usize)| (-score, len, at);
     // Only the best are listed: no need to sort the rest of 50,000.
     if most > 0 && most < found.len() {
-        found.select_nth_unstable_by_key(most - 1, key);
+        found.select_nth_unstable(most - 1);
         found.truncate(most);
     }
-    found.sort_unstable_by_key(key);
+    found.sort_unstable();
     found.into_iter().map(|(.., at)| paths[at].clone()).collect()
 }
 
-/// How well `query` matches a file at `path`: in its name (`IN_NAME`, more if the name starts
-/// with it), else in the whole path. `None`: it does not run through the path.
-fn file_score(query: &[char], path: &str) -> Option<i64> {
+/// How well `query` matches a file at `path`: its kind of match (2: its name starts with it, 1:
+/// it is in its name, 0: only in the path), and the scorer's score within that. `None`: it does
+/// not run through the path. A long query must be in it whole.
+fn file_score(query: &[char], path: &str) -> Option<(u8, i64)> {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if query.len() > MOST_SCORED {
+        let typed: String = query.iter().collect();
+        let lower = |text: &str| text.chars().flat_map(char::to_lowercase).collect::<String>();
+        let (name, path) = (lower(name), lower(path));
+        return match (name.find(&typed), path.contains(&typed)) {
+            (Some(0), _) => Some((2, 0)),
+            (Some(_), _) => Some((1, 0)),
+            (None, true) => Some((0, 0)),
+            (None, false) => None,
+        };
+    }
     if !runs_through(query, path) {
         return None;
     }
-    let name = path.rsplit('/').next().unwrap_or(path);
     let named = runs_through(query, name).then(|| score(query, name)).flatten();
-    let start = |query: &[char]| {
+    let start = || {
         let mut letters = name.chars().flat_map(char::to_lowercase);
         query.iter().all(|q| letters.next() == Some(*q))
     };
     match named {
-        Some(named) => Some(named + IN_NAME + if start(query) { NAME_START } else { 0 }),
-        None => score(query, path),
+        Some(named) => Some((if start() { 2 } else { 1 }, named)),
+        None => Some((0, score(query, path)?)),
     }
 }
 
@@ -205,10 +211,20 @@ mod tests {
     }
 
     #[test]
+    fn a_long_query_is_found_whole() {
+        let long = "x".repeat(MOST_SCORED + 1);
+        let paths = strings(&[&format!("a/{long}.rs"), &format!("{long}/b.rs"), "c/x.rs"]);
+        assert_eq!(file_matches(&paths, &long, &[]), [format!("a/{long}.rs"), format!("{long}/b.rs")]);
+    }
+
+    #[test]
     fn a_recent_file_comes_first_among_its_kind_and_first_with_nothing_typed() {
         let paths = strings(&["src/a.rs", "src/app.rs", "docs/deep/apple.md"]);
         assert_eq!(file_matches(&paths, "", &["docs/deep/apple.md"])[0], "docs/deep/apple.md");
         assert_eq!(file_matches(&paths, "ap", &["docs/deep/apple.md"]), ["docs/deep/apple.md", "src/app.rs"]);
+        // A better match by the scorer stays ahead of a recent one (review).
+        let two = strings(&["src/ml.rs", "src/mxl.rs"]);
+        assert_eq!(file_matches(&two, "ml", &["src/mxl.rs"]), ["src/ml.rs", "src/mxl.rs"]);
         // A recent file whose match is only in its folders stays behind a match in a name.
         assert_eq!(file_matches(&paths, "src", &["src/a.rs"])[..2], ["src/a.rs", "src/app.rs"]);
     }
@@ -227,5 +243,11 @@ mod tests {
             let rows = file_matches(&paths, query, &[]);
             println!("{query:>16}: {:>6.1} ms, {} rows", start.elapsed().as_secs_f64() * 1000., rows.len());
         }
+        // Every name the same long start, the start pasted whole (review): matched in one piece.
+        let long = "a".repeat(180);
+        let paths: Vec<String> = (0..50_000).map(|n| format!("src/{long}{n}.rs")).collect();
+        let start = std::time::Instant::now();
+        let rows = file_matches(&paths, &long, &[]);
+        println!("{:>16}: {:>6.1} ms, {} rows", "180 letters", start.elapsed().as_secs_f64() * 1000., rows.len());
     }
 }
