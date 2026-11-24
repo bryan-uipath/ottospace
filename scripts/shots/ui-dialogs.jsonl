@@ -1,0 +1,6 @@
+# The dialog system (`crates/ottospace/src/ui/dialog.rs`): its buttons with their keys, ×, segments,
+# choice rows, a field with its test, the summary line, the windows that match, and a question and
+# a form whole. A test run only (`ui_gallery`).
+{"cmd":"ui_gallery","on":true,"dialogs":true}
+{"settle":300}
+{"shot":"dialogs"}

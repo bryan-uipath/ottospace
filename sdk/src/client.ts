@@ -638,9 +638,10 @@ export class Client {
   }
   /**
    * For tests (`OTTOSPACE_E2E`): the components' gallery over the whole window, every component
-   * in every state (`on`: false, the workspace again). Rejects outside a test run.
+   * in every state (`on`: false, the workspace again); `dialogs`: the dialogs' page instead.
+   * Rejects outside a test run.
    */
-  uiGallery(args: { on: boolean }): Promise<Snapshot> {
+  uiGallery(args: { on: boolean; dialogs?: boolean }): Promise<Snapshot> {
     return this.snapshot({ cmd: "ui_gallery", ...args });
   }
   /**

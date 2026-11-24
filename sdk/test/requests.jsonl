@@ -92,6 +92,7 @@
 {"cmd":"modifier_flags","changes":[{"at":0,"cmd":true},{"at":80,"cmd":false,"others":false,"input_at":null}]}
 {"cmd":"display_change"}
 {"cmd":"ui_gallery","on":true}
+{"cmd":"ui_gallery","on":true,"dialogs":true}
 {"cmd":"displays_set","displays":[{"uid":"a","frame":[0,0,1728,1117]},{"uid":"b","frame":[1728,0,1920,1080],"scale":1}],"main":"a"}
 {"cmd":"calendar","day":"tomorrow","days":2}
 {"cmd":"calendar","day":"yesterday"}

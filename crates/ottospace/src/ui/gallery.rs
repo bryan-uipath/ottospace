@@ -5,7 +5,7 @@ use gpui::{AnyElement, Div, ElementId, SharedString, div, prelude::*, px, rgb};
 use ottospace_core::features::Stage;
 use ottospace_core::{Mode, notice, theme};
 
-use super::{Button, Face, Pill, Row, Side, State, Tip};
+use super::{Button, Face, Pill, Row, Side, State, Tip, dialog};
 
 /// A component's name over its row of cases.
 fn group(name: &'static str, cases: impl IntoIterator<Item = AnyElement>) -> Div {
@@ -31,6 +31,8 @@ fn buttons() -> Div {
         ("icon", Button::Icon(crate::slide::LEFT)),
         ("ghost", Button::Ghost(Face::Label("Stop".into()))),
         ("ghost icon", Button::Ghost(Face::Icon("icons/plus.svg"))),
+        ("danger", Button::Danger("Clear slot".into())),
+        ("danger primary", Button::DangerPrimary("Delete worktree".into())),
     ];
     let rows = kinds.into_iter().map(|(name, kind)| {
         let cases = State::ALL.map(|state| {
@@ -206,29 +208,149 @@ fn shimmers() -> Div {
     group("shimmer", lines)
 }
 
+/// A dialog's buttons with their keys, in each state that differs.
+fn dialog_buttons() -> Div {
+    let kinds: [(&str, Button, &[&'static str]); 5] = [
+        ("primary", Button::Primary("Keep slot".into()), &["↵"]),
+        ("secondary", Button::Secondary("Cancel".into()), &[]),
+        ("ghost", Button::Ghost(Face::Label("Offer again".into())), &[]),
+        ("danger", Button::Danger("Clear slot".into()), &[]),
+        ("danger primary", Button::DangerPrimary("Delete worktree".into()), &["⌘", "↵"]),
+    ];
+    let rows = kinds.into_iter().map(|(name, kind, keys)| {
+        let cases = [State::Rest, State::Hover, State::Focus, State::Disabled].map(|state| {
+            let button = dialog::action(id(format!("dialog-{name}{state:?}")), kind.clone(), keys, state);
+            case(format!("{state:?}"), button)
+        });
+        group(name, cases)
+    });
+    let closes = [State::Rest, State::Hover, State::Focus]
+        .map(|state| case(format!("{state:?}"), dialog::close(id(format!("close{state:?}")), state)));
+    div().flex().flex_col().gap(px(theme::SPACE_2)).children(rows).child(group("close ×", closes))
+}
+
+/// Segments, choice rows, a field with its test, the summary line, the windows that match.
+fn dialog_controls() -> Div {
+    let offer = |name: &str, focus: bool, take: bool| {
+        let options = [("Offer it", "O", !take), ("Take it", "T", take)].map(|(label, key, on)| {
+            dialog::segment(id(format!("seg-{name}-{label}")), label, Some(key), on, State::Rest)
+        });
+        dialog::segments(options, focus)
+    };
+    let segments = group(
+        "segments",
+        [
+            case("rest", offer("rest", false, false)),
+            case("other chosen", offer("other", false, true)),
+            case("focus", offer("focus", true, false)),
+        ],
+    );
+    let rows = [
+        ("box on", false, true, State::Rest),
+        ("box off", false, false, State::Rest),
+        ("box hover", false, false, State::Hover),
+        ("round on", true, true, State::Rest),
+        ("round focus", true, false, State::Focus),
+    ]
+    .map(|(name, radio, on, state)| {
+        let row = dialog::choice_row(id(format!("choice-{name}")), radio, on, "Kind", Some("panel".into()), state);
+        case(name, row)
+    });
+    let tests = ["is", "contains", "starts with"]
+        .map(|test| dialog::segment(id(format!("test-{test}")), test, None, test == "contains", State::Rest));
+    let field = div()
+        .w(px(360.))
+        .flex()
+        .gap(px(theme::SPACE_1_5))
+        .child(dialog::segments(tests, false))
+        .child(dialog::text_box(true).child("Standup"));
+    let windows = vec![
+        dialog::Listed { taken: true, title: "Weekly sync".into(), detail: "900×700 · display 1".into() },
+        dialog::Listed { taken: false, title: "Huddle".into(), detail: "small · panel".into() },
+    ];
+    let summary = dialog::summary("Waits for any Meetings window, the largest, and offers it.");
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(theme::SPACE_2))
+        .child(segments)
+        .child(group("choice row", rows))
+        .child(group("field with a test", [case("contains, focused", field)]))
+        .child(group("summary line", [case("headline", div().w(px(360.)).child(summary))]))
+        .child(group("windows that match", [case("one of two", div().w(px(360.)).child(dialog::window_list(windows)))]))
+}
+
+/// A question and a form, whole, as a dialog draws them.
+fn dialog_examples() -> Div {
+    let x = |name: &str| dialog::close(id(format!("x-{name}")), State::Rest);
+    let quit = dialog::frame(
+        dialog::QUESTION,
+        "Quit ottospace?",
+        Some("Two programs are still running.".into()),
+        x("quit"),
+        Some(div().text_size(px(theme::TEXT_XS)).child("npm run dev · in shop").child("cargo watch · in docs")),
+        dialog::actions(
+            None,
+            None,
+            vec![
+                dialog::action("q-cancel", Button::Secondary("Cancel".into()), &[], State::Rest).into_any_element(),
+                dialog::action("q-quit", Button::Primary("Quit".into()), &["↵"], State::Rest).into_any_element(),
+            ],
+        ),
+    );
+    let delete = dialog::frame(
+        dialog::QUESTION,
+        "Delete the fix-promo worktree?",
+        Some("Its folder goes for good. The branch stays.".into()),
+        x("delete"),
+        None,
+        dialog::actions(
+            None,
+            None,
+            vec![
+                dialog::action("d-keep", Button::Secondary("Keep it".into()), &[], State::Rest).into_any_element(),
+                dialog::action("d-delete", Button::DangerPrimary("Delete worktree".into()), &["⌘", "↵"], State::Rest)
+                    .into_any_element(),
+            ],
+        ),
+    );
+    let offers = [("Offer it", "O", true), ("Take it", "T", false)]
+        .map(|(label, key, on)| dialog::segment(id(format!("f-{label}")), label, Some(key), on, State::Rest));
+    let form_body = div()
+        .child(dialog::summary("Waits for any Meetings window, the largest, and offers it."))
+        .child(dialog::row("When it opens", dialog::segments(offers, false)))
+        .child(dialog::consequence("Shows it here with Put it here; nothing moves until you press it."));
+    let form = dialog::frame(
+        dialog::FORM,
+        "Keep this pane for Meetings",
+        Some("The pane stays when the window goes, and waits for the next one.".into()),
+        x("form"),
+        Some(form_body),
+        dialog::actions(
+            Some(dialog::action("f-clear", Button::Danger("Clear slot".into()), &[], State::Rest).into_any_element()),
+            Some("1 of 2 windows match".into()),
+            vec![dialog::action("f-keep", Button::Primary("Keep slot".into()), &["↵"], State::Rest).into_any_element()],
+        ),
+    );
+    div().flex().flex_col().gap(px(theme::SPACE_3)).child(quit).child(delete).child(form)
+}
+
+/// Which page `ui_gallery` shows.
+#[derive(Clone, Copy)]
+pub(crate) enum Page {
+    Components,
+    Dialogs,
+}
+
 /// The gallery, over the whole window.
-pub(crate) fn view() -> Div {
-    let left = div()
-        .flex()
-        .flex_col()
-        .gap(px(theme::SPACE_3))
-        .child(buttons())
-        .child(pills())
-        .child(chips())
-        .child(pickers())
-        .child(depth())
-        .child(tips())
-        .child(filter_rows());
-    let right = div()
-        .flex()
-        .flex_col()
-        .gap(px(theme::SPACE_3))
-        .child(rows())
-        .child(header())
-        .child(rails())
-        .child(dividers())
-        .child(notices())
-        .child(shimmers());
+pub(crate) fn view(page: Page) -> Div {
+    let (left, right) = match page {
+        Page::Components => (components_left(), components_right()),
+        Page::Dialogs => (
+            div().flex().flex_col().gap(px(theme::SPACE_3)).child(dialog_buttons()).child(dialog_controls()),
+            dialog_examples(),
+        ),
+    };
     div()
         .absolute()
         // Takes the pointer: nothing under it is hovered or clicked.
@@ -243,4 +365,31 @@ pub(crate) fn view() -> Div {
         .gap(px(24.))
         .child(left)
         .child(right)
+}
+
+fn components_left() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(theme::SPACE_3))
+        .child(buttons())
+        .child(pills())
+        .child(chips())
+        .child(pickers())
+        .child(depth())
+        .child(tips())
+        .child(filter_rows())
+}
+
+fn components_right() -> Div {
+    div()
+        .flex()
+        .flex_col()
+        .gap(px(theme::SPACE_3))
+        .child(rows())
+        .child(header())
+        .child(rails())
+        .child(dividers())
+        .child(notices())
+        .child(shimmers())
 }

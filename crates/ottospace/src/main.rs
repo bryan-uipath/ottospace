@@ -1346,8 +1346,8 @@ struct Workspace {
     filled: Option<Filled>,
     /// A zoom of the window (its green button) fills the display instead (`zoom_asks`).
     zoom_asks: bool,
-    /// A test run's `ui_gallery`: the components' gallery over the window.
-    gallery: bool,
+    /// A test run's `ui_gallery`: the components' gallery over the window, or its dialogs' page.
+    gallery: Option<ui::gallery::Page>,
     /// Test runs: the pid of the one app that may be hosted.
     host_only: Option<i32>,
     control: Option<Receiver<Call>>,
@@ -1986,7 +1986,7 @@ impl Workspace {
             hosting,
             filled: None,
             zoom_asks,
-            gallery: false,
+            gallery: None,
             host_only,
             control,
             ax_overlay: None,
@@ -3659,8 +3659,9 @@ impl Workspace {
                     display::note_change();
                     None
                 }
-                Request::UiGallery { on } => {
-                    self.gallery = on;
+                Request::UiGallery { on, dialogs } => {
+                    let page = if dialogs { ui::gallery::Page::Dialogs } else { ui::gallery::Page::Components };
+                    self.gallery = on.then_some(page);
                     cx.notify();
                     None
                 }
@@ -9612,7 +9613,7 @@ impl Render for Workspace {
             // Over the window's own controls: the bug report's frozen picture.
             .children(self.render_bug(window, cx))
             .children(self.model.confirm.as_ref().map(|confirm| self.render_confirm(confirm, cx)))
-            .when(self.gallery, |d| d.child(ui::gallery::view()))
+            .children(self.gallery.map(ui::gallery::view))
             .children(seal)
             .children(card_seal)
             .child(frame_probe(self.frame_start.clone(), self.renders, self.seq))
