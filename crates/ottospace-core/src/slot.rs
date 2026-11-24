@@ -249,9 +249,9 @@ impl Look {
 /// A waiting slot to `pair`: the windows it may take, in the order it prefers them, and whether it
 /// pairs by size (one that names no window: app only) or names its window and goes first.
 #[derive(Clone, Debug, PartialEq)]
-pub struct Want {
-    pub windows: Vec<u32>,
-    pub by_size: bool,
+pub(crate) struct Want {
+    pub(crate) windows: Vec<u32>,
+    pub(crate) by_size: bool,
 }
 
 /// Which window each waiting slot gets: one window a slot, never two slots one window. First the
@@ -261,7 +261,7 @@ pub struct Want {
 /// pane first), each taking from what is left in its own order (the largest window first), and
 /// again as many served as can be: a named slot with a second window gives its first up to one
 /// that would otherwise wait.
-pub fn pair(wants: &[Want]) -> Vec<Option<u32>> {
+pub(crate) fn pair(wants: &[Want]) -> Vec<Option<u32>> {
     let mut owner: std::collections::BTreeMap<u32, usize> = Default::default();
     for by_size in [false, true] {
         for i in (0..wants.len()).filter(|i| wants[*i].by_size == by_size) {

@@ -131,8 +131,7 @@ pub struct Dialog {
 }
 
 /// Why a window of its app is not a waiting slot's, in the order they are said and checked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Miss {
     /// The window rules leave it alone: ignored, floated, a sheet, tiny or another kind.
     Rules,
@@ -350,8 +349,7 @@ impl Model {
             Status::Offered | Status::Filled => return None,
         }
         let look = self.slot_looks.iter().find(|look| run.of(look))?;
-        let held =
-            |window: u32| self.panes.iter().any(|p| matches!(p.kind, Kind::App { window: w, .. } if w == window));
+        let held = |window: u32| self.in_pane(window);
         // Every window it selects, one it passed over too: held, not asked for.
         let found = look.candidates(&run.slot, &self.window_rules, |_| false);
         if !found.is_empty() && found.iter().all(|seen| held(seen.window)) {
@@ -365,13 +363,26 @@ impl Model {
         (!said.is_empty()).then(|| format!("{windows} {app} window{plural}: {}", said.join("; ")))
     }
 
+    /// True if a pane holds `window`.
+    fn in_pane(&self, window: u32) -> bool {
+        self.panes.iter().any(|p| matches!(p.kind, Kind::App { window: w, .. } if w == window))
+    }
+
+    /// The windows the slots of `group` hold.
+    fn held_by(&self, group: &[PaneId]) -> Vec<u32> {
+        let held = |id: &PaneId| match self.pane(*id).map(|p| &p.kind) {
+            Some(Kind::App { window, .. }) => Some(*window),
+            _ => None,
+        };
+        group.iter().filter_map(held).collect()
+    }
+
     /// Why each window of its app's last look is not what waiting slot `pane` offers, counted by
     /// reason, in `Miss` order. Never a title: the shell logs it (`slot_miss`) and draws its words.
     pub fn slot_misses(&self, pane: PaneId) -> Vec<(Miss, usize)> {
         let Some(run) = self.slots.get(&pane).filter(|run| run.status == Status::Empty) else { return Vec::new() };
         let Some(look) = self.slot_looks.iter().find(|look| run.of(look) && look.running) else { return Vec::new() };
-        let held =
-            |window: u32| self.panes.iter().any(|p| matches!(p.kind, Kind::App { window: w, .. } if w == window));
+        let held = |window: u32| self.in_pane(window);
         let select = &run.slot.select;
         let one = |field: crate::rules::Selector, facts: &crate::rules::Facts| field.selects(facts);
         let mut counted: BTreeMap<Miss, usize> = BTreeMap::new();
@@ -760,13 +771,7 @@ impl Model {
     /// last look lists each held window with the size its app gave it (seen in no pane).
     pub fn slot_resorts(&self, pane: PaneId) -> bool {
         let group = self.slot_group(pane);
-        let held: Vec<u32> = group
-            .iter()
-            .filter_map(|id| match self.pane(*id).map(|p| &p.kind) {
-                Some(Kind::App { window, .. }) => Some(*window),
-                _ => None,
-            })
-            .collect();
+        let held = self.held_by(&group);
         let look = self.slots.get(&pane).and_then(|run| self.slot_looks.iter().find(|look| run.of(look)));
         let known = |w: &u32| {
             self.slot_natural.contains_key(w) && look.is_some_and(|l| l.windows.iter().any(|s| s.window == *w))
@@ -817,13 +822,7 @@ impl Model {
     fn slot_resort(&mut self, pane: PaneId, effects: &mut Vec<Effect>) {
         let group = self.slot_group(pane);
         let Some(run) = self.slots.get(&pane) else { return };
-        let held: Vec<u32> = group
-            .iter()
-            .filter_map(|id| match self.pane(*id).map(|p| &p.kind) {
-                Some(Kind::App { window, .. }) => Some(*window),
-                _ => None,
-            })
-            .collect();
+        let held = self.held_by(&group);
         let Some(look) = self.slot_looks.iter().find(|look| run.of(look)) else { return };
         // Only the windows they hold, each free to go to any of them.
         let mut look = look.clone();
