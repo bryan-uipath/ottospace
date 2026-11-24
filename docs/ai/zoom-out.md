@@ -17,16 +17,61 @@ view, never the work. One key in, one key back.
 
 ## Slices
 
-1. **The overview** (this note, behind `zoom_out`): ⌘⇧\\ toggles it; tiles on an automatic grid;
-   arrows or H J K L select, ↵ or a click goes in, ⌘⇧\\ or Esc goes back to the tab you came from;
-   the zoom animated both ways; sneak labels the tiles.
-2. **Free placement**: a tile moved by hand leaves the grid and keeps its place (A2.2, one tile at
-   a time); positions in the workspace file.
-3. **The canvas**: dropped files (linked by path), pasted images, notes, text, shapes, arrows, ink
-   (A5, A6). The workspace file gains `canvas` (version 3).
+1. **The overview** (built, #422): ⌘⇧\\ toggles it; tiles on an automatic grid; arrows or H J K L
+   select, ↵ or a click goes in, ⌘⇧\\ or Esc goes back; the zoom animated both ways.
+2. **The canvas** (this slice, below): the overview zooms and pans freely, and tiles can be placed.
+   The owner after slice 1: "we don't zoom out very far - and it's not like a canvas where I can
+   zoom in and out and pan and stuff".
+3. **Things on the canvas**: dropped files (linked by path), pasted images, notes, text, shapes,
+   arrows, ink (A5, A6); the code city as the ground (A4.1). The capture annotator's pen and
+   shapes are the likely base for ink and shapes. Not built.
 
-Slice 1b, small and separable: the rails' shadow deepening while zoomed out (A3), and the code
-city as the ground under the grid (A4.1).
+## Slice 2: the canvas
+
+**World and camera.** Tiles live in a world where one tab is 1 × 1 (its panes area's shape,
+whatever the window), with 0.12 between grid cells. The camera is a `scale` (1: one tab fills the
+area) and a `pan` (the world point at the area's top left). Both are pure numbers, so the core
+needs no window size: the shell maps world to points by the area's width and height. Per space
+(workspace or task), kept in `layout.json` beside the space.
+
+- **Range:** scale 1 (one tab fills the area: the nearest; nearer is the tab itself, ↵) out to
+  0.08. At 0.08 a 4 × 4 workspace (16 tabs) is 0.35 of the area wide: small, with room around
+  it for slice 3's things. Farther shows nothing more.
+- **Bounds:** the pan keeps the area's middle inside the tiles' box grown by half a view: some
+  tile is always in view. ⌘0 (fit) always recovers: it shows every tile, centred.
+- **⌘⇧\\:** opens fitted (every tile, centred; never nearer than 0.5), the zoom out flies from
+  the tab to there; again, or Esc, flies back into the tab you came from. ↵, a click or a double
+  click on a tile flies into it.
+
+**Gestures.** GPUI 0.2.2 delivers no pinch (as the code city found): pinch waits for a native
+hook. Today, as the code city's camera does:
+
+| Input | Does |
+| --- | --- |
+| Two-finger scroll (trackpad) | pans: the canvas follows the fingers |
+| ⌘ + two-finger scroll, a mouse wheel | zooms about the pointer |
+| Drag on the empty canvas, space-drag anywhere | pans |
+| ⌘= / ⌘- | zoom in / out about the area's middle, by 1.25 |
+| ⌘0 | fit every tile |
+| Arrows, H J K L | the selection, as before; the camera follows it into view |
+
+⌘= / ⌘- / ⌘0 are free in ottospace (no binding; a terminal program never gets ⌘ keys) and act
+only while zoomed out; elsewhere they do nothing.
+
+**Free placement.** Tiles start on the grid. A drag of a tile (past 4 points) places it where it
+is dropped; its world position is kept on the tab in `layout.json`. Snap: to a 0.25-tile grid
+(about 28 points at fit for four tabs), light enough to place by eye, firm enough that tiles line
+up without effort. Tidy (the canvas's corner button, T zoomed out) puts every tile back on the
+grid. A new tab takes the next grid cell that no placed tile covers. Only the user's drag places:
+a client's is refused (`only the user places a tile`).
+
+**Detail by size** (a tile's width on screen): over 360 points, terminals' text; 120 to 360,
+each terminal row a bar of its colours (blocks); under 120, the tab's name alone. Cheap at any
+distance: far out, nothing is shaped.
+
+**Idle.** The camera moves only on input; a fly in or out plays 220 ms and asks for frames only
+while it moves (`counts.zoom_frames`); Reduce Motion: a cut. Hosted windows stay parked while
+zoomed out (slice 1).
 
 ## The model (core)
 
