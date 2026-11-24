@@ -3392,12 +3392,7 @@ impl Workspace {
                     continue;
                 }
                 Request::Wait { pane, pattern, timeout_ms } => {
-                    let id = pane.or(self.model.focused);
-                    if let Some(Err(why)) = id.map(|id| self.model.pane_access(id, self.caller(pass.as_ref()))) {
-                        let _ = reply.send(control::error(&why));
-                        continue;
-                    }
-                    self.wait(pane, &pattern, timeout_ms, reply, cx);
+                    self.wait(pane, &pattern, timeout_ms, pass, reply, cx);
                     continue;
                 }
                 // Only to the task the user let see the pane (agent mode): its pass says who asks.
@@ -3965,12 +3960,18 @@ impl Workspace {
         pane: Option<PaneId>,
         pattern: &str,
         timeout_ms: Option<u64>,
+        pass: Option<pass::Pass>,
         reply: Sender<String>,
         cx: &mut Context<Self>,
     ) {
+        // Resolved once: none named, the focused one, which a task's agent may read only in its
+        // own workspace (`pane_access`), as any pane.
         let Some(id) = pane.or(self.model.focused).filter(|id| self.terminals.contains_key(id)) else {
             return drop(reply.send(control::error("no terminal pane to wait on")));
         };
+        if let Err(why) = self.model.pane_access(id, self.caller(pass.as_ref())) {
+            return drop(reply.send(control::error(&why)));
+        }
         let regex = match regex::Regex::new(pattern) {
             Ok(regex) => regex,
             Err(err) => return drop(reply.send(control::error(&err.to_string()))),
@@ -3980,8 +3981,16 @@ impl Workspace {
         let start = Instant::now();
         cx.spawn(async move |this, cx| {
             let message = loop {
-                let text = this.update(cx, |this, _| this.terminals.get(&id).map(|t| t.text(true)));
+                // Asked again each time: the pane may have left the workspace, or the agent ended.
+                let text = this.update(cx, |this, _| {
+                    let caller = this.caller(pass.as_ref());
+                    this.model.pane_access(id, caller).map(|()| this.terminals.get(&id).map(|t| t.text(true)))
+                });
                 let Ok(text) = text else { break control::error("ottospace is closing") };
+                let text = match text {
+                    Ok(text) => text,
+                    Err(why) => break control::error(&why),
+                };
                 let Some(text) = text else { break control::error(&format!("pane {id} closed")) };
                 // Line by line, so `^done$` skips the echoed command, which starts with the prompt.
                 if let Some(line) = text.lines().find(|line| regex.is_match(line)) {

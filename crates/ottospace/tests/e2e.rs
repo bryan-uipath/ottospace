@@ -14297,6 +14297,64 @@ fn the_mcp_server_answers_a_tasks_agent_on_the_sockets_terms() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A task's agent's `wait` reads only a terminal of its own workspace, the whole time: none named
+/// while the user's focus is elsewhere is refused; a pane moved out of the workspace, or the
+/// agent's end (its pass dead), ends the wait with why, rather than reading on.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_task_agents_wait_ends_when_its_reach_does() {
+    let (root, record, env) = native_setup("wait-reach", &[], &[("FAKE_SAY_PASS", "1")]);
+    let otto = launch_env("wait-reach", &env);
+    let theirs = otto.call(json!({"cmd": "split"}))["state"]["focused"].as_u64().expect("the user's terminal");
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    let pass = otto.wait_for("its pass", |_| {
+        std::fs::read_to_string(record.join("pass")).ok().filter(|t| t.ends_with('\n')).map(|t| t.trim().to_string())
+    });
+    let state = otto.call(json!({"cmd": "split"}));
+    let mine = state["state"]["focused"].as_u64().expect("a terminal in the task's workspace");
+    let tab_of = |state: &Value, pane: u64| {
+        let tabs = state["tab_panes"].as_array().unwrap();
+        tabs.iter().position(|panes| panes.as_array().unwrap().contains(&json!(pane))).unwrap()
+    };
+    let (own_tab, their_tab) = (tab_of(&state, mine), tab_of(&state, theirs));
+    // A wait from another connection: it answers once the wait ends.
+    let wait = |pane: Option<u64>| {
+        let mut line = json!({"cmd": "wait", "pattern": "^never-7f3a$", "timeout_ms": 20000, "pass": pass});
+        if let Some(pane) = pane {
+            line["pane"] = json!(pane);
+        }
+        let socket = otto.socket.clone();
+        std::thread::spawn(move || {
+            let mut stream = UnixStream::connect(&socket).unwrap();
+            writeln!(stream, "{line}").unwrap();
+            let mut reply = String::new();
+            BufReader::new(stream).read_line(&mut reply).unwrap();
+            serde_json::from_str::<Value>(&reply).unwrap()
+        })
+    };
+    let error = |reply: Value| reply["error"].as_str().unwrap_or_default().to_string();
+    // None named, the focus on the user's terminal elsewhere: refused, not read.
+    otto.call(json!({"cmd": "focus", "pane": theirs}));
+    assert!(error(wait(None).join().unwrap()).contains("not in task 1's workspace"));
+    // Its own terminal moved out of the workspace mid-wait: the wait ends.
+    otto.call(json!({"cmd": "select_tab", "index": own_tab}));
+    let waiting = wait(Some(mine));
+    std::thread::sleep(Duration::from_millis(400));
+    otto.call(json!({"cmd": "move_pane", "pane": mine, "tab": their_tab}));
+    assert!(error(waiting.join().unwrap()).contains("not in task 1's workspace"));
+    // The agent ends mid-wait: its pass is dead, the wait ends.
+    otto.call(json!({"cmd": "select_tab", "index": own_tab}));
+    let other = otto.call(json!({"cmd": "split"}))["state"]["focused"].as_u64().unwrap();
+    let waiting = wait(Some(other));
+    std::thread::sleep(Duration::from_millis(400));
+    stop_the_agent(&otto);
+    assert!(error(waiting.join().unwrap()).contains("no running agent"));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The owner's order: an app pane placed and set to See before any task works in its workspace.
 /// The pick grants nothing and waits; the task the user then starts there is only offered it; a
 /// client's click on the offer gives nothing, the user's gives See to that task.
