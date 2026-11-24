@@ -1,8 +1,9 @@
 //! Decisions filed from any source (`decision_sources`): what the model checks a filing against,
 //! and when one expires. The record and its rules: `crate::filed`.
 
+use super::decisions::Undo;
 use super::{Action, Effect, Model};
-use crate::filed::{Ctx, Filing};
+use crate::filed::{Ctx, Filing, Role, prefix_of};
 use crate::tasks::{State, TaskId};
 
 impl Model {
@@ -33,13 +34,79 @@ impl Model {
                 self.filed.file(&filing, &Ctx { now, live: &live, tasks: &tasks, checkouts: &checkouts })
             }
             Action::DecisionWithdraw { source, key, now } => self.filed.withdraw(source, &key, now),
-            Action::RestoreDecisions { kept } => {
-                self.filed.restore(kept);
+            Action::RestoreDecisions { kept, trusted } => {
+                self.filed.restore(kept, trusted);
                 None
             }
             _ => None,
         };
         self.save_filed(changed.into_iter().collect(), Vec::new(), effects);
+    }
+
+    /// Triage's keys, the user's alone, on the item on show (`decisions::sort_key`).
+    pub(super) fn sort_act(&mut self, action: Action, effects: &mut Vec<Effect>) {
+        let now = self.now;
+        let Some(sort) = self.decisions.as_ref().and_then(|run| run.sort.clone()) else { return };
+        let shown = |id: u64| sort.item == Some(id);
+        let mut next = sort.clone();
+        let mut changed = Vec::new();
+        match action {
+            Action::SortStart if sort.item.is_none() => {
+                next = self.sorting_at(self.filed.next_to_sort(now), sort.done, sort.undo.clone());
+            }
+            Action::SortSkip if sort.item.is_none() => {
+                if let Some(run) = self.decisions.as_mut() {
+                    (run.sort, run.sorted) = (None, true);
+                }
+                return;
+            }
+            Action::SortItem { id, how } if shown(id) => {
+                if let Some(before) = self.filed.sort(id, how, sort.claims, sort.role, now) {
+                    next.undo.push(Undo::Sorted(Box::new(before)));
+                    next.done += 1;
+                    changed.push(id);
+                }
+            }
+            Action::SortToggle { id, claims: true } if shown(id) => next.claims = !sort.claims,
+            Action::SortToggle { id, claims: false } if shown(id) => {
+                let core = sort.role == Some(Role::Core);
+                next.role = Some(if core { Role::Ancillary } else { Role::Core });
+            }
+            Action::SortPromote { id } if shown(id) => {
+                let Some(d) = self.filed.get(id) else { return };
+                let (source, prefix) = (d.source, prefix_of(&d.key).to_string());
+                let ids = self.filed.promote(source, &prefix);
+                next.done += ids.len();
+                changed.extend(ids.iter().copied());
+                next.undo.push(Undo::Promoted { source, prefix, ids });
+                effects.push(Effect::SaveTrust { trusted: self.filed.trusted.clone() });
+            }
+            Action::SortUndo => match next.undo.pop() {
+                Some(Undo::Sorted(before)) => {
+                    let id = before.id;
+                    if self.filed.put_back(*before) {
+                        changed.push(id);
+                        (next.item, next.done) = (Some(id), next.done.saturating_sub(1));
+                        (next.claims, next.role) = (false, self.filed.get(id).and_then(|d| d.suggest.role));
+                    }
+                }
+                Some(Undo::Promoted { source, prefix, ids }) => {
+                    self.filed.demote(source, &prefix, &ids);
+                    changed.extend(ids.iter().copied());
+                    next.done = next.done.saturating_sub(ids.len());
+                    let first = ids.iter().copied().find(|id| self.filed.get(*id).is_some_and(|d| d.to_sort(now)));
+                    next.item = first.or(next.item);
+                    effects.push(Effect::SaveTrust { trusted: self.filed.trusted.clone() });
+                }
+                None => return,
+            },
+            _ => return,
+        }
+        next.left = self.filed.to_sort(now);
+        if let Some(run) = self.decisions.as_mut() {
+            run.sort = Some(next);
+        }
+        self.save_filed(changed, Vec::new(), effects);
     }
 
     /// After every step: an open decision past its time, or whose task is done or gone, expires;
@@ -102,7 +169,7 @@ mod tests {
         let mut kept = crate::filed::Filed::default();
         let ctx = crate::filed::Ctx { now: 10, live: &[], tasks: &[], checkouts: &[] };
         kept.file(&filing(), &ctx);
-        m.update(Action::RestoreDecisions { kept: kept.list }.sent_by(Origin::System));
+        m.update(Action::RestoreDecisions { kept: kept.list, trusted: Vec::new() }.sent_by(Origin::System));
         assert_eq!(m.filed.list.len(), 1, "read at start whatever the flag");
         let effects = m.update(Action::Tick { now: 10 + crate::filed::DEFAULT_EXPIRY_MS }.sent_by(Origin::System));
         assert_eq!(m.filed.list[0].status, Status::Expired);
@@ -129,6 +196,76 @@ mod tests {
         assert_eq!(m.filed.list[0].triage, Triage::Skipped);
         m.update(Action::TaskSetState { id: task, state: State::Done }.sent_by(Origin::Socket));
         assert_eq!(m.filed.list[0].status, Status::Expired, "no one to answer");
+    }
+
+    fn file(m: &mut Model, source: Source, key: &str, now: u64) -> u64 {
+        let mut f = filing();
+        (f.source, f.key) = (source, key.into());
+        m.update(Action::DecisionFile { filing: Box::new(f), now }.sent_by(Origin::Socket));
+        m.filed.find(source, key).map(|d| d.id).unwrap_or_default()
+    }
+
+    fn key(m: &mut Model, key: &str) -> Vec<Effect> {
+        let crate::model::chat::Key::Act(action) = m.decision_key(key, crate::keys::Mods::default(), 1_000) else {
+            panic!("{key} does nothing");
+        };
+        m.update(action)
+    }
+
+    fn item(m: &Model) -> Option<Option<u64>> {
+        m.decisions.as_ref().and_then(|run| run.sort.as_ref()).map(|sort| sort.item)
+    }
+
+    #[test]
+    fn triage_is_one_key_an_item_and_z_takes_the_last_back() {
+        let mut m = Model::in_workspace();
+        let a = file(&mut m, Source::Slack, "slack:C1:1.0", 10);
+        let b = file(&mut m, Source::Slack, "slack:C1:2.0", 20);
+        let c = file(&mut m, Source::Jira, "jira:ABC-1", 30);
+        m.update(Action::Tick { now: 1_000 }.sent_by(Origin::System));
+        assert_eq!(m.filed.to_sort(1_000), 3);
+        // No agent waits: ⌘J opens Decisions on triage's card.
+        m.update(Action::DecisionsOpen);
+        assert_eq!(item(&m), Some(None));
+        assert_eq!(m.decisions.as_ref().map(|run| (run.task, run.at, run.of)), Some((None, 1, 1)));
+        // A client's keys are refused.
+        for action in [Action::SortStart, Action::SortSkip, Action::SortUndo] {
+            m.update(action.sent_by(Origin::Socket));
+            assert_eq!(item(&m), Some(None));
+        }
+        key(&mut m, "enter");
+        assert_eq!(item(&m), Some(Some(a)), "the first filed first");
+        // T: taken now, its claims counted with U; the next shows.
+        key(&mut m, "u");
+        let effects = key(&mut m, "t");
+        let d = m.filed.get(a).unwrap();
+        assert_eq!((d.triage, d.accepted.claims, d.accepted.now_until.is_some()), (Triage::Sorted, true, true));
+        assert!(effects.iter().any(|e| matches!(e, Effect::SaveDecision { decision } if decision.id == a)));
+        assert_eq!(item(&m), Some(Some(b)));
+        // Z: back as it was, on show again.
+        key(&mut m, "z");
+        assert_eq!((m.filed.get(a).unwrap().triage, item(&m)), (Triage::Pending, Some(Some(a))));
+        key(&mut m, "n");
+        assert_eq!(m.filed.get(a).unwrap().status, Status::NotMine);
+        // P: its channel skips triage from now, the rest of it with it; Z takes that back too.
+        let effects = key(&mut m, "p");
+        assert!(effects.iter().any(|e| matches!(e, Effect::SaveTrust { trusted } if trusted.len() == 1)));
+        assert_eq!((m.filed.get(b).unwrap().triage, item(&m)), (Triage::Skipped, Some(Some(c))));
+        assert_eq!(file(&mut m, Source::Slack, "slack:C1:3.0", 1_000), m.filed.list.last().unwrap().id);
+        assert_eq!(m.filed.list.last().unwrap().triage, Triage::Skipped, "a promoted channel's next skips triage");
+        key(&mut m, "z");
+        assert_eq!((m.filed.get(b).unwrap().triage, m.filed.trusted.len()), (Triage::Pending, 0));
+        // L puts one off a day; D dismisses: nothing left, triage ends, and Decisions with it.
+        key(&mut m, "l");
+        assert!(m.filed.get(b).unwrap().later.is_some());
+        key(&mut m, "d");
+        assert_eq!(m.filed.get(c).unwrap().status, Status::Dismissed);
+        assert!(m.decisions.is_none(), "nothing left to sort");
+        // S on the card: not in this run.
+        file(&mut m, Source::Jira, "jira:ABC-2", 1_000);
+        m.update(Action::DecisionsOpen);
+        key(&mut m, "s");
+        assert!(m.decisions.is_none());
     }
 
     #[test]

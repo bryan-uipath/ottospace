@@ -296,8 +296,49 @@ pub enum Via {
 pub enum Triage {
     /// Waits for the user to sort it.
     Pending,
-    /// Its source skips triage.
+    /// Its source skips triage: by its spec, or the user promoted it (`Filed::trusted`).
     Skipped,
+    /// The user sorted it: work, or a ranked decision.
+    Sorted,
+}
+
+/// What the user took of a filer's word when sorting (or a trusted source's, as filed).
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Accepted {
+    pub project: Option<String>,
+    pub role: Option<Role>,
+    /// Its claims (due, someone waits) count.
+    pub claims: bool,
+    /// Taken now (`t`): first of its tier until then.
+    pub now_until: Option<u64>,
+}
+
+/// A source's prefix of keys the user promoted: its items skip triage. `slack:C0MADEUP:`, or ``
+/// for the whole source.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Prefix {
+    pub source: Source,
+    pub prefix: String,
+}
+
+/// How the user sorts an item: one key each.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Sort {
+    /// ↵: under the project it suggests (if any), its role as the user left it.
+    Keep,
+    /// `t`: first of its tier until `until` (the end of the user's day).
+    Now { until: u64 },
+    /// `l`: back in triage after `until`.
+    Later { until: u64 },
+    /// `n`: not the user's; closed, the filer reads it.
+    NotMine,
+    /// `d`: closed.
+    Dismiss,
+}
+
+/// The part of a key a promotion covers: up to its last `:`, else the whole source.
+pub fn prefix_of(key: &str) -> &str {
+    key.rfind(':').map_or("", |at| &key[..=at])
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -308,6 +349,10 @@ pub enum Status {
     Withdrawn,
     /// Its time passed, or its asker ended.
     Expired,
+    /// The user closed it in triage.
+    Dismissed,
+    /// The user said it is not theirs.
+    NotMine,
 }
 
 /// A filed decision as kept: `<home>/decisions/<id>.json`.
@@ -336,11 +381,21 @@ pub struct Decision {
     pub status: Status,
     /// When it closed: it is deleted `KEEP_CLOSED_MS` later.
     pub closed: Option<u64>,
+    /// Put off in triage (`l`): not to sort before then.
+    #[serde(default)]
+    pub later: Option<u64>,
+    #[serde(default)]
+    pub accepted: Accepted,
 }
 
 impl Decision {
     pub fn open(&self) -> bool {
         self.status == Status::Open
+    }
+
+    /// Open, waiting in triage, and not put off past `now`.
+    pub fn to_sort(&self, now: u64) -> bool {
+        self.open() && self.triage == Triage::Pending && self.later.is_none_or(|until| until <= now)
     }
 
     /// What a filing sets, compared to tell an update that changes nothing.
@@ -383,6 +438,8 @@ pub struct Row {
 pub struct Shown {
     pub open: usize,
     pub to_sort: usize,
+    /// How many prefixes the user promoted (never the prefixes: a channel's id is the filer's).
+    pub trusted: usize,
     pub rows: Vec<Row>,
 }
 
@@ -390,6 +447,8 @@ pub struct Shown {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Filed {
     pub list: Vec<Decision>,
+    /// Prefixes the user promoted: their items skip triage. Kept in `<home>/decisions/trust.json`.
+    pub trusted: Vec<Prefix>,
     /// When each counted filing came, by source: for `PER_HOUR`.
     recent: Vec<(Source, u64)>,
 }
@@ -409,13 +468,78 @@ impl Filed {
         self.list.iter().filter(|d| d.open()).count()
     }
 
-    /// Open and waiting to be sorted.
-    pub fn to_sort(&self) -> usize {
-        self.list.iter().filter(|d| d.open() && d.triage == Triage::Pending).count()
+    /// Waiting to be sorted now.
+    pub fn to_sort(&self, now: u64) -> usize {
+        self.list.iter().filter(|d| d.to_sort(now)).count()
+    }
+
+    /// The next item to sort: the one filed first.
+    pub fn next_to_sort(&self, now: u64) -> Option<u64> {
+        self.list.iter().filter(|d| d.to_sort(now)).min_by_key(|d| (d.filed, d.id)).map(|d| d.id)
+    }
+
+    /// Whether the user promoted `key` of `source`.
+    pub fn trusts(&self, source: Source, key: &str) -> bool {
+        self.trusted.iter().any(|p| p.source == source && key.starts_with(p.prefix.as_str()))
+    }
+
+    /// Sorts item `id` as the user said, with the claims and the role they left on it. What it
+    /// was before, for undo; `None`: no such item waits.
+    pub fn sort(&mut self, id: u64, how: Sort, claims: bool, role: Option<Role>, now: u64) -> Option<Decision> {
+        let d = self.list.iter_mut().find(|d| d.id == id && d.to_sort(now))?;
+        let before = d.clone();
+        let take = |d: &mut Decision, until: Option<u64>| {
+            d.triage = Triage::Sorted;
+            let project = d.suggest.projects.first().cloned();
+            d.accepted = Accepted { project, role, claims, now_until: until };
+        };
+        match how {
+            Sort::Keep => take(d, None),
+            Sort::Now { until } => take(d, Some(until)),
+            Sort::Later { until } => d.later = Some(until),
+            Sort::NotMine => (d.status, d.closed) = (Status::NotMine, Some(now)),
+            Sort::Dismiss => (d.status, d.closed) = (Status::Dismissed, Some(now)),
+        }
+        d.updated = now;
+        Some(before)
+    }
+
+    /// Puts a decision back as it was (undo of a sort). True if it was there to put back.
+    pub fn put_back(&mut self, before: Decision) -> bool {
+        let Some(d) = self.list.iter_mut().find(|d| d.id == before.id) else { return false };
+        *d = before;
+        true
+    }
+
+    /// The user promotes `prefix` of `source`: its open items waiting in triage skip it now, and
+    /// its next ones never enter it. The items moved, for undo; none if it was promoted already.
+    pub fn promote(&mut self, source: Source, prefix: &str) -> Vec<u64> {
+        let p = Prefix { source, prefix: prefix.to_string() };
+        if self.trusted.contains(&p) {
+            return Vec::new();
+        }
+        self.trusted.push(p);
+        let moved = |d: &Decision| d.open() && d.triage == Triage::Pending && d.source == source;
+        let mut ids = Vec::new();
+        for d in self.list.iter_mut().filter(|d| moved(d) && d.key.starts_with(prefix)) {
+            (d.triage, d.accepted.claims) = (Triage::Skipped, true);
+            d.accepted.project = d.suggest.projects.first().cloned();
+            d.accepted.role = d.suggest.role;
+            ids.push(d.id);
+        }
+        ids
+    }
+
+    /// Takes a promotion back: the prefix goes, and `ids` (still open, skipped) wait in triage again.
+    pub fn demote(&mut self, source: Source, prefix: &str, ids: &[u64]) {
+        self.trusted.retain(|p| !(p.source == source && p.prefix == prefix));
+        for d in self.list.iter_mut().filter(|d| ids.contains(&d.id) && d.open() && d.triage == Triage::Skipped) {
+            (d.triage, d.accepted) = (Triage::Pending, Accepted::default());
+        }
     }
 
     /// What the state says of them.
-    pub fn shown(&self) -> Shown {
+    pub fn shown(&self, now: u64) -> Shown {
         let row = |d: &Decision| Row {
             id: d.id,
             source: d.source,
@@ -430,7 +554,8 @@ impl Filed {
             options: d.options.len(),
             evidence: d.evidence.len(),
         };
-        Shown { open: self.open_count(), to_sort: self.to_sort(), rows: self.list.iter().map(row).collect() }
+        let (to_sort, trusted) = (self.to_sort(now), self.trusted.len());
+        Shown { open: self.open_count(), to_sort, trusted, rows: self.list.iter().map(row).collect() }
     }
 
     /// Why `filing` is refused, or `None`: what it holds, then the caps.
@@ -471,7 +596,7 @@ impl Filed {
         let Some(was) = was else { return true };
         match was.status {
             Status::Open | Status::Withdrawn => true,
-            Status::Expired => {
+            Status::Expired | Status::Dismissed | Status::NotMine => {
                 let sooner = filing.claims.due.is_some_and(|due| was.claims.due.is_none_or(|old| due < old));
                 sooner || filing.claims.blocks.iter().any(|task| !was.claims.blocks.contains(task))
             }
@@ -488,7 +613,8 @@ impl Filed {
         let opens = self.opens(self.find(filing.source, &filing.key), filing);
         let at = self.find(filing.source, &filing.key).map(|was| was.id);
         let at = at.and_then(|id| self.list.iter().position(|d| d.id == id));
-        let triage = if filing.source.spec().triage { Triage::Pending } else { Triage::Skipped };
+        let trusted = self.trusts(filing.source, &filing.key);
+        let triage = if filing.source.spec().triage && !trusted { Triage::Pending } else { Triage::Skipped };
         let id = match at {
             Some(at) if self.list[at].open() && unchanged(&self.list[at], &kept, filing, ctx.now) => return None,
             // Closed, and this does not open it: left as it closed.
@@ -504,7 +630,7 @@ impl Filed {
                 set(d, kept, ctx.now, filing.expires);
                 d.revision = d.revision.saturating_add(1);
                 if opens && !d.open() {
-                    (d.status, d.closed, d.triage) = (Status::Open, None, triage);
+                    (d.status, d.closed, d.triage, d.later) = (Status::Open, None, triage, None);
                 }
                 d.id
             }
@@ -536,6 +662,8 @@ impl Filed {
                     task: None,
                     status,
                     closed,
+                    later: None,
+                    accepted: Accepted::default(),
                 };
                 set(&mut d, kept, ctx.now, filing.expires);
                 self.list.push(d);
@@ -587,7 +715,10 @@ impl Filed {
 
     /// The decisions read at start. Each file is input: kept as a filing would be, once per id
     /// and per open key, at most `OPEN_ALL` open; the rest are left out.
-    pub fn restore(&mut self, kept: Vec<Decision>) {
+    pub fn restore(&mut self, kept: Vec<Decision>, trusted: Vec<Prefix>) {
+        let fits = |p: &Prefix| p.prefix.is_empty() || (valid_key(&p.prefix) && p.prefix.ends_with(':'));
+        self.trusted = trusted.into_iter().filter(fits).take(OPEN_ALL).collect();
+        self.trusted.dedup();
         let mut list: Vec<Decision> = Vec::new();
         for d in kept {
             let clash =
@@ -1023,7 +1154,7 @@ pub(crate) mod tests {
         (derived.id, derived.key, derived.source) = (id + 4, "c".into(), Source::TerminalSession);
         kept.extend([twin, bad, link, derived]);
         let mut back = Filed::default();
-        back.restore(kept);
+        back.restore(kept, Vec::new());
         assert_eq!(back.list.len(), 1, "one open per key; no bad key, act or source");
         assert_eq!(back.list[0].question, "line one[31m");
     }

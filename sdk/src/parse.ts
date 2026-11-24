@@ -28,6 +28,7 @@ import type {
   Slot,
   Offer,
   Decisions,
+  DecisionSorting,
   SlotDialog,
   Viewer,
   ViewerDrawn,
@@ -1022,7 +1023,12 @@ function filedRow(value: unknown, at: string): FiledRow {
 
 function filed(value: unknown, at: string): Filed {
   const o = fields(value, at);
-  return { open: num(o.open, `${at}.open`), to_sort: num(o.to_sort, `${at}.to_sort`), rows: list(filedRow)(o.rows, `${at}.rows`) };
+  return {
+    open: num(o.open, `${at}.open`),
+    to_sort: num(o.to_sort, `${at}.to_sort`),
+    trusted: num(o.trusted, `${at}.trusted`),
+    rows: list(filedRow)(o.rows, `${at}.rows`),
+  };
 }
 
 export function taskBriefReply(value: unknown): TaskBriefReply {
@@ -2073,11 +2079,23 @@ function decisions(value: unknown, at: string): Decisions {
   return {
     tab: num(o.tab, `${at}.tab`),
     pane: num(o.pane, `${at}.pane`),
-    task: num(o.task, `${at}.task`),
-    ticket: num(o.ticket, `${at}.ticket`),
+    task: orNull(num)(o.task, `${at}.task`),
+    ticket: orNull(num)(o.ticket, `${at}.ticket`),
+    sort: orNull(decisionSorting)(o.sort, `${at}.sort`),
     at: num(o.at, `${at}.at`),
     of: num(o.of, `${at}.of`),
     queue: list(card)(o.queue, `${at}.queue`),
+  };
+}
+
+function decisionSorting(value: unknown, at: string): DecisionSorting {
+  const o = fields(value, at);
+  return {
+    item: orNull(num)(o.item, `${at}.item`),
+    claims: bool(o.claims, `${at}.claims`),
+    role: orNull(oneOf(["core", "ancillary"] as const, "a role"))(o.role, `${at}.role`),
+    done: num(o.done, `${at}.done`),
+    left: num(o.left, `${at}.left`),
   };
 }
 

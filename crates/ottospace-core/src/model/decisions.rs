@@ -39,15 +39,41 @@ pub struct Waiting {
     pub since: u64,
 }
 
+/// Triage on show (`decision_sources`): the card "Sort 6 new items" (`item` null), or the item
+/// being sorted, one key each, and what the user left on it before its key.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Sorting {
+    pub item: Option<u64>,
+    /// `u`: its claims (due, someone waits) count once sorted. Off at each item.
+    pub claims: bool,
+    /// `c`: its role, from its suggestion at each item.
+    pub role: Option<crate::filed::Role>,
+    /// Sorted in this run, and waiting still.
+    pub done: usize,
+    pub left: usize,
+    /// What `z` takes back, the last first.
+    #[serde(skip)]
+    pub(crate) undo: Vec<Undo>,
+}
+
+/// A sort or a promotion, to take back.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) enum Undo {
+    Sorted(Box<crate::filed::Decision>),
+    Promoted { source: crate::filed::Source, prefix: String, ids: Vec<u64> },
+}
+
 /// The Decisions workspace while it is open.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Run {
     /// The tab that holds its card pane, and the pane.
     pub tab: u32,
     pub pane: PaneId,
-    /// The card on show: its task's agent's question `ticket`.
-    pub task: TaskId,
-    pub ticket: u64,
+    /// The card on show: its task's agent's question `ticket`; neither while triage shows.
+    pub task: Option<TaskId>,
+    pub ticket: Option<u64>,
+    /// Triage on show, or null. It comes after the agents' questions.
+    pub sort: Option<Sorting>,
     /// "`at` of `of`": the cards dealt with in this run, and those left.
     pub at: usize,
     pub of: usize,
@@ -62,6 +88,9 @@ pub struct Run {
     /// Held: the person typed in the drawer to its task when another's step would have moved it on.
     #[serde(skip)]
     pub(crate) held: bool,
+    /// Triage was skipped or finished in this run: its card does not come again.
+    #[serde(skip)]
+    pub(crate) sorted: bool,
 }
 
 impl Model {
@@ -74,9 +103,21 @@ impl Model {
         }
     }
 
-    /// The card on show in Decisions: its task and ticket.
+    /// The card on show in Decisions: its task and ticket. None while triage shows.
     pub fn decision_card(&self) -> Option<(TaskId, u64)> {
-        self.decisions.as_ref().map(|run| (run.task, run.ticket))
+        self.decisions.as_ref().and_then(|run| run.task.zip(run.ticket))
+    }
+
+    /// Items wait in triage (`decision_sources`): Decisions has a sort card to show.
+    pub fn sortable(&self) -> bool {
+        self.features.on(Feature::DecisionSources) && self.filed.to_sort(self.now) > 0
+    }
+
+    /// The sort card's run state at item `item`: its claims off, its role as suggested.
+    pub(crate) fn sorting_at(&self, item: Option<u64>, done: usize, undo: Vec<Undo>) -> Sorting {
+        let role = item.and_then(|id| self.filed.get(id)).and_then(|d| d.suggest.role);
+        let left = self.filed.to_sort(self.now);
+        Sorting { item, claims: false, role, done, left, undo }
     }
 
     /// The questions waiting on the person: each task whose native agent runs and shows a question
@@ -120,8 +161,12 @@ impl Model {
     /// A key on the card pane, while it has the keyboard: 1 to 9 pick, ↑↓ j k move, space picks,
     /// ↵ sends, ⇥ between questions; S skips, L puts it off until `now + LATER_MS`, Esc closes Decisions.
     pub fn decision_key(&self, key: &str, mods: crate::keys::Mods, now: u64) -> Key {
-        let Some((task, ticket)) = self.decision_card().filter(|_| self.keyboard_decision()) else { return Key::Pass };
         let bare = !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift;
+        let sort = self.decisions.as_ref().and_then(|run| run.sort.as_ref()).filter(|_| self.keyboard_decision());
+        if let Some(sort) = sort {
+            return self.sort_key(sort, key, bare, now);
+        }
+        let Some((task, ticket)) = self.decision_card().filter(|_| self.keyboard_decision()) else { return Key::Pass };
         match key {
             "escape" => Key::Act(Action::DecisionsClose),
             "s" if bare => Key::Act(Action::DecisionsSkip { task, ticket }),
@@ -131,6 +176,66 @@ impl Model {
                 other => other,
             },
         }
+    }
+
+    /// A key on triage: on its card ↵ sorts, S skips; on an item ↵ keeps it (under the project it
+    /// suggests), T takes it now, L puts it off a day, N not mine, D dismisses, U counts its claims,
+    /// C flips its role, P promotes its source's prefix, Z takes the last back. Esc closes.
+    fn sort_key(&self, sort: &Sorting, key: &str, bare: bool, now: u64) -> Key {
+        // Today ends at the user's next midnight; with no day yet, twelve hours on.
+        let day = crate::filed::DAY_MS;
+        let tonight = if self.local_day > 0 { self.local_day.saturating_add(day) } else { now.saturating_add(day / 2) };
+        let act = |how| sort.item.map(|id| Action::SortItem { id, how });
+        let action = match (key, sort.item) {
+            ("escape", _) => Some(Action::DecisionsClose),
+            ("enter", None) => Some(Action::SortStart),
+            ("s", None) if bare => Some(Action::SortSkip),
+            ("enter", Some(_)) => act(crate::filed::Sort::Keep),
+            ("z", _) if bare => Some(Action::SortUndo),
+            (_, Some(id)) if bare => match key {
+                "t" => act(crate::filed::Sort::Now { until: tonight.max(now) }),
+                "l" => act(crate::filed::Sort::Later { until: now.saturating_add(day) }),
+                "n" => act(crate::filed::Sort::NotMine),
+                "d" => act(crate::filed::Sort::Dismiss),
+                "u" => Some(Action::SortToggle { id, claims: true }),
+                "c" => Some(Action::SortToggle { id, claims: false }),
+                "p" => Some(Action::SortPromote { id }),
+                _ => None,
+            },
+            _ => None,
+        };
+        action.map_or(Key::Pass, Key::Act)
+    }
+
+    /// A click on one of triage's buttons: what its key does, wherever the keyboard is.
+    pub fn sort_click(&self, key: &str, mods: crate::keys::Mods, now: u64) -> Key {
+        let Some(sort) = self.decisions.as_ref().and_then(|run| run.sort.as_ref()) else { return Key::Pass };
+        self.sort_key(sort, key, !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift, now)
+    }
+
+    /// After every step, while triage shows: its item moves on once sorted (or gone); no item
+    /// left, triage ends for this run. True while it still shows.
+    fn settle_sort(&mut self) -> bool {
+        let now = self.now;
+        let Some(sort) = self.decisions.as_ref().and_then(|run| run.sort.as_ref()) else { return false };
+        let on = self.features.on(Feature::DecisionSources);
+        let waits = |id: u64| self.filed.get(id).is_some_and(|d| d.to_sort(now));
+        let item = match sort.item {
+            _ if !on => None,
+            Some(id) if waits(id) => Some(Some(id)),
+            Some(_) => self.filed.next_to_sort(now).map(Some),
+            None => (self.filed.to_sort(now) > 0).then_some(None),
+        };
+        let fresh = item.flatten() != sort.item;
+        let (done, undo) = (sort.done, sort.undo.clone());
+        let next = item.map(|item| match fresh {
+            true => self.sorting_at(item, done, undo),
+            false => Sorting { left: self.filed.to_sort(now), ..sort.clone() },
+        });
+        let Some(run) = self.decisions.as_mut() else { return false };
+        run.sort = next;
+        run.sorted |= run.sort.is_none();
+        run.sort.is_some()
     }
 
     /// The card pane is focused and ottospace has the keyboard: keys go to the card.
@@ -229,7 +334,10 @@ impl Model {
             return self.focus(pane, effects);
         }
         let queue = self.decision_queue();
-        let Some(first) = queue.first().cloned() else { return self.act(Action::TaskGo { id: None }, effects) };
+        let sortable = self.sortable();
+        if queue.is_empty() && !sortable {
+            return self.act(Action::TaskGo { id: None }, effects);
+        }
         // Not from a window out: Decisions is the main window's.
         if self.away.is_some() {
             return;
@@ -242,9 +350,13 @@ impl Model {
         let pane = self.add(Kind::Decision, None, Axis::Right);
         effects.push(Effect::Opened(pane));
         let tab = self.tabs[self.active].id;
-        let (task, ticket) = (first.task, first.ticket);
+        // The agents' questions first; triage after them, as one card.
+        let (task, ticket) = queue.first().map(|first| (first.task, first.ticket)).unzip();
+        let sort = task.is_none().then(|| self.sorting_at(None, 0, Vec::new()));
+        let of = queue.len() + usize::from(sortable);
+        let done = Vec::new();
         self.decisions =
-            Some(Run { tab, pane, task, ticket, at: 1, of: queue.len(), queue, done: Vec::new(), from, held: false });
+            Some(Run { tab, pane, task, ticket, sort, at: 1, of, queue, done, from, held: false, sorted: false });
         self.title_decisions();
     }
 
@@ -253,7 +365,7 @@ impl Model {
     /// from shows again (else its neighbour's); in the background nothing on show changes.
     fn end_decisions(&mut self, effects: &mut Vec<Effect>) {
         let run = self.decisions.take();
-        let (from, task) = (run.as_ref().and_then(|run| run.from), run.map(|run| run.task));
+        let (from, task) = (run.as_ref().and_then(|run| run.from), run.and_then(|run| run.task));
         // A pane the person added stays on show, its tab a workspace's now: nothing moves under them.
         let card = |id: &PaneId| self.pane(*id).is_some_and(|p| p.kind == Kind::Decision);
         let at = self.tabs.iter().position(|t| t.space == Owner::Decisions);
@@ -309,7 +421,7 @@ impl Model {
                 self.waiting.push(Seen { task, ticket, since: self.now });
             }
         }
-        let Some((pane, shown)) = self.decisions.as_ref().map(|run| (run.pane, (run.task, run.ticket))) else {
+        let Some((pane, shown)) = self.decisions.as_ref().map(|run| (run.pane, run.task.zip(run.ticket))) else {
             // No run: nothing of one is left.
             let left = self.tabs.iter().any(|t| t.space == Owner::Decisions);
             if left || self.panes.iter().any(|p| p.kind == Kind::Decision) {
@@ -328,37 +440,58 @@ impl Model {
         for other in self.tabs.iter_mut().filter(|t| t.space == Owner::Decisions && Some(t.id) != tab) {
             other.space = Owner::Home;
         }
-        let on_card = self.talk.as_ref().is_some_and(|talk| talk.open && talk.task == Subject::Task(shown.0));
-        // Only when the card would move: it left the queue.
-        let was = self.decision_held();
-        let held = origin != super::Origin::User
-            && (typing || was)
-            && (was || !asking.contains(&shown))
-            && on_card
-            && self.tasks.live(shown.0).is_some();
-        let queue = self.decision_queue();
-        if let Some(run) = self.decisions.as_mut() {
-            run.held = held;
-            if held {
+        // Triage on show stays while items wait: nothing moves under the person.
+        if self.settle_sort() {
+            let queue = self.decision_queue();
+            if let Some(run) = self.decisions.as_mut() {
+                (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len() + 1);
                 run.queue = queue;
-                return;
+            }
+            return self.title_decisions();
+        }
+        if let Some(shown) = shown {
+            let on_card = self.talk.as_ref().is_some_and(|talk| talk.open && talk.task == Subject::Task(shown.0));
+            // Only when the card would move: it left the queue.
+            let was = self.decision_held();
+            let held = origin != super::Origin::User
+                && (typing || was)
+                && (was || !asking.contains(&shown))
+                && on_card
+                && self.tasks.live(shown.0).is_some();
+            let queue = self.decision_queue();
+            if let Some(run) = self.decisions.as_mut() {
+                run.held = held;
+                if held {
+                    run.queue = queue;
+                    return;
+                }
+            }
+            // Answered or withdrawn: dealt with. One only put behind another of its task waits still.
+            let pending = self.chat(&Subject::Task(shown.0)).is_some_and(|chat| {
+                chat.transcript.live && chat.transcript.cards.iter().any(|card| card.ticket == shown.1)
+            });
+            if !asking.contains(&shown)
+                && !pending
+                && let Some(run) = self.decisions.as_mut().filter(|run| !run.done.contains(&shown))
+            {
+                run.done.push(shown);
             }
         }
-        // Answered or withdrawn: dealt with. One only put behind another of its task waits still.
-        let pending = self.chat(&Subject::Task(shown.0)).is_some_and(|chat| {
-            chat.transcript.live && chat.transcript.cards.iter().any(|card| card.ticket == shown.1)
-        });
-        if !asking.contains(&shown)
-            && !pending
-            && let Some(run) = self.decisions.as_mut().filter(|run| !run.done.contains(&shown))
-        {
-            run.done.push(shown);
-        }
         let queue = self.decision_queue();
-        let Some(first) = queue.first().cloned() else { return self.end_decisions(effects) };
+        // After the agents' questions, triage as one card, once a run.
+        let sort = queue.is_empty() && self.sortable() && self.decisions.as_ref().is_some_and(|run| !run.sorted);
+        let sorting = sort.then(|| self.sorting_at(None, 0, Vec::new()));
+        if queue.is_empty() && sorting.is_none() {
+            return self.end_decisions(effects);
+        }
         if let Some(run) = self.decisions.as_mut() {
-            (run.task, run.ticket) = (first.task, first.ticket);
-            (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len());
+            (run.task, run.ticket) = queue.first().map(|first| (first.task, first.ticket)).unzip();
+            run.sort = sorting;
+            let more = usize::from(
+                run.sort.is_some()
+                    || (!run.sorted && self.features.on(Feature::DecisionSources) && self.filed.to_sort(self.now) > 0),
+            );
+            (run.at, run.of) = (run.done.len() + 1, run.done.len() + queue.len() + more);
             run.queue = queue;
         }
         self.title_decisions();
@@ -497,7 +630,7 @@ mod tests {
         m.update(Action::DecisionsOpen);
         let run = m.decisions.clone().unwrap();
         assert!(on_show(&m) && m.focused == Some(run.pane));
-        assert_eq!((run.task, run.at, run.of), (b, 1, 2));
+        assert_eq!((run.task, run.at, run.of), (Some(b), 1, 2));
         assert_eq!(m.tabs[m.active].title, "Decisions · 1 of 2");
         // The drawer and the right rail are on the card's task.
         assert_eq!(m.talk.as_ref().map(|talk| talk.task.clone()), Some(Subject::Task(b)));

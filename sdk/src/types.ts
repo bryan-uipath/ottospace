@@ -727,6 +727,8 @@ export interface FiledRow {
 export interface Filed {
   open: number;
   to_sort: number;
+  /** How many source prefixes the user promoted out of triage. */
+  trusted: number;
   rows: FiledRow[];
 }
 
@@ -1509,11 +1511,23 @@ export interface Zoom {
 export interface Decisions {
   tab: number;
   pane: PaneId;
-  task: TaskId;
-  ticket: number;
+  /** The question on show: its task and ticket; null while triage shows. */
+  task: TaskId | null;
+  ticket: number | null;
+  /** Triage on show (`decision_sources`): its card (`item` null) or the item being sorted. */
+  sort: DecisionSorting | null;
   at: number;
   of: number;
   queue: { task: TaskId; ticket: number; priority: number; since: number }[];
+}
+
+/** Triage in Decisions: the item on show (an id of `filed`), and what the user left on it. */
+export interface DecisionSorting {
+  item: number | null;
+  claims: boolean;
+  role: "core" | "ancillary" | null;
+  done: number;
+  left: number;
 }
 
 /** A slot: a pane that keeps its place and waits for a window the user named. */

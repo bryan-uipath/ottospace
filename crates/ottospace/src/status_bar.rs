@@ -7,6 +7,7 @@ use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
 use gpui::{AnyView, Context, Div, FontWeight, Stateful, TextRun, Window, div, prelude::*, px, rems, rgb, svg};
+use ottospace_core::features::Feature;
 use ottospace_core::status_bar::{self, Agents, Fit, Meeting, Part, Place, Widths};
 use ottospace_core::tasks::Group;
 use ottospace_core::{Action, Kind, theme};
@@ -304,6 +305,12 @@ impl Workspace {
             dot.into_iter().chain([part])
         });
         let tip = format!("{} · ⌘J goes to the next that needs you", agents.text(false));
+        // Filed items waiting in triage (`decision_sources`): beside needs you, quiet, never a dot.
+        let n = self.model.filed.to_sort(self.model.now());
+        let to_sort = (n > 0 && self.on(Feature::DecisionSources)).then(|| {
+            let text = if short { format!("{n}") } else { format!("· {n} to sort") };
+            div().flex_none().text_color(rgb(theme::MUTED)).child(text)
+        });
         let segment = div()
             .id("status-agents")
             .relative()
@@ -312,6 +319,7 @@ impl Workspace {
             .items_center()
             .gap(px(6.))
             .children(parts)
+            .children(to_sort)
             .child(mark(&self.marks, Mark::StatusAgents));
         match agents == Agents::default() {
             true => segment,

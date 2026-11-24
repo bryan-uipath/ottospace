@@ -1800,7 +1800,8 @@ impl Workspace {
         let keeping = kept.error.is_none();
         model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest }.sent_by(Origin::System));
         // After the tasks: an agent's question whose task is there is not taken for an orphan.
-        model.update(Action::RestoreDecisions { kept: config::load_decisions() }.sent_by(Origin::System));
+        let (kept, trusted) = (config::load_decisions(), config::load_trust());
+        model.update(Action::RestoreDecisions { kept, trusted }.sent_by(Origin::System));
         // The first problem found at start, for the toast: settings, the font, then tasks.
         let unread = (unread > 0).then(|| format!("tasks: {unread} file(s) in the tasks folder could not be read"));
         let notice = config::get().error.clone().or(terminal::choose_font(window)).or(kept.error).or(unread);
@@ -2384,6 +2385,11 @@ impl Workspace {
                 }
                 Effect::RemoveDecision { id } => {
                     if let Err(err) = config::remove_decision(*id) {
+                        self.error = Some(format!("decisions: {err}"));
+                    }
+                }
+                Effect::SaveTrust { trusted } => {
+                    if let Err(err) = config::save_trust(trusted) {
                         self.error = Some(format!("decisions: {err}"));
                     }
                 }
@@ -4467,7 +4473,7 @@ impl Workspace {
             // Decisions filed from any source (`decision_sources`), null with the flag off: `open`,
             // `to_sort`, and each one's id, source, `via`, triage, status, revision, times and counts
             // of options and evidence. Never its words: `decision` gives those, labelled untrusted.
-            "filed": self.on(Feature::DecisionSources).then(|| self.model.filed.shown()),
+            "filed": self.on(Feature::DecisionSources).then(|| self.model.filed.shown(self.model.now())),
             // The home screen, or null while the tab on show has a pane: each task's node (its
             // lane, depth and crossing of the lattice) and the rows under "Needs you".
             "home": self.model.home(&self.home.borrow().keep_out()),
