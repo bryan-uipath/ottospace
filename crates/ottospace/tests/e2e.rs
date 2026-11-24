@@ -6780,10 +6780,11 @@ fn the_users_wheel_and_thumb_scroll_the_conversation_over_the_panes() {
     let (code_track, code_thumb) = code_bar(&otto.drawn()).unwrap();
     let over = [code_track[0] + 40., code_track[1] - 10.];
     let before = chat_bar(&otto.drawn()).unwrap().1[1];
-    let after = user_wheel(over, 120., 0.);
+    // Down, the way that has room after the thumb was dragged up.
+    let after = user_wheel(over, -120., 0.);
     let (_, code_after) = code_bar(&after).unwrap_or((code_track, code_thumb));
     let scrolled = chat_bar(&after).unwrap().1[1];
-    assert!((scrolled - before).abs() > 5., "over the code block: {before} {scrolled}");
+    assert!(scrolled > before + 5., "over the code block: {before} {scrolled}");
     assert_eq!(code_after[0], code_thumb[0], "a vertical wheel does not slide the block");
     // A sideways wheel over it does.
     let (_, across) = code_bar(&user_wheel(over, 0., -60.)).unwrap();
