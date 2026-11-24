@@ -1,0 +1,1 @@
+{"repos": ["{ROOT}/repos/app"], "sessions": true, "session_dirs": {"claude": ["{ROOT}/claude"]}, "restore_layout": false, "features": {"code_city": true}}
