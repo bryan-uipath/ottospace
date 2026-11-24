@@ -1579,7 +1579,7 @@ fn paint(
             lit_beams.push([foot.x, foot.y, end.x, end.y].map(f32::from));
         }
     }
-    let glimmering = glance(&mut glimmer, made, glimpses, bounds, window);
+    let glimmering = glance(&mut glimmer, made, glimpses, bounds, clear, window);
     let (icons, gliding, pulsing) = agents(made, floating, &was, bounds, clear, window, cx, &shape);
     // The last painted is on top.
     let over_icon = pointer.and_then(|at| icons.iter().rev().find(|icon| icon.rect.contains(&at)));
@@ -1640,7 +1640,14 @@ fn block_of(made: &Made, id: &str) -> Option<usize> {
 /// covers (its folders' plinths, the whole ground when unscoped), and the files its result names
 /// stay lit a moment. Glimpses `TOGETHER` play as one; one sweep at a time; none under Reduce
 /// Motion. Returns whether one still plays.
-fn glance(g: &mut Glimmer, made: &Made, glimpses: &[Glimpse], bounds: Bounds<Pixels>, window: &mut Window) -> bool {
+fn glance(
+    g: &mut Glimmer,
+    made: &Made,
+    glimpses: &[Glimpse],
+    bounds: Bounds<Pixels>,
+    clear: Bounds<Pixels>,
+    window: &mut Window,
+) -> bool {
     let (now, calm) = (Instant::now(), crate::dial::calm());
     // A folder with no plinth of its own (its one child stands for it): its buildings'.
     let blocks_of = |path: &str| -> Vec<usize> {
@@ -1665,7 +1672,11 @@ fn glance(g: &mut Glimmer, made: &Made, glimpses: &[Glimpse], bounds: Bounds<Pix
             if !g.see(key) || !g.began || calm {
                 continue;
             }
-            let mut blocks: Vec<usize> = paths.iter().flat_map(|path| blocks_of(path)).collect();
+            // A result names files: its paths exactly (a folder's buildings only for a scope).
+            let mut blocks: Vec<usize> = match play {
+                Play::Found => paths.iter().filter_map(|path| block_of(made, path)).collect(),
+                _ => paths.iter().flat_map(|path| blocks_of(path)).collect(),
+            };
             blocks.sort_unstable();
             blocks.dedup();
             if blocks.is_empty() && !whole {
@@ -1719,6 +1730,9 @@ fn glance(g: &mut Glimmer, made: &Made, glimpses: &[Glimpse], bounds: Bounds<Pix
         path.close();
         crate::dial::stroke(window, path, colour);
     };
+    // A found file's light: full, then fading over its last 40%.
+    let fading = |t: f32| 1. - ((t - 0.6) / 0.4).clamp(0., 1.);
+    let to_window = |p: [f32; 3]| camera.project(p).map(at);
     for e in &g.effects {
         // A sweep waiting its turn draws nothing yet.
         let Some(run) = now.checked_duration_since(e.since) else { continue };
@@ -1728,13 +1742,25 @@ fn glance(g: &mut Glimmer, made: &Made, glimpses: &[Glimpse], bounds: Bounds<Pix
         for f in faces {
             match e.play {
                 Play::Flash => fill_face(&f, colour.opacity(0.6 * (1. - t)), window),
-                Play::Found => fill_face(&f, colour.opacity(0.45 * (1. - ((t - 0.6) / 0.4).clamp(0., 1.))), window),
+                Play::Found => fill_face(&f, colour.opacity(0.45 * fading(t)), window),
                 // A band across the face, from one side to the other, brightest midway.
                 Play::Sweep => {
                     let (s0, s1) = ((t * 1.2 - 0.2).clamp(0., 1.), (t * 1.2).clamp(0., 1.));
                     let lerp = |p: Point<Pixels>, q: Point<Pixels>, s: f32| p + (q - p) * s;
                     let band = [lerp(f[0], f[1], s0), lerp(f[0], f[1], s1), lerp(f[3], f[2], s1), lerp(f[3], f[2], s0)];
                     fill_face(&band, colour.opacity(0.4 * (t * std::f32::consts::PI).sin()), window);
+                }
+            }
+        }
+        // A found file's top alone is a few pixels at most zooms: it gets a lit file's steady beam.
+        if e.play == Play::Found {
+            // Buildings only: a lit one has its beam already, a folder none.
+            let building = |i: usize| made.scene.blocks.get(i).is_some_and(|b| b.kind == Kind::Building);
+            for &i in e.blocks.iter().filter(|i| building(**i)) {
+                let Some((foot, end)) = made.scene.beam(i) else { continue };
+                let (Some(foot), Some(end)) = (to_window(foot), to_window(end)) else { continue };
+                if let Some((end, _)) = fit_beam(foot, end, None, bounds, clear) {
+                    paint_beam(window, foot, end, colour.opacity(0.85 * fading(t)), 1., 2., false);
                 }
             }
         }
