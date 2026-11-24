@@ -1,6 +1,6 @@
-# The code city's names (`code_city`), placed by `city_labels`: walls of the outer two tiers,
-# then folders and files by size on screen, apart, clear of the hints; at the fitted view and
-# turned lower. code-city's small repository (`app`; city-labels/ is a link to code-city/) and a
+# The code city's names (`code_city`), placed by `city_labels`: each centred on its plinth (or a
+# file's top) once it holds it, the largest first, apart, clear of the hints; at the fitted view,
+# turned lower, and (the 2,000 files) zoomed in twice, deeper folders named as it comes in. code-city's small repository (`app`; city-labels/ is a link to code-city/) and a
 # made-up tree of 2,000 (`big`). The hover is `city-hover`, which the base cannot run.
 {"env":{"OTTOSPACE_FEATURES":"code_city"}}
 {"tree":"repos/big","files":2000}
@@ -25,6 +25,14 @@
 {"until":"city.places","is":2096,"timeout_ms":60000}
 {"settle":800}
 {"shot":"big-names"}
+{"wheel":{"rect":"city.bounds"},"at":[0.5,0.7],"dy":4}
+{"settle":1500}
+{"shot":"big-zoom-1"}
+{"wheel":{"rect":"city.bounds"},"at":[0.5,0.7],"dy":6}
+{"settle":1500}
+{"shot":"big-zoom-2"}
+{"click":"city:reset:tab"}
+{"settle":800}
 {"drag":{"rect":"city.bounds"},"at":[0.5,0.8],"by":[120,-30]}
 {"settle":800}
 {"shot":"big-turned"}

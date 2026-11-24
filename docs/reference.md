@@ -1705,9 +1705,11 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   the tab comes on show and when the lit files change. No timer. Over 20,000 files, 4 MB of
   names or 10 seconds: no city, the lattice stays.
 - It takes no click and no key, and nothing in it moves: a still picture, made again when the
-  files, the lit files or the tab's size change. The outer two tiers of districts are named on
-  their plates where the name fits, never behind the tab's hints; no path or name is in the
-  socket's state or the logs.
+  files, the lit files or the tab's size change. Districts and files are named as a map is:
+  each name centred on its plinth (a folder's, in capitals, once the plinth on screen is wider
+  than the name) or on a file's top; a thing from 40 points to 45% of the view on screen, the
+  largest first, at most 50, none over another or behind the tab's hints. Coming nearer names
+  deeper folders, then files. No path or name is in the socket's state or the logs.
 - Pointing at a building shows a beam: a thin line straight up from its top to a dot, with the
   file's path beside the dot (cut in the middle if long); at a district, its folder's. A lit
   building has a steady, thinner beam in its task's colour. Over the hints, the hints win, and
