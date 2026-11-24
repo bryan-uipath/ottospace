@@ -603,6 +603,16 @@ mod tests {
                 assert_eq!(pane.as_deref(), Some("/code/web"), "⌘D opens in it");
             }
         }
+        // Moved to another space, a tab is that space's: its checkout goes with the move.
+        let mut m = listed();
+        m.update(Action::OpenRepo { path: "/code/web".into(), axis: Axis::Right }.sent_by(Origin::Socket));
+        m.update(Action::Close { pane: None });
+        let tab = m.tabs[m.active].id;
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Axis::Right });
+        let other = m.tabs[m.active].space.clone();
+        assert_ne!(Some(&other), m.tabs.iter().find(|t| t.id == tab).map(|t| &t.space));
+        m.update(Action::TabPlace { tab: Some(tab), at: crate::model::TabAt::End(other) });
+        assert_eq!(m.tabs.iter().find(|t| t.id == tab).and_then(|t| t.folder.clone()), None);
     }
 
     /// A workspace's empty place lights every task that works in its folder (as the Repos
