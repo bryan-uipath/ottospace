@@ -1883,7 +1883,7 @@ pub enum Action {
     /// The decisions kept on disk, read at start, and the prefixes the user promoted. The shell's alone.
     RestoreDecisions {
         kept: Vec<crate::filed::Decision>,
-        trusted: Vec<crate::filed::Prefix>,
+        trusted: Vec<crate::filed::Trust>,
     },
     /// ↵ on triage's card: sort its items, the first filed first. Only the user's.
     SortStart,
@@ -3560,7 +3560,7 @@ pub enum Effect {
     },
     /// The user promoted or took back a prefix: write `<home>/decisions/trust.json`.
     SaveTrust {
-        trusted: Vec<crate::filed::Prefix>,
+        trusted: Vec<crate::filed::Trust>,
     },
     /// The Repos list's entries changed: write them, in this order, as `repos` in the settings
     /// file.
