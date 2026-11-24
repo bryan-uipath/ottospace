@@ -322,7 +322,7 @@ impl Workspace {
             true => secondary("Send to an agent"),
             false => ui::Button::Primary("Send to an agent".into()),
         };
-        let send = ui::dialog::action("bug:send", send, &["⌘", "↵"], ui::State::Rest);
+        let send = ui::dialog::keyed("bug:send", send, &["⌘", "↵"], ui::State::Rest);
         let apps = ui::dialog::choice_row("bug:apps", false, report.apps, "Include app panes", None, ui::State::Rest);
         let bar = dialog::panel(theme::BORDER_STRONG)
             .flex()

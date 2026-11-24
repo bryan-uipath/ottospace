@@ -49,13 +49,13 @@ impl Workspace {
                     .children(why.map(|why| div().text_xs().text_color(rgb(theme::MUTED)).child(why))),
             )
             .child(div().text_xs().text_color(rgb(theme::MUTED)).child(format!("{} of {}", run.at, run.of)));
-        let skip = ui::dialog::action("decision-skip", Button::Ghost(Face::Label("Skip".into())), &["S"], State::Rest)
+        let skip = ui::dialog::keyed("decision-skip", Button::Ghost(Face::Label("Skip".into())), &["S"], State::Rest)
             .child(self.controls.mark("decision:skip"))
             .on_click(cx.listener(move |this, _, window, cx| {
                 drop(this.dispatch(Action::DecisionsSkip { task, ticket }, this.input, window, cx))
             }));
         let later =
-            ui::dialog::action("decision-later", Button::Ghost(Face::Label("Later".into())), &["L"], State::Rest)
+            ui::dialog::keyed("decision-later", Button::Ghost(Face::Label("Later".into())), &["L"], State::Rest)
                 .child(self.controls.mark("decision:later"))
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let until = crate::now_ms().saturating_add(LATER_MS);
