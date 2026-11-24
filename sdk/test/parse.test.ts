@@ -157,6 +157,10 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       agents: [{ task: 1, rect: [618, 0, 22, 22], cone: true, fan: [0, 1], hovered: false, pulsing: false, subagents: 0 }],
       glimmer: { flash: 0, sweep: 0, found: 0 },
     },
+    typing: {
+      running: false,
+      result: { keys: 250, missed: 0, key_write: { n: 250, p50: 0.3, p95: 0.6, p99: 0.9, max: 1.2 }, write_echo: { n: 250, p50: 0.3, p95: 0.6, p99: 0.9, max: 1.2 }, echo_taken: { n: 250, p50: 0.3, p95: 0.6, p99: 0.9, max: 1.2 }, taken_painted: { n: 250, p50: 0.3, p95: 0.6, p99: 0.9, max: 1.2 }, app: { n: 250, p50: 0.3, p95: 0.6, p99: 0.9, max: 1.2 }, total: { n: 250, p50: 0.3, p95: 0.6, p99: 0.9, max: 1.2 }, full: false, busy: false, done: true, hz: 75 },
+    },
     closed_apps: [],
     apps_bar: { not_running: [], more: 0, more_open: false, all_count: 0, all_open: false, all: [], filter: "", filtering: false, undo: null },
     apps: [],

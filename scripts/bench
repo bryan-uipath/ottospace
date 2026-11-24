@@ -23,6 +23,8 @@ temp folder, `/bin/sh` terminals, no apps, no repositories or sessions of the us
   ticks_idle           runs of the app's tick over those 30 s (`counts.ticks`): a second of each
                        frame after the first request, then about one a second.
   cpu_stream_pct       its CPU over 10 s while one terminal prints about 2500 lines a second.
+  cpu_hidden_stream_pct, frames_hidden_stream   the same with that terminal's tab not on show: its CPU
+                       and the frames drawn (nothing on screen changes).
   city_2000_ms, city_20000_ms   with `code_city` on, a repository's tab emptied (its terminal
                        closed) to its code city's picture in the state, for a made-up tree of
                        2,000 and 20,000 files (scripts/shot's): read, render and painted.
@@ -41,6 +43,14 @@ temp folder, `/bin/sh` terminals, no apps, no repositories or sessions of the us
                        33 ms), frames that showed the picture the frame before did, and a new
                        picture's wait from made to painted; from the trace, per picture: boxes,
                        textures, GPU, copy out; per paint: the picture's upload into GPUI's atlas.
+
+  typing               the Developer command's timed typing (`typing_time`) at CI's window: 250 made-up
+                       keys into a throwaway `cat` (idle), the same beside a pane printing without end
+                       (busy), and into a made-up full-screen program (full). Per stage (key event to
+                       pty write, to echo parsed, to taken by the main thread, to painted) p50 / p95 /
+                       p99 / max, and the app's own share (key to write plus parsed to taken). The
+                       display's refresh sets a floor the app cannot go under (a frame: 16.7 ms at
+                       60 Hz, 13.3 at 75, 8.3 at 120); the app's share must stay under one 120 Hz frame.
 
 Startups: median and p90 of --runs launches (cold: --cold-runs). With --compare, both sides
 run alternately, so drift of the machine falls on both; the deltas are printed and the exit
@@ -97,11 +107,17 @@ THRESHOLDS = [
     ("spin_9500_over_33", None, 3, 3),
     # Frames that showed the picture before (of 240): the turn standing still on screen.
     ("spin_9500_repeats", None, 24, 24),
+    # Key to painted echo at a prompt: the display's frame is most of it, so a frame's rise.
+    ("typing_total_p99_ms", 0.25, 4.0, 0),
 ]
+# Past these, whatever the base: the app's own share of a key's latency (p99, ms) stays under one
+# 120 Hz frame (`ottospace_core::typing::APP_BUDGET_MS`).
+CEILINGS = [("typing_app_p99_ms", 8.3), ("typing_busy_app_p99_ms", 8.3), ("typing_full_app_p99_ms", 8.3)]
 LIMITS = ("startup median +20% and +50 ms; RSS +25% and +10 MB; idle CPU above 2% of a core and +1 point; "
           "code city +25% and +100 ms (20,000 files: +150 ms); "
           "a spin of 9,500 files: frames' p99 +25% and +4 ms, frames over 33 ms and repeated frames above 3 and +3, 24 and +24; "
-          "a spin the base made and this side did not.")
+          "a spin the base made and this side did not; typing's key to screen p99 +25% and +4 ms; "
+          "the app's own share of a key (p99) above 8.3 ms on this side; typing the base timed and this side did not.")
 
 
 # proc_pid_rusage(2): CPU times, wakeups, resident size and phys_footprint of a pid we started.
@@ -295,6 +311,11 @@ def long_run(binary):
         inst.ok({"cmd": "type", "pane": panes[0], "text": loop})
         time.sleep(1)
         out["cpu_stream_pct"] = cpu_over(inst, STREAM_S)["cpu_pct"]
+        # The same, its pane in a tab not on show: nothing on screen changes, so no frame need draw.
+        inst.ok({"cmd": "new_tab"})
+        time.sleep(1)
+        hidden = cpu_over(inst, STREAM_S)
+        out["cpu_hidden_stream_pct"], out["frames_hidden_stream"] = hidden["cpu_pct"], hidden["frames"]
         inst.ok({"cmd": "type", "pane": panes[0], "text": "\x03"})
         return out
     finally:
@@ -472,6 +493,27 @@ def city_spin(binary, scratch, files, folders, deepest):
         inst.close()
 
 
+TYPING = (("idle", False, False), ("busy", False, True), ("full", True, False))
+
+
+def typing(binary, full, busy):
+    """The Developer command's timed typing at CI's window: the app's numbers (`typing.result`).
+    None: a build with no timed typing."""
+    inst = launch(binary, {"OTTOSPACE_E2E_WINDOW": "1024x674"})
+    try:
+        inst.ok({"cmd": "split"})
+        time.sleep(1)
+        if inst.call({"cmd": "typing_time", "full": full, "busy": busy}).get("ok") is not True:
+            return None
+        # Not asked meanwhile: a state's reply is the main thread's work too.
+        time.sleep(17)
+        inst.poll = 0.5
+        inst.wait("the run", lambda: shot.path_get(inst.state(), "typing.result") is not None, timeout=60)
+        return shot.path_get(inst.state(), "typing.result")
+    finally:
+        inst.close()
+
+
 def stats(values):
     values = sorted(values)
     p90 = values[min(len(values) - 1, max(0, -(-len(values) * 9 // 10) - 1))]  # nearest rank
@@ -574,6 +616,8 @@ def bench(sides, args, scratch):
                 if i and spins[name][size[0]] and spins[name][size[0]][-1] is None:
                     continue
                 spins[name][size[0]].append(city_spin(sides[name], scratch, *size))
+    say("typing ...")
+    typed = {name: {kind: typing(sides[name], full, busy) for kind, full, busy in TYPING} for name in names}
     result = {}
     for name in names:
         say(f"memory and CPU, {name} ({IDLE_S + STREAM_S + 20} s) ...")
@@ -586,6 +630,12 @@ def bench(sides, args, scratch):
             result[name]["spin_9500_p99_ms"] = result[name]["spin"][9500]["p99"]
             result[name]["spin_9500_over_33"] = result[name]["spin"][9500]["over_33"]
             result[name]["spin_9500_repeats"] = result[name]["spin"][9500]["repeats"]
+        result[name]["typing"] = typed[name]
+        for kind, t in typed[name].items():
+            if t:
+                pre = "typing" if kind == "idle" else f"typing_{kind}"
+                result[name][f"{pre}_total_p99_ms"] = t["total"]["p99"]
+                result[name][f"{pre}_app_p99_ms"] = t["app"]["p99"]
     return result, sorted(held)
 
 
@@ -606,11 +656,19 @@ ROWS = [
     ("dial_frames_idle", f"  dial frames, idle {IDLE_S} s"),
     ("ticks_idle", f"  tick runs, idle {IDLE_S} s"),
     ("cpu_stream_pct", f"CPU, a terminal streaming {STREAM_S} s (%)"),
+    ("cpu_hidden_stream_pct", "  its tab not on show: CPU (%)"),
+    ("frames_hidden_stream", f"    frames drawn in those {STREAM_S} s"),
     ("city_2000_ms", "code city, 2,000 files: tab emptied to picture (ms)"),
     ("city_20000_ms", "code city, 20,000 files (ms)"),
     ("spin_9500_p99_ms", "code city spun, 9,500 files: frames' p99 (ms)"),
     ("spin_9500_over_33", "  frames over 33 ms"),
     ("spin_9500_repeats", "  frames that repeated the picture before"),
+    ("typing_total_p99_ms", "typing at a prompt: key to painted echo, p99 (ms)"),
+    ("typing_app_p99_ms", "  the app's own share, p99 (ms)"),
+    ("typing_busy_total_p99_ms", "  beside a busy pane: key to painted, p99 (ms)"),
+    ("typing_busy_app_p99_ms", "    the app's own share, p99 (ms)"),
+    ("typing_full_total_p99_ms", "  a full-screen program: key to painted, p99 (ms)"),
+    ("typing_full_app_p99_ms", "    the app's own share, p99 (ms)"),
 ]
 
 
@@ -644,9 +702,12 @@ def regressions(before, after, held):
     """What fails: a startup past its threshold in every round (`held`), any other metric past its own."""
     keys = [k for k, *_ in THRESHOLDS if k in held or (not k.startswith("startup_") and k in past(before, after))]
     found = [f"{k}: {value(before, k):.1f} → {value(after, k):.1f}" for k in keys]
+    found += [f"{k}: {after[k]:.1f} ms, past {limit} ms" for k, limit in CEILINGS if (after.get(k) or 0) > limit]
     # A spin the base made and this side did not (no city, a failed spin): never a pass by absence.
     if "spin_9500_p99_ms" in before and "spin_9500_p99_ms" not in after:
         found.append("spin_9500: the base spun, this side did not")
+    if "typing_total_p99_ms" in before and "typing_total_p99_ms" not in after:
+        found.append("typing: the base timed typing, this side did not")
     return found
 
 
@@ -690,6 +751,22 @@ def spin_table(result):
     return lines
 
 
+def typing_table(result):
+    """Timed typing, each side and run: each stage's p50 / p95 / p99 / max (ms)."""
+    f = lambda d: "—" if not d else f"{d['p50']:.1f} / {d['p95']:.1f} / {d['p99']:.1f} / {d['max']:.1f}"
+    lines = ["", "Timed typing, 250 made-up keys, at 1024×674 (p50 / p95 / p99 / max, ms; app: key to write plus parsed to taken):", "",
+             "| side | run | display Hz | missed | key → write | write → echo parsed | parsed → taken | taken → painted | app's share | key → painted |",
+             "|---|---|---|---|---|---|---|---|---|---|"]
+    for name, side in result.items():
+        for kind, t in (side.get("typing") or {}).items():
+            if not t:
+                lines.append(f"| {name} | {kind} | no timed typing |" + " |" * 7)
+                continue
+            lines.append(f"| {name} | {kind} | {t['hz']:.0f} | {t['missed']} | {f(t['key_write'])} | {f(t['write_echo'])} | "
+                         f"{f(t['echo_taken'])} | {f(t['taken_painted'])} | {f(t['app'])} | {f(t['total'])} |")
+    return lines
+
+
 def table(result, meta):
     names = list(result)
     first = result[names[0]]
@@ -698,7 +775,7 @@ def table(result, meta):
     if len(names) == 1:
         lines += ["| | value |", "|---|---|"]
         lines += [f"| {label} | {cell(result[names[0]], key)} |" for key, label in ROWS]
-        return "\n".join(lines + motion_table(result) + spin_table(result)) + "\n"
+        return "\n".join(lines + motion_table(result) + spin_table(result) + typing_table(result)) + "\n"
     b, a = result[names[0]], result[names[1]]
     lines += [f"| | {names[0]} | {names[1]} | Δ |", "|---|---|---|---|"]
     for key, label in ROWS:
@@ -711,7 +788,7 @@ def table(result, meta):
     found = regressions(b, a, meta["startup_held"])
     lines += ["", "**Past a threshold:** " + "; ".join(found) if found else "No metric past a threshold."]
     lines += ["", "Thresholds: " + LIMITS]
-    lines += motion_table(result) + spin_table(result)
+    lines += motion_table(result) + spin_table(result) + typing_table(result)
     return "\n".join(lines) + "\n"
 
 

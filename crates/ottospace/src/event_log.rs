@@ -182,6 +182,21 @@ fn fields_of(event: &str) -> &'static [&'static str] {
         ],
         // Why a waiting slot is offered nothing: counts by reason code, never a title or id.
         "slot_miss" => &["pane", "bundle", "why"],
+        // The developer's timed typing: times by stage and counts only.
+        "typing_time" => &[
+            "keys",
+            "missed",
+            "key_write",
+            "write_echo",
+            "echo_taken",
+            "taken_painted",
+            "app",
+            "total",
+            "full",
+            "busy",
+            "done",
+            "hz",
+        ],
         // Where a new window of a hosted app went, and why: never its title.
         "place" => {
             &["bundle", "subrole", "modal", "sheet", "size", "pane", "min_width", "place", "why", "rule", "slot"]
@@ -407,6 +422,12 @@ mod tests {
                     "wait_max": 20.4, "boxes": 10392 }),
             ),
             ("slot_miss", json!({ "pane": 3, "bundle": "us.zoom.xos", "why": { "no_id": 1, "in_pane": 1 } })),
+            (
+                "typing_time",
+                json!({ "keys": 250, "missed": 0, "app": { "n": 250, "p50": 0.4, "p95": 9.1, "p99": 15.8, "max": 16.3 },
+                    "total": { "n": 250, "p50": 18.0, "p95": 29.2, "p99": 31.0, "max": 33.0 }, "full": false,
+                    "busy": false, "done": true, "hz": 75.0 }),
+            ),
             ("panic", panic_fields(Some((&main, 12)), Some("main"))),
             ("panic", panic_fields(Some((&format!("{home}/src/app/target/debug/build/x-1/out/gen.rs"), 3)), None)),
             // The first line only.
@@ -431,7 +452,7 @@ mod tests {
             write(event, fields, Some(&*dir));
         }
         let text = fs::read_to_string(dir.join(NAME)).unwrap();
-        assert_eq!(text.lines().count(), 24, "{text}");
+        assert_eq!(text.lines().count(), 25, "{text}");
         // `at` is each line's time, never overwritten by a field.
         assert!(
             text.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["at"].as_str().unwrap().len() == 25)

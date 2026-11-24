@@ -86,6 +86,7 @@ pub mod terminal;
 pub mod theme;
 pub mod titlebar;
 pub mod transcript;
+pub mod typing;
 pub mod viewer;
 pub mod vim;
 pub mod workbook;

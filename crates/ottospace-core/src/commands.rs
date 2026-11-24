@@ -166,6 +166,7 @@ commands! {
     InspectorRefresh: "Read the Inspected App Again", Developer;
     CopyState: "Copy State as JSON", Developer;
     CitySpin: "Spin the City and Time Its Frames", Developer;
+    TypingTime: "Time Typing in This Terminal", Developer;
     // Before the Developer one: a tie of "Open Settings" goes to the earlier.
     EditSettings: "Open Settings", App;
     OpenSettings: "Open the Settings File", Developer;

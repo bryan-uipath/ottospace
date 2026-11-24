@@ -2011,6 +2011,39 @@ export interface CitySpun {
   boxes: number;
 }
 
+export interface TypingState {
+  running: boolean;
+  result: Typed | null;
+}
+
+/** A stage's times over a run of timed keys (ms). */
+export interface TypingDist {
+  n: number;
+  p50: number;
+  p95: number;
+  p99: number;
+  max: number;
+}
+
+/** A timed run: each key from its event to the frame that painted its echo, by stage. */
+export interface Typed {
+  keys: number;
+  /** Keys whose echo no frame painted before the next key. */
+  missed: number;
+  key_write: TypingDist;
+  write_echo: TypingDist;
+  echo_taken: TypingDist;
+  taken_painted: TypingDist;
+  /** The app's own share: `key_write` plus `echo_taken`, per key. */
+  app: TypingDist;
+  total: TypingDist;
+  full: boolean;
+  busy: boolean;
+  done: boolean;
+  /** The window's display's refresh (Hz); 0 unknown. */
+  hz: number;
+}
+
 export interface CityGlimmer {
   flash: number;
   sweep: number;
@@ -2263,6 +2296,8 @@ export interface Snapshot {
   home_drawn: HomeDrawn;
   /** Null outside a test run, and while no city is drawn. */
   city: CityDrawn | null;
+  /** Null outside a test run: the Developer command's timed typing (`typing_time`). */
+  typing: TypingState | null;
   /** Names of `apps_bar.not_running`. */
   closed_apps: string[];
   apps_bar: AppsBar;

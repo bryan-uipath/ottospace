@@ -178,6 +178,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             .into_iter()
             .chain(city.then(|| item("Spin the City and Time Its Frames", commands::CitySpin)))
             .chain([
+                item("Time Typing in This Terminal", commands::TypingTime),
                 item("Open the Settings File", commands::OpenSettings),
                 item("Open the ottospace Folder", commands::OpenFolder),
                 item("Bring All Windows Back", commands::BringBack),

@@ -185,6 +185,14 @@ Design note: `docs/ai/attention/plan.md`.
     on show turns once round (`CameraStep::Spin`, a step a frame), its camera then back; the numbers
     in the state's `city.spin` (`scripts/bench`'s spin). Outside a test run only the user moves the
     city's camera; the core refuses a `CityCamera` of any other origin.
+  - `typing_time` (`"full"`, `"busy"`, both optional): the Developer command "Time Typing in This
+    Terminal", as the user's: made-up keys into a throwaway `cat` in a new pane (`full`: the made-up
+    full-screen `ottospace typing-echo`; `busy`: a pane printing without end beside it), each timed
+    from its key event to the frame that paints its echo, by stage; the panes then closed. The
+    numbers in the state's `typing` (`running`, `result`: `keys`, `missed`, and per stage `n`,
+    `p50`, `p95`, `p99`, `max` in ms: `key_write`, `write_echo`, `echo_taken`, `taken_painted`,
+    `app` (the app's own share), `total`; `hz` the display's refresh). Null outside a test run.
+    `scripts/bench`'s typing. Outside a test run only the user's command types into the window.
   - `sneak_app_tree`: a fixture tree as if read from the focused pane's window while sneak mode
     is on (a test run hosts no window), so its elements get labels. The state's `app_presses`
     (null outside a test run) lists each press a label asked for.
