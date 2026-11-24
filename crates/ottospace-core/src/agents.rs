@@ -128,6 +128,8 @@ pub struct Launch {
     pub runner: RunnerId,
     pub model: Option<String>,
     pub title: String,
+    /// The task's `$skill` tags: its first message asks for them (`prompt`).
+    pub skills: Vec<String>,
 }
 
 /// How a task's agent comes up in its conversation.
@@ -148,7 +150,7 @@ pub fn launch(tag: Option<&str>, default: &str, models: &Models, title: String) 
     let Agent { runner, model } = read(tag.unwrap_or(default), models);
     // A listed id came from the settings, which keep only names; checked again where it is used.
     let model = model.filter(|id| is_name(id));
-    runner.map(|runner| Launch { runner, model, title })
+    runner.map(|runner| Launch { runner, model, title, skills: Vec::new() })
 }
 
 /// True if `id` is written as a UUID: `8f14e45f-ceea-467f-a8d3-0242ac130003`.
@@ -175,7 +177,7 @@ impl Launch {
         };
         let session = flag.into_iter().flat_map(|flag| [flag.to_string(), session.to_string()]);
         let added = run_args(self.runner, see, mcp);
-        let prompt = ["--".to_string(), prompt(&self.title, brief)];
+        let prompt = ["--".to_string(), prompt(&self.title, brief, &self.skills)];
         let args = model.chain(session).chain(added).chain(prompt).collect();
         Some(Command { program: cli.program, args })
     }
@@ -396,17 +398,24 @@ pub fn mcp_instructions() -> String {
 }
 
 /// The agent's first prompt: `Task: `, the task's title and, if it has a brief, the path of the
-/// brief's file and `READ_BRIEF`. Nothing else: what ottospace tells it goes elsewhere
-/// (`guidance`). `brief`: a path the shell made. Control characters become spaces. The fixed
-/// start keeps a title such as `/logout fails` from being read as a command of the runner's own.
-pub fn prompt(title: &str, brief: Option<&str>) -> String {
-    let plain = |text: &str| text.chars().map(|c| if c.is_control() { ' ' } else { c }).collect::<String>();
-    match brief {
+/// brief's file and `READ_BRIEF`, and the skills its `$skill` tags asked for (the line read them
+/// out of the title: unasked here, they would be lost). Nothing else: what ottospace tells it goes
+/// elsewhere (`guidance`). `brief`: a path the shell made. Control characters become spaces. The
+/// fixed start keeps a title such as `/logout fails` from being read as a command of the runner's own.
+pub fn prompt(title: &str, brief: Option<&str>, skills: &[String]) -> String {
+    let plain = |text: &str| text.chars().map(|c| if c.is_control() || c == '`' { ' ' } else { c }).collect::<String>();
+    let mut asked = match brief {
         Some(path) => {
             format!("Task: {}\n\nThe brief for this task is the file {}\n{READ_BRIEF}", plain(title), plain(path))
         }
         None => format!("Task: {}", plain(title)),
+    };
+    if !skills.is_empty() {
+        let named: Vec<String> = skills.iter().map(|skill| format!("`{}`", plain(skill))).collect();
+        let (one, many) = ("Use the skill", "Use the skills");
+        asked += &format!("\n\n{} {}.", if named.len() == 1 { one } else { many }, named.join(", "));
     }
+    asked
 }
 
 #[cfg(test)]
@@ -534,7 +543,7 @@ mod tests {
         assert_eq!(args(Some("ana")), None);
         assert_eq!(launch(None, "ana", &models, String::new()), None);
         // A session id that is no UUID, or a model that is no name, starts nothing.
-        let ask = Launch { runner: RunnerId::Claude, model: None, title: "x".into() };
+        let ask = Launch { runner: RunnerId::Claude, model: None, title: "x".into(), skills: Vec::new() };
         for id in ["", "--resume", "8f14e45f-ceea-467f-a8d3-0242ac13000", "8f14e45f-ceea-467f-a8d3-0242ac13000g"] {
             assert_eq!(
                 (ask.command(id, None, true, None), resume(RunnerId::Claude, id, Vec::new())),
@@ -664,7 +673,11 @@ mod tests {
                 assert_eq!(args.last().map(String::as_str), appended.then_some(told.as_str()), "{runner:?}");
             }
         }
-        assert_eq!(prompt("fix login", None), "Task: fix login");
+        assert_eq!(prompt("fix login", None, &[]), "Task: fix login");
+        // A `$skill` tag read out of the title is asked for, not dropped.
+        let skills = ["xreview".to_string(), "code-review".to_string()];
+        assert_eq!(prompt("this pr pls", None, &skills[..1]), "Task: this pr pls\n\nUse the skill `xreview`.");
+        assert_eq!(prompt("x", None, &skills), "Task: x\n\nUse the skills `xreview`, `code-review`.");
         assert_eq!(mcp_instructions(), guidance(true, true));
     }
 
@@ -748,7 +761,7 @@ mod tests {
             let brief = rng.coin().then(|| "/Users/me/.ottospace/materials/7-k3f9a2c41b7d/brief.md");
             let Some(launch) = launch(Some(&tag), "claude", &Models::default(), title.clone()) else { continue };
             let see = rng.coin();
-            let asked = prompt(&title, brief);
+            let asked = prompt(&title, brief, &[]);
             assert!(asked.starts_with("Task: ") && !asked.chars().any(|c| c.is_control() && c != '\n'), "{asked:?}");
             assert_eq!(asked.lines().count() <= 1, brief.is_none(), "{asked:?}");
             let Command { program, args } = launch.command(uuid, brief, see, None).unwrap();

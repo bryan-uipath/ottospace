@@ -332,13 +332,14 @@ impl Model {
             self.chats.push(Chat::new(subject.clone()));
         }
         // A new session is asked its task first: shown as the user's message, the brief's path aside.
-        let title = subject.task().and_then(|id| self.tasks.get(id)).map(|task| task.title.clone());
+        let task = subject.task().and_then(|id| self.tasks.get(id));
+        let (title, skills) = (task.map(|task| task.title.clone()), task.map(|t| t.skills.clone()).unwrap_or_default());
         let now = self.now;
         if let Some(chat) = self.chat_mut(subject) {
             chat.transcript.started(resumed);
             (chat.deny, chat.armed, chat.btw) = (false, false, None);
             if let Some(title) = title.filter(|_| !resumed) {
-                chat.transcript.send(&agents::prompt(&title, None), now);
+                chat.transcript.send(&agents::prompt(&title, None, &skills), now);
             }
             if let Some(text) = chat.queued.take() {
                 chat.transcript.send(&text, now);

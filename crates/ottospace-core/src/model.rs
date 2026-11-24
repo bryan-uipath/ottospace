@@ -8028,6 +8028,8 @@ impl Model {
                     None => {
                         let default = self.default_agent();
                         let launch = agents::launch(task.agent.as_deref(), default, &self.models, task.title.clone());
+                        // Its `$skill` tags, asked for in its first message.
+                        let launch = launch.map(|launch| agents::Launch { skills: task.skills.clone(), ..launch });
                         // Where it works: the worktree its agent moved into, else its folder.
                         let dir = self.task_moved(*id).map(String::from).or_else(|| task.dir().cloned());
                         launch.map(|launch| (agents::Start::New(launch), dir))
@@ -13592,6 +13594,25 @@ mod tests {
         assert_eq!(m.pane_access(shell, Caller::Unknown), Err(STALE_PASS.into()));
     }
 
+    /// The owner's line `$xreview this pr pls @opus`: the skill tag leaves the title, and the agent
+    /// is asked for it in its first message, never dropped; the agent tag is its model.
+    #[test]
+    fn a_skill_tag_is_asked_of_the_agent() {
+        let mut m = Model::default();
+        let names = crate::compose::Names { agents: vec![], skills: vec!["xreview".into()] };
+        let known = crate::compose::Known { names, ..Default::default() };
+        m.update(Action::TaskFromLine { line: "$xreview this pr pls @claude-opus-5-5".into(), known, open: false });
+        let task = m.tasks.list[0].id;
+        let effects = started(&mut m, Action::TaskTalk { id: task });
+        let Some(Effect::StartAgent { start: agents::Start::New(launch), .. }) = effects.first() else {
+            panic!("{effects:?}")
+        };
+        assert_eq!((launch.title.as_str(), launch.model.as_deref()), ("this pr pls", Some("claude-opus-5-5")));
+        assert_eq!(launch.skills, ["xreview"]);
+        let asked = agents::prompt(&launch.title, None, &launch.skills);
+        assert_eq!(asked, "Task: this pr pls\n\nUse the skill `xreview`.");
+    }
+
     #[test]
     fn a_tasks_space_holds_its_tabs_and_a_new_tab_joins_the_selected_space() {
         let mut m = Model::default();
@@ -18287,7 +18308,12 @@ mod tests {
         // The user's click: the conversation opens with the keyboard, the agent the tag names
         // is asked for in the task's repository, and the workspace stays as it is.
         let launch = |runner, model: Option<&str>, title: &str| {
-            agents::Start::New(agents::Launch { runner, model: model.map(str::to_string), title: title.into() })
+            agents::Start::New(agents::Launch {
+                runner,
+                model: model.map(str::to_string),
+                title: title.into(),
+                skills: Vec::new(),
+            })
         };
         let asked = |task, start, cwd: Option<&str>| Effect::StartAgent {
             task: Subject::Task(task),
@@ -18628,7 +18654,8 @@ mod tests {
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
         // Its agent, in the drawer, with the keyboard, in its repository. Its space opens, one
         // empty tab; nothing the user had changes.
-        let launch = agents::Launch { runner: RunnerId::Claude, model: None, title: "fix zoom".into() };
+        let launch =
+            agents::Launch { runner: RunnerId::Claude, model: None, title: "fix zoom".into(), skills: Vec::new() };
         let start = agents::Start::New(launch);
         let agent = Effect::StartAgent {
             task: Subject::Task(1),

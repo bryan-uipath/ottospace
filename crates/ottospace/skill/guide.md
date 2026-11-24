@@ -387,7 +387,7 @@ States: `captured` (default), `triaged`, `running`, `needs_you`, `review`, `stal
   so `ask @ana`, `costs $5` and `use > 3 workers` are safe. One `#project`, `>repo` and `@agent`
   per task: the last one counts. Every `/path` and `$skill` is kept. `@name` no longer names a
   repository. The task keeps them as `repo` (a path), `agent`, `paths`, `skills`. `agent` is the
-  agent the user's click starts in the drawer; nothing acts on `paths` or `skills` yet. It
+  agent the user's click starts in the drawer, and its first message asks for its `skills`; nothing acts on `paths` yet. It
   replies like `task_add`. A line with no title, or longer than 500 characters, is refused.
   `"open":true` starts no agent (only the user does), and a client's new task has no tab to
   show: the reply's `opened` is false.

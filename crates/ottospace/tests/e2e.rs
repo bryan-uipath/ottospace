@@ -9749,7 +9749,7 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let argv = otto.wait_for("the argv", |_| agent_argv(&bin, "claude"));
     let state = otto.call(json!({"cmd": "state"}));
     let session = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
-    let prompt = ottospace_core::agents::prompt("fix login", None);
+    let prompt = ottospace_core::agents::prompt("fix login", None, &[]);
     assert_eq!(without_mcp(&argv), [app.as_str(), "--session-id", &session, "--", &prompt]);
     // Its MCP server for the run: this program, `mcp`, the test's socket; only its tools allowed.
     let config = argv.iter().position(|a| a == "--mcp-config").map(|at| argv[at + 1].clone()).expect("an MCP config");
@@ -9804,7 +9804,7 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     // A task tagged with a Codex model starts Codex with that model, in the home folder.
     otto.start_task(2);
     let argv = otto.wait_for("codex's argv", |_| agent_argv(&bin, "codex"));
-    let prompt = ottospace_core::agents::prompt("try codex", None);
+    let prompt = ottospace_core::agents::prompt("try codex", None, &[]);
     assert_eq!(without_mcp(&argv[1..]), ["--model", "gpt-6-astra", "--", &prompt]);
     assert!(argv.iter().any(|a| a.starts_with("mcp_servers.ottospace_task.command=")), "{argv:?}");
     assert_eq!(Some(&argv[0]), std::env::var("HOME").ok().as_ref(), "no repository: the home folder");
