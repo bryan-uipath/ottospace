@@ -685,6 +685,7 @@ function task(value: unknown, at: string): Task {
     resolved: list(str)(o.resolved, `${at}.resolved`),
     skills: list(str)(o.skills, `${at}.skills`),
     ...(o.line === undefined ? {} : { line: str(o.line, `${at}.line`) }),
+    ...(o.body === undefined ? {} : { body: str(o.body, `${at}.body`) }),
     created: orNull(num)(o.created, `${at}.created`),
     session: orNull(sessionLink)(o.session, `${at}.session`),
     refs: list(ref)(o.refs, `${at}.refs`),

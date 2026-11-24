@@ -214,9 +214,11 @@ impl Workspace {
     pub fn field_place(&self, at: usize) -> Option<(Pixels, Bounds<Pixels>, Pixels)> {
         let drawn = self.field.borrow();
         let empty = self.model.open_field().is_none_or(|(_, field)| field.text().is_empty());
-        let x = match &drawn.line {
-            Some(line) if !empty => line.x_for_index(at),
-            _ => px(0.),
+        let x = match (&drawn.line, drawn.place(at)) {
+            _ if empty => px(0.),
+            (_, Some((x, _))) => x,
+            (Some(line), None) => line.x_for_index(at),
+            (None, None) => px(0.),
         };
         (drawn.bounds.size.width > px(1.))
             .then(|| (drawn.bounds.left() + x - drawn.scroll, drawn.bounds, drawn.viewport))
@@ -319,7 +321,12 @@ impl Workspace {
                 marked: field.marked(),
                 placeholder: placeholder.into(),
                 accent: theme::accent(self.model.mode()),
-                rows: if matches!(of, "talk" | "btw") { ROWS } else { 1 },
+                // The new-task box has several rows; a capture's title in the bar, one.
+                rows: match of {
+                    "talk" | "btw" => ROWS,
+                    "compose" if self.model.bar_draft().is_none() => ROWS,
+                    _ => 1,
+                },
             })
     }
 }

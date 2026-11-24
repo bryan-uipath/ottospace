@@ -26,6 +26,8 @@ pub struct Draft {
     /// each once.
     pub refs: Vec<String>,
     pub priority: Option<u8>,
+    /// The lines after the title's, as typed: the rest of what the task's agent is asked.
+    pub body: Option<String>,
 }
 
 /// A tag in a line: where its word is (bytes), and its mark. `p`: a priority.
@@ -206,7 +208,7 @@ fn tag(word: &str, known: &impl Fn(char, &str) -> bool) -> Option<(char, String)
     tag.or_else(pointed).or_else(|| priority.map(|digit| ('p', digit.to_string())))
 }
 
-/// Reads a line. `known(mark, name)`: see `tag`. Of two `#project`, `>repo`, `@agent` or
+/// Reads a line, or several: the first with words is the title, the rest its body. `known(mark, name)`: see `tag`. Of two `#project`, `>repo`, `@agent` or
 /// priorities the last one counts; every `/path`, `$skill` and `^reference` is kept. A path also
 /// stays in the title: what the agent reads keeps every word of it.
 pub fn parse(line: &str, known: impl Fn(char, &str) -> bool) -> Draft {
@@ -217,23 +219,46 @@ pub fn parse(line: &str, known: impl Fn(char, &str) -> bool) -> Draft {
             list.push(item);
         }
     };
-    for word in words(line) {
-        match tag(word, &known) {
-            Some(('#', project)) => draft.project = Some(project),
-            Some(('>', repo)) => draft.repo = Some(repo),
-            Some(('@', agent)) => draft.agent = Some(agent),
-            Some(('$', skill)) => once(&mut draft.skills, skill),
-            Some(('/', path)) => {
-                once(&mut draft.paths, path);
-                title.push(word);
+    // The title is the first line with words in it (tags apart); the lines after it, the body.
+    let mut rest = None;
+    for (at, text) in line.split('\n').scan(0, |at, text| Some((std::mem::replace(at, *at + text.len() + 1), text))) {
+        if !title.is_empty() {
+            rest.get_or_insert(at);
+        }
+        for word in words(text) {
+            let titled = rest.is_none();
+            match tag(word, &known) {
+                Some(('#', project)) => draft.project = Some(project),
+                Some(('>', repo)) => draft.repo = Some(repo),
+                Some(('@', agent)) => draft.agent = Some(agent),
+                Some(('$', skill)) => once(&mut draft.skills, skill),
+                Some(('/', path)) => {
+                    once(&mut draft.paths, path);
+                    if titled {
+                        title.push(word);
+                    }
+                }
+                Some(('^', name)) => once(&mut draft.refs, name),
+                Some((_, digit)) => draft.priority = digit.parse().ok(),
+                None if titled => title.push(word),
+                None => {}
             }
-            Some(('^', name)) => once(&mut draft.refs, name),
-            Some((_, digit)) => draft.priority = digit.parse().ok(),
-            None => title.push(word),
         }
     }
     draft.title = title.join(" ");
+    // Its indentation kept: only blank lines around it go.
+    let body = rest.map(|at| line[at.min(line.len())..].trim_start_matches(['\n', '\r']).trim_end().to_string());
+    draft.body = body.filter(|body| !body.trim().is_empty());
     draft
+}
+
+/// A title longer than `most` characters cut with …, and asked whole first in the body.
+pub(crate) fn cut_title(draft: &mut Draft, most: usize) {
+    if draft.title.chars().count() > most {
+        let whole = std::mem::take(&mut draft.title);
+        draft.title = whole.chars().take(most - 1).chain(['…']).collect();
+        draft.body = Some(draft.body.take().map_or(whole.clone(), |body| format!("{whole}\n{body}")));
+    }
 }
 
 /// Where the tags of a line are, by the rules `parse` reads it with: what the box draws as
@@ -494,6 +519,19 @@ mod tests {
     }
 
     #[test]
+    fn several_lines_are_a_title_and_a_body() {
+        // The first line with words is the title; the rest, indentation kept, the body; tags count anywhere.
+        let draft = parse("#canvas\nfix the zoom >app\n\n  it flickers\n  @codex p2\n", known);
+        assert_eq!(draft.title, "fix the zoom");
+        assert_eq!(draft.body.as_deref(), Some("  it flickers\n  @codex p2"));
+        let tags = (draft.project.as_deref(), draft.repo.as_deref(), draft.agent.as_deref(), draft.priority);
+        assert_eq!(tags, (Some("canvas"), Some("app"), Some("codex"), Some(2)));
+        // One line: no body; blank lines after it: none either.
+        assert_eq!(parse("fix it", known).body, None);
+        assert_eq!(parse("fix it\n \n", known).body, None);
+    }
+
+    #[test]
     fn a_task_has_one_agent_and_any_number_of_paths_and_skills() {
         let draft = parse("review the export PR >app @claude @codex $code-review /src/export $deploy ~/notes.", known);
         assert_eq!(
@@ -713,7 +751,9 @@ mod tests {
         let priority = draft.priority.map(|n| format!("p{n}"));
         let title = Some(draft.title.clone()).filter(|title| !title.is_empty());
         let one = [tag('#', &draft.project), tag('>', &draft.repo), tag('@', &draft.agent)].into_iter().flatten();
-        one.chain(skills).chain(priority).chain(title).collect::<Vec<_>>().join("\t")
+        let line = one.chain(skills).chain(priority).chain(title).collect::<Vec<_>>().join("\t");
+        // The body on the lines after.
+        draft.body.as_ref().map_or(line.clone(), |body| format!("{line}\n{body}"))
     }
 
     /// What must hold of any line, with names of any kind known. `Err`: what does not.
@@ -732,9 +772,10 @@ mod tests {
         for path in &draft.paths {
             let from = |word: &&str| path_shaped(word) && unescape(word).starts_with(path);
             check(typed.iter().any(from), format!("the path {path:?} is no word of the line"))?;
-            // And it stays in the title: nothing typed goes missing from what the agent reads.
+            // And it stays in the title, or the body after it: nothing typed goes missing from what the agent reads.
             let titled = |word: &str| path_shaped(word) && unescape(word).starts_with(path);
-            check(words(&draft.title).into_iter().any(titled), format!("the path {path:?} left the title"))?;
+            let read = words(&draft.title).into_iter().chain(draft.body.as_deref().map(words).unwrap_or_default());
+            check(read.into_iter().any(titled), format!("the path {path:?} left the title"))?;
         }
         let priority = |word: &&str| draft.priority.is_some_and(|n| word.to_lowercase().starts_with(&format!("p{n}")));
         check(draft.priority.is_none() || typed.iter().any(priority), "the priority is no word of the line".into())?;

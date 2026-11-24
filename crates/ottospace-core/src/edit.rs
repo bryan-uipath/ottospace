@@ -184,8 +184,13 @@ impl Field {
 
     /// A field of several lines holding `text`, the cursor at its end. e.g. a transcript to select in.
     pub fn of_lines(text: &str) -> Self {
-        let mut field = Self::lines(0);
-        field.text = field.cleaned(text, false);
+        Self::lines_of(text, 0)
+    }
+
+    /// A field of several lines holding as much of `text` as `limit` lets in, the cursor at its end.
+    pub fn lines_of(text: &str, limit: usize) -> Self {
+        let mut field = Self::lines(limit);
+        field.text = field.fitting(&field.cleaned(text, false), 0);
         (field.anchor, field.head) = (field.text.len(), field.text.len());
         field
     }

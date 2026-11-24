@@ -442,6 +442,8 @@ export interface Task {
   skills: string[];
   /** The line it was filed from, as typed (its tags in place); left out for one filed otherwise. */
   line?: string;
+  /** The lines after its title's in the new-task box, as typed: its agent is asked them after the title. Absent: none. */
+  body?: string;
   /** When it was filed, in milliseconds since 1970. Null: filed before this was kept. */
   created: number | null;
   /** The session it was adopted from, or null. */
@@ -2211,7 +2213,7 @@ export interface Snapshot {
   quick_pills: Array<"meeting" | "transcript" | "front"> | null;
   /** What ↵ in the box would do: start `agent` (unless a saved agent: `starts` false) in the repository `dir`, or the folder taken from the dropdown as typed (null: the home folder), on `branch`. Null while the box is closed. */
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
-  /** The one line under the box: what ↵ does with the line as it is, then the other keys (`↵ starts @codex in app on main · ⇧↵ later · Esc`). Null while the box is closed. */
+  /** The one line under the box: what ↵ does with the line as it is, then the other keys (`↵ starts @codex in app on main · ⌘⇧↵ later · Esc`). Null while the box is closed. */
   compose_status: string | null;
   /** The tag hint, while the box's tags' sheet shows ("? tags", ⌘/); null otherwise. */
   compose_hint: string | null;
