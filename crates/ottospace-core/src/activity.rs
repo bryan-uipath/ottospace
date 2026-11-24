@@ -174,6 +174,11 @@ impl Activity {
         }
     }
 
+    /// The id of the newest call on `station` that still runs.
+    pub(crate) fn running_on(&self, station: Station) -> Option<&str> {
+        self.running.iter().rev().find(|call| call.station == station).map(|call| call.id.as_str())
+    }
+
     /// The label of the newest call that still runs.
     pub(crate) fn running_label(&self) -> Option<&str> {
         self.running.last().map(|call| call.label.as_str())

@@ -18228,6 +18228,80 @@ fn a_citys_names_stay_apart_and_a_hovered_folder_is_outlined() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// Shell lines as activity in the code city: while `cd <checkout> && ls src/ui` runs, the agent
+/// stands over that folder's plinth, its cone on it, pulsing; while `git status` (no path) runs, it
+/// hovers, its icon pulsing; its turn over, it is gone and no frame pulses. Under Reduce Motion
+/// nothing pulses.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_shell_line_in_the_city_stands_its_agent_over_the_path_it_names_and_pulses() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    for calm in [false, true] {
+        let mut extra = vec![("OTTOSPACE_FEATURES", "code_city"), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+        extra.extend(calm.then_some(("OTTOSPACE_REDUCE_MOTION", "1")));
+        let name = if calm { "city-shell-calm" } else { "city-shell" };
+        let (root, _, env) = native_setup(name, &[], &extra);
+        let app = root.join("repos/app");
+        git(&app, &["init", "-q"]);
+        for (file, bytes) in
+            [("src/main.rs", 3000), ("src/ui/mod.rs", 9000), ("src/ui/view.rs", 4000), ("docs/a.md", 500)]
+        {
+            let path = app.join(file);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            std::fs::write(path, "x".repeat(bytes)).unwrap();
+        }
+        let app = app.canonicalize().unwrap();
+        let bash = |id: &str, line: String| {
+            let call = json!({"type": "tool_use", "id": id, "name": "Bash", "input": {"command": line}});
+            format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#)
+        };
+        let result = |id: &str| {
+            let r = json!({"type": "tool_result", "tool_use_id": id, "content": "ok", "is_error": false});
+            format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{r}]}}}}"#)
+        };
+        let init =
+            format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+        let done = r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01}"#;
+        let lines = [
+            init,
+            bash("b1", format!("cd {} && ls src/ui", app.display())),
+            r#"{"_sleep":4}"#.into(),
+            result("b1"),
+            bash("b2", format!("cd {} && git status", app.display())),
+            r#"{"_sleep":4}"#.into(),
+            result("b2"),
+            done.into(),
+        ];
+        std::fs::write(root.join("fixtures/turn1.jsonl"), lines.join("\n") + "\n").unwrap();
+        let otto = launch_env(name, &env);
+        otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+        otto.call(json!({"cmd": "section", "section": "tasks"}));
+        otto.start_task(1);
+        otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+        let agent = |o: &Otto| o.call(json!({"cmd": "state"}))["city"]["agents"][0].clone();
+        let pulses = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["city_pulse_frames"].as_u64().unwrap();
+        // Over the folder's plinth, its cone on it.
+        let over = otto.wait_for("over src/ui", |o| Some(agent(o)).filter(|a| a["cone"] == json!(true)));
+        assert_eq!(over["pulsing"], json!(!calm), "{over}");
+        // No path named: hovering, its icon pulsing.
+        let hovers = otto.wait_for("hovering", |o| {
+            Some(agent(o)).filter(|a| a["cone"] == json!(false) && (calm || a["pulsing"] == json!(true)))
+        });
+        assert_eq!(hovers["pulsing"], json!(!calm), "{hovers}");
+        let before = pulses(&otto);
+        std::thread::sleep(Duration::from_millis(400));
+        assert!(if calm { pulses(&otto) == 0 } else { pulses(&otto) > before }, "pulse frames while busy");
+        // The turn over: no agent, no frame.
+        otto.wait_for("the turn over", |o| Some(agent(o)).filter(Value::is_null));
+        std::thread::sleep(Duration::from_millis(300));
+        let rest = pulses(&otto);
+        std::thread::sleep(Duration::from_millis(600));
+        assert_eq!(pulses(&otto), rest, "no frames at rest");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
 /// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a 3D
 /// picture rendered on the GPU, where the lattice was, as large as the tab in pixels. The file
 /// the agent reads is lit, and only it, its agent's icon over it; an ignored file is no building;
@@ -18281,8 +18355,14 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
 
     let (root, otto) = setup("city", "code_city", true);
+    // Lit, on the standing picture (a rise's frames are half size, #437).
+    let standing = |c: &Value| {
+        let n = |v: &Value| v.as_f64().unwrap_or(0.);
+        let (b, scale) = (&c["bounds"], n(&c["scale"]));
+        c["picture"][0].as_f64() == Some((n(&b[2]) * scale).round())
+    };
     let lit = otto.wait_for("a lit building", |o| {
-        Some(city(o)).filter(|city| city["lit"].as_array().is_some_and(|lit| !lit.is_empty()))
+        Some(city(o)).filter(|city| city["lit"].as_array().is_some_and(|lit| !lit.is_empty()) && standing(city))
     });
     // Seven files and three folders (src, src/ui, docs): the ignored one is no building.
     assert_eq!((lit["places"].as_u64(), lit["groups"].as_u64()), (Some(10), Some(3)), "{lit}");

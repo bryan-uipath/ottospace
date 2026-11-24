@@ -1,0 +1,20 @@
+# Shell lines as activity in the code city (`code_city`): one task's agent replays
+# city-shell/fixtures: `cd <checkout> && ls m1/core` (`folder`: over that folder's plinth, its
+# cone on it, pulsing), then `cd <checkout> && git status` (`shell`: no path named, hovering over
+# the city, its icon pulsing). Made-up repository. Waits by time, not by the cone: a base
+# that does not place a shell line takes the same two pictures.
+{"env": {"OTTOSPACE_FEATURES": "code_city"}}
+{"tree": "repos/app", "files": 60}
+{"cmd": "repo_add", "path": "{ROOT}/repos/app"}
+{"until": "repos_bar.0"}
+{"cmd": "task_new", "line": "tidy the parser >app"}
+{"cmd": "section", "section": "tasks"}
+{"click": "task:1", "at": [0.3, 0.3]}
+{"click": "talk:talk-start"}
+{"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
+{"cmd": "open_space", "space": {"kind": "task", "id": 1}}
+{"until": "city.agents", "len": 1, "timeout_ms": 30000}
+{"settle": 3000}
+{"shot": "folder"}
+{"settle": 20000}
+{"shot": "shell"}

@@ -84,6 +84,8 @@ const KEPT_PICTURES: usize = 2;
 const ICON: f32 = 22.;
 const FAN_GAP: f32 = 4.;
 const GLIDE: Duration = Duration::from_millis(280);
+/// A busy agent's pulse: once this long.
+const PULSE: Duration = Duration::from_millis(1600);
 /// Room kept between a name and the empty tab's hints, in points.
 const CLEAR: f32 = 12.;
 /// The hints' backing fades out over this many points, in this many layers: no edge to see.
@@ -401,6 +403,8 @@ struct Floating {
     mono: String,
     title: String,
     at: Option<String>,
+    /// A call of it runs: its building, or the icon at no file, pulses (`PULSE`).
+    busy: bool,
 }
 
 /// An agent's icon as a paint drew it: its centre, where it glides to and since when (window
@@ -416,6 +420,7 @@ struct Icon {
     rect: Bounds<Pixels>,
     cone: bool,
     fan: (usize, usize),
+    pulsing: bool,
 }
 
 /// A hovered box's beacon as drawn: whether a file's, whether lit; a file's beam (foot and end)
@@ -450,6 +455,8 @@ pub struct Drawn {
     rise_frames: u64,
     /// Frames an agent's icon gliding to another file asked for: none at rest or under Reduce Motion.
     agent_frames: u64,
+    /// Frames a busy agent's pulse asked for: none once its calls end, none under Reduce Motion.
+    pulse_frames: u64,
     /// Pictures no place shows: GPUI keeps each in the window's atlas until it is dropped.
     retired: Vec<Arc<RenderImage>>,
 }
@@ -668,6 +675,7 @@ impl Drawn {
                 let hovered = place.is_some_and(|place| place.hovered_agent.as_ref() == Some(&i.key));
                 serde_json::json!({
                     "task": i.task, "rect": rect(i.rect), "cone": i.cone, "fan": [i.fan.0, i.fan.1], "hovered": hovered,
+                    "pulsing": i.pulsing,
                 })
             })
             .collect();
@@ -865,20 +873,30 @@ impl Workspace {
                     let one = places.next()?.id.clone();
                     places.next().is_none().then_some(one)
                 });
+                // At no file, the first path its shell line names that is a building or a plinth.
+                let at = at.or_else(|| {
+                    let places = &plan.as_ref()?.places;
+                    agent
+                        .near
+                        .iter()
+                        .find_map(|path| places.iter().find(|place| place.id == *path))
+                        .map(|p| p.id.clone())
+                });
+                let busy = agent.busy;
                 Some(match agent.who {
                     Who::Task(task) => {
                         let subject = ottospace_core::talk::Subject::Task(task);
                         let mono = badges.iter().find(|(of, _)| *of == subject)?.1.clone();
                         let title = self.model.tasks.live(task)?.title.clone();
                         let (key, colour) = (format!("task:{task}"), theme::identity(agent.colour));
-                        Floating { task: Some(task), key, colour, mono, title, at }
+                        Floating { task: Some(task), key, colour, mono, title, at, busy }
                     }
                     // A session no task has: its runner's glyph, in the colour of work going on.
                     Who::Session { runner, id, title } => {
                         let spec = ottospace_core::runner::RunnerId::named(runner)?.spec();
                         let title = title.unwrap_or(spec.display).to_string();
                         let (key, colour) = (format!("session:{runner}:{id}"), theme::task(Group::Running));
-                        Floating { task: None, key, colour, mono: spec.glyph.to_string(), title, at }
+                        Floating { task: None, key, colour, mono: spec.glyph.to_string(), title, at, busy }
                     }
                 })
             })
@@ -1283,6 +1301,11 @@ impl Workspace {
     pub(crate) fn city_agent_frames(&self) -> u64 {
         self.city_drawn.borrow().agent_frames
     }
+
+    /// Frames a busy agent's pulse asked for: for the counts of a test run.
+    pub(crate) fn city_pulse_frames(&self) -> u64 {
+        self.city_drawn.borrow().pulse_frames
+    }
 }
 
 /// For the state of a test run: a point of the picture (window points) over a folder's own
@@ -1470,7 +1493,7 @@ fn paint(
             lit_beams.push([foot.x, foot.y, end.x, end.y].map(f32::from));
         }
     }
-    let (icons, gliding) = agents(made, floating, &was, bounds, clear, window, cx, &shape);
+    let (icons, gliding, pulsing) = agents(made, floating, &was, bounds, clear, window, cx, &shape);
     // The last painted is on top.
     let over_icon = pointer.and_then(|at| icons.iter().rev().find(|icon| icon.rect.contains(&at)));
     let hovered_agent = over_icon.map(|icon| icon.key.clone());
@@ -1498,7 +1521,7 @@ fn paint(
     if fades {
         window.request_animation_frame();
     }
-    if gliding {
+    if gliding || pulsing {
         window.request_animation_frame();
     }
     drawn.paints += 1;
@@ -1506,6 +1529,7 @@ fn paint(
     drawn.fade_frames += u64::from(fading_in);
     drawn.rise_frames += u64::from(rising);
     drawn.agent_frames += u64::from(gliding);
+    drawn.pulse_frames += u64::from(pulsing);
     if let Some(made) = drawn.pictures.get_mut(&shown) {
         made.used = Instant::now();
     }
@@ -1541,7 +1565,9 @@ fn name_agent(
 /// its colour from the icon down onto the building's top; fanned beside others there; at no file,
 /// hovering over the city's middle (above the hints if they cover it, else under) with no cone. Lowered along the beam
 /// until clear of the hints and inside the picture, else not drawn. One that moves glides there (at once under Reduce Motion).
-/// Returns the icons drawn, and whether one still glides.
+/// A busy agent pulses (none under Reduce Motion): the pool on its building, or at no file a
+/// halo round its icon, swelling and fading once every `PULSE`.
+/// Returns the icons drawn, whether one still glides, and whether one pulses.
 fn agents(
     made: &Made,
     floating: &[Floating],
@@ -1551,8 +1577,8 @@ fn agents(
     window: &mut Window,
     cx: &mut gpui::App,
     shape: &dyn Fn(&str, Hsla, f32, &mut Window) -> gpui::ShapedLine,
-) -> (Vec<Icon>, bool) {
-    let Some(camera) = made.scene.camera else { return (Vec::new(), false) };
+) -> (Vec<Icon>, bool, bool) {
+    let Some(camera) = made.scene.camera else { return (Vec::new(), false, false) };
     let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let to_window = |p: [f32; 3]| camera.project(p).map(|(x, y)| bounds.origin + point(px(x * w), px(y * h)));
     let place = |id: &str| made.plan.places.iter().position(|place| place.id == id);
@@ -1564,8 +1590,14 @@ fn agents(
         .collect();
     let (calm, now) = (crate::dial::calm(), Instant::now());
     let side = gpui::size(px(ICON), px(ICON));
-    let mut gliding = false;
+    let (mut gliding, mut pulsing) = (false, false);
     let mut icons = Vec::new();
+    // 0 to 1 and back, one clock for every icon so two busy ones pulse together.
+    let beat = {
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        let t = START.get_or_init(Instant::now).elapsed().as_secs_f32() / PULSE.as_secs_f32();
+        0.5 - 0.5 * (t * std::f32::consts::TAU).cos()
+    };
     for (agent, mark) in floating.iter().zip(made.scene.marks(&boxes)) {
         let Some(end) = to_window(mark.at) else { continue };
         let block = mark.over.and_then(|i| made.scene.blocks.get(i));
@@ -1597,6 +1629,8 @@ fn agents(
         let shown = from + (to - from) * (1. - (1. - t).powi(3));
         let rect = Bounds::centered_at(shown, side);
         let colour = Hsla::from(rgb(agent.colour));
+        let pulse = (agent.busy && !calm).then_some(beat);
+        pulsing |= pulse.is_some();
         // The cone: from the icon's foot over the building's top, its widest corners on screen.
         let top =
             block.map(|b| [[b.min[0], b.min[2]], [b.max[0], b.min[2]], [b.max[0], b.max[2]], [b.min[0], b.max[2]]]);
@@ -1620,7 +1654,11 @@ fn agents(
                 pool.line_to(*corner);
             }
             pool.close();
-            crate::dial::stroke(window, pool, colour.opacity(0.3));
+            crate::dial::stroke(window, pool, colour.opacity(0.3 + 0.3 * pulse.unwrap_or(0.)));
+        } else if let Some(p) = pulse {
+            let halo = rect.dilate(px(2. + 6. * p));
+            let ring = fill(halo, gpui::transparent_black()).corner_radii(px(ICON / 4. + 4.));
+            window.paint_quad(ring.border_widths(px(2.)).border_color(colour.opacity(0.6 * (1. - p))));
         }
         // The task's badge, as drawn on its row: its letters in a square bordered in its colour.
         window.paint_quad(
@@ -1629,9 +1667,9 @@ fn agents(
         let mono = shape(&agent.mono, Hsla::from(rgb(theme::TEXT)), (ICON * 0.4).max(9.), window);
         let _ = mono.paint(point(shown.x - mono.width / 2., shown.y - px(7.)), px(14.), window, cx);
         let (task, key, cone) = (agent.task, agent.key.clone(), corners.is_some());
-        icons.push(Icon { task, key, shown, from, to, since, rect, cone, fan: mark.fan });
+        icons.push(Icon { task, key, shown, from, to, since, rect, cone, fan: mark.fan, pulsing: pulse.is_some() });
     }
-    (icons, gliding)
+    (icons, gliding, pulsing)
 }
 
 /// Where the end of a beam from `foot` to `end` is drawn (window points), and its label's box (`label`: its

@@ -4570,6 +4570,8 @@ impl Workspace {
                 "city_rise_frames": self.city_rise_frames(),
                 // Frames an agent's icon in the code city asked for as it glided: none at rest or under Reduce Motion.
                 "city_agent_frames": self.city_agent_frames(),
+                // Frames a busy agent's pulse in the code city asked for: none once its calls end, none under Reduce Motion.
+                "city_pulse_frames": self.city_pulse_frames(),
                 // Frames a city's camera asked for easing back after a reset: none at rest, none under Reduce Motion.
                 "city_frames": self.city_frames.get(),
                 // Frames the dial asked for because something in it moves: none at rest.

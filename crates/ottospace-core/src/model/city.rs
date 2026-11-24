@@ -30,6 +30,11 @@ pub struct Agent<'a> {
     pub who: Who<'a>,
     pub colour: Option<u8>,
     pub at: Option<&'a str>,
+    /// At no file: the checkout's paths its running shell line names (`city_shell::paths`), files
+    /// or folders, relative to it; the shell takes the first that is in the city.
+    pub near: Vec<String>,
+    /// A call of it runs now (for a session read from its file: a call it started has not ended).
+    pub busy: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -192,7 +197,11 @@ impl Model {
         let working = chats.iter().filter(|(.., transcript)| transcript.pulse() == Pulse::Running);
         let mut tasks: Vec<(TaskId, Agent)> = (working)
             .map(|(task, colour, transcript)| {
-                (*task, Agent { who: Who::Task(*task), colour: *colour, at: transcript.file_at() })
+                let at = transcript.file_at();
+                let near = (transcript.shell_line().filter(|_| at.is_none()))
+                    .map_or_else(Vec::new, |line| crate::city_shell::paths(line, dir));
+                let busy = transcript.calling();
+                (*task, Agent { who: Who::Task(*task), colour: *colour, at, near, busy })
             })
             .collect();
         // A task whose agent runs in a terminal (Codex, or `conversation_view: terminal`) has no
@@ -202,7 +211,13 @@ impl Model {
             let task = self.tasks.adopter(&s.runner, &s.id)?;
             let works = own.map_or(self.task_worktree(task.id) == Some(dir), |own| own == task.id);
             let chatted = self.chat(&Subject::Task(task.id)).is_some_and(|chat| chat.transcript.live);
-            let agent = Agent { who: Who::Task(task.id), colour: task.colour, at: file_of(s) };
+            let agent = Agent {
+                who: Who::Task(task.id),
+                colour: task.colour,
+                at: file_of(s),
+                near: Vec::new(),
+                busy: s.station.is_some(),
+            };
             (works && !chatted).then_some((task.id, agent))
         });
         let in_terminal: Vec<(TaskId, Agent)> = in_terminal.collect();
@@ -215,6 +230,8 @@ impl Model {
                 who: Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() },
                 colour: None,
                 at: file_of(s),
+                near: Vec::new(),
+                busy: s.station.is_some(),
             });
         let agents: Vec<Agent> = tasks.into_iter().map(|(_, agent)| agent).chain(sessions).collect();
         // A session's file is lit too: in its task's colour if a task has it, else in none.
@@ -529,7 +546,8 @@ mod tests {
         m.update(Action::SessionsAtWork { found: vec![found(true, "files", "src/main.rs")] });
         let city = city(&m).unwrap();
         let who = Who::Session { runner: "claude", id: "s1", title: Some("fix the loop") };
-        assert_eq!(city.agents, vec![Agent { who, colour: None, at: Some("src/main.rs") }]);
+        let near = Vec::new();
+        assert_eq!(city.agents, vec![Agent { who, colour: None, at: Some("src/main.rs"), near, busy: true }]);
         assert_eq!(city.lit, vec![Lit { label: "src/main.rs", colour: None, running: true }]);
         m.update(Action::SessionsAtWork { found: vec![found(true, "shell", "cargo test")] });
         assert_eq!(agents(&m), Some(vec![(0, None)]), "a shell line: at no file");
@@ -585,6 +603,45 @@ mod tests {
             assert_eq!(agents(&m), Some(vec![(1, None)]), "after step {n}");
             assert_eq!(labels(&m), Some(vec![]), "nothing lit, step {n}");
         }
+    }
+
+    /// The owner's third case: shell lines only, each `cd <checkout> && <cmd> <path>`. While one
+    /// runs, the agent is near the paths it names (the shell puts it over that building or
+    /// plinth) and busy; between calls, near none and not busy; a file call wins over a line.
+    #[test]
+    fn a_shell_line_puts_its_agent_near_the_paths_it_names() {
+        let mut m = task_in_app();
+        let bash = |id: &str, line: &str| Event::ToolStart {
+            id: id.into(),
+            sub: false,
+            tool: "Bash".into(),
+            station: Station::Shell,
+            label: line.split(' ').nth(3).unwrap_or("").into(),
+            detail: Text::new(line),
+            diff: None,
+            gist: None,
+        };
+        let near = |m: &Model| city(m).map(|city| (city.agents[0].near.clone(), city.agents[0].busy));
+        events(&mut m, vec![Event::TurnStarted]);
+        assert_eq!(near(&m), Some((vec![], false)));
+        let lines = [
+            ("a", "cd /code/app && cat src/main.rs", vec!["src/main.rs"]),
+            ("b", "cd /code/app && rg -n loop src/model docs", vec!["src/model"]),
+            ("c", "cd /code/app && git log --oneline -5", vec![]),
+            ("d", "cd /code/app && wc -l src/lib.rs src/main.rs", vec!["src/lib.rs", "src/main.rs"]),
+        ];
+        for (id, line, want) in lines {
+            events(&mut m, vec![bash(id, line)]);
+            let want: Vec<String> = want.into_iter().map(String::from).collect();
+            assert_eq!(near(&m), Some((want, true)), "{line}");
+            assert_eq!(agents(&m), Some(vec![(1, None)]), "{line}");
+            events(&mut m, vec![end(id)]);
+            assert_eq!(near(&m), Some((vec![], false)), "{line}: ended");
+        }
+        // A file call beside a running line: at the file, near nothing.
+        events(&mut m, vec![bash("e", "cd /code/app && cat docs/a.md"), call("f", Station::Files, "src/x.rs")]);
+        assert_eq!(agents(&m), Some(vec![(1, Some("src/x.rs"))]));
+        assert_eq!(near(&m), Some((vec![], true)));
     }
 
     /// A task whose agent runs in a terminal (no chat: Codex, or the terminal view) floats in its

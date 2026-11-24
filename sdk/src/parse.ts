@@ -2457,6 +2457,7 @@ function cityAgent(value: unknown, at: string): CityAgent {
     cone: bool(o.cone, `${at}.cone`),
     fan: pair(o.fan, `${at}.fan`),
     hovered: bool(o.hovered, `${at}.hovered`),
+    pulsing: bool(o.pulsing, `${at}.pulsing`),
   };
 }
 

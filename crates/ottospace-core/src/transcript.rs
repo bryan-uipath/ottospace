@@ -525,7 +525,13 @@ pub struct Transcript {
     pub stopping: bool,
     /// What its dial draws (`dial`).
     pub activity: Activity,
+    /// Its shell calls that run, by id, their command lines: kept apart from the rows, which a
+    /// long transcript drops (at most `MOST_SHELLS`, the newest).
+    shells: Vec<(String, Text)>,
 }
+
+/// The most running shell calls whose lines are kept.
+const MOST_SHELLS: usize = 8;
 
 /// The most kinds of line not understood kept apart; past it they count under the last.
 pub const MAX_KINDS: usize = 8;
@@ -603,6 +609,17 @@ impl Transcript {
     /// Its dial's state alone: what the agent chip says while the conversation is closed.
     pub fn pulse(&self) -> Pulse {
         self.activity.pulse(&self.is())
+    }
+
+    /// A call of its agent runs now.
+    pub fn calling(&self) -> bool {
+        self.activity.running_label().is_some()
+    }
+
+    /// The command line of its newest shell call that still runs.
+    pub fn shell_line(&self) -> Option<&str> {
+        let id = self.activity.running_on(Station::Shell)?;
+        self.shells.iter().find(|(of, _)| of == id).map(|(_, line)| line.text())
     }
 
     /// The one file its agent is at now (`Activity::at`).
@@ -750,6 +767,12 @@ impl Transcript {
             Event::ToolStart { id, sub, tool, station, label, detail, diff, gist } => {
                 self.settle();
                 self.activity.start(&id, station, &label, at);
+                if station == Station::Shell {
+                    if self.shells.len() == MOST_SHELLS {
+                        self.shells.remove(0);
+                    }
+                    self.shells.push((id.clone(), detail.clone()));
+                }
                 if let Some(turn) = &mut self.turn {
                     turn.tool = Some(label.clone());
                 }
@@ -758,6 +781,7 @@ impl Transcript {
             }
             Event::ToolEnd { id, failed, output } => {
                 self.activity.end(&id, failed, at);
+                self.shells.retain(|(of, _)| *of != id);
                 let call = self.items.iter_mut().rev().find_map(|item| match &mut item.entry {
                     Entry::Tool { id: of, state, gist, output, .. } if *of == id => Some((state, gist, output)),
                     _ => None,
@@ -1112,6 +1136,33 @@ mod tests {
         fresh.fold(Event::Exited { code: None, signal: None, details: false }, 4);
         fresh.started(true);
         assert_eq!(fresh.items().len(), 3, "{:?}", texts(&fresh));
+    }
+
+    /// A running shell call's line outlasts its row: a long transcript drops old rows, never the
+    /// line of a call that still runs. Ended, it is gone.
+    #[test]
+    fn a_running_shell_line_outlasts_its_row() {
+        let mut t = Transcript::default();
+        t.started(false);
+        let bash = Event::ToolStart {
+            id: "b".into(),
+            sub: false,
+            tool: "Bash".into(),
+            station: Station::Shell,
+            label: "cat".into(),
+            detail: Text::new("cat src/main.rs"),
+            diff: None,
+            gist: None,
+        };
+        t.fold(Event::TurnStarted, 1);
+        t.fold(bash, 2);
+        for n in 0..(MAX_ITEMS + 10) {
+            t.fold(Event::Text { text: Text::new(&format!("note {n}")) }, 3);
+        }
+        assert!(!t.items().any(|item| matches!(&item.entry, Entry::Tool { .. })), "its row is gone");
+        assert_eq!(t.shell_line(), Some("cat src/main.rs"));
+        t.fold(Event::ToolEnd { id: "b".into(), failed: false, output: None }, 4);
+        assert_eq!(t.shell_line(), None);
     }
 
     /// Live, a usage line after a call is no second model request; a watched call left open is
