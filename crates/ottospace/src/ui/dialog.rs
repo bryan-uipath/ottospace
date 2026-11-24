@@ -11,8 +11,9 @@ use super::{Button, State, states};
 /// Widths: a question, a form.
 pub(crate) const QUESTION: f32 = 360.;
 pub(crate) const FORM: f32 = 520.;
-/// The one dim behind every centred dialog.
+/// The one dim behind every centred dialog, and the lighter one behind a list anchored to its place (⌘E).
 pub(crate) const DIM: f32 = 0.45;
+pub(crate) const DIM_ANCHORED: f32 = 0.2;
 /// A control's height in a dialog (22 elsewhere).
 const CONTROL: f32 = 26.;
 /// A form's label column.
@@ -100,12 +101,14 @@ pub(crate) fn actions(left: Option<AnyElement>, status: Option<SharedString>, ri
 /// A dialog's button, its `keys` as caps after its label in its own ink: the caps are the only
 /// place a dialog shows a key. One `Primary` (or `DangerPrimary`), right-most.
 pub(crate) fn action(id: impl Into<ElementId>, kind: Button, keys: &[&'static str], state: State) -> Stateful<Div> {
+    keyed(id, kind, keys, state).h(px(CONTROL)).px(px(9.))
+}
+
+/// A `ui::button` with its keys as caps after its label, at its own size: for a card or bar that
+/// is not a dialog (the decision card, the bug report's bar).
+pub(crate) fn keyed(id: impl Into<ElementId>, kind: Button, keys: &[&'static str], state: State) -> Stateful<Div> {
     let filled = matches!(kind, Button::Primary(_) | Button::DangerPrimary(_));
-    super::button(id, kind, state)
-        .h(px(CONTROL))
-        .px(px(9.))
-        .gap(px(7.))
-        .children(keys.iter().map(|key| cap(key, filled)))
+    super::button(id, kind, state).gap(px(7.)).children(keys.iter().map(|key| cap(key, filled)))
 }
 
 /// A key cap on a control. On a filled button: dark, in the button's own ink, never the accent.

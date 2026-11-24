@@ -302,22 +302,28 @@ impl Workspace {
 
     /// A button of the overlay's bar or a card: `bug:<name>`.
     fn bug_button(&self, name: String, kind: ui::Button, state: ui::State, cx: &mut Context<Self>) -> Stateful<Div> {
-        let control = name.clone();
-        ui::button(SharedString::from(name.clone()), kind, state)
+        self.bug_control(name.clone(), ui::button(SharedString::from(name), kind, state), cx)
+    }
+
+    /// `control`, drawn, as a control of the overlay's: `bug:<name>`.
+    fn bug_control(&self, name: String, control: Stateful<Div>, cx: &mut Context<Self>) -> Stateful<Div> {
+        let clicked = name.clone();
+        control
             .child(self.controls.mark(name))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(move |this, _, window, cx| this.click_bug(&control, window, cx)))
+            .on_click(cx.listener(move |this, _, window, cx| this.click_bug(&clicked, window, cx)))
     }
 
     /// The bar over the picture: what to do, and its buttons.
     fn bug_bar(&self, report: &Report, cx: &mut Context<Self>) -> Div {
-        let apps = if report.apps { "☑ Include app panes" } else { "☐ Include app panes" };
         let secondary = |label: &'static str| ui::Button::Secondary(label.into());
-        // Primary once there is a mark to send.
+        // Primary once there is a mark to send; its keys on it.
         let send = match report.marks.is_empty() {
-            true => secondary("Send to an agent  ⌘↵"),
-            false => ui::Button::Primary("Send to an agent  ⌘↵".into()),
+            true => secondary("Send to an agent"),
+            false => ui::Button::Primary("Send to an agent".into()),
         };
+        let send = ui::dialog::keyed("bug:send", send, &["⌘", "↵"], ui::State::Rest);
+        let apps = ui::dialog::choice_row("bug:apps", false, report.apps, "Include app panes", None, ui::State::Rest);
         let bar = dialog::panel(theme::BORDER_STRONG)
             .flex()
             .flex_col()
@@ -333,9 +339,9 @@ impl Workspace {
                     .child(div().text_sm().text_color(rgb(theme::TEXT)).child("Report a bug in ottospace"))
                     .child(div().text_xs().text_color(rgb(theme::MUTED)).child("drag a box round what is wrong"))
                     .child(self.bug_button("bug:whole".into(), secondary("Whole app"), ui::State::Rest, cx))
-                    .child(self.bug_button("bug:apps".into(), secondary(apps), ui::State::Rest, cx))
-                    .child(self.bug_button("bug:cancel".into(), secondary("Cancel  esc"), ui::State::Rest, cx))
-                    .child(self.bug_button("bug:send".into(), send, ui::State::Rest, cx)),
+                    .child(self.bug_control("bug:apps".into(), apps, cx))
+                    .child(self.bug_button("bug:cancel".into(), secondary("Cancel"), ui::State::Rest, cx))
+                    .child(self.bug_control("bug:send".into(), send, cx)),
             )
             .child(div().text_xs().text_color(rgb(theme::MUTED)).child(
                 "Only ottospace's window is pictured, and it stays on this Mac for the agent you start. \

@@ -432,7 +432,7 @@ impl Workspace {
 
 /// The palette's box near the top, over the dimmed workspace. A click outside closes it.
 fn palette_box(panel: gpui::Div, cx: &mut Context<Workspace>) -> gpui::Stateful<gpui::Div> {
-    dialog::backdrop("palette-backdrop", 0.35, Action::ClosePalette, cx)
+    dialog::backdrop("palette-backdrop", crate::ui::dialog::DIM, Action::ClosePalette, cx)
         .pt(px(72.))
         .px_4()
         .flex()

@@ -5987,7 +5987,7 @@ impl Workspace {
                 ..scrollbar::Fade::to(theme::RAISED)
             },
         ));
-        dialog::backdrop("keys-backdrop", 0.5, Action::CloseKeys, cx)
+        dialog::backdrop("keys-backdrop", ui::dialog::DIM, Action::CloseKeys, cx)
             .p_6()
             .flex()
             .flex_col()
@@ -6070,7 +6070,9 @@ impl Workspace {
             .child(div().flex_none().text_color(rgb(theme::PICK)).child(title))
             .child(self.render_field("type to filter", cx));
         let panel = self.list_panel(panel, header, "picker", rows, empty);
-        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
+        dialog::backdrop("picker-backdrop", ui::dialog::DIM_ANCHORED, Action::ClosePicker, cx)
+            .child(panel)
+            .into_any_element()
     }
 
     /// The transcript's picker ("Transcribe a window…"), in ⌘E's style: each app that can play
@@ -6123,7 +6125,9 @@ impl Workspace {
             .text_color(rgb(theme::MUTED))
             .child("↵ listen · Esc cancel · needn't be in a pane");
         let panel = self.list_panel(panel, header, "picker", rows, "No app to listen to").child(foot);
-        dialog::backdrop("picker-backdrop", 0.25, Action::ClosePicker, cx).child(panel).into_any_element()
+        dialog::backdrop("picker-backdrop", ui::dialog::DIM_ANCHORED, Action::ClosePicker, cx)
+            .child(panel)
+            .into_any_element()
     }
 
     /// Carries out `Effect::FillDisplay`. A run with hosting off changes no window: its own

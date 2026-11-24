@@ -67,7 +67,8 @@ action row.
   Cancel button (the answers are its content); a form drops it.
 - **Letters on options** work only while no text field has the keys.
 - **Words**: sentence case; a button names its result (`Keep slot`, `Quit`), never `OK`.
-- **Backdrop**: one dim, 0.45, under every centred dialog.
+- **Backdrop**: one dim, 0.45 (`DIM`), under every centred dialog and panel (the palette, the
+  key reference, the clone dialog); 0.2 (`DIM_ANCHORED`) under a list anchored to its place (⌘E).
 
 The new-task box (`lifted`, `well`, `picker`, `chip`) is its own design (#394–#401) and not yet on
 this system: its keys line and legend stay.

@@ -350,7 +350,7 @@ impl Workspace {
             .children(busy)
             .children(said)
             .child(dialog::hint(hint));
-        dialog::backdrop("clone-backdrop", 0.35, Action::CloneClose { cancel: false }, cx)
+        dialog::backdrop("clone-backdrop", crate::ui::dialog::DIM, Action::CloneClose { cancel: false }, cx)
             .pt(px(72.))
             .px_4()
             .flex()

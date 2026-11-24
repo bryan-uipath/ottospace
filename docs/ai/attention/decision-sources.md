@@ -31,7 +31,7 @@ MCP server.
 | What a decision is | Not a record. A derived view: a task whose native agent's live transcript has a question card (`AskUserQuestion`, a `Form`) first, and whose task is not done, snoozed, put away or gone (`Model::asking`, `model/decisions.rs`) |
 | Who files one | Nobody. It appears when the agent asks through the runner's structured protocol; no request makes one |
 | Its fields | `Waiting { task, ticket, priority, since }`: the task's priority (P1–P9), when first seen waiting (`Seen`, from `Tick`) |
-| Where it shows | The Decisions workspace (⌘J under `decisions`; the palette): one card pane (`crates/ottospace/src/decisions.rs`), header "P2 · waiting 12m · its agent asks", the drawer's ask card, Skip (s) and Later (l). "Decisions · 2 of 5" over a progress bar |
+| Where it shows | The Decisions workspace (⌘J under `decisions`; the palette): one card pane (`crates/ottospace/src/decisions.rs`), header "P2 · waiting 12m · its agent asks", the drawer's ask card, Skip and Later (S and L caps). "Decisions · 2 of 5" over a progress bar |
 | Order | The card on show first; then priority; then waiting longest; then task id (`decision_queue`) |
 | How it is answered | 1–9 pick, ↵ sends (`DecisionsAsk` → `ask_act` → `Effect::AgentAnswers`), the agent resumes. Skip: out of this run. Later: the task snoozed one hour (`LATER_MS`). Only `Origin::User`; a client or timer is refused (`USERS_ALONE`) |
 | Persistence | None of its own. The run and `waiting` live in memory; Later is the task's `snoozed_until`, kept with the task |
