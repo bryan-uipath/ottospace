@@ -69,11 +69,7 @@ impl Workspace {
         // terminal. (A client's key is no event of the keyboard's.)
         let held = self.input == Origin::User && ottospace_mac::window::key_repeating();
         if let Some(answer) = self.confirm_answer(key, self.input).filter(|_| !held) {
-            // Where each shell is now: the core keeps a worktree a terminal went into since.
-            if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) {
-                self.tell_terminals();
-            }
-            self.dispatch(answer, self.input, window, cx);
+            self.confirm_answered(answer, window, cx);
         }
         true
     }
@@ -83,6 +79,13 @@ impl Workspace {
         let rows = self.model.confirm.as_ref().filter(|c| c.quits()).map_or(0, |c| c.unsent.len());
         let marks = self.marks.borrow();
         (0..rows).filter_map(|at| marks.get(&crate::Mark::QuitRow(at)).copied().map(crate::rect)).collect()
+    }
+
+    /// Where the question's buttons are drawn: its way out, its yes, its ×. Empty: no question.
+    pub fn confirm_buttons(&self) -> Vec<[f32; 4]> {
+        let marks = self.marks.borrow();
+        let drawn = |at| marks.get(&crate::Mark::ConfirmButton(at)).copied().map(crate::rect);
+        if self.model.confirm.is_none() { Vec::new() } else { (0..3).filter_map(drawn).collect() }
     }
 
     /// The question, centred over the workspace (`ui::dialog`): its title, one sentence, what it
@@ -152,7 +155,8 @@ impl Workspace {
             };
             let sections = confirm.sections().into_iter().map(|(name, rows)| {
                 let drafts = name == quit::NOT_SENT;
-                let count = rows.len();
+                // All of them, not the rows: five and "and 3 more" end eight.
+                let count = if drafts { confirm.unsent.len() } else { confirm.running.len() + confirm.agents.len() };
                 let row = |(at, line): (usize, String)| match drafts {
                     // A list row, its words in line with the section's.
                     true => ui::list_row(("quit-row", at), ui::Row::Normal, ui::State::Rest)
@@ -172,7 +176,9 @@ impl Workspace {
                     .child(head(name, count))
                     .children(rows.into_iter().enumerate().map(row))
             });
-            (confirm.title(), "These end, or are lost, when it quits.", Some(div().children(sections)))
+            // A long list scrolls; the buttons stay in reach under it.
+            let list = div().id("quit-sections").max_h(px(320.)).overflow_y_scroll().children(sections);
+            (confirm.title(), "These end, or are lost, when it quits.", Some(div().child(list)))
         };
         let answers = confirm.answers().into_iter().enumerate().map(|(at, answer)| {
             let kind = match answer.look {
@@ -184,12 +190,14 @@ impl Workspace {
             let action = answer.action;
             ui::dialog::action(id, kind, answer.keys, ui::State::Rest)
                 .child(self.controls.mark(id.to_string()))
-                .on_click(cx.listener(move |this, _, window, cx| this.confirm_click(action.clone(), window, cx)))
+                .child(crate::mark(&self.marks, crate::Mark::ConfirmButton(at as u8)))
+                .on_click(cx.listener(move |this, _, window, cx| this.confirm_answered(action.clone(), window, cx)))
                 .into_any_element()
         });
         let close = ui::dialog::close("confirm:close", ui::State::Rest)
             .child(self.controls.mark("confirm:close".to_string()))
-            .on_click(cx.listener(|this, _, window, cx| this.confirm_click(Action::QuitCancel, window, cx)));
+            .child(crate::mark(&self.marks, crate::Mark::ConfirmButton(2)))
+            .on_click(cx.listener(|this, _, window, cx| this.confirm_answered(Action::QuitCancel, window, cx)));
         let panel = ui::dialog::frame(
             ui::dialog::QUESTION,
             title,
@@ -205,10 +213,10 @@ impl Workspace {
             .child(panel)
     }
 
-    /// A button of the question pressed: as its key would answer, where each shell is first known
-    /// for a delete (the core keeps a worktree a terminal went into since).
-    fn confirm_click(&mut self, answer: Action, window: &Window, cx: &mut Context<Self>) {
-        if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) && answer == Action::QuitConfirm {
+    /// The question answered, by a key or a button. Where each shell is now, first, for a delete:
+    /// the core keeps a worktree a terminal went into since.
+    fn confirm_answered(&mut self, answer: Action, window: &Window, cx: &mut Context<Self>) {
+        if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) {
             self.tell_terminals();
         }
         self.dispatch(answer, self.input, window, cx);

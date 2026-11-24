@@ -1428,7 +1428,7 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
     assert!(otto.drawn()["state"]["confirm"].is_null() && clean.exists());
     // Its Keep it button, a client's click refused, the user's keeps it too.
     ask(&otto);
-    let keep = otto.control("confirm:no");
+    let keep = rect(&otto.drawn()["confirm_buttons"][0]);
     let k = at(keep, 0.5, 0.5);
     for action in ["down", "up"] {
         otto.raw(&json!({"cmd": "mouse", "action": action, "x": k[0], "y": k[1]}).to_string());
@@ -1455,7 +1455,8 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
     // The dirty one: git refuses, nothing goes, and the notice says why.
     let state = right_click(at(row(&otto.drawn(), &dirty).unwrap(), 0.3, 0.5));
     otto.user_click(at(rect(&state["row_menu"]["items"][0]["rect"]), 0.5, 0.5));
-    otto.user_click(at(otto.control("confirm:yes"), 0.5, 0.5));
+    let yes = rect(&otto.drawn()["confirm_buttons"][1]);
+    otto.user_click(at(yes, 0.5, 0.5));
     let said =
         |o: &Otto| Some(o.drawn()).filter(|s| s["notice"].as_str().is_some_and(|n| n.starts_with("Kept the worktree")));
     let state = otto.wait_for("git's reason", said);
@@ -14445,7 +14446,8 @@ fn quit_names_an_unsent_message_and_its_row_goes_to_the_composer() {
     });
     assert_eq!(both["state"]["confirm"]["unsent"], message, "{both}");
     // Its × cancels, as Esc and Cancel do.
-    let cancelled = otto.user_click(at(otto.control("confirm:close"), 0.5, 0.5));
+    let close = rect(&otto.drawn()["confirm_buttons"][2]);
+    let cancelled = otto.user_click(at(close, 0.5, 0.5));
     assert_eq!(cancelled["state"]["confirm"], Value::Null, "{cancelled}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);

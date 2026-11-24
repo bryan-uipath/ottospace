@@ -2511,6 +2511,7 @@ export function snapshot(value: unknown): Snapshot {
     notice_level: orNull(noticeLevel)(o.notice_level, "notice_level"),
     toast: orNull(toast)(o.toast, "toast"),
     quit_rows: list(rect)(o.quit_rows, "quit_rows"),
+    confirm_buttons: list(rect)(o.confirm_buttons, "confirm_buttons"),
     settings_errors: num(o.settings_errors, "settings_errors"),
     editor: orNull(editor)(o.editor, "editor"),
     hosted: map(rect)(o.hosted, "hosted"),

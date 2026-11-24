@@ -1245,7 +1245,7 @@ export interface Confirm {
   later: [TaskId, string] | null;
   /** Not the quit question: "Close <title>? It has unsaved changes" for this owned app pane. Only the user answers it. */
   edited: PaneId | null;
-  /** Not the quit question: "Delete this worktree?" for the linked one at this path. ↵ deletes; Esc or any other key keeps it. Only the user answers it. */
+  /** Not the quit question: "Delete this worktree?" for the linked one at this path. ⌘↵ deletes, ↵ alone does nothing; Esc or any other key keeps it. Only the user answers it. */
   delete: string | null;
   /** The quit question's running agents, by their conversation's name. */
   agents: string[];
@@ -2015,6 +2015,8 @@ export interface Snapshot {
   toast: Toast | null;
   /** Where each draft row of the quit question is drawn, in `confirm.unsent`'s order. */
   quit_rows: Rect[];
+  /** Where the question's buttons are drawn: its way out, its yes, its ×. Empty with no question. */
+  confirm_buttons: Rect[];
   /** How many problems the last read of `settings.json` found: the first is in `notice`. */
   settings_errors: number;
   /** The user's editor on a draft, or null while none runs. */
