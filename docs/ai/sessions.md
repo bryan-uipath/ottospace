@@ -401,6 +401,10 @@ Session files hold prompts, source code, command output and whatever secrets pas
   name's shape or is replaced by a fixed word. The adversarial fixture test checks it.
 - A session's title is the one free text that leaves the crate: see "Quoted" under Labels. It
   is shown only in the app's Sessions rows and its state reply, never by `ottospace sessions`.
+- For the drawer's watch alone, a cursor that asks carries more: an edit's change and a call's
+  output (`with_edits`), and what the user and the model wrote (`with_words`, `What::Words`; never
+  thinking). Drawn as a live chat's are: in memory only, never in the state, the socket, a log
+  or a file (`Text`'s `Debug` prints a length).
 - Known soft spots, accepted for the local CLI: the fields in "Shown as written" above. A file
   label shows the last two parts of a path; a name-shaped skill, agent type, MCP name or model
   is shown as the model or file wrote it; `SessionRef.cwd` and `path`, and the report's `cwd`,
