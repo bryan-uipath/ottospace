@@ -1672,7 +1672,11 @@ fn glance(
             if !g.see(key) || !g.began || calm {
                 continue;
             }
-            let mut blocks: Vec<usize> = paths.iter().flat_map(|path| blocks_of(path)).collect();
+            // A result names files: its paths exactly (a folder's buildings only for a scope).
+            let mut blocks: Vec<usize> = match play {
+                Play::Found => paths.iter().filter_map(|path| block_of(made, path)).collect(),
+                _ => paths.iter().flat_map(|path| blocks_of(path)).collect(),
+            };
             blocks.sort_unstable();
             blocks.dedup();
             if blocks.is_empty() && !whole {
@@ -1750,7 +1754,9 @@ fn glance(
         }
         // A found file's top alone is a few pixels at most zooms: it gets a lit file's steady beam.
         if e.play == Play::Found {
-            for &i in &e.blocks {
+            // Buildings only: a lit one has its beam already, a folder none.
+            let building = |i: usize| made.scene.blocks.get(i).is_some_and(|b| b.kind == Kind::Building);
+            for &i in e.blocks.iter().filter(|i| building(**i)) {
                 let Some((foot, end)) = made.scene.beam(i) else { continue };
                 let (Some(foot), Some(end)) = (to_window(foot), to_window(end)) else { continue };
                 if let Some((end, _)) = fit_beam(foot, end, None, bounds, clear) {
