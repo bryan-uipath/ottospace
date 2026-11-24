@@ -759,9 +759,9 @@ impl Tasks {
     }
 
     /// The task whose session this is, if one's is.
-    pub fn adopter(&self, runner: &str, id: &str) -> Option<TaskId> {
+    pub(crate) fn adopter(&self, runner: &str, id: &str) -> Option<&Task> {
         let is = |link: &crate::sessions::Link| link.runner == runner && link.id == id;
-        self.list.iter().find(|task| task.session.as_ref().is_some_and(is)).map(|task| task.id)
+        self.list.iter().find(|task| task.session.as_ref().is_some_and(is))
     }
 
     /// Notes when a task's agent first started. Kept from the first time on.
