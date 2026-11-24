@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 
 use crate::PaneId;
 use crate::activity::{Pulse, Station};
+use crate::city_shell;
 use crate::features::Feature;
+use crate::glance::{Glance, Words};
 use crate::model::spaces::Owner;
 use crate::model::{Action, Model, Origin};
 use crate::scene::View;
@@ -59,6 +61,48 @@ pub struct City<'a> {
     pub agents: Vec<Agent<'a>>,
     /// Where the user turned, moved and zoomed its camera (the fitted view until they do).
     pub view: View,
+    /// What its working agents read and searched lately, oldest first: the shell plays each once.
+    pub glimpses: Vec<Glimpse>,
+}
+
+/// A read or a search of an agent, as the city's places: `scope` the files or folders it covers
+/// (a search's empty scope: the whole checkout), `found` the files a search's result names. Its
+/// `id` is its task's and its call's: the same glimpse keeps it as more is known.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Glimpse {
+    pub id: String,
+    pub search: bool,
+    pub scope: Vec<String>,
+    pub found: Vec<String>,
+    pub colour: Option<u8>,
+}
+
+/// `glance` in the checkout `dir`; none for a read of no file there, or a search elsewhere (a
+/// `cd` out of the checkout, or operands all outside it). A search with no operands covers where
+/// it ran: the whole checkout, or the folder its `cd` went to. Its result is read from there.
+fn glimpse(task: TaskId, colour: Option<u8>, glance: &Glance, dir: &str) -> Option<Glimpse> {
+    let mut base = String::new();
+    let scope = match &glance.words {
+        Words::Path(path) => vec![city_shell::path(path, dir, "")?],
+        Words::Stage { cds, operands } => {
+            for cd in cds {
+                base = city_shell::path(cd, dir, &base)?;
+            }
+            let inside: Vec<String> = operands.iter().filter_map(|word| city_shell::path(word, dir, &base)).collect();
+            if !operands.is_empty() && inside.is_empty() {
+                return None;
+            }
+            if operands.is_empty() { vec![base.clone()] } else { inside }
+        }
+        Words::All => Vec::new(),
+    };
+    let scope: Vec<String> = scope.into_iter().filter(|path| !path.is_empty()).collect();
+    if !glance.search && scope.is_empty() {
+        return None;
+    }
+    let found = glance.found.iter().filter_map(|word| city_shell::path(word, dir, &base)).filter(|p| !p.is_empty());
+    let (id, search) = (format!("{task}:{}", glance.id), glance.search);
+    Some(Glimpse { id, search, scope, found: found.collect(), colour })
 }
 
 /// A step of the city's camera, the user's pointer's (the shell translates it).
@@ -243,7 +287,12 @@ impl Model {
             Who::Task(_) => None,
         }));
         let view = self.city_view(at);
-        Some(City { dir, lit: lit.collect(), agents, view })
+        let glimpses = (chats.iter().filter(|(.., transcript)| transcript.pulse() == Pulse::Running))
+            .flat_map(|(task, colour, transcript)| {
+                transcript.glances.iter().filter_map(move |glance| glimpse(*task, *colour, glance, dir))
+            })
+            .collect();
+        Some(City { dir, lit: lit.collect(), agents, view, glimpses })
     }
 
     /// What a click on an agent's icon over a city does: the user's own goes to its task (as
@@ -642,6 +691,71 @@ mod tests {
         events(&mut m, vec![bash("e", "cd /code/app && cat docs/a.md"), call("f", Station::Files, "src/x.rs")]);
         assert_eq!(agents(&m), Some(vec![(1, Some("src/x.rs"))]));
         assert_eq!(near(&m), Some((vec![], true)));
+    }
+
+    /// Reads and searches as the city's glimpses: a read's file, a search's scope (none: the
+    /// whole checkout) and, once it ends, the files its result names; outside the checkout, none.
+    #[test]
+    fn an_agents_reads_and_searches_are_glimpses_of_the_city() {
+        let mut m = task_in_app();
+        let start = |id: &str, tool: &str, station: Station, detail: &str| Event::ToolStart {
+            id: id.into(),
+            sub: false,
+            tool: tool.into(),
+            station,
+            label: String::new(),
+            detail: Text::new(detail),
+            diff: None,
+            gist: None,
+        };
+        let done = |id: &str, out: &str| Event::ToolEnd { id: id.into(), failed: false, output: Some(Text::new(out)) };
+        events(
+            &mut m,
+            vec![
+                Event::TurnStarted,
+                start("r", "Read", Station::Files, "/code/app/src/main.rs"),
+                start("x", "Read", Station::Files, "/etc/hosts"),
+                start("g", "Grep", Station::Files, r#"{"pattern":"loop"}"#),
+                start("b", "Bash", Station::Shell, "cd /code/app && rg -n loop src/model docs"),
+                start("o", "Bash", Station::Shell, "rg password /etc"),
+                start("e", "Bash", Station::Shell, "cd /elsewhere && rg -n loop"),
+                start("c", "Bash", Station::Shell, "cd src && rg -n loop"),
+            ],
+        );
+        let glimpses = |m: &Model| {
+            city(m).map(|c| {
+                c.glimpses
+                    .iter()
+                    .map(|g| (g.id.clone(), g.search, g.scope.clone(), g.found.clone()))
+                    .collect::<Vec<_>>()
+            })
+        };
+        let s = |v: &[&str]| v.iter().map(|p| p.to_string()).collect::<Vec<_>>();
+        let want = vec![
+            ("1:r".to_string(), false, s(&["src/main.rs"]), s(&[])),
+            ("1:g".to_string(), true, s(&[]), s(&[])),
+            ("1:b".to_string(), true, s(&["src/model", "docs"]), s(&[])),
+            ("1:c".to_string(), true, s(&["src"]), s(&[])),
+        ];
+        assert_eq!(glimpses(&m), Some(want.clone()));
+        events(
+            &mut m,
+            vec![done(
+                "g",
+                "/code/app/src/lib.rs:3:loop
+src/main.rs:9:loop
+/etc/x:1:loop",
+            )],
+        );
+        // A result from where the search ran: `cd src && rg` names `ui/mod.rs`, `src/ui/mod.rs`.
+        events(&mut m, vec![done("c", "ui/mod.rs:3:loop")]);
+        let mut found = want;
+        found[1].3 = s(&["src/lib.rs", "src/main.rs"]);
+        found[3].3 = s(&["src/ui/mod.rs"]);
+        assert_eq!(glimpses(&m), Some(found));
+        // Its turn over: none.
+        events(&mut m, vec![Event::TurnFinished { outcome: Outcome::Completed }]);
+        assert_eq!(glimpses(&m), Some(vec![]));
     }
 
     /// A task whose agent runs in a terminal (no chat: Codex, or the terminal view) floats in its

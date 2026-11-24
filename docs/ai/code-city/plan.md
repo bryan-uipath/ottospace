@@ -308,7 +308,10 @@ building's beam's end, a translucent cone of its colour from the icon down onto 
 top, its top washed in it. Several on one file fan out side by side; one at no file (a shell
 line, between calls) hovers over the buildings, above the camera's middle as high as a beam, with no cone;
 a running shell line that names a checkout path (`city_shell::paths`, words only) stands it over
-that file or folder's plinth; a busy agent pulses (`counts.city_pulse_frames`)
+that file or folder's plinth; a busy agent pulses (`counts.city_pulse_frames`). Reads and
+searches play once over the picture with no render (`glance`, `Glimpse`): a read's flash, a
+search's sweep over its scope, its result's files lit 1.5 s; within 250 ms one ripple, one sweep at
+a time (`counts.city_glimmer_frames`)
 (`Scene::marks`, tested). A session no task has, at work in the checkout (a `claude` the user
 runs in a terminal: the Repos dot's `SessionsAtWork`), floats too, as its runner's glyph in the
 colour of work going on, its file lit; its title on hover. Moving to another file, an icon

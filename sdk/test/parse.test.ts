@@ -153,6 +153,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       hovered: { file: true, lit: true, beam: [628, 45, 629, 9], outline: null, beacon: [637, 0, 80, 18] },
       first_ms: 140, read_us: 6200, view: { yaw: 34, pitch: 52, zoom: 1, pan: [0, 0] }, grabbed: false,
       agents: [{ task: 1, rect: [618, 0, 22, 22], cone: true, fan: [0, 1], hovered: false, pulsing: false }],
+      glimmer: { flash: 0, sweep: 0, found: 0 },
     },
     closed_apps: [],
     apps_bar: { not_running: [], more: 0, more_open: false, all_count: 0, all_open: false, all: [], filter: "", filtering: false, undo: null },

@@ -1908,6 +1908,14 @@ export interface CityDrawn {
   /** Each agent's icon drawn over the city: its task (null: a session no task has), its box,
    * whether its cone shines on a building, its place in a fan `[k, n]`, under the user's pointer. */
   agents: CityAgent[];
+  /** The reads' flashes, searches' sweeps and found files' lights playing now, by count. */
+  glimmer: CityGlimmer | null;
+}
+
+export interface CityGlimmer {
+  flash: number;
+  sweep: number;
+  found: number;
 }
 
 export interface CityAgent {
