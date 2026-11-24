@@ -255,13 +255,12 @@ impl Model {
         self.cameras.grab.is_some()
     }
 
-    /// The place's camera is moving: a drag of its own checkout's camera in flight that has
-    /// moved it from where the drag began. A press that has not moved, or another checkout's
-    /// drag, is no motion (its picture stays full size and named).
+    /// The place's camera is moving: a drag of its own camera in flight that has moved it from
+    /// where the drag began. A press that has not moved, or another place's drag, is no motion
+    /// (its picture stays full size and named).
     pub fn camera_moving(&self, at: At) -> bool {
-        let Some((grabbed, from)) = &self.cameras.grab else { return false };
-        let now = |key: &String| self.cameras.views.get(key).copied().unwrap_or_default();
-        self.camera_of(at).is_some_and(|key| key == *grabbed && now(&key) != *from)
+        let Some(grab) = &self.cameras.grab else { return false };
+        grab.place.0 == at && self.camera_of(at).as_ref() == Some(&grab.place.1) && self.city_view(at) != grab.from
     }
 
     /// Moves a place's camera by the user's `step`. Clamped: never under the ground, never
