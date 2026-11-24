@@ -558,6 +558,35 @@ mod tests {
         assert_eq!(agents(&m), Some(vec![]));
     }
 
+    /// The owner's case: a chat whose turn is a Skill call, then shell lines, no file read or
+    /// edited. The agent is in the city from its first event, at no file (so it hovers).
+    #[test]
+    fn an_agent_of_a_skill_and_shell_lines_shows_from_its_first_event() {
+        let mut m = task_in_app();
+        let tool = |id: &str, tool: &str, station: Station, label: &str| Event::ToolStart {
+            id: id.into(),
+            sub: false,
+            tool: tool.into(),
+            station,
+            label: label.into(),
+            detail: Text::default(),
+            diff: None,
+            gist: None,
+        };
+        let turn = [
+            vec![Event::TurnStarted],
+            vec![tool("a", "Skill", Station::Skills, "review")],
+            vec![end("a"), tool("b", "Bash", Station::Shell, "git status")],
+            vec![end("b"), tool("c", "Bash", Station::Shell, "cargo test")],
+            vec![end("c")],
+        ];
+        for (n, step) in turn.into_iter().enumerate() {
+            events(&mut m, step);
+            assert_eq!(agents(&m), Some(vec![(1, None)]), "after step {n}");
+            assert_eq!(labels(&m), Some(vec![]), "nothing lit, step {n}");
+        }
+    }
+
     /// A task whose agent runs in a terminal (no chat: Codex, or the terminal view) floats in its
     /// city by its session at work, at its file, lit in its colour; once the session is idle, it is
     /// gone. A task with a live chat floats by its chat alone, never twice.

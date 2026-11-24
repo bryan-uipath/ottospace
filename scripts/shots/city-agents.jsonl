@@ -1,7 +1,7 @@
 # Agents over the code city (`code_city`): each task's agent floats as its badge over the file
 # it reads, a cone of its colour on the building. Two tasks in one made-up repository replay
 # city-agents/fixtures (read f0, a shell line, read f49): one agent (`one`), both on one file
-# (`two`, fanned), one at a shell line (`no-file`, at the city's edge), moved on (`moved`), and the
+# (`two`, fanned), one at a shell line (`no-file`, hovering over the city), moved on (`moved`), and the
 # user's pointer on an icon (`hover`: the task's title). The city is a workspace's the user made
 # (`space:1`, next to Home) and goes back to; the user folds the chat first.
 {"env": {"OTTOSPACE_FEATURES": "code_city"}}
