@@ -75,7 +75,9 @@ fn item_control(index: usize) -> String {
 fn tip(level: Level, task: Option<TaskId>) -> String {
     match (task, level) {
         (None, Level::Off) => agent_mode::NO_TASK.into(),
-        (None, level) => format!("{}: {} offered to the next task here", agent_mode::NO_TASK, level.label()),
+        (None, level) => {
+            format!("{}: {} is saved for the next task you start here", agent_mode::NO_TASK, level.label())
+        }
         (Some(task), Level::Off) => format!("Agent mode off: task {task} cannot see this window"),
         (Some(task), Level::See) => format!("Task {task} can see this window"),
         (Some(task), Level::Act) => format!("Task {task} can see this window. {}", agent_mode::ACT_LATER),
@@ -276,10 +278,10 @@ impl Workspace {
                     this.agent_send(Action::AgentMenuChoose { index: Some(index) }, window, cx);
                 }))
         });
-        // Where no task works yet: the pick is for the next task here, offered to it.
+        // Where no task works yet: a pick is saved for the next task the user starts here.
         let head = match grant.task {
             Some(task) => format!("What task {task} may do here"),
-            None => format!("{}. {}", agent_mode::NO_TASK, agent_mode::AHEAD),
+            None => format!("{}. {}", agent_mode::NO_TASK, agent_mode::AHEAD_MENU),
         };
         let head = div().px_2().py_1().text_xs().text_color(rgb(theme::MUTED)).child(head);
         Some(list.child(head).children(rows))
