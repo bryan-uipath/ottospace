@@ -1601,18 +1601,23 @@ impl Workspace {
         .detach();
         // A terminal's output: taken and its frame asked for at once, not at the tick's next run
         // (up to a frame later, out of step with the display: a key's echo waited for it).
-        cx.spawn_in(window, async move |this, cx| {
+        // Only the output: what else follows it (an exit, a copy asked for) is the tick's.
+        cx.spawn(async move |this, cx| {
             loop {
                 ottospace_mac::wake::DRAW.rung().await;
-                let took = this.update_in(cx, |this, window, cx| {
-                    this.with_origin(Origin::System, |this| {
-                        this.sync_terminals(window, cx);
-                        this.sync_agents(window, cx);
-                    })
-                });
-                if took.is_err() {
+                if this.update(cx, |this, cx| this.take_output(cx)).is_err() {
                     return;
                 }
+                // A flood rings again at once: other work on this thread runs between.
+                let mut yielded = false;
+                std::future::poll_fn(|cx| {
+                    if std::mem::replace(&mut yielded, true) {
+                        return std::task::Poll::Ready(());
+                    }
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                })
+                .await;
             }
         })
         .detach();
@@ -5448,6 +5453,22 @@ impl Workspace {
             self.dispatch(Action::Close { pane: Some(id) }, Origin::System, window, cx);
         }
         if redraw {
+            self.output = true;
+            cx.notify();
+        }
+    }
+
+    /// Any terminal's new output (a pane's, the drawer agent's, the editor's): a frame asked for.
+    /// Not while one is asked for already: that frame reads every grid as it is then.
+    fn take_output(&mut self, cx: &mut Context<Self>) {
+        if self.output {
+            return;
+        }
+        let panes = self.terminals.values().map(|t| t.take_dirty());
+        let drawer = self.drawer.agents.values().map(|a| a.terminal.take_dirty());
+        let editor = self.drawer.editor.iter().map(|e| e.terminal.take_dirty());
+        // Every one taken (no short cut): each is drawn by the one frame.
+        if panes.chain(drawer).chain(editor).fold(false, |any, dirty| any | dirty) {
             self.output = true;
             cx.notify();
         }
