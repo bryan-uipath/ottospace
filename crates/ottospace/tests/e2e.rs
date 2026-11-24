@@ -6738,7 +6738,8 @@ fn the_users_wheel_and_thumb_scroll_the_conversation_over_the_panes() {
     otto.call(json!({"cmd": "type", "pane": 1, "text": lines}));
     otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^line-200$", "timeout_ms": 30000}));
     otto.call(json!({"cmd": "task_new", "line": "list the notes >app"}));
-    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    // With overlays only the user opens a side overlay: their click on the rail's Tasks.
+    otto.user_click(at(otto.control("rail:tasks"), 0.5, 0.5));
     otto.start_task(1);
     let chat_bar = |reply: &Value| {
         let bars = reply["scrollbars"].as_object()?;
