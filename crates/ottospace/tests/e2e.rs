@@ -18420,19 +18420,17 @@ fn an_agents_running_subagents_show_under_its_icon() {
 }
 
 /// An agent CLI the user runs in one of our terminals shows in the city of its checkout by its
-/// process alone: no `sessions` setting, no session file. A program named `claude` (a copy of
-/// `sleep`) in a pane of the checkout: an icon hovers in the workspace's empty tab; its pane
+/// process alone: no `sessions` setting, no session file. A program named `claude` (`sleep` run
+/// under that name, as the session-wait tests' stand-in) in a pane of the checkout: an icon hovers in the workspace's empty tab; its pane
 /// closed, none.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn an_agent_cli_in_a_pane_shows_in_its_checkouts_city_with_no_settings() {
     let root = support::temp(&format!("ottospace-e2e-city-pane-agent-{}", std::process::id()));
-    let (app, bin) = (root.join("repos/app"), root.join("bin"));
+    let app = root.join("repos/app");
     std::fs::create_dir_all(app.join("src")).unwrap();
-    std::fs::create_dir_all(&bin).unwrap();
     git(&app, &["init", "-q"]);
     std::fs::write(app.join("src/main.rs"), "x".repeat(3000)).unwrap();
-    std::fs::copy("/bin/sleep", bin.join("claude")).unwrap();
     let app = app.canonicalize().unwrap();
     let home = user_folder("city-pane-agent", &json!({"repos": [app], "restore_layout": false}).to_string());
     let env = [
@@ -18442,17 +18440,20 @@ fn an_agent_cli_in_a_pane_shows_in_its_checkouts_city_with_no_settings() {
     ];
     let otto = Otto::launch_with("city-pane-agent", &env);
     otto.call(json!({"cmd": "open_repo", "path": app}));
-    otto.call(json!({"cmd": "type", "text": format!("{} 120\r", bin.join("claude").display())}));
+    otto.call(json!({"cmd": "type", "text": "/bin/bash -c 'exec -a claude sleep 120'\r"}));
+    // A second tab on the checkout (`open_repo` there, its terminal closed): an empty tab that
+    // keeps the checkout, so its city (a bare new tab of this workspace names no folder).
     otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
     // The drawer folded: at CI's window the city gets the whole tab (else the lattice).
     otto.call(json!({"cmd": "key", "keys": "cmd-shift-r", "as": "user"}));
     let agents = |o: &Otto| o.call(json!({"cmd": "state"}))["city"]["agents"].clone();
     let one = otto.wait_for("its icon", |o| Some(agents(o)).filter(|a| a.as_array().is_some_and(|a| a.len() == 1)));
     assert_eq!((&one[0]["task"], &one[0]["cone"]), (&Value::Null, &json!(false)), "{one}");
-    // Its pane closed: gone.
+    // Its pane closed: gone (that tab is then the checkout's city too).
     otto.call(json!({"cmd": "select_tab", "index": 0}));
     otto.call(json!({"cmd": "close"}));
-    otto.call(json!({"cmd": "new_tab"}));
     otto.wait_for("no icon", |o| Some(agents(o)).filter(|a| a.as_array().is_some_and(Vec::is_empty)));
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
