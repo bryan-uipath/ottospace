@@ -114,8 +114,9 @@ pub(crate) fn shell_run(
 /// the pass's file (`agents::mcp_args`). None: a path that is not text.
 pub(crate) fn mcp_server(pass: &crate::pass::Live) -> Option<agents::McpServer> {
     let program = std::env::current_exe().ok()?.to_str()?.to_string();
-    let socket = crate::control::path().to_str()?.to_string();
-    let pass_file = pass.file().to_str()?.to_string();
+    // Whole: a relative one would be read from the agent's folder, not ottospace's.
+    let socket = std::path::absolute(crate::control::path()).ok()?.to_str()?.to_string();
+    let pass_file = std::path::absolute(pass.file()).ok()?.to_str()?.to_string();
     Some(agents::McpServer { program, socket, pass_file })
 }
 

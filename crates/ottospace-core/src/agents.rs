@@ -199,15 +199,22 @@ pub struct McpServer {
     pub pass_file: String,
 }
 
-/// The server's name in a runner's config: its tools are `mcp__ottospace__<tool>` to Claude Code.
-const MCP_NAME: &str = "ottospace";
+/// The server's name in a runner's config, its tools `mcp__ottospace_task__<tool>` to Claude Code.
+/// Not `ottospace`: one the user named so in their own config (an HTTP server, or the hand-added
+/// `ottospace mcp`) is merged with ours by Codex, and fails its start ("url is not supported for
+/// stdio", probed with 0.171.0).
+const MCP_NAME: &str = "ottospace_task";
+
+/// The variables `ottospace mcp` reads: the socket, and the file of the task's agent's pass.
+pub const SOCKET_VAR: &str = "OTTOSPACE_SOCKET";
+pub const PASS_FILE_VAR: &str = "OTTOSPACE_TASK_PASS_FILE";
 
 /// The arguments that give `runner` ottospace's MCP server for this run (`RunnerSpec::mcp`): its
 /// command, `ottospace mcp`, with the socket and the pass file in its environment (a runner may
 /// pass its own on filtered), and its read-only tools let run unasked. Nothing else is allowed.
 /// None for a runner that takes none. The user's config files are never touched.
 pub fn mcp_args(runner: RunnerId, server: &McpServer) -> Vec<String> {
-    let env = [("OTTOSPACE_SOCKET", &server.socket), ("OTTOSPACE_TASK_PASS_FILE", &server.pass_file)];
+    let env = [(SOCKET_VAR, &server.socket), (PASS_FILE_VAR, &server.pass_file)];
     match runner.spec().mcp {
         None => Vec::new(),
         Some(McpAttach::ConfigJson) => {
@@ -661,7 +668,7 @@ mod tests {
         let claude = mcp_args(RunnerId::Claude, &server);
         assert_eq!((claude.len(), claude[0].as_str(), claude[2].as_str()), (4, "--mcp-config", "--allowedTools"));
         let config: serde_json::Value = serde_json::from_str(&claude[1]).unwrap();
-        let one = &config["mcpServers"]["ottospace"];
+        let one = &config["mcpServers"]["ottospace_task"];
         assert_eq!((&one["command"], &one["args"]), (&server.program.as_str().into(), &serde_json::json!(["mcp"])));
         assert_eq!(
             (&one["env"]["OTTOSPACE_SOCKET"], &one["env"]["OTTOSPACE_TASK_PASS_FILE"]),
@@ -669,7 +676,10 @@ mod tests {
         );
         let allowed: Vec<&str> = claude[3].split(',').collect();
         assert_eq!(allowed.len(), MCP_TOOLS.len());
-        assert!(allowed.iter().all(|tool| tool.starts_with("mcp__ottospace__") && !tool.contains('*')), "{allowed:?}");
+        assert!(
+            allowed.iter().all(|tool| tool.starts_with("mcp__ottospace_task__") && !tool.contains('*')),
+            "{allowed:?}"
+        );
         let codex = mcp_args(RunnerId::Codex, &server);
         let set: Vec<&str> = codex
             .chunks(2)
@@ -681,11 +691,11 @@ mod tests {
         assert_eq!(
             set,
             [
-                r#"mcp_servers.ottospace.command="/Applications/otto space.app/ottospace""#,
-                r#"mcp_servers.ottospace.args=["mcp"]"#,
-                r#"mcp_servers.ottospace.default_tools_approval_mode="writes""#,
-                r#"mcp_servers.ottospace.env.OTTOSPACE_SOCKET="/tmp/a\"b/ottospace.sock""#,
-                r#"mcp_servers.ottospace.env.OTTOSPACE_TASK_PASS_FILE="/tmp/ottospace.sock.passes/7""#,
+                r#"mcp_servers.ottospace_task.command="/Applications/otto space.app/ottospace""#,
+                r#"mcp_servers.ottospace_task.args=["mcp"]"#,
+                r#"mcp_servers.ottospace_task.default_tools_approval_mode="writes""#,
+                r#"mcp_servers.ottospace_task.env.OTTOSPACE_SOCKET="/tmp/a\"b/ottospace.sock""#,
+                r#"mcp_servers.ottospace_task.env.OTTOSPACE_TASK_PASS_FILE="/tmp/ottospace.sock.passes/7""#,
             ]
         );
         // After the runner's own flags; the prompt still last, after `--`.

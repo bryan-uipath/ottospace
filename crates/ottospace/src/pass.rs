@@ -19,7 +19,7 @@ use ottospace_core::tasks::{Caller, TaskId};
 
 /// The variable the file's path travels in. No `KEY`, `TOKEN` or `SECRET` in the name: Codex's
 /// tool shell may drop such names (agent-mode.md, "Probes").
-pub(crate) const VAR: &str = "OTTOSPACE_TASK_PASS_FILE";
+pub(crate) const VAR: &str = ottospace_core::agents::PASS_FILE_VAR;
 
 /// What a client sends when its file is gone (its agent ended): a pass never minted, so the
 /// request is refused as a dead pass's, never answered as one with no pass.

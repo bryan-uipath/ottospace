@@ -1903,7 +1903,7 @@ socket's terms (a task's agent's pass, agent mode's grants; with a task's pass, 
 `wait` read only that task's workspace's terminals). Its instructions are the agent
 preamble with its tools. ottospace gives it to the agent of every task it starts, for that run
 only and never in your CLI's config files: Claude Code by `--mcp-config` with its tools in
-`--allowedTools` (no prompt for them), Codex by `-c mcp_servers.ottospace.*` with
+`--allowedTools` (no prompt for them; the server is named `ottospace_task` there), Codex by `-c mcp_servers.ottospace_task.*` with
 `default_tools_approval_mode = "writes"` (its read-only tools unasked), both in either view.
 To use it from a CLI you start yourself, add it by hand, e.g.
 `claude mcp add ottospace -- ottospace mcp`; with no task's pass it reads no app pane. Design:
