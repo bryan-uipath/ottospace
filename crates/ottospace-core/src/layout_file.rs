@@ -793,6 +793,26 @@ mod tests {
         m
     }
 
+    /// A tab's own checkout (`Tab::folder`) is kept and comes back with it; a file written
+    /// before it was kept reads as none.
+    #[test]
+    fn a_tabs_own_checkout_is_kept() {
+        let mut m = workspace();
+        let at = m.tabs.iter().position(|tab| matches!(tab.space, Owner::Workbook { .. })).unwrap();
+        m.tabs[at].folder = Some("/code/web".into());
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        let (back, _) = restored(&m, file, &[], false);
+        let folders = |m: &Model| m.tabs.iter().filter_map(|tab| tab.folder.clone()).collect::<Vec<_>>();
+        assert_eq!(folders(&back), ["/code/web"]);
+        let older: String = (write(&m.layout_file(&[], &[], 0)).lines())
+            .filter(|line| !line.contains(r#""folder": "/code/web""#))
+            .map(|line| format!("{line}\n"))
+            .collect();
+        assert!(!older.contains("/code/web"), "{older}");
+        let (back, _) = restored(&m, parse(&older).unwrap(), &[], false);
+        assert!(folders(&back).is_empty());
+    }
+
     /// A code city's camera the user moved is kept, by its folder, and comes back; a fitted
     /// one is not written; one out of its clamps, or of what is not a path, is not read.
     #[test]
@@ -997,6 +1017,7 @@ mod tests {
                 title: title.into(),
                 task,
                 focused: None,
+                folder: None,
                 layout: panes.first().map(|pane| Node::Leaf(pane.id)),
                 panes,
                 extra: Extra::new(),

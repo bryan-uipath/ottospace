@@ -859,7 +859,8 @@ impl Model {
             }
         }
         let title = marks::kept_title(&tab.title, 256);
-        Some(TabRecord { title, task: None, focused, layout, panes, extra: Extra::new() })
+        let folder = tab.folder.clone();
+        Some(TabRecord { title, task: None, focused, layout, panes, folder, extra: Extra::new() })
     }
 
     /// Why the tab on show cannot be saved, for the shell to say.

@@ -4081,6 +4081,10 @@ pub struct Model {
     /// The name of the workspace this step's tab is to make, if it makes one: a folder's.
     #[serde(skip)]
     pub(crate) home_hint: Option<(String, String)>,
+    /// ⌘T pressed in a folded-out window: the checkout of that window's tab, for the new tab the
+    /// main window gets (`main_first`). Taken by that `NewTab`.
+    #[serde(skip)]
+    pub(crate) new_tab_from: Option<Option<String>>,
     /// Each joined task and its space, as the last step left them.
     #[serde(skip)]
     joined_before: Vec<(TaskId, Owner)>,
@@ -4635,6 +4639,7 @@ impl Default for Model {
             moving: Vec::new(),
             making: Vec::new(),
             home_hint: None,
+            new_tab_from: None,
             next_tab: 0,
             layout_seen: None,
             layout_kept: true,
@@ -5886,6 +5891,8 @@ impl Model {
         let placed = origin == Origin::User || (origin == Origin::System && !matches!(action, Action::Adopt { .. }));
         let held = self.app_windows();
         self.act(action, &mut effects);
+        // Only the step that set it carries it.
+        self.new_tab_from = None;
         self.settle_placed(&held, placed);
         // Which tab the main window shows, before what asks it (a closing workspace on the row).
         self.settle_out(out_from, user, &mut effects);
@@ -6280,8 +6287,10 @@ impl Model {
                 let of = if self.by_user { self.space().clone() } else { Owner::Home };
                 // The user's carries the checkout of the tab it is opened from (its city, where ⌘D
                 // starts), as a tab `open_repo` made keeps it.
-                let carried =
-                    if self.by_user { self.tabs.get(self.active).and_then(|tab| tab.folder.clone()) } else { None };
+                // From a folded-out window: that window's tab's.
+                let from = self.new_tab_from.take();
+                let own = || self.tabs.get(self.active).and_then(|tab| tab.folder.clone());
+                let carried = if self.by_user { from.unwrap_or_else(own) } else { None };
                 self.leave(effects);
                 self.park_active();
                 self.push_tab_of(of);

@@ -101,6 +101,10 @@ pub struct TabRecord {
     pub layout: Option<Node>,
     #[serde(default)]
     pub panes: Vec<PaneRecord>,
+    /// The checkout the tab keeps of its own (`Tab::folder`): its city, where its terminals
+    /// start. A file without it: none, as before.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub folder: Option<String>,
     #[serde(flatten)]
     pub extra: Extra,
 }
@@ -915,7 +919,8 @@ impl Model {
                     return Err("a tab with nothing in it has nothing to mark".into());
                 }
                 let (title, task, layout) = (kept_title(&tab.title, 256), tab.space.task(), layout.clone());
-                let mut record = TabRecord { title: title.clone(), task, focused, layout, panes, extra: Extra::new() };
+                let mut record =
+                    TabRecord { title: title.clone(), task, focused, layout, panes, folder: None, extra: Extra::new() };
                 // A level the user picked: going to the mark may only offer it back.
                 self.keep_levels(&mut record);
                 if let Some(wrong) = record.unsound() {
@@ -1119,6 +1124,7 @@ impl Model {
         self.retry_unfilled(effects);
         let tab = &mut self.tabs[self.active];
         tab.title = record.title.clone();
+        tab.folder = record.folder.clone();
         tab.id
     }
 
