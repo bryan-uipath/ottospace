@@ -18444,6 +18444,8 @@ fn an_agent_cli_in_a_pane_shows_in_its_checkouts_city_with_no_settings() {
     otto.call(json!({"cmd": "open_repo", "path": app}));
     otto.call(json!({"cmd": "type", "text": format!("{} 120\r", bin.join("claude").display())}));
     otto.call(json!({"cmd": "new_tab"}));
+    // The drawer folded: at CI's window the city gets the whole tab (else the lattice).
+    otto.call(json!({"cmd": "key", "keys": "cmd-shift-r", "as": "user"}));
     let agents = |o: &Otto| o.call(json!({"cmd": "state"}))["city"]["agents"].clone();
     let one = otto.wait_for("its icon", |o| Some(agents(o)).filter(|a| a.as_array().is_some_and(|a| a.len() == 1)));
     assert_eq!((&one[0]["task"], &one[0]["cone"]), (&Value::Null, &json!(false)), "{one}");
