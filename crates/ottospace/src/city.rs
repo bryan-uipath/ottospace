@@ -143,7 +143,7 @@ type ReadJob = (String, Vec<String>, Exclude);
 /// its agents are at change, once each (`latest_each`). No timer of its own.
 pub struct Reader {
     jobs: Sender<ReadJob>,
-    reads: Receiver<(ReadJob, Option<(Option<Atlas>, u64)>)>,
+    reads: Receiver<(ReadJob, Option<Option<(Option<Atlas>, u64)>>)>,
     asked: HashMap<String, Asked>,
     /// The folders on show, as the read's thread sees them: a read of one no longer on show
     /// (its tab closed) stops.
@@ -163,7 +163,9 @@ impl Reader {
             move |(dir, roots, exclude): &ReadJob| {
                 let started = Instant::now();
                 let gone = || on_show.lock().is_ok_and(|wanted| !wanted.contains(dir));
-                (read(Path::new(dir), roots, exclude, &gone), started.elapsed().as_micros() as u64)
+                let atlas = read(Path::new(dir), roots, exclude, &gone);
+                // Stopped (its place closed): no answer, so a city held for it is kept.
+                (atlas.is_some() || !gone()).then(|| (atlas, started.elapsed().as_micros() as u64))
             },
             ottospace_mac::wake::post,
         );
@@ -174,13 +176,14 @@ impl Reader {
     /// files changed, is read (again). A folder no longer on show is forgotten, and read again
     /// when it comes back.
     fn ask(&mut self, on_show: HashMap<String, Asked>) {
+        // Published first: a read sent below must find its folder wanted.
+        if let Ok(mut wanted) = self.wanted.lock() {
+            *wanted = on_show.keys().cloned().collect();
+        }
         for (dir, asked) in &on_show {
             if self.asked.get(dir) != Some(asked) {
                 let _ = self.jobs.send((dir.clone(), asked.0.clone(), asked.1.clone()));
             }
-        }
-        if let Ok(mut wanted) = self.wanted.lock() {
-            *wanted = on_show.keys().cloned().collect();
         }
         self.asked = on_show;
     }
@@ -188,7 +191,7 @@ impl Reader {
     /// Takes the reads that came. True if one did.
     fn take(&mut self) -> bool {
         let came: Vec<(String, (Option<Atlas>, u64))> =
-            self.reads.try_iter().filter_map(|((dir, ..), read)| Some((dir, read?))).collect();
+            self.reads.try_iter().filter_map(|((dir, ..), read)| Some((dir, read.flatten()?))).collect();
         let any = !came.is_empty();
         for (dir, (read, us)) in came {
             (self.came, self.read_us) = (self.came + 1, Some(us));
@@ -224,24 +227,23 @@ fn exclude_for(dir: &Path, setting: &[(String, Vec<String>)]) -> Vec<String> {
 fn read(dir: &Path, roots: &[String], exclude: &[(String, Vec<String>)], gone: &dyn Fn() -> bool) -> Option<Atlas> {
     let rule = city_filter::Exclude::new(&exclude_for(dir, exclude));
     let keep = |name: &str| !rule.excludes(name);
-    let (files, _) = checkout_files(dir, roots, MOST_FILES, MOST_BYTES, true, &rule.git_patterns(), &keep, gone)?;
+    let limits = (MOST_FILES, MOST_BYTES, TIMEOUT);
+    let (files, _) = checkout_files(dir, roots, limits, true, &rule.git_patterns(), &keep, gone)?;
     (!files.is_empty()).then(|| atlas::atlas(&atlas::repo(&files)))
 }
 
 /// The files git lists in the checkout at `dir` (tracked, and new ones it does not ignore), each
-/// with its size: at most `most`, and true if there were more (or more than `most_bytes` of
-/// names); `whole`: a list that was cut is none. Hardened as the status bar's read
+/// with its size, within `(most, most_bytes, timeout)`: at most `most` files, and true if there
+/// were more (or more than `most_bytes` of names), all of it within `timeout`; `whole`: a list that was cut is none. Hardened as the status bar's read
 /// (`child::git_read`), and only in a folder that, resolved, is one of `roots`
 /// (`status_bar::reads_changes`). A link is no file, and nothing under a folder that is a link is
 /// one: nothing outside the checkout is looked at. Git lists no untracked file under `skip`
 /// (its `--exclude` patterns), and only names `keep` keeps are counted or looked at. `None`: not
 /// such a checkout, git failed or took too long, or `gone` said to stop (looked at every 1,024 files).
-#[allow(clippy::too_many_arguments)] // Each a different limit or rule of one read.
 pub(crate) fn checkout_files(
     dir: &Path,
     roots: &[String],
-    most: usize,
-    most_bytes: u64,
+    (most, most_bytes, timeout): (usize, u64, Duration),
     whole: bool,
     skip: &[String],
     keep: &dyn Fn(&str) -> bool,
@@ -252,8 +254,11 @@ pub(crate) fn checkout_files(
     let mut list = crate::child::git_read(&top);
     list.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
     list.args(skip.iter().map(|pattern| format!("--exclude={pattern}")));
-    let late = Instant::now() + TIMEOUT;
-    let said = crate::child::run(list, TIMEOUT, most_bytes).ok()?;
+    if gone() {
+        return None;
+    }
+    let late = Instant::now() + timeout;
+    let said = crate::child::run_until(list, timeout, most_bytes, gone).ok()?;
     // Cut at `most_bytes`: git stops on the closed pipe, and the last name may be half of one.
     let full = said.out.len() as u64 >= most_bytes;
     if !said.ok && !full {
@@ -2675,11 +2680,12 @@ mod tests {
             let roots = [top.to_string_lossy().into_owned()];
             let started = Instant::now();
             let places = read(&top, &roots, &[], &|| false).map(|atlas| atlas.places.len());
+            let took = started.elapsed();
             // Its tab closed as it read: how long until the read lets go.
             let at = Instant::now();
             drop(read(&top, &roots, &[], &|| true));
             println!("{dir}: a read whose place closed ends in {:.0} ms", at.elapsed().as_secs_f64() * 1e3);
-            println!("{dir}: {places:?} places in {:.1} ms", started.elapsed().as_secs_f64() * 1000.);
+            println!("{dir}: {places:?} places in {:.1} ms", took.as_secs_f64() * 1000.);
         }
     }
 }

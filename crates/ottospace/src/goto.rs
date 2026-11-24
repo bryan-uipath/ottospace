@@ -31,8 +31,7 @@ impl Reader {
                 let read = crate::city::checkout_files(
                     Path::new(&folder),
                     &roots,
-                    MOST_FILES,
-                    MOST_BYTES,
+                    (MOST_FILES, MOST_BYTES, std::time::Duration::from_secs(10)),
                     false,
                     &[],
                     &|_| true,

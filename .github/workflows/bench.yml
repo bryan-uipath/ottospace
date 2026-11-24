@@ -29,7 +29,7 @@ permissions: {}
 # A pull request run that benches nothing (no label, or another label added) gets a group of its
 # own, so it cannot cancel a bench.
 concurrency:
-  group: bench-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'pull_request' && (!contains(github.event.pull_request.labels.*.name, 'pr-bench') || (github.event.action == 'labeled' && github.event.label.name != 'pr-bench')) && format('-skip-{0}', github.run_id) || '' }}
+  group: bench-${{ github.event.pull_request.number || github.ref }}${{ github.event_name == 'pull_request' && (!contains(github.event.pull_request.labels.*.name, 'pr-bench') || (github.event.action == 'labeled' && github.event.label.name != 'pr-bench' && github.event.label.name != 'pr-bench-large')) && format('-skip-{0}', github.run_id) || '' }}
   # A run by hand on main does not cancel the nightly one.
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
@@ -39,7 +39,7 @@ env:
 jobs:
   bench:
     # On a pull request, with the label only. Adding another label benches nothing.
-    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'pr-bench') && (github.event.action != 'labeled' || github.event.label.name == 'pr-bench'))
+    if: github.event_name != 'pull_request' || (contains(github.event.pull_request.labels.*.name, 'pr-bench') && (github.event.action != 'labeled' || github.event.label.name == 'pr-bench' || github.event.label.name == 'pr-bench-large'))
     runs-on: macos-26
     timeout-minutes: 90
     permissions:

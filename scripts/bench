@@ -440,8 +440,13 @@ def city_spin(binary, scratch, files, folders, deepest):
         inst.wait("the repository listed", lambda: shot.path_get(inst.state(), "repos_bar.0") is not None)
         inst.ok({"cmd": "open_repo", "path": tree})
         inst.ok({"cmd": "close"})
-        # 600,000 files take about 30 s to read.
-        if not inst.wait("the city", lambda: shot.path_get(inst.state(), "city.picture") is not None, timeout=240, fail=False):
+        # 600,000 files take about 30 s to read. A read that came with no city (past a build's
+        # limit) ends the wait at once.
+        read = lambda s: shot.path_get(s, "city.picture") is not None or (shot.path_get(s, "counts.city_reads") or 0) > 0
+        inst.wait("the city", lambda: read(inst.state()), timeout=240)
+        if shot.path_get(inst.state(), "city.picture") is None:
+            time.sleep(2)
+        if shot.path_get(inst.state(), "city.picture") is None:
             return None
         time.sleep(1)
         start = last()
@@ -565,6 +570,9 @@ def bench(sides, args, scratch):
     for i in range(MOTION_RUNS):
         for name in order_of(names, i):
             for size in sizes:
+                # A size a side drew no city for once (past its limit) is not tried again.
+                if i and spins[name][size[0]] and spins[name][size[0]][-1] is None:
+                    continue
                 spins[name][size[0]].append(city_spin(sides[name], scratch, *size))
     result = {}
     for name in names:
