@@ -1,0 +1,27 @@
+# This week's focus ranks Decisions (`decision_sources`): the focus set first (an agent's
+# proposal, the user's ↵), then two made-up tasks whose agents each ask. The one in focus comes
+# first though asked later; its line says why, and its hover gives the sum.
+{"env":{"OTTOSPACE_FEATURES":"decisions,decision_sources"}}
+{"cmd":"split","kind":"empty"}
+{"until":"week_focus.week"}
+{"cmd":"task_new","line":"Fix the login loop >app"}
+{"cmd":"task_new","line":"Pick the cache for search #search >app"}
+{"cmd":"focus_set","areas":[{"name":"Search speed","projects":["search"]}]}
+{"cmd":"key","keys":"cmd-j","as":"user"}
+{"until":"state.decisions.week"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"until":"week_focus.areas","is":1}
+{"cmd":"section","section":"tasks"}
+{"click":"task:1","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"click":"task:2","at":[0.3,0.3]}
+{"click":"talk:talk-start"}
+{"until":"drawer.native.chats.2.transcript.cards","len":1}
+{"until":"drawer.native.chats.1.transcript.cards","len":1}
+{"cmd":"key","keys":"cmd-j","as":"user"}
+{"until":"state.decisions.at"}
+{"settle":300}
+{"shot":"focus-first"}
+{"hover":"decision:why"}
+{"settle":600}
+{"shot":"why-sum"}

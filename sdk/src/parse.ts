@@ -2210,7 +2210,9 @@ function decisions(value: unknown, at: string): Decisions {
   const card = (value: unknown, at: string) => {
     const c = fields(value, at);
     const n = (key: string) => num(c[key], `${at}.${key}`);
-    return { task: n("task"), ticket: n("ticket"), priority: n("priority"), since: n("since") };
+    // `area`: absent from an app before the rank: none.
+    const area = c.area === undefined ? null : orNull(num)(c.area, `${at}.area`);
+    return { task: n("task"), ticket: n("ticket"), priority: n("priority"), since: n("since"), area };
   };
   return {
     tab: num(o.tab, `${at}.tab`),

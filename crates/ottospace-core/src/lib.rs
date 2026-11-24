@@ -60,6 +60,7 @@ pub mod palette;
 pub mod progress;
 pub mod projects;
 pub mod prs;
+pub mod rank;
 pub mod repos;
 pub mod restore;
 pub mod row_menu;

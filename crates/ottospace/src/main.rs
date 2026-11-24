@@ -3868,7 +3868,7 @@ impl Workspace {
             row["group"] = serde_json::json!(group);
             row
         };
-        self.model.tasks.inbox().into_iter().map(row).collect()
+        self.model.task_inbox().into_iter().map(row).collect()
     }
 
     /// The Repos section as laid out: each repository's `name` and `path` with its `header`,

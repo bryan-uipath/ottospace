@@ -414,6 +414,15 @@ claims, `t`, Later, Skip. No per-card drag (Decided 7).
 
 The Tasks section's Needs you group and ⌘J's next task order by focus first, then as today.
 
+Built (slice 2c): the rule is `rank::order`, a pure function of `rank::Entry`s that
+`Model::ranked` makes of the agents' questions and the open sorted or trusted decisions (claims
+counted only when accepted, or the source trusted; an agent waits only when a `blocks` task asks
+now). Decisions shows the questions in that order, the week's card and triage after those in
+focus, and each card's line (`rank::line`, hover `rank::sum`). The state's `queue` gains `area`
+(the area's place, never its name). Needs you and ⌘J put focus first. Not yet: a sorted decision
+as a card of its own in Decisions (slice 2d, with its answer recorded; the order and the
+three-in-a-row pass already cover it), number keys 1–4 in Sort mode.
+
 Core tests it implies:
 
 - The worked table, and that each input alone moves a card.

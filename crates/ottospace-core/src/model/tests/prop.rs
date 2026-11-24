@@ -2583,6 +2583,21 @@ fn check_cards(m: &Model) -> Result<(), String> {
 /// Decisions: none with the flag off; while open, its card is the queue's first, the queue not
 /// empty, its one card pane in its one tab, "at of of" its title; closed, nothing of it is left.
 fn check_decisions(m: &Model) -> Result<(), String> {
+    // The rank: every open, sorted (or trusted) decision once and no triage item, with the flag;
+    // the focus tier never inverted.
+    {
+        use crate::filed::Triage;
+        use crate::rank::Card;
+        let ranked = m.ranked();
+        let mut filed: Vec<u64> =
+            ranked.iter().filter_map(|e| if let Card::Filed(id) = e.card { Some(id) } else { None }).collect();
+        filed.sort_unstable();
+        let on = m.features.on(Feature::DecisionSources);
+        let want: Vec<u64> =
+            m.filed.list.iter().filter(|d| on && d.open() && d.triage != Triage::Pending).map(|d| d.id).collect();
+        ensure!(filed == want, "ranked filed {filed:?}, open and sorted {want:?}");
+        ensure!(ranked.windows(2).all(|w| w[0].why.tier() <= w[1].why.tier()), "a focus tier inverted");
+    }
     let cards: Vec<PaneId> = m.panes.iter().filter(|p| p.kind == Kind::Decision).map(|p| p.id).collect();
     let tabs: Vec<&crate::model::Tab> = m.tabs.iter().filter(|tab| tab.space == Owner::Decisions).collect();
     let Some(run) = &m.decisions else {

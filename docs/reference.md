@@ -1653,7 +1653,9 @@ provisional. Only you sort.
 The week's focus (`decision_sources`): Tasks ▸ This Week's Focus… (the palette too) lists the
 Projects entries; tick up to four (↑↓ move, space ticks, ↵ sets, Esc closes, setting nothing).
 Each is an area of the week, named by the project's title (an area set before keeps its own name
-and links). Kept in `~/.ottospace/focus.json` by ISO week (the last twelve); a new week starts with
+and links); what is of it (a task's `#project` or `>repo`) comes first in Decisions, in Needs you
+and for ⌘J. Each Decisions card says why it is where it is ("Search speed · an agent waits · P2 ·
+waiting 5 min"; its hover gives the sum). Kept in `~/.ottospace/focus.json` by ISO week (the last twelve); a new week starts with
 none. Only you set it; agents read it with `week_focus`. An agent may propose it (`focus_set`,
 from your weekly note, say): Decisions shows it as one card after the agents' questions, exactly as
 it would be set, what changes and where it was read; ↵ sets it, E opens the editor with it ticked,

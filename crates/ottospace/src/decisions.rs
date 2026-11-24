@@ -33,11 +33,23 @@ impl Workspace {
         let card = chat.and_then(|chat| Some((chat, chat.form()?)));
         let card = card.map(|(chat, form)| self.ask_card(&subject, chat, form, ticket, Some(task), cx));
         let title = self.model.tasks.get(task).map(|t| t.title.clone()).unwrap_or_default();
-        // Why it is first: from the queue's inputs alone. Its own entry: a held card may not be first.
+        // Why it is here: the rank's inputs alone ("Login rewrite · an agent waits · P3 · waiting
+        // 5 min"); the hover gives the sum. Its own entry: a held card may not be first.
         let why = run.queue.iter().find(|w| (w.task, w.ticket) == (task, ticket)).map(|own| {
-            let age = ottospace_core::tasks::age(own.since, crate::now_ms());
+            let now = crate::now_ms();
+            let age = ottospace_core::tasks::age(own.since, now);
             let waiting = if age == "now" { "just asked".to_string() } else { format!("waiting {age}") };
-            format!("P{} · {waiting} · its agent asks", own.priority)
+            let area = own.area.and_then(|at| self.model.focus.areas().get(at)).map(|a| a.name.as_str());
+            let due = |at| ottospace_core::calendar::clock(at, crate::calendar::zone_offset(at));
+            let line = ottospace_core::rank::line(&own.why, area, now, due);
+            let tip: gpui::SharedString = ottospace_core::rank::sum(&own.why, area, now, due).into();
+            div()
+                .id("decision-why")
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child(format!("{line} · P{} · {waiting}", own.priority))
+                .child(self.controls.mark("decision:why"))
+                .tooltip(move |_, cx| gpui::AnyView::from(cx.new(|_| crate::Tooltip(tip.clone()))))
         });
         let header = div()
             .flex_none()
@@ -55,7 +67,7 @@ impl Workspace {
                     .flex()
                     .flex_col()
                     .child(crate::cut_text(title).text_sm().font_weight(FontWeight::SEMIBOLD))
-                    .children(why.map(|why| div().text_xs().text_color(rgb(theme::MUTED)).child(why))),
+                    .children(why),
             )
             .child(div().text_xs().text_color(rgb(theme::MUTED)).child(format!("{} of {}", run.at, run.of)));
         let skip = ui::dialog::keyed("decision-skip", Button::Ghost(Face::Label("Skip".into())), &["S"], State::Rest)

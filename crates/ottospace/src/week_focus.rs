@@ -69,7 +69,7 @@ impl Workspace {
         let panel = ui::dialog::frame(
             ui::dialog::QUESTION,
             "This week's focus",
-            Some("Up to four areas for the week.".into()),
+            Some("Up to four areas for the week: what is in them comes first in Decisions.".into()),
             close,
             Some(body),
             ui::dialog::actions(None, Some(status.into()), vec![set.into_any_element()]),

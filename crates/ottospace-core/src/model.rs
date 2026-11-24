@@ -6280,7 +6280,7 @@ impl Model {
             }
             // ⌘J: the next task's conversation; the tab stays.
             Action::TaskGo { id: None } if self.by_user => {
-                if let Some(id) = self.tasks.next().map(|task| task.id) {
+                if let Some(id) = self.next_task() {
                     self.talk_to(Subject::Task(id), false, effects);
                 } else if self.features.on(Feature::TerminalTasks) {
                     // No task needs you: the first terminal session that does, in its pane, else its conversation.
@@ -6297,7 +6297,7 @@ impl Model {
                 }
             }
             Action::TaskGo { id } => {
-                let task = id.map_or_else(|| self.tasks.next(), |id| self.tasks.get(id)).map(|task| task.id);
+                let task = id.map_or_else(|| self.next_task(), |id| self.tasks.get(id).map(|task| task.id));
                 if let Some(id) = task {
                     self.open_space(self.task_space(id), effects);
                     // Only the user says which conversation is in front there.
@@ -9765,7 +9765,7 @@ impl Model {
         // Done since the local day began, as the shell says it.
         let day = self.local_day;
         let today = |task: &Task| day > 0 && task.finished_at.is_some_and(|at| at >= day);
-        for (group, task) in self.tasks.inbox() {
+        for (group, task) in self.task_inbox() {
             let heading = match group.into() {
                 Heading::Done if today(task) => Heading::DoneToday,
                 heading => heading,
