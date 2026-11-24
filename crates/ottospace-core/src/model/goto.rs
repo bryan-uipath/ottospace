@@ -51,7 +51,8 @@ impl Model {
             row.current = of.as_ref() == Some(&current);
         }
         rows.sort_by_key(|(row, of)| (row.current, std::cmp::Reverse(of.as_ref().map_or(0, |of| self.picked(of)))));
-        GoTo { places: rows.into_iter().map(|(row, _)| row).collect(), ..GoTo::default() }
+        let places = rows.into_iter().map(|(row, _)| row).collect();
+        GoTo { places, recent: self.recent_files.clone(), ..GoTo::default() }
     }
 
     /// The folder a place's files come from now: a workspace's default, a checkout, a task's checkout.
@@ -82,8 +83,35 @@ impl Model {
         }
     }
 
+    /// ⌘P opens on the files of the checkout on show (the tab's, else its space's: a task's
+    /// worktree, a workspace's default), when the Repos section lists one; ⌫ goes to the places.
+    /// Elsewhere it opens on the places.
+    pub(crate) fn goto_here(&mut self, effects: &mut Vec<Effect>) {
+        let tab = self.tabs[self.main_at()].id;
+        let Some(folder) = self.empty_folder(crate::model::city::At::Tab(tab)).map(String::from) else { return };
+        let Some(goto) = self.palette.as_ref().and_then(|palette| palette.goto.as_ref()) else { return };
+        // Named as its Repos row is; on show, so a file opens here without going anywhere.
+        let listed = goto.places.iter().find(|row| row.place == Place::Checkout(folder.clone()));
+        let (name, detail) = listed.map_or_else(
+            || (crate::marks::directory_name(&folder).unwrap_or_default().to_string(), String::new()),
+            |row| (row.name.clone(), row.detail.clone()),
+        );
+        let row =
+            PlaceRow { place: Place::Checkout(folder.clone()), name, detail, folder: Some(folder), current: true };
+        self.drill_into(row, String::new(), "", effects);
+        if let Some(drill) = self.palette.as_mut().and_then(|p| p.goto.as_mut()).and_then(|goto| goto.drill.as_mut()) {
+            drill.here = true;
+        }
+    }
+
     /// ↵ or a click on row `at` of go-to's places or files. Nothing there: it stays open.
     pub(crate) fn goto_choose(&mut self, at: usize, effects: &mut Vec<Effect>) {
+        self.goto_choose_at(at, Axis::Right, effects);
+    }
+
+    /// Row `at` chosen; a file opens in a viewer `axis` of the focused pane (`Right`: in it, if
+    /// it is empty).
+    pub(crate) fn goto_choose_at(&mut self, at: usize, axis: Axis, effects: &mut Vec<Effect>) {
         let Some(palette) = &self.palette else { return };
         let Some(goto) = &palette.goto else { return };
         let chosen = match &goto.drill {
@@ -98,7 +126,7 @@ impl Model {
         }
         if let (Some(file), Some(folder)) = (file, row.folder) {
             let path = format!("{}/{file}", folder.trim_end_matches('/'));
-            let open = Action::OpenFile { path, axis: Axis::Right, beside: None, reuse: false, at: None };
+            let open = Action::OpenFile { path, axis, beside: None, reuse: false, at: None };
             self.act(open, effects);
         }
     }
@@ -121,6 +149,11 @@ impl Model {
         let Some(palette) = &mut self.palette else { return };
         let Some(goto) = &mut palette.goto else { return };
         let text = palette.query.text().to_string();
+        // `>` first lists the commands, from the files too (⌘P opens on them).
+        if goto.drill.is_some() && text.starts_with('>') {
+            (goto.drill, goto.rows, palette.selected) = (None, Vec::new(), 0);
+            return;
+        }
         if goto.drill.is_some() {
             return goto.refresh(&text);
         }
@@ -152,7 +185,7 @@ impl Model {
             }
             goto.files.push((folder, files));
         }
-        goto.drill = Some(Drill { row, back });
+        goto.drill = Some(Drill { row, back, here: false });
         palette.query = Field::new(query, MAX_FILTER);
         palette.selected = 0;
         goto.refresh(query);

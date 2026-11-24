@@ -92,6 +92,10 @@ impl Model {
         if beside.is_some_and(|id| self.pane(id).is_none()) {
             return;
         }
+        // Go to ranks it first next time.
+        self.recent_files.retain(|seen| *seen != path);
+        self.recent_files.insert(0, path.clone());
+        self.recent_files.truncate(crate::goto::MOST_RECENT);
         let from = beside.or(self.focused);
         // A split goes into the tab of the pane it is beside.
         if let Some(from) = from {

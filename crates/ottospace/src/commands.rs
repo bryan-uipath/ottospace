@@ -244,9 +244,13 @@ impl Workspace {
         // Go to: Tab goes into a place's files; Esc, or ⌫ with nothing typed, comes back out.
         let view = self.model.palette.as_ref().map(|palette| (palette.view(), palette.query.text().is_empty()));
         let plain = !event.keystroke.modifiers.modified();
+        // Opened on the checkout on show: Esc closes, as the palette's does.
+        let here = self.model.palette.as_ref().and_then(|p| p.goto.as_ref()?.drill.as_ref()).is_some_and(|d| d.here);
+        let cmd = event.keystroke.modifiers.platform && !event.keystroke.modifiers.shift;
         let goto = match (view, event.keystroke.key.as_str()) {
             (Some((View::Places, _)), "tab") if plain => Some(Action::GoToDrill),
-            (Some((View::Files, _)), "escape") => Some(Action::GoToBack),
+            (Some((View::Files, _)), "enter") if cmd => Some(Action::GoToSplit),
+            (Some((View::Files, _)), "escape") if !here => Some(Action::GoToBack),
             (Some((View::Files, true)), "backspace") if plain => Some(Action::GoToBack),
             _ => None,
         };
@@ -425,7 +429,7 @@ impl Workspace {
                         .on_click(choose(i))
                         .into_any_element()
                 });
-                (title, "type a file, ⌫ or Esc for places", empty, rows.collect())
+                (title, "type a file · ↵ opens · ⌘↵ below · ⌫ places", empty, rows.collect())
             }
         };
         let header = div()

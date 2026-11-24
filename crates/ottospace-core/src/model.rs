@@ -839,6 +839,9 @@ pub enum Action {
     PaletteGoTo,
     /// Tab in go-to: into the highlighted place's files.
     GoToDrill,
+    /// ⌘↵ in go-to's files: the highlighted file in a viewer split below, not in the focused
+    /// empty pane.
+    GoToSplit,
     /// Out of a place's files, to the places again.
     GoToBack,
     /// The files the shell read in `folder` (relative paths; `None`: git could not list them;
@@ -2757,6 +2760,7 @@ impl Action {
             | Action::ClosePicker
             | Action::PaletteMove { .. }
             | Action::GoToDrill
+            | Action::GoToSplit
             | Action::GoToBack
             | Action::PaletteChoose { .. }
             | Action::ClosePalette
@@ -3273,6 +3277,7 @@ impl Action {
             | Action::PaletteFeatures
             | Action::PaletteMove { .. }
             | Action::GoToDrill
+            | Action::GoToSplit
             | Action::GoToBack
             | Action::PaletteChoose { .. }
             | Action::ClosePalette
@@ -4367,6 +4372,8 @@ pub struct Model {
     pub edited: Vec<PaneId>,
     /// The command palette, while it is open.
     pub palette: Option<Palette>,
+    /// The files opened in a viewer, newest first, at most `goto::MOST_RECENT`: Go to ranks them first.
+    pub(crate) recent_files: Vec<String>,
     /// The accessibility inspector, while it is open.
     pub inspector: Option<Inspector>,
     /// The palette was opened over the conversation with the keyboard: closing it gives it back.
@@ -4694,6 +4701,7 @@ impl Default for Model {
             new_window: None,
             edited: Vec::new(),
             palette: None,
+            recent_files: Vec::new(),
             inspector: None,
             palette_over_talk: false,
             installed: (Vec::new(), Vec::new()),
@@ -5420,6 +5428,7 @@ impl Model {
             | Action::PaletteFeatures
             | Action::PaletteMove { .. }
             | Action::GoToDrill
+            | Action::GoToSplit
             | Action::GoToBack
             | Action::PaletteChoose { .. }
             | Action::ClosePalette => Some(commands::USERS_ALONE),
@@ -7264,8 +7273,13 @@ impl Model {
                 if let Some(palette) = &mut self.palette {
                     palette.goto = Some(goto);
                 }
+                self.goto_here(effects);
             }
             Action::GoToDrill => self.goto_drill(effects),
+            Action::GoToSplit => {
+                let at = self.palette.as_ref().map_or(0, |palette| palette.selected);
+                self.goto_choose_at(at, Axis::Down, effects);
+            }
             Action::GoToBack => self.goto_back(),
             Action::GoToFiles { folder, paths, cut } => self.goto_files(folder, paths, cut),
             Action::PaletteMove { delta } => {
@@ -11741,6 +11755,7 @@ mod tests {
         Action::PaletteFeatures,
         Action::PaletteMove { .. },
         Action::GoToDrill,
+        Action::GoToSplit,
         Action::GoToBack,
         Action::PaletteChoose { .. },
         Action::ClosePalette,
@@ -12159,6 +12174,7 @@ mod tests {
             Action::PaletteGoTo,
             Action::PaletteFeatures,
             Action::GoToDrill,
+            Action::GoToSplit,
             Action::GoToBack,
             Action::GoToFiles { folder: text(), paths: Some(vec![text()]), cut: false },
             Action::PaletteMove { delta: 1 },
@@ -12709,6 +12725,7 @@ mod tests {
                 | Action::PaletteChoose { .. }
                 | Action::ClosePalette
                 | Action::GoToDrill
+                | Action::GoToSplit
                 | Action::GoToBack
         ) || matches!(
             action,
@@ -12762,12 +12779,74 @@ mod tests {
         m
     }
 
+    /// ⌘P, then ⌫ out of the checkout on show's files: the places.
+    fn goto_open(m: &mut Model) {
+        m.update(Action::PaletteGoTo);
+        m.update(Action::GoToBack);
+    }
+
+    #[test]
+    fn go_to_opens_on_the_files_of_the_checkout_on_show_and_back_lists_the_places() {
+        let mut m = goto_places();
+        // `app` is on show: its files, read for the user.
+        let asked = m.update(Action::PaletteGoTo);
+        assert_eq!(asked, [Effect::ListFiles { folder: "/code/app".into() }]);
+        let files = Action::GoToFiles {
+            folder: "/code/app".into(),
+            paths: Some(["src/main.rs", "README.md", "docs/deep/notes.md"].map(String::from).to_vec()),
+            cut: false,
+        };
+        m.update(files.sent_by(Origin::System));
+        assert_eq!(m.palette.as_ref().map(Palette::view), Some(commands::View::Files));
+        assert_eq!(goto_rows(&m), ["README.md", "src/main.rs", "docs/deep/notes.md"]);
+        // ↵ opens it here: no other place is gone to.
+        let space = m.shown_space().clone();
+        go_type(&mut m, "notes");
+        m.update(Action::PaletteChoose { index: None });
+        let viewer = |m: &Model| {
+            m.panes
+                .iter()
+                .filter_map(|pane| match &pane.kind {
+                    Kind::File { path } => Some(path.clone()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!((m.shown_space(), viewer(&m)), (&space, vec!["/code/app/docs/deep/notes.md".to_string()]));
+        // Opened since: first with nothing typed. ⌘↵ splits it below.
+        m.update(Action::PaletteGoTo);
+        m.update(files_again().sent_by(Origin::System));
+        assert_eq!(goto_rows(&m)[0], "docs/deep/notes.md");
+        go_type(&mut m, "main");
+        let panes = m.panes.len();
+        m.update(Action::GoToSplit);
+        assert_eq!((m.panes.len(), m.palette.is_none()), (panes + 1, true));
+        // `>` first: the commands. ⌫ with nothing typed: the places.
+        m.update(Action::PaletteGoTo);
+        go_type(&mut m, ">");
+        assert_eq!(m.palette.as_ref().map(Palette::view), Some(commands::View::Commands));
+        m.update(Action::ClosePalette);
+        m.update(Action::PaletteGoTo);
+        m.update(Action::GoToBack);
+        assert_eq!(m.palette.as_ref().map(Palette::view), Some(commands::View::Places));
+        // No checkout on show (Home): the places at once.
+        m.update(Action::ClosePalette);
+        m.update(Action::SpaceSelect { index: 0 });
+        assert!(m.update(Action::PaletteGoTo).is_empty());
+        assert_eq!(m.palette.as_ref().map(Palette::view), Some(commands::View::Places));
+    }
+
+    fn files_again() -> Action {
+        let paths = Some(["src/main.rs", "README.md", "docs/deep/notes.md"].map(String::from).to_vec());
+        Action::GoToFiles { folder: "/code/app".into(), paths, cut: false }
+    }
+
     #[test]
     fn go_to_lists_places_the_last_used_first_the_current_last_for_the_user_alone() {
         let mut m = goto_places();
         assert!(m.update(Action::PaletteGoTo.sent_by(Origin::Socket)).is_empty());
         assert!(m.palette.is_none());
-        m.update(Action::PaletteGoTo);
+        goto_open(&mut m);
         assert_eq!(m.mode(), Mode::Palette);
         // app-2's workspace was selected before; then the rest in their sections' order; the
         // workspace on show and its checkout last.
@@ -12789,7 +12868,7 @@ mod tests {
     #[test]
     fn go_to_goes_to_a_checkout_as_its_repos_row_does() {
         let mut m = goto_places();
-        m.update(Action::PaletteGoTo);
+        goto_open(&mut m);
         go_type(&mut m, "app-2");
         m.update(Action::PaletteMove { delta: 1 });
         m.update(Action::PaletteChoose { index: None });
@@ -12800,7 +12879,7 @@ mod tests {
     #[test]
     fn tab_or_a_slash_goes_into_a_places_files_and_back_returns_to_the_places() {
         let mut m = goto_places();
-        m.update(Action::PaletteGoTo);
+        goto_open(&mut m);
         // A task with no folder: Tab goes nowhere.
         go_type(&mut m, "fix");
         assert!(m.update(Action::GoToDrill).is_empty());
@@ -12844,7 +12923,7 @@ mod tests {
     #[test]
     fn a_place_and_a_file_typed_in_one_go_go_in_when_the_place_is_clearly_best() {
         let mut m = goto_places();
-        m.update(Action::PaletteGoTo);
+        goto_open(&mut m);
         // "app" names two places equally: the slash stays a letter.
         go_type(&mut m, "app/x");
         assert_eq!(m.palette.as_ref().map(Palette::view), Some(commands::View::Places));
@@ -12857,7 +12936,7 @@ mod tests {
     #[test]
     fn a_failed_read_says_so_and_a_task_drills_into_its_checkout_as_it_is_now() {
         let mut m = goto_places();
-        m.update(Action::PaletteGoTo);
+        goto_open(&mut m);
         go_type(&mut m, "app-2");
         m.update(Action::GoToDrill);
         let failed = Action::GoToFiles { folder: "/code/app-2".into(), paths: None, cut: false };
@@ -12869,7 +12948,7 @@ mod tests {
     #[test]
     fn a_gt_sign_lists_the_commands_and_deleting_it_the_places_again() {
         let mut m = goto_places();
-        m.update(Action::PaletteGoTo);
+        goto_open(&mut m);
         go_type(&mut m, ">next tab");
         let palette = m.palette.as_ref().expect("open");
         assert_eq!((palette.view(), palette.matches().first()), (commands::View::Commands, Some(&Command::NextTab)));
@@ -12882,7 +12961,7 @@ mod tests {
     #[test]
     fn a_place_that_goes_leaves_go_to_and_ends_a_drill_into_it() {
         let mut m = goto_places();
-        m.update(Action::PaletteGoTo);
+        goto_open(&mut m);
         go_type(&mut m, "app-2");
         // Its checkout's row, under its workspace's.
         m.update(Action::PaletteMove { delta: 1 });
@@ -12959,6 +13038,7 @@ mod tests {
                 | Action::PaletteChoose { .. }
                 | Action::ClosePalette
                 | Action::GoToDrill
+                | Action::GoToSplit
                 | Action::GoToBack
         )
     }
