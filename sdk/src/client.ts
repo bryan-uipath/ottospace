@@ -485,6 +485,13 @@ export class Client {
     return this.snapshot({ cmd: "bug_start" });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): the Developer command's spin, as the user: the city on show turns
+   * once round, a step a frame; its numbers then in `city.spin`. Rejects outside a test run.
+   */
+  citySpin(): Promise<Snapshot> {
+    return this.snapshot({ cmd: "city_spin" });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): opens the accessibility inspector on a pane (default: the focused
    * one) with `tree` as if read from its window. Rejects outside a test run: only the user opens it.
    */

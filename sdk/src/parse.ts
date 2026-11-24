@@ -107,6 +107,8 @@ import type {
   CityDrawn,
   CityAgent,
   CityGlimmer,
+  CitySpin,
+  CitySpun,
   CityHovered,
   CityName,
   CitySpots,
@@ -2540,8 +2542,36 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     read_us: orNull(num)(o.read_us, `${at}.read_us`),
     view: cityView(o.view, `${at}.view`),
     grabbed: bool(o.grabbed, `${at}.grabbed`),
+    spin: citySpin(o.spin, `${at}.spin`),
     agents: list(cityAgent)(o.agents, `${at}.agents`),
     glimmer: orNull(cityGlimmer)(o.glimmer, `${at}.glimmer`),
+  };
+}
+
+function citySpin(value: unknown, at: string): CitySpin {
+  const o = fields(value, at);
+  return { running: bool(o.running, `${at}.running`), result: orNull(citySpun)(o.result, `${at}.result`) };
+}
+
+function citySpun(value: unknown, at: string): CitySpun {
+  const o = fields(value, at);
+  const n = (key: string) => num(o[key], `${at}.${key}`);
+  return {
+    steps: n("steps"),
+    done: bool(o.done, `${at}.done`),
+    frames: n("frames"),
+    mean: n("mean"),
+    p50: n("p50"),
+    p95: n("p95"),
+    p99: n("p99"),
+    max: n("max"),
+    over_16: n("over_16"),
+    over_33: n("over_33"),
+    repeats: n("repeats"),
+    wait_p50: n("wait_p50"),
+    wait_p95: n("wait_p95"),
+    wait_max: n("wait_max"),
+    boxes: n("boxes"),
   };
 }
 

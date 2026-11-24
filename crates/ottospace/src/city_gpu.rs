@@ -16,6 +16,12 @@ pub struct Picture {
     /// out of it into `bgra`.
     pub gpu_us: u64,
     pub copy_us: u64,
+    /// Before the GPU: its boxes, buffers and textures made.
+    pub prep_us: u64,
+    /// Of it: the boxes' instances (of them, each box's rise delay), and the textures and buffers made.
+    pub boxes_us: u64,
+    pub delays_us: u64,
+    pub alloc_us: u64,
 }
 
 const SAMPLES: u32 = 4;
@@ -246,6 +252,7 @@ impl Gpu {
     }
 
     fn draw(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {
+        let prepared = std::time::Instant::now();
         let camera = scene.camera.ok_or("no camera")?;
         let limit = self.device.limits().max_texture_dimension_2d;
         if width == 0 || height == 0 || width > limit || height > limit {
@@ -265,10 +272,12 @@ impl Gpu {
                 view_formats: &[],
             })
         };
+        let allocating = std::time::Instant::now();
         let target = wgpu::TextureUsages::RENDER_ATTACHMENT;
         let samples = texture(FORMAT, SAMPLES, target);
         let resolved = texture(FORMAT, 1, target | wgpu::TextureUsages::COPY_SRC);
         let depth = texture(DEPTH, SAMPLES, target);
+        let mut alloc_us = allocating.elapsed().as_micros() as u64;
 
         // The frame: the camera, the eye, the fog (from a bit before the target to far past it,
         // at most this thick) and the light.
@@ -284,7 +293,9 @@ impl Gpu {
         self.queue.write_buffer(&uniform, 0, &bytes(&frame));
         // The solid boxes first; then the glass ones, the farthest first, each over what is behind it.
         // Each box with its rise's delay and its folder's colour (`Scene::tints`; none: plain).
+        let boxing = std::time::Instant::now();
         let delays = scene.rise_delays();
+        let delays_us = boxing.elapsed().as_micros() as u64;
         let tint = |i: usize| scene.tints.get(i).copied().flatten();
         let all = scene.blocks.iter().zip(delays.iter().copied()).enumerate().map(|(i, (b, d))| (b, d, tint(i)));
         let see_through = |b: &Block| glass && b.kind == Kind::Building;
@@ -297,6 +308,7 @@ impl Gpu {
             .chain(clear.iter().map(|(b, d, t)| instance(b, *d, *t, GLASS)))
             .flatten()
             .collect();
+        let boxes_us = boxing.elapsed().as_micros() as u64;
         let instances = buffer(device, &boxes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST);
         self.queue.write_buffer(&instances, 0, &bytes(&boxes));
         let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -307,12 +319,14 @@ impl Gpu {
 
         // Rows of the read back are padded to 256 bytes.
         let row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+        let allocating = std::time::Instant::now();
         let read = device.create_buffer(&wgpu::BufferDescriptor {
             label: None,
             size: u64::from(row) * u64::from(height),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
         });
+        alloc_us += allocating.elapsed().as_micros() as u64;
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let view = samples.create_view(&Default::default());
@@ -354,6 +368,7 @@ impl Gpu {
             },
             size,
         );
+        let prep_us = prepared.elapsed().as_micros() as u64;
         let started = std::time::Instant::now();
         self.queue.submit([encoder.finish()]);
         let (done, mapped) = std::sync::mpsc::channel();
@@ -368,7 +383,17 @@ impl Gpu {
         for line in padded.chunks(row as usize) {
             bgra.extend_from_slice(&line[..width as usize * 4]);
         }
-        Ok(Picture { width, height, bgra, gpu_us, copy_us: started.elapsed().as_micros() as u64 })
+        Ok(Picture {
+            width,
+            height,
+            bgra,
+            gpu_us,
+            copy_us: started.elapsed().as_micros() as u64,
+            prep_us,
+            boxes_us,
+            delays_us,
+            alloc_us,
+        })
     }
 }
 

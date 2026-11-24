@@ -1703,13 +1703,14 @@ const MAKERS: &[Make] = &[
         let places = g.m.empty_places();
         let at = g.one_of(&places, |g| crate::model::city::At::Pane(g.pane()));
         let [x, y] = g.point().map(|v| v as f32 * 90.);
-        let step = match g.rng.below(7) {
+        let step = match g.rng.below(8) {
             0 => CameraStep::Orbit { yaw: x, pitch: y },
             1 => CameraStep::Pan { dx: x / 90., dz: y / 90. },
             2 => CameraStep::Zoom { factor: (x / 90.).abs(), about: [y / 90., x / 90.] },
             3 => CameraStep::Grab,
             4 => CameraStep::Let,
             5 => CameraStep::Cancel,
+            6 => CameraStep::Spin,
             _ => CameraStep::Reset,
         };
         Action::CityCamera { at, step }

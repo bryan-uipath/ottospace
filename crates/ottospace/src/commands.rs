@@ -26,6 +26,7 @@ actions!(
         CommandPalette,
         GoToPlace,
         CopyState,
+        CitySpin,
         OpenSettings,
         EditSettings,
         OpenFolder,
@@ -111,6 +112,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::InspectorFilter => Box::new(InspectorFilter),
         Command::InspectorRefresh => Box::new(InspectorRefresh),
         Command::CopyState => Box::new(CopyState),
+        Command::CitySpin => Box::new(CitySpin),
         Command::CalendarBack => Box::new(CalendarBack),
         Command::CalendarForward => Box::new(CalendarForward),
         Command::CalendarToday => Box::new(CalendarToday),
@@ -178,6 +180,7 @@ impl Workspace {
                 let state = this.snapshot(window, cx);
                 this.copy_text(state, None, ottospace_core::clip::Verb::Copied, cx);
             }))
+            .on_action(cx.listener(|this, _: &CitySpin, window, cx| this.city_spin_start(this.input, window, cx)))
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
                 this.error = open_in_user_folder(Some("settings.json")).err();
                 cx.notify();

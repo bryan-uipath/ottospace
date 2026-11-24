@@ -139,7 +139,14 @@ pub enum CameraStep {
     Cancel,
     /// The fitted view again (a double click on the ground).
     Reset,
+    /// One frame of a spin (the developer's timed turn): `SPIN_DEGREES` round, level.
+    Spin,
 }
+
+/// A spin turns the camera once round, a frame a step, between a `Grab` and a `Cancel` (which
+/// puts it back): `SPIN_STEPS` of `SPIN_DEGREES`, as a steady drag would.
+pub const SPIN_STEPS: usize = 240;
+pub const SPIN_DEGREES: f32 = 360. / SPIN_STEPS as f32;
 
 /// Only the user's pointer moves a city's camera: a client's drag is refused.
 pub(crate) const USERS_ALONE: &str = "only the user's pointer moves the city's camera";
@@ -399,6 +406,7 @@ impl Model {
         let now = self.city_view(at);
         let view = match step {
             CameraStep::Orbit { yaw, pitch } => now.orbited(yaw, pitch),
+            CameraStep::Spin => now.orbited(SPIN_DEGREES, 0.),
             CameraStep::Pan { dx, dz } => now.panned(dx, dz),
             CameraStep::Zoom { factor, about } => now.zoomed(factor, about),
             CameraStep::Grab => {
@@ -1058,6 +1066,28 @@ src/main.rs:9:loop
         m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
         go(&mut m, CameraStep::Let);
         assert!(!m.camera_moving(at));
+    }
+
+    /// A spin is a full turn, in motion all the way (half-size pictures, as a drag), and leaves
+    /// the camera where it was.
+    #[test]
+    fn a_spin_turns_once_round_in_motion_and_puts_the_camera_back() {
+        let mut m = task_in_app();
+        let at = m.empty_places()[0];
+        let go = |m: &mut Model, step| drop(m.update(Action::CityCamera { at, step }));
+        go(&mut m, CameraStep::Orbit { yaw: 20., pitch: 5. });
+        let was = m.city_view(at);
+        go(&mut m, CameraStep::Grab);
+        for i in 1..=SPIN_STEPS {
+            go(&mut m, CameraStep::Spin);
+            let turned = (m.city_view(at).yaw - was.yaw).rem_euclid(360.);
+            let want = (i as f32 * SPIN_DEGREES).rem_euclid(360.);
+            assert!((turned - want).abs() < 1e-2 || (turned - want).abs() > 360. - 1e-2, "step {i}: {turned}");
+            assert!(i == SPIN_STEPS || m.camera_moving(at), "step {i}: not in motion");
+            assert_eq!(m.city_view(at).pitch, was.pitch);
+        }
+        go(&mut m, CameraStep::Cancel);
+        assert_eq!((m.city_view(at), m.camera_grabbed()), (was, false));
     }
 
     #[test]

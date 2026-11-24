@@ -1304,6 +1304,9 @@ struct Workspace {
     /// The code city's last wheel or trackpad step: its place moves until `city::WHEELING` after it.
     city_wheeled: Cell<Option<(ottospace_core::model::city::At, std::time::Instant)>>,
     city_frames: Cell<usize>,
+    /// The developer's timed turn of a city in flight, and the last one's numbers.
+    city_spin: Option<city::Spin>,
+    city_spun: Option<city::Spun>,
     status_fit: Cell<ottospace_core::status_bar::Fit>,
     status_said: Option<(u64, Option<u64>, bool)>,
     pr_opens: u32,
@@ -1972,6 +1975,8 @@ impl Workspace {
             city_ease: Cell::new(None),
             city_wheeled: Cell::new(None),
             city_frames: Cell::new(0),
+            city_spin: None,
+            city_spun: None,
             status_fit: Cell::default(),
             status_said: None,
             pr_opens: 0,
@@ -3371,6 +3376,11 @@ impl Workspace {
                 // A test run only (refused above otherwise): the user's bug key, pressed by the test.
                 Request::BugStart => {
                     failure = self.with_origin(Origin::User, |this| this.bug_start(Origin::User, window, cx)).err();
+                    None
+                }
+                // A test run only: the Developer command's spin, as the user's.
+                Request::CitySpin => {
+                    self.with_origin(Origin::User, |this| this.city_spin_start(Origin::User, window, cx));
                     None
                 }
                 Request::InspectorFixture { pane, app, tree } => match pane.or(self.model.focused) {
@@ -9214,7 +9224,11 @@ impl Workspace {
         root.on_key_down(cx.listener(Self::key_down))
             // Esc during a divider drag puts it back, before a terminal or a box sees the key.
             .capture_key_down(cx.listener(|this, e: &KeyDownEvent, window, cx| {
-                if e.keystroke.key == "escape" && (this.divider_escape(window, cx) || this.city_escape(window, cx)) {
+                if e.keystroke.key == "escape"
+                    && (this.divider_escape(window, cx)
+                        || this.city_escape(window, cx)
+                        || this.city_spin_escape(window, cx))
+                {
                     cx.stop_propagation();
                 }
             }))
@@ -9603,6 +9617,7 @@ impl Render for Workspace {
         self.drawn_seq = self.seq;
         self.output = false;
         self.frame_start.set(Some(Instant::now()));
+        self.city_spin_frames(window, cx);
         // `cut_texts` lists this frame's texts only.
         CUT_TEXTS.with_borrow_mut(Vec::clear);
         for pane in &self.model.panes {
@@ -10172,9 +10187,10 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 23] = [
+        const TESTS_ONLY: [&str; 24] = [
             "capture_start",
             "bug_start",
+            "city_spin",
             "repo_add",
             "inspector_fixture",
             "sneak_app_tree",
