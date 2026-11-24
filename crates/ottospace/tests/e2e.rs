@@ -14312,6 +14312,8 @@ fn a_task_agents_wait_ends_when_its_reach_does() {
     let pass = otto.wait_for("its pass", |_| {
         std::fs::read_to_string(record.join("pass")).ok().filter(|t| t.ends_with('\n')).map(|t| t.trim().to_string())
     });
+    // The drawer folded (the user's key): while the user types in the chat, a client's focus is refused.
+    otto.user_key("cmd-shift-r");
     let state = otto.call(json!({"cmd": "split"}));
     let mine = state["state"]["focused"].as_u64().expect("a terminal in the task's workspace");
     let tab_of = |state: &Value, pane: u64| {
@@ -14336,7 +14338,7 @@ fn a_task_agents_wait_ends_when_its_reach_does() {
     };
     let error = |reply: Value| reply["error"].as_str().unwrap_or_default().to_string();
     // None named, the focus on the user's terminal elsewhere: refused, not read.
-    otto.call(json!({"cmd": "focus", "pane": theirs}));
+    assert_eq!(otto.call(json!({"cmd": "focus", "pane": theirs}))["state"]["focused"], theirs, "the focus elsewhere");
     assert!(error(wait(None).join().unwrap()).contains("not in task 1's workspace"));
     // Its own terminal moved out of the workspace mid-wait: the wait ends.
     otto.call(json!({"cmd": "select_tab", "index": own_tab}));
@@ -14349,6 +14351,7 @@ fn a_task_agents_wait_ends_when_its_reach_does() {
     let other = otto.call(json!({"cmd": "split"}))["state"]["focused"].as_u64().unwrap();
     let waiting = wait(Some(other));
     std::thread::sleep(Duration::from_millis(400));
+    otto.user_key("cmd-shift-r");
     stop_the_agent(&otto);
     assert!(error(waiting.join().unwrap()).contains("no running agent"));
     drop(otto);
