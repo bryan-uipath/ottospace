@@ -1576,6 +1576,18 @@ impl Workspace {
             }
         })
         .detach();
+        // A city's picture made: taken and drawn on the next frame, not at the tick's next run
+        // (up to a frame later, out of step with the display: a turn snagged).
+        cx.spawn_in(window, async move |this, cx| {
+            let Ok(bell) = this.update(cx, |this, _| this.city_painter.bell.clone()) else { return };
+            loop {
+                bell.rung().await;
+                if this.update(cx, |this, cx| this.read_city(cx)).is_err() {
+                    return;
+                }
+            }
+        })
+        .detach();
         // The tick: answer control calls, redraw on new output, keep windows matched to panes;
         // every ~500ms, also look for new and closed windows of hosted apps. Each frame while
         // something moves or waits, or just happened; else asleep until woken, or the next slow
