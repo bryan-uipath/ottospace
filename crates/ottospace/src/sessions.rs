@@ -332,18 +332,20 @@ fn read(
     let listed =
         |path: &PathBuf| sessions.iter().any(|(_, s)| s.path == *path || path.starts_with(s.path.with_extension("")));
     follows.retain(|path, _| listed(path));
-    let mut found = Vec::new();
+    let (mut found, mut live) = (Vec::new(), 0);
     for (index, (runner, session)) in sessions.iter().enumerate() {
         let Some(repo) = repo_of(&checkouts, session) else { continue };
         let mut seen = as_found(session, repo, now);
         // A live session may be quiet while its sub-agents work in files of their own: at work.
-        let subs: Vec<SessionRef> = match seen.held && index < FOLLOWED {
+        // Live ones are few (a process each), so they are looked at however long ago they wrote.
+        live += usize::from(seen.held);
+        let subs: Vec<SessionRef> = match seen.held && live <= FOLLOWED {
             true => runner.subagents(session).into_iter().filter(active).take(SUBAGENTS).collect(),
             false => Vec::new(),
         };
         seen.active |= !subs.is_empty();
         let (mut station, mut label) = (None, None);
-        if seen.active && index < FOLLOWED {
+        if seen.active && (index < FOLLOWED || !subs.is_empty()) {
             let follow = follows.entry(session.path.clone()).or_default();
             advance(*runner, session, follow);
             if follow.caught_up {
