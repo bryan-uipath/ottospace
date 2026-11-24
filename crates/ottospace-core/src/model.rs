@@ -6796,7 +6796,7 @@ impl Model {
             Action::SetSessions { found, day } => {
                 let kept = self.list_row();
                 self.found = sessions::kept(found);
-                self.at_work = self.found.iter().filter(|s| s.active).cloned().collect();
+                self.at_work = self.found.iter().filter(|s| s.works()).cloned().collect();
                 self.session_day = day;
                 let seen = self.found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
                 self.follow_sessions(seen.collect());
@@ -10050,9 +10050,9 @@ impl Model {
         if let Some((_, why)) = self.waiting(runner, id) {
             return (Some(why), last);
         }
-        // Held, and not at work: its file quiet and its runner's record not busy (`Found::active`).
+        // Held, and not at work: its file quiet, its record not busy, no sub-agent at work (`Found::works`).
         let held = RunnerId::named(runner).is_some_and(|r| r.spec().disk.held)
-            && listed.is_some_and(|s| Self::found_runs(s) && !s.active);
+            && listed.is_some_and(|s| Self::found_runs(s) && !s.works());
         let quiet =
             self.session_quiet_ms > 0 && last.is_some_and(|at| self.now.saturating_sub(at) >= self.session_quiet_ms);
         let on = self.features.on(Feature::TerminalTasks);
@@ -10092,7 +10092,7 @@ impl Model {
                 runner: runner.clone(),
                 id: id.clone(),
                 name,
-                active: listed.is_some_and(|s| s.active),
+                active: listed.is_some_and(Found::works),
                 doing: needs.map(|w| format!("needs you · {}", w.label())).or(listed.and_then(Found::doing)),
                 age: last.map(|at| tasks::age(at, self.now)),
                 pane: self.runs_in(&runner, &id),
@@ -18218,6 +18218,21 @@ mod tests {
         // Another space on show: nothing asks for the sessions.
         m.update(Action::SpaceOpen { space: Owner::Home });
         assert!(!m.shows_session());
+    }
+
+    /// The owner's case: a terminal session quiet past its turn while its sub-agents work is at
+    /// work, not "your turn"; they done, it is its turn.
+    #[test]
+    fn a_held_session_whose_subagents_work_is_not_your_turn() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let quiet = Found { held: true, ..session("claude", "h", "/code/app", false, now - sessions::QUIET_MS) };
+        let working = Found { subagents: 2, ..quiet.clone() };
+        m.update(Action::SetSessions { found: vec![working], day: 0 }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("h".into(), sessions::CardState::Running)]);
+        assert_eq!(m.agents().in_terminal, 1);
+        m.update(Action::SetSessions { found: vec![quiet], day: 0 }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("h".into(), sessions::CardState::NeedsYou)]);
     }
 
     #[test]

@@ -328,10 +328,8 @@ fn read(
     // How far a transcript was read is kept while its session is listed, at work or not: after a
     // pause the reading goes on from there, not from the start of a long file. (A file replaced
     // or cut short starts over by itself: the cursor knows which file it read.)
-    // A sub-agent's own file (under its session's folder) is followed as its session is.
-    let listed =
-        |path: &PathBuf| sessions.iter().any(|(_, s)| s.path == *path || path.starts_with(s.path.with_extension("")));
-    follows.retain(|path, _| listed(path));
+    // The sub-agents' files followed this round: kept with the listed sessions' (below).
+    let mut subs_seen: Vec<PathBuf> = Vec::new();
     let (mut found, mut live) = (Vec::new(), 0);
     for (index, (runner, session)) in sessions.iter().enumerate() {
         let Some(repo) = repo_of(&checkouts, session) else { continue };
@@ -339,13 +337,14 @@ fn read(
         // A live session may be quiet while its sub-agents work in files of their own: at work.
         // Live ones are few (a process each), so they are looked at however long ago they wrote.
         live += usize::from(seen.held);
-        let subs: Vec<SessionRef> = match seen.held && live <= FOLLOWED {
+        // Its own `active` stays its file's and record's, as the slow round reads it (`seen`).
+        let looked = seen.held && live <= FOLLOWED;
+        let subs: Vec<SessionRef> = match looked {
             true => runner.subagents(session).into_iter().filter(active).take(SUBAGENTS).collect(),
             false => Vec::new(),
         };
-        seen.active |= !subs.is_empty();
         let (mut station, mut label) = (None, None);
-        if seen.active && (index < FOLLOWED || !subs.is_empty()) {
+        if (seen.active || !subs.is_empty()) && (index < FOLLOWED || looked) {
             let follow = follows.entry(session.path.clone()).or_default();
             advance(*runner, session, follow);
             if follow.caught_up {
@@ -358,6 +357,7 @@ fn read(
         seen.subagents = seen.subagents.max(subs.len());
         // Each sub-agent at work: the file it is at, as its own file says.
         for sub in &subs {
+            subs_seen.push(sub.path.clone());
             let follow = follows.entry(sub.path.clone()).or_default();
             advance(*runner, sub, follow);
             seen.sub_files.extend(follow.caught_up.then(|| file_at(&follow.snapshot)).flatten());
@@ -367,6 +367,7 @@ fn read(
         let (title, model) = if index < TITLED { (runner.title(session), runner.model(session)) } else { (None, None) };
         found.push(Found { station, label, title, model, ..seen });
     }
+    follows.retain(|path, _| subs_seen.contains(path) || sessions.iter().any(|(_, s)| s.path == *path));
     found
 }
 
@@ -662,6 +663,6 @@ mod tests {
         let (mut follows, mut files) = (HashMap::new(), HashMap::new());
         let found = read(&[&reader], &listed, now, &mut follows, &mut files);
         let at = |f: &Found| (f.held, f.active, f.subagents, f.sub_files.clone());
-        assert_eq!(found.iter().map(at).collect::<Vec<_>>(), [(true, true, 1, vec!["src/auth.rs".to_string()])]);
+        assert_eq!(found.iter().map(at).collect::<Vec<_>>(), [(true, false, 1, vec!["src/auth.rs".to_string()])]);
     }
 }

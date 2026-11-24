@@ -322,7 +322,8 @@ pub struct Found {
     /// The runner records a live process for it: idle or not, a program has it open.
     #[serde(default)]
     pub held: bool,
-    /// Its sub-agents at work now: their calls not ended in its file, or their own files written lately.
+    /// Its sub-agents at work now: their calls not ended in its file, or their own files written
+    /// lately. Read only for a live session (`held`): with any, it is at work (`Found::works`).
     #[serde(default)]
     pub subagents: usize,
     /// The files its sub-agents are at now, as `label` names one (the last two parts of a path).
@@ -474,6 +475,12 @@ pub fn kept(found: Vec<Found>) -> Vec<Found> {
 }
 
 impl Found {
+    /// At work now: its file written lately or its record busy (`active`), or, live, its
+    /// sub-agents at work while its own file is quiet.
+    pub fn works(&self) -> bool {
+        self.active || self.subagents > 0
+    }
+
     /// Listed in `range`: at work, last active since its start, or any under All.
     pub fn in_range(&self, range: Range, now: u64, day: u64) -> bool {
         self.active || range == Range::All || self.last_activity.is_some_and(|at| at >= range.since(now, day))

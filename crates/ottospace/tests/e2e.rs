@@ -1991,14 +1991,15 @@ fn a_folded_repositorys_name_has_a_dot_while_a_checkout_works_or_needs_you() {
     fold(&otto);
     assert_eq!(head(&otto.drawn()), (json!(true), json!(null)));
 
-    // A session at work in the worktree: read for the folded repository too, never listed.
+    // A session at work in the worktree: read for the folded repository too, and listed as with
+    // Tasks open (one list, whichever section read it).
     let id = "11111111-1111-4111-8111-111111111111";
     let project = claude.join("projects").join(ottospace_sessions::claude::slug(&worktree));
     let fixture = format!("claude/projects/-work-app/{id}.jsonl");
     session_fixture(&fixture, &project.join(format!("{id}.jsonl")), &worktree, Duration::ZERO);
     let lit = |o: &Otto| Some(o.drawn()).filter(|s| s["repos_bar"][0]["dot"] == "working");
     let state = otto.wait_for("the folded name's dot to light", lit);
-    assert_eq!((&state["repos_bar"][0]["folded"], &state["sessions_bar"]["total"]), (&json!(true), &json!(0)));
+    assert_eq!((&state["repos_bar"][0]["folded"], &state["sessions_bar"]["total"]), (&json!(true), &json!(1)));
 
     // A task there that needs you (folded while it does: it stays folded): amber wins.
     fold(&otto);

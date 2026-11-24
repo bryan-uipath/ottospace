@@ -719,7 +719,7 @@ mod tests {
             repo: "/code/app".into(),
             started: Some(1),
             last_activity: Some(2),
-            active: true,
+            active: false,
             station: Some("agents".into()),
             label: Some("Explore".into()),
             title: None,
