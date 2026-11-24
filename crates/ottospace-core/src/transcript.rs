@@ -529,9 +529,14 @@ pub struct Transcript {
     /// Its shell calls that run, by id, their command lines: kept apart from the rows, which a
     /// long transcript drops (at most `MOST_SHELLS`, the newest).
     shells: Vec<(String, Text)>,
+    /// Its sub-agent calls that run (`Agent`, `Task`), by id: at most `MAX_SUBS`, the newest.
+    subs: Vec<String>,
     /// What its agent read and searched lately: the code city's brief effects.
     pub glances: Glances,
 }
+
+/// The most running sub-agent calls counted.
+const MAX_SUBS: usize = 64;
 
 /// The most running shell calls whose lines are kept.
 const MOST_SHELLS: usize = 8;
@@ -617,6 +622,12 @@ impl Transcript {
     /// A call of its agent runs now.
     pub fn calling(&self) -> bool {
         self.activity.running_label().is_some()
+    }
+
+    /// How many sub-agents its agent runs now: its `Agent` or `Task` calls that still run (one
+    /// whose end never came is over once its calls are: an interrupt, an exit).
+    pub fn subagents(&self) -> usize {
+        self.subs.iter().filter(|id| self.activity.runs(id)).count()
     }
 
     /// The command line of its newest shell call that still runs.
@@ -772,6 +783,12 @@ impl Transcript {
                 self.settle();
                 self.activity.start(&id, station, &label, at);
                 self.glances.start(&id, &tool, station, detail.text());
+                if matches!(tool.as_str(), "Agent" | "Task") && !sub {
+                    if self.subs.len() == MAX_SUBS {
+                        self.subs.remove(0);
+                    }
+                    self.subs.push(id.clone());
+                }
                 if station == Station::Shell {
                     if self.shells.len() == MOST_SHELLS {
                         self.shells.remove(0);
@@ -788,6 +805,7 @@ impl Transcript {
                 self.activity.end(&id, failed, at);
                 self.glances.end(&id, output.as_ref().map(Text::text));
                 self.shells.retain(|(of, _)| *of != id);
+                self.subs.retain(|of| *of != id);
                 let call = self.items.iter_mut().rev().find_map(|item| match &mut item.entry {
                     Entry::Tool { id: of, state, gist, output, .. } if *of == id => Some((state, gist, output)),
                     _ => None,

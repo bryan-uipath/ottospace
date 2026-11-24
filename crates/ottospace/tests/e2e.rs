@@ -18383,6 +18383,42 @@ fn a_read_flashes_and_a_search_sweeps_then_lights_what_it_found() {
     }
 }
 
+/// An agent's sub-agents in the code city: two `Agent` calls running, two squares under its icon
+/// (the state's `subagents`); one ended, one.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_agents_running_subagents_show_under_its_icon() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let extra = [("OTTOSPACE_FEATURES", "code_city"), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+    let (root, _, env) = native_setup("city-subagents", &[], &extra);
+    let app = root.join("repos/app");
+    git(&app, &["init", "-q"]);
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("src/main.rs"), "x".repeat(3000)).unwrap();
+    let call = |id: &str| {
+        let call = json!({"type": "tool_use", "id": id, "name": "Agent", "input": {"subagent_type": "Explore", "prompt": "look"}});
+        format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#)
+    };
+    let result = |id: &str| {
+        let r = json!({"type": "tool_result", "tool_use_id": id, "content": "done", "is_error": false});
+        format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{r}]}}}}"#)
+    };
+    let init =
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+    let lines = [init, call("a1"), call("a2"), r#"{"_sleep":5}"#.into(), result("a1"), r#"{"_sleep":60}"#.into()];
+    std::fs::write(root.join("fixtures/turn1.jsonl"), lines.join("\n") + "\n").unwrap();
+    let otto = launch_env("city-subagents", &env);
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    let subs = |o: &Otto| o.call(json!({"cmd": "state"}))["city"]["agents"][0]["subagents"].as_u64();
+    otto.wait_for("two sub-agents", |o| subs(o).filter(|n| *n == 2));
+    otto.wait_for("one ended", |o| subs(o).filter(|n| *n == 1));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// The code city (flag `code_city`): a task's empty tab draws its checkout's files as a 3D
 /// picture rendered on the GPU, where the lattice was, as large as the tab in pixels. The file
 /// the agent reads is lit, and only it, its agent's icon over it; an ignored file is no building;

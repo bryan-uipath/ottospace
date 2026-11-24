@@ -37,6 +37,9 @@ pub struct Agent<'a> {
     pub near: Vec<String>,
     /// A call of it runs now (for a session read from its file: a call it started has not ended).
     pub busy: bool,
+    /// The sub-agents it runs now (a chat's `Agent`/`Task` calls not ended; none known for a
+    /// session read from its file).
+    pub subagents: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -244,8 +247,8 @@ impl Model {
                 let at = transcript.file_at();
                 let near = (transcript.shell_line().filter(|_| at.is_none()))
                     .map_or_else(Vec::new, |line| crate::city_shell::paths(line, dir));
-                let busy = transcript.calling();
-                (*task, Agent { who: Who::Task(*task), colour: *colour, at, near, busy })
+                let (busy, subagents) = (transcript.calling(), transcript.subagents());
+                (*task, Agent { who: Who::Task(*task), colour: *colour, at, near, busy, subagents })
             })
             .collect();
         // A task whose agent runs in a terminal (Codex, or `conversation_view: terminal`) has no
@@ -261,6 +264,7 @@ impl Model {
                 at: file_of(s),
                 near: Vec::new(),
                 busy: s.station.is_some(),
+                subagents: 0,
             };
             (works && !chatted).then_some((task.id, agent))
         });
@@ -276,6 +280,7 @@ impl Model {
                 at: file_of(s),
                 near: Vec::new(),
                 busy: s.station.is_some(),
+                subagents: 0,
             });
         let agents: Vec<Agent> = tasks.into_iter().map(|(_, agent)| agent).chain(sessions).collect();
         // A session's file is lit too: in its task's colour if a task has it, else in none.
@@ -596,7 +601,10 @@ mod tests {
         let city = city(&m).unwrap();
         let who = Who::Session { runner: "claude", id: "s1", title: Some("fix the loop") };
         let near = Vec::new();
-        assert_eq!(city.agents, vec![Agent { who, colour: None, at: Some("src/main.rs"), near, busy: true }]);
+        assert_eq!(
+            city.agents,
+            vec![Agent { who, colour: None, at: Some("src/main.rs"), near, busy: true, subagents: 0 }]
+        );
         assert_eq!(city.lit, vec![Lit { label: "src/main.rs", colour: None, running: true }]);
         m.update(Action::SessionsAtWork { found: vec![found(true, "shell", "cargo test")] });
         assert_eq!(agents(&m), Some(vec![(0, None)]), "a shell line: at no file");
@@ -691,6 +699,33 @@ mod tests {
         events(&mut m, vec![bash("e", "cd /code/app && cat docs/a.md"), call("f", Station::Files, "src/x.rs")]);
         assert_eq!(agents(&m), Some(vec![(1, Some("src/x.rs"))]));
         assert_eq!(near(&m), Some((vec![], true)));
+    }
+
+    /// An agent counts the sub-agents it runs: its `Agent`/`Task` calls not ended (a sub-agent's
+    /// own calls are not its).
+    #[test]
+    fn an_agent_counts_the_subagents_it_runs() {
+        let mut m = task_in_app();
+        let agent = |id: &str, sub: bool| Event::ToolStart {
+            id: id.into(),
+            sub,
+            tool: "Agent".into(),
+            station: Station::Agents,
+            label: "Explore".into(),
+            detail: Text::default(),
+            diff: None,
+            gist: None,
+        };
+        let subs = |m: &Model| city(m).map(|c| c.agents[0].subagents);
+        events(&mut m, vec![Event::TurnStarted, agent("a", false), agent("b", false), agent("c", true)]);
+        assert_eq!(subs(&m), Some(2));
+        events(&mut m, vec![end("a")]);
+        assert_eq!(subs(&m), Some(1));
+        events(&mut m, vec![end("b")]);
+        assert_eq!(subs(&m), Some(0));
+        // Interrupted: a call whose end never comes runs no more.
+        events(&mut m, vec![agent("d", false), Event::TurnFinished { outcome: Outcome::Interrupted }]);
+        assert_eq!(city(&m).map(|c| c.agents.iter().map(|a| a.subagents).sum::<usize>()), Some(0));
     }
 
     /// Reads and searches as the city's glimpses: a read's file, a search's scope (none: the

@@ -1709,7 +1709,9 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   … in a shell line) flashes its building; a search (`Grep`, `Glob`, or `rg`, `grep`, `find` …)
   sweeps a band of light across the folders it names (the whole city when it names none), and the
   files its result names stay lit a moment. Calls close together play as one; none under Reduce
-  Motion. Codex's calls carry no result, so its searches light nothing after the sweep. An icon with no room clear of the hints is not drawn.
+  Motion. Codex's calls carry no result, so its searches light nothing after the sweep. The
+  sub-agents a chat's agent runs (its `Agent` calls not ended) are small squares under its icon,
+  eight at most, then `+n`; a terminal session's are not shown yet. An icon with no room clear of the hints is not drawn.
 - The files are what `git ls-files` lists there (tracked, and new ones not ignored), less the
   folders `city_exclude` leaves out and built-in ones (`node_modules`, `target`, `dist`, …):
   dropped before the layout, they take no room, move nothing and count toward no limit. Read off

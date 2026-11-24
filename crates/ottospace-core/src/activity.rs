@@ -174,6 +174,11 @@ impl Activity {
         }
     }
 
+    /// The call `id` still runs (an interrupt, an exit or a message elsewhere ends them all).
+    pub(crate) fn runs(&self, id: &str) -> bool {
+        self.running.iter().any(|call| call.id == id)
+    }
+
     /// The id of the newest call on `station` that still runs.
     pub(crate) fn running_on(&self, station: Station) -> Option<&str> {
         self.running.iter().rev().find(|call| call.station == station).map(|call| call.id.as_str())
