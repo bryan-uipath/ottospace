@@ -369,9 +369,9 @@ impl Gpu {
             one
         };
         let data: Vec<f32> = boxes.solid.iter().chain(&clear).map(placed).flatten().collect();
+        let bytes_of = bytes(&data);
         let boxes_us = boxing.elapsed().as_micros() as u64;
         let allocating = std::time::Instant::now();
-        let bytes_of = bytes(&data);
         if kept.instances.as_ref().is_none_or(|b| b.size() < bytes_of.len() as u64) {
             kept.instances = Some(buffer(device, &data, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST));
         }

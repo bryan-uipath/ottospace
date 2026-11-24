@@ -106,7 +106,7 @@ type Exclude = Vec<(String, Vec<String>)>;
 
 /// A thread of its own that answers each job with `work`, in order: of the jobs waiting, only
 /// the last of each `key` (a newer ask for the same thing replaces the older), the others answered
-/// `None`. Each job comes back with its answer; `answered` is called after each batch.
+/// `None`. Each job comes back with its answer, and `answered` is called after each.
 fn latest_each<J, K, R>(
     key: fn(&J) -> K,
     mut work: impl FnMut(&J) -> R + Send + 'static,
@@ -129,8 +129,8 @@ where
                 if done.send((job, answer)).is_err() {
                     return;
                 }
+                answered();
             }
-            answered();
         }
     });
     (jobs, answers)
@@ -684,9 +684,11 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
         }
     };
     let mut scene = layout.scene(&key.view());
-    scene.tints = tints.clone();
     // Its boxes' colours and delays, once a layout: a camera move only places them.
-    let boxes = boxes.unwrap_or_else(|| Arc::new(Boxes::new(&scene, key.glass)));
+    let boxes = boxes.unwrap_or_else(|| {
+        scene.tints = tints.clone();
+        Arc::new(Boxes::new(&scene, key.glass))
+    });
     last.push((laid, layout, tints, boxes.clone()));
     if last.len() > KEPT_LAYOUTS {
         last.remove(0);
