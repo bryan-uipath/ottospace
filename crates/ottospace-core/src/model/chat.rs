@@ -335,12 +335,14 @@ impl Model {
         let title = subject.task().and_then(|id| self.tasks.get(id)).map(|task| task.title.clone());
         let runner = self.runner_of(subject);
         let see = self.features.on(crate::features::Feature::AgentMode);
+        // A task's agent has ottospace's MCP server where its runner takes one (the shell gives it).
+        let tools = runner.is_some_and(|runner| runner.spec().mcp.is_some());
         let now = self.now;
         if let Some(chat) = self.chat_mut(subject) {
             chat.transcript.started(resumed);
             (chat.deny, chat.armed, chat.btw) = (false, false, None);
             if let (Some(title), Some(runner)) = (title.filter(|_| !resumed), runner) {
-                chat.transcript.send(&agents::prompt(runner, &title, None, see), now);
+                chat.transcript.send(&agents::prompt(runner, &title, None, see, tools), now);
             }
             if let Some(text) = chat.queued.take() {
                 chat.transcript.send(&text, now);
@@ -1565,7 +1567,7 @@ mod tests {
             crate::transcript::Entry::User { text } => Some(text.text().to_string()),
             _ => None,
         });
-        let prompt = crate::agents::prompt(launch.runner, "plan my week ~/notes folder", None, true);
+        let prompt = crate::agents::prompt(launch.runner, "plan my week ~/notes folder", None, true, true);
         assert_eq!(asked, Some(prompt));
     }
 

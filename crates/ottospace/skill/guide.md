@@ -19,6 +19,11 @@ ottospace ctl '{"cmd":"state"}'
   (`state.picker` is not null, or `state.keys` is true). Read the reply and check that the state
   changed the way you meant.
 
+**Which to use.** An agent ottospace started for a task has ottospace's MCP server for its run:
+use its tools (`workspace`, `app_read`, `app_look`, `capture`, `wait`, `task_brief`, `guide`), read
+only, each scoped to your task's workspace. `ottospace ctl` is for scripts, debugging and what the
+tools do not cover (opening panes, filing tasks); its rules below hold for both.
+
 ## Rules
 
 - **Look before you act.** Start with `state`. Pane ids and tab indexes come from it.

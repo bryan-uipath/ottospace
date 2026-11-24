@@ -9749,7 +9749,8 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let argv = otto.wait_for("the argv", |_| agent_argv(&bin, "claude"));
     let state = otto.call(json!({"cmd": "state"}));
     let session = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
-    let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Claude, "fix login", None, false);
+    let prompt =
+        ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Claude, "fix login", None, false, true);
     assert_eq!(without_mcp(&argv), [app.as_str(), "--session-id", &session, "--", &prompt]);
     // Its MCP server for the run: this program, `mcp`, the test's socket; only its tools allowed.
     let config = argv.iter().position(|a| a == "--mcp-config").map(|at| argv[at + 1].clone()).expect("an MCP config");
@@ -9804,7 +9805,8 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     // A task tagged with a Codex model starts Codex with that model, in the home folder.
     otto.start_task(2);
     let argv = otto.wait_for("codex's argv", |_| agent_argv(&bin, "codex"));
-    let prompt = ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Codex, "try codex", None, false);
+    let prompt =
+        ottospace_core::agents::prompt(ottospace_core::runner::RunnerId::Codex, "try codex", None, false, true);
     assert_eq!(without_mcp(&argv[1..]), ["--model", "gpt-6-astra", "--", &prompt]);
     assert!(argv.iter().any(|a| a.starts_with("mcp_servers.ottospace_task.command=")), "{argv:?}");
     assert_eq!(Some(&argv[0]), std::env::var("HOME").ok().as_ref(), "no repository: the home folder");
@@ -12318,7 +12320,7 @@ fn a_native_conversation_streams_asks_and_switches_to_the_terminal_and_back() {
     });
     assert!(argv().lines().any(|a| a == "-p") && argv().contains("--session-id"), "{}", argv());
     assert!(stdin().contains("Task: fix login"), "the prompt goes on stdin, never in argv");
-    assert!(stdin().contains("ottospace skill"), "the preamble follows the task: {}", stdin());
+    assert!(stdin().contains("`workspace`"), "the preamble follows the task, naming its tools: {}", stdin());
     let entries = first["transcript"]["entries"].as_array().unwrap();
     let kinds: Vec<&str> = entries.iter().filter_map(|e| e["kind"].as_str()).collect();
     assert_eq!(kinds, ["user", "assistant", "tool"], "{first}");
