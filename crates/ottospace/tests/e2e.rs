@@ -3531,9 +3531,11 @@ fn sessions_that_are_no_tasks_are_listed_and_can_be_adopted() {
 
     // One terminal opened in the session's directory, one session started there: it runs "in" that
     // pane, and a click on the row focuses it. Nothing is typed into it.
+    // The pane beside is empty: a terminal split there starts in the tab's checkout too (#472), and
+    // which of two terminals runs the session would be in doubt.
     otto.call(json!({"cmd": "repos"}));
     let pane = otto.call(json!({"cmd": "open_repo", "path": repo}))["state"]["focused"].clone();
-    let other = otto.call(json!({"cmd": "split"}))["state"]["focused"].clone();
+    let other = otto.call(json!({"cmd": "split", "kind": "empty"}))["state"]["focused"].clone();
     assert_ne!(pane, other);
     let reply = otto.call(json!({"cmd": "session_click", "runner": "claude", "id": busy}));
     assert_eq!((&reply["sessions_bar"]["rows"][0]["pane"], &reply["state"]["focused"]), (&pane, &pane));
