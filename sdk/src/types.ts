@@ -1600,6 +1600,8 @@ export interface Decisions {
   sort: DecisionSorting | null;
   /** The week's focus card on show: an agent's proposal (`{"proposal": revision}`) or `"carry"`. */
   week: { proposal: number } | "carry" | null;
+  /** The card on show changed since it was first drawn: the user's next key only says they saw it. */
+  changed: boolean;
   at: number;
   of: number;
   queue: { task: TaskId; ticket: number; priority: number; since: number }[];

@@ -524,6 +524,16 @@ default, which the user sets per card); sorting; setting focus; promoting a sour
 - **Retention**: `<home>/decisions/<id>.json`, 0600, deleted 14 days after it closed; Forget at
   once. `focus.json` keeps weeks' areas and counts; the user may clear a week.
 - **People**: an author is kept only inside a quote's text; the record says `a person`.
+- **What is accepted is what was shown** (built, slice 2b, for every card a filer can change while
+  it shows: the week's proposal, triage's item): a key or click names the revision the shell drew,
+  and one on another revision takes nothing. The same card at a new revision is marked "changed
+  since it was shown", and its next key only says the user saw it. A property check holds that an
+  accept never sets other words than the revision it names.
+- **No existence oracle**: a refusal never says which project or repository exists. A proposal
+  whose links name nothing listed is taken, and its card marks them "not listed" for the user
+  alone. Filing and proposing count every attempt, refused or taken, against the hour, the rate
+  checked first, so what a refusal does say (a file not inside a listed checkout) cannot be probed
+  faster than that.
 - **Promotion and updates** (built, slice 1b): a promotion trusts one named scope of its
   source's key format, shown on the card before P, never a prefix or a whole source; anyone who
   can reach the socket can file under it, within the caps. An update that changes a sorted item's

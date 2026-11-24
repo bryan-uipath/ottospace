@@ -1901,11 +1901,15 @@ const MAKERS: &[Make] = &[
             crate::filed::Sort::NotMine,
             crate::filed::Sort::Dismiss,
         ]);
-        Action::SortItem { id: g.sort_item(), how }
+        let id = g.sort_item();
+        let current = g.m.filed.get(id).map_or(0, |d| d.revision);
+        let revision = g.rng.pick(&[current, current, 0, 1, 2]);
+        Action::SortItem { id, how, revision }
     },
     |g| Action::SortToggle { id: g.sort_item(), claims: g.rng.coin() },
     |g| Action::SortPromote { id: g.sort_item() },
     |_| Action::SortUndo,
+    |_| Action::DecisionsSeen,
     // The week's focus: the week (a real one, another, none), kept weeks, the editor's keys.
     |g| Action::SetWeek { week: g.rng.pick(&["2026-W48", "2026-W49", "", "../x"]).into() },
     |g| {
@@ -4325,6 +4329,7 @@ impl Run {
             .then(|| (m.sidebar, m.compose.clone().filter(|field| !field.text().is_empty() && !m.compose_theirs)));
         let kept_before = m.compose_kept.clone().filter(|kept| !kept.theirs).map(|kept| kept.line);
         let listen_before = m.listen.on.as_ref().map(|on| on.id.clone());
+        let proposal_before = m.focus.pending.clone();
         let armed_before = m.listen.on.as_ref().is_some_and(|on| on.session.armed.is_some());
         let listen_pane = m.listen.on.as_ref().and_then(|on| on.source.pane());
         let transcribe_picker = m.picker.as_ref().is_some_and(|picker| picker.transcribe);
@@ -5875,6 +5880,14 @@ impl Run {
                 }
                 // Only the user's ↵ in the focus editor writes the week's focus; and it is what is held.
                 Effect::SaveFocus { kept } => {
+                    // An accept sets the proposal of the revision it names, as it was: no other.
+                    if let Action::FocusAccept { revision, .. } = &action {
+                        let shown = proposal_before.as_ref().filter(|p| p.revision == *revision);
+                        ensure!(
+                            shown.is_some_and(|p| m.focus.areas() == p.areas.as_slice()),
+                            "accepted other words than revision {revision}'s"
+                        );
+                    }
                     let acts = user
                         && matches!(
                             action,

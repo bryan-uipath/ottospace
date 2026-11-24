@@ -100,6 +100,21 @@ pub struct Run {
     /// The week's card was answered or left in this run: it does not come again.
     #[serde(skip)]
     pub(crate) weeked: bool,
+    /// The card on show changed since it was first drawn (a newer proposal, its filer's update):
+    /// the next key only says the user saw it (`DecisionsSeen`), nothing is taken.
+    pub changed: bool,
+    /// What was on show at the last step, and its revision: a change of revision under the same
+    /// card sets `changed`.
+    #[serde(skip)]
+    pub(crate) seen: Option<(On, u32)>,
+}
+
+/// Which card is on show, for `changed`: an agent's question, the week's card, triage (its item).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum On {
+    Ask(TaskId, u64),
+    Week,
+    Sort(Option<u64>),
 }
 
 impl Model {
@@ -171,7 +186,51 @@ impl Model {
     /// A key on the card pane, while it has the keyboard: 1 to 9 pick, ↑↓ j k move, space picks,
     /// ↵ sends, ⇥ between questions; S skips, L puts it off until `now + LATER_MS`, Esc closes Decisions.
     pub fn decision_key(&self, key: &str, mods: crate::keys::Mods, now: u64) -> Key {
+        self.decision_key_drawn(key, mods, now, self.on_show().map(|(_, revision)| revision))
+    }
+
+    /// The card on show and its revision: an agent's question (its ticket never changes), the
+    /// week's card (the proposal's revision), triage's item (the decision's revision).
+    pub fn on_show(&self) -> Option<(On, u32)> {
+        let run = self.decisions.as_ref()?;
+        if let Some(card) = run.week {
+            let revision = match card {
+                super::focus::WeekCard::Proposal(revision) => revision,
+                super::focus::WeekCard::Carry => 0,
+            };
+            return Some((On::Week, revision));
+        }
+        if let Some(sort) = &run.sort {
+            let revision = sort.item.and_then(|id| self.filed.get(id)).map_or(0, |d| d.revision);
+            return Some((On::Sort(sort.item), revision));
+        }
+        run.task.zip(run.ticket).map(|(task, ticket)| (On::Ask(task, ticket), 0))
+    }
+
+    /// After every step, one rule for every card a filer can change while it is on show: the same
+    /// card at another revision is marked changed, and its next key only says it was seen.
+    pub(super) fn settle_changed(&mut self) {
+        let now = self.on_show();
+        let Some(run) = self.decisions.as_mut() else { return };
+        match (run.seen, now) {
+            (Some((was, from)), Some((on, to))) if was == on && from != to => run.changed = true,
+            (Some((was, _)), Some((on, _))) if was == on => {}
+            _ => run.changed = false,
+        }
+        run.seen = now;
+    }
+
+    /// A key on the card pane, as `decision_key`, the shell saying which revision it drew: a key
+    /// on a card whose revision moved since (a newer proposal, its filer's update) takes nothing,
+    /// and while the card is marked changed, the next key only says the user saw it.
+    pub fn decision_key_drawn(&self, key: &str, mods: crate::keys::Mods, now: u64, drawn: Option<u32>) -> Key {
         let bare = !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift;
+        if self.keyboard_decision()
+            && key != "escape"
+            && let Some(stop) = self.unseen(drawn)
+        {
+            return stop;
+        }
         if let Some(card) = self.decisions.as_ref().and_then(|run| run.week).filter(|_| self.keyboard_decision()) {
             return self.week_key(card, key, bare, now);
         }
@@ -198,7 +257,8 @@ impl Model {
         // Today ends at the user's next midnight; with no day yet, twelve hours on.
         let day = crate::filed::DAY_MS;
         let tonight = if self.local_day > 0 { self.local_day.saturating_add(day) } else { now.saturating_add(day / 2) };
-        let act = |how| sort.item.map(|id| Action::SortItem { id, how });
+        let revision = sort.item.and_then(|id| self.filed.get(id)).map_or(0, |d| d.revision);
+        let act = |how| sort.item.map(|id| Action::SortItem { id, how, revision });
         let action = match (key, sort.item) {
             ("escape", _) => Some(Action::DecisionsClose),
             ("enter", None) => Some(Action::SortStart),
@@ -238,17 +298,33 @@ impl Model {
     }
 
     /// A click on one of the week card's buttons: what its key does, wherever the keyboard is.
-    pub fn week_click(&self, key: &str, now: u64) -> Key {
-        match self.decisions.as_ref().and_then(|run| run.week) {
-            Some(card) => self.week_key(card, key, true, now),
-            None => Key::Pass,
+    pub fn week_click(&self, key: &str, now: u64, drawn: Option<u32>) -> Key {
+        let Some(card) = self.decisions.as_ref().and_then(|run| run.week) else { return Key::Pass };
+        if let Some(stop) = self.unseen(drawn) {
+            return stop;
         }
+        self.week_key(card, key, true, now)
     }
 
     /// A click on one of triage's buttons: what its key does, wherever the keyboard is.
-    pub fn sort_click(&self, key: &str, mods: crate::keys::Mods, now: u64) -> Key {
+    pub fn sort_click(&self, key: &str, mods: crate::keys::Mods, now: u64, drawn: Option<u32>) -> Key {
         let Some(sort) = self.decisions.as_ref().and_then(|run| run.sort.as_ref()) else { return Key::Pass };
+        if let Some(stop) = self.unseen(drawn) {
+            return stop;
+        }
         self.sort_key(sort, key, !mods.cmd && !mods.ctrl && !mods.alt && !mods.shift, now)
+    }
+
+    /// A click or key on a card that changed since it was drawn, or that is marked changed: it takes
+    /// nothing (the latter's says the user saw it). `None`: it may act.
+    fn unseen(&self, drawn: Option<u32>) -> Option<Key> {
+        let changed = self.decisions.as_ref().is_some_and(|run| run.changed);
+        let moved = drawn != self.on_show().map(|(_, revision)| revision);
+        match (changed, moved) {
+            (true, _) => Some(Key::Act(Action::DecisionsSeen)),
+            (false, true) => Some(Key::Swallow),
+            (false, false) => None,
+        }
     }
 
     /// After every step, while triage shows: its item moves on once sorted (or gone); no item
@@ -399,9 +475,25 @@ impl Model {
         let sort = (task.is_none() && week.is_none()).then(|| self.sorting_at(None, 0, Vec::new()));
         let of = queue.len() + usize::from(sortable) + usize::from(self.week_card().is_some());
         let done = Vec::new();
-        let (held, sorted, weeked) = (false, false, false);
-        self.decisions =
-            Some(Run { tab, pane, task, ticket, sort, week, at: 1, of, queue, done, from, held, sorted, weeked });
+        let (held, sorted, weeked, changed, seen) = (false, false, false, false, None);
+        self.decisions = Some(Run {
+            tab,
+            pane,
+            task,
+            ticket,
+            sort,
+            week,
+            at: 1,
+            of,
+            queue,
+            done,
+            from,
+            held,
+            sorted,
+            weeked,
+            changed,
+            seen,
+        });
         self.title_decisions();
     }
 

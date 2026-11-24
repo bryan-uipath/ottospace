@@ -1903,7 +1903,12 @@ pub enum Action {
     SortItem {
         id: u64,
         how: crate::filed::Sort,
+        /// The item's revision the user was shown: another one (its filer changed it) does nothing.
+        revision: u32,
     },
+    /// The card on show changed since it was first drawn (a newer proposal, a filer's update): the
+    /// user's next key only says they saw it. Only the user's.
+    DecisionsSeen,
     /// U (`claims`) counts the item's claims, C flips its role, before its key. Only the user's.
     SortToggle {
         id: u64,
@@ -3051,6 +3056,7 @@ impl Action {
             | Action::SortStart
             | Action::SortSkip
             | Action::SortItem { .. }
+            | Action::DecisionsSeen
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo
@@ -3109,6 +3115,7 @@ impl Action {
             | Action::SortStart
             | Action::SortSkip
             | Action::SortItem { .. }
+            | Action::DecisionsSeen
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo
@@ -5186,6 +5193,7 @@ impl Model {
             | Action::SortStart
             | Action::SortSkip
             | Action::SortItem { .. }
+            | Action::DecisionsSeen
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo => Some(decisions::USERS_ALONE),
@@ -5658,6 +5666,7 @@ impl Model {
         }
         self.settle_focus_edit();
         self.settle_decisions(origin, drawer_keys, &mut effects);
+        self.settle_changed();
         self.settle_spaces(origin, &home);
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         // After the tabs out: a fold-in may move the main window's tab (seed 37143).
@@ -7778,6 +7787,11 @@ impl Model {
             | Action::SortToggle { .. }
             | Action::SortPromote { .. }
             | Action::SortUndo) => self.sort_act(action, effects),
+            Action::DecisionsSeen => {
+                if let Some(run) = self.decisions.as_mut() {
+                    run.changed = false;
+                }
+            }
             action @ (Action::SetWeek { .. }
             | Action::RestoreFocus { .. }
             | Action::FocusEditOpen { .. }
@@ -11937,6 +11951,7 @@ mod tests {
         Action::SortStart,
         Action::SortSkip,
         Action::SortItem { .. },
+        Action::DecisionsSeen,
         Action::SortToggle { .. },
         Action::SortPromote { .. },
         Action::SortUndo,
@@ -12372,7 +12387,8 @@ mod tests {
             Action::RestoreDecisions { kept: Vec::new(), trusted: Vec::new() },
             Action::SortStart,
             Action::SortSkip,
-            Action::SortItem { id: 1, how: crate::filed::Sort::Keep },
+            Action::SortItem { id: 1, how: crate::filed::Sort::Keep, revision: 1 },
+            Action::DecisionsSeen,
             Action::SortToggle { id: 1, claims: true },
             Action::SortPromote { id: 1 },
             Action::SortUndo,
@@ -13011,6 +13027,7 @@ mod tests {
                     Action::SortStart
                     | Action::SortSkip
                     | Action::SortItem { .. }
+                    | Action::DecisionsSeen
                     | Action::SortToggle { .. }
                     | Action::SortPromote { .. }
                     | Action::SortUndo => Some(decisions::USERS_ALONE),
@@ -20502,6 +20519,7 @@ mod tests {
                     Action::SortStart
                     | Action::SortSkip
                     | Action::SortItem { .. }
+                    | Action::DecisionsSeen
                     | Action::SortToggle { .. }
                     | Action::SortPromote { .. }
                     | Action::SortUndo => Some(decisions::USERS_ALONE),

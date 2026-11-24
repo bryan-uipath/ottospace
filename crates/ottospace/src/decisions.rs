@@ -19,6 +19,8 @@ impl Workspace {
     /// The card pane's body: its header, the ask card, its foot.
     pub(crate) fn decision_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(run) = self.model.decisions.as_ref() else { return div().into_any_element() };
+        // What this frame draws: a key or click names it, and one on another revision takes nothing.
+        self.drawn_decision.set(self.model.on_show().map(|(_, revision)| revision));
         if let Some(card) = run.week {
             return self.week_body(card, (run.at, run.of), cx);
         }
@@ -168,7 +170,8 @@ impl Workspace {
             let kind = if n == 0 { Button::Primary(label.into()) } else { Button::Ghost(Face::Label(label.into())) };
             ui::dialog::keyed(id, kind, &[cap], State::Rest).on_click(cx.listener(move |this, _, window, cx| {
                 let mods = ottospace_core::keys::Mods::default();
-                if let Key::Act(action) = this.model.sort_click(key, mods, crate::now_ms()) {
+                let drawn = this.drawn_decision.get();
+                if let Key::Act(action) = this.model.sort_click(key, mods, crate::now_ms(), drawn) {
                     drop(this.dispatch(action, this.input, window, cx));
                 }
             }))
@@ -200,6 +203,7 @@ impl Workspace {
             .gap_2()
             .p_3()
             .child(header)
+            .children(self.changed_line())
             .children(body)
             .child(div().flex().flex_wrap().items_center().gap_1().pt_2().children(buttons))
             .child(muted(hint));
@@ -260,8 +264,12 @@ impl Workspace {
                 ("Keep last week's focus?", "A new week: nothing is in focus until you say.", last, Vec::new(), keys)
             }
         };
+        let (projects, checkouts) = (self.model.project_names(), self.model.checkouts());
         let rows = areas.iter().enumerate().map(|(n, a)| {
-            let links: Vec<String> = a.projects.iter().chain(a.repos.iter()).cloned().collect();
+            // A link to nothing listed is shown as such: the agent is never told which.
+            let unlisted = a.unlisted(&projects, &checkouts);
+            let mark = |l: &String| if unlisted.contains(l) { format!("{l} (not listed)") } else { l.clone() };
+            let links: Vec<String> = a.projects.iter().chain(a.repos.iter()).map(mark).collect();
             let links = if links.is_empty() { "(no link)".to_string() } else { format!("→ {}", links.join(", ")) };
             div()
                 .flex()
@@ -276,6 +284,7 @@ impl Workspace {
             .flex()
             .flex_col()
             .gap_1()
+            .children(self.changed_line())
             .children(rows)
             .children(lines.into_iter().map(|l| muted(l).into_any_element()));
         // A click is its key: the core says what the key does.
@@ -289,7 +298,8 @@ impl Workspace {
                 ui::dialog::action(id, kind, &[cap], State::Rest)
                     .child(self.controls.mark(format!("decision:{id}")))
                     .on_click(cx.listener(move |this, _, window, cx| {
-                        if let Key::Act(action) = this.model.week_click(key, crate::now_ms()) {
+                        let drawn = this.drawn_decision.get();
+                        if let Key::Act(action) = this.model.week_click(key, crate::now_ms(), drawn) {
                             drop(this.dispatch(action, this.input, window, cx));
                         }
                     }))
@@ -310,6 +320,19 @@ impl Workspace {
         div().size_full().flex().items_center().justify_center().child(panel).into_any_element()
     }
 
+    /// While the card on show changed since it was first drawn: says so; the next key only says the
+    /// user saw it, so nothing is taken on words they did not read.
+    fn changed_line(&self) -> Option<AnyElement> {
+        let changed = self.model.decisions.as_ref().is_some_and(|run| run.changed);
+        changed.then(|| {
+            div()
+                .text_xs()
+                .text_color(rgb(theme::TEXT))
+                .child("Changed since it was shown: read it again. Any key goes on; nothing is taken.")
+                .into_any_element()
+        })
+    }
+
     /// A key while the card pane has the keyboard. True: it was the card's.
     pub(crate) fn decision_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) -> bool {
         let key = &event.keystroke;
@@ -317,7 +340,8 @@ impl Workspace {
         if event.is_held && !matches!(key.key.as_str(), "up" | "down" | "j" | "k") {
             return true;
         }
-        match self.model.decision_key(&key.key, crate::mods(key.modifiers), crate::now_ms()) {
+        let drawn = self.drawn_decision.get();
+        match self.model.decision_key_drawn(&key.key, crate::mods(key.modifiers), crate::now_ms(), drawn) {
             Key::Act(action) => {
                 self.dispatch(action, self.input, window, cx);
                 cx.notify();

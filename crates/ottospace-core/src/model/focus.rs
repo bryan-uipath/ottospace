@@ -63,7 +63,9 @@ impl Model {
                 }
             }
             Action::FocusPropose { week, areas, provenance, now } => {
-                if self.focus_refusal(&week, &areas, now).is_none() {
+                let refused = self.focus_refusal(&week, &areas, now).is_some();
+                self.focus.attempt(now);
+                if !refused {
                     self.focus.propose(&areas, provenance, now);
                 }
             }
@@ -123,14 +125,14 @@ impl Model {
         }
     }
 
-    /// The Projects entries' names: what a proposal's projects must be.
-    fn project_names(&self) -> Vec<String> {
+    /// The Projects entries' names: what an area's projects link to.
+    pub fn project_names(&self) -> Vec<String> {
         self.projects.listed.iter().map(|p| project_name(&p.path).to_string()).collect()
     }
 
     /// Why a `focus_set` is refused now, or `None`. The socket's reply says it.
     pub fn focus_refusal(&self, week: &str, areas: &[Area], now: u64) -> Option<String> {
-        self.focus.refusal(week, areas, now, &self.project_names(), &self.checkouts())
+        self.focus.refusal(week, areas, now)
     }
 
     /// The card for the week's focus Decisions has to show, if any: a proposal waiting first, else
@@ -358,7 +360,8 @@ mod tests {
         let area =
             |name: &str, project: &str| Area { name: name.into(), projects: vec![project.into()], repos: vec![] };
         assert!(refused(&m, "2026-W47", vec![area("Login", "atlas")]), "another week");
-        assert!(refused(&m, "2026-W48", vec![area("Login", "nope")]), "no such project");
+        // A link to nothing listed is no refusal: the agent learns nothing of what exists.
+        assert!(!refused(&m, "2026-W48", vec![area("Login", "nope")]), "kept, shown as not listed");
         assert!(refused(&m, "2026-W48", vec![area(&"x".repeat(41), "atlas")]), "a name too long");
         assert!(refused(&m, "2026-W48", vec![area("a", "atlas"); 5]), "five areas");
         propose(&mut m, &[("Login rewrite", &["ATLAS"]), ("Hiring", &[])], 1);
@@ -372,6 +375,13 @@ mod tests {
         assert_eq!(m.decisions.as_ref().and_then(|r| r.week), Some(super::WeekCard::Proposal(2)));
         m.update(Action::FocusAccept { revision: 1, at: 4 });
         assert!(m.focus.areas().is_empty(), "the older one is not what was shown");
+        // Replaced while on show: marked changed; the first ↵ only says it was seen, the next sets it.
+        assert!(m.decisions.as_ref().is_some_and(|r| r.changed));
+        key(&mut m, "enter");
+        assert!(m.focus.areas().is_empty() && m.decisions.as_ref().is_some_and(|r| !r.changed));
+        // A key the shell gives for the revision it drew before the swap takes nothing.
+        let stale = m.decision_key_drawn("enter", crate::keys::Mods::default(), 50, Some(1));
+        assert_eq!(stale, crate::model::chat::Key::Swallow);
         key(&mut m, "enter");
         let names: Vec<&str> = m.focus.areas().iter().map(|a| a.name.as_str()).collect();
         assert_eq!(

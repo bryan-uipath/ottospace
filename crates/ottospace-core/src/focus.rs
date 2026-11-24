@@ -44,6 +44,14 @@ impl Area {
         Area { name: plain(&self.name, MAX_NAME - 1), projects: links(&self.projects), repos: links(&self.repos) }
     }
 
+    /// Its links that name nothing listed: a project no Projects entry has, a repository not
+    /// listed. Shown on the proposal's card as such; never said to the agent.
+    pub fn unlisted(&self, projects: &[String], checkouts: &[String]) -> Vec<String> {
+        let entry = |p: &&String| !projects.iter().any(|q| q.eq_ignore_ascii_case(p));
+        let repo = |r: &&String| !checkouts.contains(r);
+        self.projects.iter().filter(entry).chain(self.repos.iter().filter(repo)).cloned().collect()
+    }
+
     /// Whether a task or decision of `project` (a `#tag` or a project's name) or in `repo` is the area's.
     pub fn holds(&self, project: Option<&str>, repo: Option<&str>) -> bool {
         let project = project.is_some_and(|p| self.projects.iter().any(|q| q.eq_ignore_ascii_case(p)));
@@ -178,16 +186,13 @@ impl Focus {
 
     /// Why a proposal is refused, or `None`. `projects`: the Projects entries' names;
     /// `checkouts`: the listed repositories and worktrees.
-    pub fn refusal(
-        &self,
-        week: &str,
-        areas: &[Area],
-        now: u64,
-        projects: &[String],
-        checkouts: &[String],
-    ) -> Option<String> {
-        let entry = |p: &String| projects.iter().any(|q| q.eq_ignore_ascii_case(p));
-        let fault = if self.week.is_empty() || week != self.week {
+    /// Why a proposal is refused, or `None`. The rate first, every attempt counted (`attempt`), and
+    /// never a word on which projects or repositories exist: a link that is not listed is kept and
+    /// shown to the user as not listed (`Area::unlisted`), never refused.
+    pub fn refusal(&self, week: &str, areas: &[Area], now: u64) -> Option<String> {
+        let fault = if self.recent.iter().filter(|at| at.saturating_add(HOUR_MS) > now).count() >= PROPOSALS_PER_HOUR {
+            format!("{PROPOSALS_PER_HOUR} proposals in the last hour: wait")
+        } else if self.week.is_empty() || week != self.week {
             format!("week: this week's, {}", self.week)
         } else if areas.is_empty() || areas.len() > MAX_AREAS {
             format!("1 to {MAX_AREAS} areas")
@@ -200,19 +205,19 @@ impl Focus {
             )
         } else if areas.iter().any(|a| a.projects.len() > MAX_LINKS || a.repos.len() > MAX_LINKS) {
             format!("at most {MAX_LINKS} projects and {MAX_LINKS} repositories an area")
-        } else if let Some(p) = areas.iter().flat_map(|a| &a.projects).find(|p| !entry(p)) {
-            format!("no project {p:?} in Projects")
-        } else if let Some(r) = areas.iter().flat_map(|a| &a.repos).find(|r| !checkouts.contains(r)) {
-            format!("no listed repository {r:?}")
-        } else if self.recent.iter().filter(|at| at.saturating_add(HOUR_MS) > now).count() >= PROPOSALS_PER_HOUR {
-            format!("{PROPOSALS_PER_HOUR} proposals in the last hour: wait")
         } else {
             return None;
         };
         Some(fault)
     }
 
-    /// An agent proposes this week's focus (checked by `refusal` first). It sets nothing: it waits
+    /// A proposal came, taken or refused: it counts against the hour.
+    pub fn attempt(&mut self, now: u64) {
+        self.recent.retain(|at| at.saturating_add(HOUR_MS) > now);
+        self.recent.push(now);
+    }
+
+    /// An agent proposes this week's focus (checked by `refusal` first; `attempt` counted). It sets nothing: it waits
     /// for the user, replacing one that waited, unless it is what is set or what they declined.
     pub fn propose(&mut self, areas: &[Area], provenance: Option<Provenance>, now: u64) -> Proposed {
         let areas: Vec<Area> = areas.iter().map(Area::kept).take(MAX_AREAS).collect();
@@ -226,8 +231,6 @@ impl Focus {
         if self.pending.as_ref().is_some_and(|p| p.areas == areas && p.provenance == provenance) {
             return Proposed::Pending;
         }
-        self.recent.retain(|at| at.saturating_add(HOUR_MS) > now);
-        self.recent.push(now);
         self.revisions = self.revisions.saturating_add(1);
         let provenance = provenance.map(|p| Provenance {
             path: plain(&p.path, MAX_LINK),

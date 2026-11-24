@@ -1265,6 +1265,8 @@ struct Workspace {
     worktrees: (Sender<worktree::Made>, Receiver<worktree::Made>),
     /// The local day's start last told to the core (`LocalDay`).
     told_day: u64,
+    /// The revision of the Decisions card last drawn: what a key or click on it names.
+    drawn_decision: std::cell::Cell<Option<u32>>,
     /// Done's removals of a task's own worktree, off the main thread.
     removals: (Sender<worktree::Removed>, Receiver<worktree::Removed>),
     /// What the user's last step did, said for a few seconds as information (`Effect::Told`).
@@ -1950,6 +1952,7 @@ impl Workspace {
             worktrees: std::sync::mpsc::channel(),
             removals: std::sync::mpsc::channel(),
             told_day: 0,
+            drawn_decision: std::cell::Cell::new(None),
             told: None,
             prs: prs::Reader::new(),
             projects: projects::Reader::new(),
@@ -3507,7 +3510,11 @@ impl Workspace {
                     self.dispatch(Action::Tick { now }, Origin::Socket, window, cx);
                     let said = self.error.clone();
                     let _ = reply.send(match self.model.filing_refusal(&filing, now) {
-                        Some(why) => control::error(&why),
+                        // Sent all the same: a refused filing counts against the source's hour.
+                        Some(why) => {
+                            self.dispatch(Action::DecisionFile { filing: Box::new(filing), now }, Origin::Socket, window, cx);
+                            control::error(&why)
+                        }
                         None => {
                             let (source, key) = (filing.source, filing.key.clone());
                             self.dispatch(Action::DecisionFile { filing: Box::new(filing), now }, Origin::Socket, window, cx);
@@ -3550,7 +3557,16 @@ impl Workspace {
                         self.dispatch(Action::SetProjects { on: true, listed }, Origin::System, window, cx);
                     }
                     let _ = reply.send(match self.model.focus_refusal(&week, &areas, now) {
-                        Some(why) => control::error(&why),
+                        // Sent all the same: a refused proposal counts against the hour.
+                        Some(why) => {
+                            self.dispatch(
+                                Action::FocusPropose { week, areas, provenance, now },
+                                Origin::Socket,
+                                window,
+                                cx,
+                            );
+                            control::error(&why)
+                        }
                         None => {
                             let kept: Vec<_> = areas.iter().map(ottospace_core::focus::Area::kept).collect();
                             self.dispatch(

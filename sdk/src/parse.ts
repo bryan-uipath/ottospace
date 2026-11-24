@@ -2217,6 +2217,7 @@ function decisions(value: unknown, at: string): Decisions {
     ticket: orNull(num)(o.ticket, `${at}.ticket`),
     sort: orNull(decisionSorting)(o.sort, `${at}.sort`),
     week: o.week === undefined ? null : orNull(weekCard)(o.week, `${at}.week`),
+    changed: o.changed === undefined ? false : bool(o.changed, `${at}.changed`),
     at: num(o.at, `${at}.at`),
     of: num(o.of, `${at}.of`),
     queue: list(card)(o.queue, `${at}.queue`),

@@ -19424,7 +19424,8 @@ fn a_proposed_week_focus_waits_for_the_users_enter() {
     let propose = |areas: Value, week: &str| json!({"cmd": "focus_set", "week": week, "areas": areas});
     let error = |request: Value| otto.raw(&request.to_string())["error"].as_str().unwrap_or_default().to_string();
     assert!(error(propose(json!([{"name": "Login"}]), "2001-W01")).contains("week"));
-    assert!(error(propose(json!([{"name": "Login", "projects": ["nope"]}]), &week)).contains("nope"));
+    // A link to nothing listed is not refused (the agent learns nothing of what exists): it waits too.
+    assert_eq!(otto.call(propose(json!([{"name": "Login", "projects": ["nope"]}]), &week))["status"], "pending");
     assert!(
         error(propose(json!([{"name": "a"}, {"name": "b"}, {"name": "c"}, {"name": "d"}, {"name": "e"}]), &week))
             .contains("areas")
@@ -19447,6 +19448,9 @@ fn a_proposed_week_focus_waits_for_the_users_enter() {
     ));
     let shown = otto.call(json!({"cmd": "state"}))["state"]["decisions"]["week"]["proposal"].clone();
     assert_eq!(shown, second["revision"]);
+    // Replaced while on show: marked changed; the first ↵ only says it was seen.
+    let seen = otto.user_key("enter");
+    assert_eq!((&seen["week_focus"]["areas"], &seen["state"]["decisions"]["changed"]), (&json!(0), &json!(false)));
     let set = otto.user_key("enter");
     assert_eq!((&set["week_focus"]["areas"], &set["week_focus"]["set_by"]), (&json!(2), &json!("proposal")));
     assert_eq!(set["state"]["decisions"], Value::Null, "nothing else waits");
