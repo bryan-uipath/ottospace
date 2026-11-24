@@ -311,7 +311,7 @@ impl Workspace {
             Start::New(launch) => {
                 let id = crate::talk::new_uuid().ok_or("no random bytes for a session id")?;
                 let model = launch.model.clone();
-                let tools = server.is_some() && launch.runner.spec().mcp.is_some();
+                let tools = agents::has_tools(launch.runner, server.is_some());
                 let prompt = agents::prompt(launch.runner, &launch.title, brief, self.see_apps(), tools);
                 let chosen = launch.runner.spec().chooses_session().then(|| id.clone());
                 (launch.runner, ottospace_agents::Start::New { id }, chosen, model, Some(prompt))

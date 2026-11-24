@@ -336,7 +336,7 @@ impl Model {
         let runner = self.runner_of(subject);
         let see = self.features.on(crate::features::Feature::AgentMode);
         // A task's agent has ottospace's MCP server where its runner takes one (the shell gives it).
-        let tools = runner.is_some_and(|runner| runner.spec().mcp.is_some());
+        let tools = runner.is_some_and(|runner| agents::has_tools(runner, true));
         let now = self.now;
         if let Some(chat) = self.chat_mut(subject) {
             chat.transcript.started(resumed);

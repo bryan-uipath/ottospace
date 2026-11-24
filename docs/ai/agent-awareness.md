@@ -261,7 +261,7 @@ core's, the shim passes it on.
 MCP call is a card in the drawer unless allowed; rules name `mcp__ottospace_task__<tool>`
 (code.claude.com/docs/en/permissions). Recommend: the read-only tools pre-allowed in the start
 (`--allowedTools mcp__ottospace_task__workspace …`), every later tool that acts left to a card. Codex:
-`-c mcp_servers.ottospace.default_tools_approval_mode="writes"` prompts only for tools not marked
+`-c mcp_servers.ottospace_task.default_tools_approval_mode="writes"` prompts only for tools not marked
 read-only; the shim marks the first set `readOnlyHint`.
 
 **Tokens.** Claude Code defers MCP tool definitions by default: "only tool names and server
