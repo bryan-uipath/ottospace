@@ -242,7 +242,7 @@ mod tests {
         let (mut m, _) = live();
         assert_eq!(ask(&mut m), []);
         assert_eq!(sections(&m), [(ENDS, vec!["agent · fix login".to_string()])]);
-        assert_eq!(m.confirm.as_ref().map(Confirm::title).as_deref(), Some("Quit?"));
+        assert_eq!(m.confirm.as_ref().map(Confirm::title).as_deref(), Some("Quit ottospace?"));
     }
 
     /// A message in a conversation's composer: its row names the task, never the words.

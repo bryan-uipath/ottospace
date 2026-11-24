@@ -149,6 +149,24 @@ pub const DIVIDER_USERS: &str = "only the user drags a divider: resize moves one
 /// Why a client's Open Settings is refused.
 pub const SETTINGS_USERS: &str = "only the user opens the settings";
 
+/// A question's answer, as its button: its words, what it does, its look, its keys.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Answer {
+    pub label: &'static str,
+    pub action: Action,
+    pub look: Look,
+    pub keys: &'static [&'static str],
+}
+
+/// An answer's look: the way out (outlined), the default (filled), or a default that destroys
+/// what cannot be brought back (red).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Look {
+    Cancel,
+    Primary,
+    Destroys,
+}
+
 /// The quit question: these terminals would lose a running program.
 #[derive(Clone, Debug, Default, PartialEq, Serialize)]
 pub struct Confirm {
@@ -201,17 +219,42 @@ impl Confirm {
         }
     }
 
-    /// What a key does to "Delete this worktree?", as the app's other questions: the user's ↵
-    /// deletes; Esc, or any other key of theirs, keeps it. A client's: `None`, refused (`repos::DELETE_USERS`).
+    /// What a key does to "Delete this worktree?": it cannot be undone, so the user's ⌘↵ deletes
+    /// and ↵ alone does nothing (a ↵ meant for a terminal never deletes a folder); Esc, or any other
+    /// key of theirs, keeps it. A client's: `None`, refused (`repos::DELETE_USERS`).
     pub fn answer_delete(key: &str, mods: Mods, origin: Origin) -> Option<Action> {
         match (key, origin) {
-            ("enter", Origin::User) if mods == Mods::default() => Some(Action::QuitConfirm),
+            ("enter", Origin::User) if mods == Mods { cmd: true, ..Mods::default() } => Some(Action::QuitConfirm),
+            ("enter", Origin::User) if mods == Mods::default() => None,
             (_, Origin::User) => Some(Action::QuitCancel),
             _ => None,
         }
     }
 
-    /// The question's title, e.g. "Quit?".
+    /// The question's two answers as its buttons, no first, yes last (right-most, the default).
+    /// Each names its result; yes carries the keys that press it. Deleting a worktree cannot be
+    /// undone: its yes is red and asks ⌘↵.
+    pub fn answers(&self) -> [Answer; 2] {
+        let (no, yes) = match () {
+            _ if self.dismiss.is_some() => ("Cancel", "Stop and dismiss"),
+            _ if self.later.is_some() => ("Keep running", "Stop, resume later"),
+            _ if self.edited.is_some() => ("Cancel", "Close"),
+            _ if self.unlist.is_some() => ("Cancel", "Unlist"),
+            _ if self.close.is_some() => ("Cancel", "Close workspace"),
+            _ if self.delete.is_some() => ("Keep it", "Delete worktree"),
+            _ => ("Cancel", "Quit"),
+        };
+        let (look, keys): (Look, &'static [&'static str]) = match self.delete {
+            Some(_) => (Look::Destroys, &["⌘", "↵"]),
+            None => (Look::Primary, &["↵"]),
+        };
+        [
+            Answer { label: no, action: Action::QuitCancel, look: Look::Cancel, keys: &[] },
+            Answer { label: yes, action: Action::QuitConfirm, look, keys },
+        ]
+    }
+
+    /// The question's title, e.g. "Quit ottospace?".
     pub fn title(&self) -> String {
         if self.dismiss.is_some() {
             return "Stop its agent and dismiss?".into();
@@ -228,7 +271,7 @@ impl Confirm {
         if self.delete.is_some() {
             return "Delete this worktree?".into();
         }
-        "Quit?".into()
+        "Quit ottospace?".into()
     }
 
     /// What quitting ends, one line each: a terminal ("pane 2 · cargo", "pane 3 · sleep
@@ -19501,6 +19544,29 @@ mod tests {
         assert_eq!((m.mode(), &m.confirm), (Mode::Normal, &None));
     }
 
+    /// Every question has two buttons, the way out first and its yes last, the default, named by
+    /// its result; only the worktree's delete, which cannot be undone, is red and asks ⌘↵.
+    #[test]
+    fn each_question_answers_with_a_way_out_and_a_named_yes() {
+        let asked = [
+            (Confirm::default(), "Cancel", "Quit"),
+            (Confirm { dismiss: Some(1), ..Confirm::default() }, "Cancel", "Stop and dismiss"),
+            (Confirm { later: Some((1, "fix".into())), ..Confirm::default() }, "Keep running", "Stop, resume later"),
+            (Confirm { edited: Some(1), ..Confirm::default() }, "Cancel", "Close"),
+            (Confirm { unlist: Some("/code/app".into()), ..Confirm::default() }, "Cancel", "Unlist"),
+            (Confirm { close: Some(1), ..Confirm::default() }, "Cancel", "Close workspace"),
+            (Confirm { delete: Some("/code/app-wt".into()), ..Confirm::default() }, "Keep it", "Delete worktree"),
+        ];
+        for (confirm, no_label, yes_label) in asked {
+            let [no, yes] = confirm.answers();
+            assert_eq!((no.label, no.action, no.look, no.keys), (no_label, Action::QuitCancel, Look::Cancel, &[][..]));
+            let destroys = confirm.delete.is_some();
+            let (look, keys) =
+                if destroys { (Look::Destroys, &["⌘", "↵"][..]) } else { (Look::Primary, &["↵"][..]) };
+            assert_eq!((yes.label, yes.action, yes.look, yes.keys), (yes_label, Action::QuitConfirm, look, keys));
+        }
+    }
+
     #[test]
     fn quit_asks_while_a_terminal_runs_and_enter_confirms() {
         let mut m = Model::default();
@@ -19983,7 +20049,7 @@ mod tests {
     fn the_quit_question_lists_five_terminals_then_counts_the_rest() {
         let one =
             Confirm { running: vec![Running { pane: 4, program: None, background: false }], ..Confirm::default() };
-        assert_eq!((one.title().as_str(), one.lines()), ("Quit?", vec!["pane 4".to_string()]));
+        assert_eq!((one.title().as_str(), one.lines()), ("Quit ottospace?", vec!["pane 4".to_string()]));
         let job = Confirm {
             running: vec![Running { pane: 2, program: Some("sleep".into()), background: true }],
             ..Confirm::default()

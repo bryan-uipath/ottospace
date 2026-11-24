@@ -1354,7 +1354,7 @@ fn git(dir: &Path, args: &[&str]) {
 }
 
 /// The user's right click on a linked worktree's row: its menu, Delete worktree…, the question
-/// (↵ deletes, Esc keeps), then git removes a clean one and keeps its branch; a dirty one stays, git's reason said.
+/// (⌘↵ deletes, ↵ alone does nothing, Esc or Keep it keeps), then git removes a clean one and keeps its branch; a dirty one stays, git's reason said.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_one() {
@@ -1426,13 +1426,25 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
     ask(&otto);
     otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
     assert!(otto.drawn()["state"]["confirm"].is_null() && clean.exists());
+    // Its Keep it button, a client's click refused, the user's keeps it too.
+    ask(&otto);
+    let keep = otto.control("confirm:no");
+    let k = at(keep, 0.5, 0.5);
+    for action in ["down", "up"] {
+        otto.raw(&json!({"cmd": "mouse", "action": action, "x": k[0], "y": k[1]}).to_string());
+    }
+    assert!(!otto.call(json!({"cmd": "state"}))["state"]["confirm"].is_null());
+    otto.user_click(at(keep, 0.5, 0.5));
+    assert!(otto.drawn()["state"]["confirm"].is_null() && clean.exists());
     // A client's ↵ answers nothing.
     ask(&otto);
     let refused = otto.raw(&json!({"cmd": "key", "keys": "enter"}).to_string());
     assert_eq!(refused["error"], "only the user deletes a worktree", "{refused}");
     assert!(!otto.call(json!({"cmd": "state"}))["state"]["confirm"].is_null() && clean.exists());
-    // The user's ↵: gone, its row too, its branch kept, said.
+    // The user's ↵ alone does nothing: it cannot be undone. ⌘↵: gone, its row too, its branch kept, said.
     otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    assert!(!otto.call(json!({"cmd": "state"}))["state"]["confirm"].is_null() && clean.exists());
+    otto.call(json!({"cmd": "key", "keys": "cmd-enter", "as": "user"}));
     let gone = |o: &Otto| Some(o.drawn()).filter(|s| !clean.exists() && row(s, &clean).is_none());
     let state = otto.wait_for("the clean worktree to go", gone);
     assert_eq!(state["notice"], "Deleted the worktree of clean · its branch is kept");
@@ -1443,7 +1455,7 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
     // The dirty one: git refuses, nothing goes, and the notice says why.
     let state = right_click(at(row(&otto.drawn(), &dirty).unwrap(), 0.3, 0.5));
     otto.user_click(at(rect(&state["row_menu"]["items"][0]["rect"]), 0.5, 0.5));
-    otto.call(json!({"cmd": "key", "keys": "enter", "as": "user"}));
+    otto.user_click(at(otto.control("confirm:yes"), 0.5, 0.5));
     let said =
         |o: &Otto| Some(o.drawn()).filter(|s| s["notice"].as_str().is_some_and(|n| n.starts_with("Kept the worktree")));
     let state = otto.wait_for("git's reason", said);
@@ -14402,7 +14414,7 @@ fn stopped_conversation(name: &str) -> (PathBuf, Otto) {
 
 /// The user's ⌘Q with a message unsent and nothing running: the question lists that row alone,
 /// with no "Quitting ends these" (no terminal, no agent). A click on the row cancels and gives
-/// the composer the keyboard. With a program running too, both are listed.
+/// the composer the keyboard. With a program running too, both are listed; × cancels.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn quit_names_an_unsent_message_and_its_row_goes_to_the_composer() {
@@ -14432,7 +14444,9 @@ fn quit_names_an_unsent_message_and_its_row_goes_to_the_composer() {
         found.then_some(reply)
     });
     assert_eq!(both["state"]["confirm"]["unsent"], message, "{both}");
-    assert_eq!(otto.user_key("escape")["state"]["confirm"], Value::Null);
+    // Its × cancels, as Esc and Cancel do.
+    let cancelled = otto.user_click(at(otto.control("confirm:close"), 0.5, 0.5));
+    assert_eq!(cancelled["state"]["confirm"], Value::Null, "{cancelled}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
