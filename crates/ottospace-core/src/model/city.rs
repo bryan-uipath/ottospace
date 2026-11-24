@@ -46,7 +46,7 @@ pub struct Agent<'a> {
 pub enum Who<'a> {
     Task(TaskId),
     /// A session no task has, at work (a `claude` the user runs in a terminal): its runner's
-    /// name, its id and its title, as read from its file (`SessionsAtWork`).
+    /// name, its id and its title, as read from its file (`SetSessions`).
     Session {
         runner: &'a str,
         id: &'a str,
@@ -280,7 +280,7 @@ impl Model {
                 at: file_of(s),
                 near: Vec::new(),
                 busy: s.station.is_some(),
-                subagents: 0,
+                subagents: s.subagents,
             };
             (works && !chatted).then_some((task.id, agent, s))
         });
@@ -303,7 +303,7 @@ impl Model {
             at: file_of(s),
             near: Vec::new(),
             busy: s.station.is_some(),
-            subagents: 0,
+            subagents: s.subagents,
         });
         // An agent CLI in one of our panes, working in this checkout, no session of it on show
         // here: by its process alone (no setting needed), hovering. A task's space: its own panes.
@@ -340,6 +340,14 @@ impl Model {
             }
             Who::Task(_) | Who::Pane { .. } => None,
         }));
+        // Its sub-agents' files too, in its colour: they may work in another worktree of the
+        // repository, whose file a building here has by name (the last two parts of its path).
+        let colour_of = |s: &crate::sessions::Found| self.tasks.adopter(&s.runner, &s.id).and_then(|task| task.colour);
+        let subs = drawn.iter().flat_map(|s| {
+            let colour = colour_of(s);
+            s.sub_files.iter().map(move |label| Lit { label, colour, running: true })
+        });
+        let lit = lit.chain(subs);
         let view = self.city_view(at);
         let glimpses = (chats.iter().filter(|(.., transcript)| transcript.pulse() == Pulse::Running))
             .flat_map(|(task, colour, transcript)| {
@@ -678,8 +686,10 @@ mod tests {
             title: Some("fix the loop".into()),
             model: None,
             held: true,
+            subagents: 0,
+            sub_files: Vec::new(),
         };
-        m.update(Action::SessionsAtWork { found: vec![found(true, "files", "src/main.rs")] });
+        m.update(Action::SetSessions { found: vec![found(true, "files", "src/main.rs")], day: 0 });
         let city = city(&m).unwrap();
         let who = Who::Session { runner: "claude", id: "s1", title: Some("fix the loop") };
         let near = Vec::new();
@@ -688,10 +698,41 @@ mod tests {
             vec![Agent { who, colour: None, at: Some("src/main.rs"), near, busy: true, subagents: 0 }]
         );
         assert_eq!(city.lit, vec![Lit { label: "src/main.rs", colour: None, running: true }]);
-        m.update(Action::SessionsAtWork { found: vec![found(true, "shell", "cargo test")] });
+        m.update(Action::SetSessions { found: vec![found(true, "shell", "cargo test")], day: 0 });
         assert_eq!(agents(&m), Some(vec![(0, None)]), "a shell line: at no file");
-        m.update(Action::SessionsAtWork { found: vec![found(false, "files", "src/main.rs")] });
+        m.update(Action::SetSessions { found: vec![found(false, "files", "src/main.rs")], day: 0 });
         assert_eq!(agents(&m), Some(vec![]));
+    }
+
+    /// The owner's case: a `claude` in another terminal, its own file quiet while its sub-agents
+    /// work (in worktrees of the repository, under a temp folder). Read at work by their files,
+    /// it is an agent of the city with its sub-agents counted, and their files are lit by name.
+    #[test]
+    fn a_terminal_session_waiting_on_its_subagents_floats_with_them_and_lights_their_files() {
+        let mut m = listed();
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Axis::Right });
+        m.update(Action::Close { pane: None });
+        let found = crate::sessions::Found {
+            runner: "claude".into(),
+            id: "s1".into(),
+            cwd: "/code/app".into(),
+            repo: "/code/app".into(),
+            started: Some(1),
+            last_activity: Some(2),
+            active: false,
+            station: Some("agents".into()),
+            label: Some("Explore".into()),
+            title: None,
+            model: None,
+            held: true,
+            subagents: 2,
+            sub_files: vec!["src/lib.rs".into(), "docs/a.md".into()],
+        };
+        m.update(Action::SetSessions { found: vec![found], day: 0 }.sent_by(Origin::System));
+        let city = city(&m).unwrap();
+        assert_eq!(city.agents.iter().map(|a| (a.at, a.subagents)).collect::<Vec<_>>(), [(None, 2)]);
+        let lit: Vec<&str> = city.lit.iter().map(|lit| lit.label).collect();
+        assert_eq!(lit, ["src/lib.rs", "docs/a.md"]);
     }
 
     /// An agent floats over the file it is at now: its newest call's; with a shell line its
@@ -815,12 +856,14 @@ mod tests {
             title: None,
             model: None,
             held: true,
+            subagents: 0,
+            sub_files: Vec::new(),
         };
         m.update(Action::PaneAgents { found: vec![found("/code/app/src")] }.sent_by(Origin::System));
-        m.update(Action::SessionsAtWork { found: vec![session] });
+        m.update(Action::SetSessions { found: vec![session], day: 0 });
         assert_eq!(who(&m).map(|w| w.len()), Some(1));
         assert!(who(&m).is_some_and(|w| w[0].starts_with("Session")), "{:?}", who(&m));
-        m.update(Action::SessionsAtWork { found: vec![] });
+        m.update(Action::SetSessions { found: vec![], day: 0 });
         m.update(Action::PaneAgents { found: vec![found("/code/app")] }.sent_by(Origin::System));
         m.update(Action::Close { pane: Some(pane) });
         assert_eq!(who(&m).map(|w| w.len()), Some(0), "its pane closed");
@@ -944,20 +987,22 @@ src/main.rs:9:loop
             title: None,
             model: None,
             held: true,
+            subagents: 0,
+            sub_files: Vec::new(),
         };
         m.tasks.link(1, crate::sessions::Link { runner: "codex".into(), id: "s9".into(), state: None });
-        m.update(Action::SessionsAtWork { found: vec![found("s9", true, "files", "src/main.rs")] });
+        m.update(Action::SetSessions { found: vec![found("s9", true, "files", "src/main.rs")], day: 0 });
         assert_eq!(agents(&m), Some(vec![(1, Some("src/main.rs"))]));
         let colour = m.tasks.get(1).and_then(|task| task.colour);
         assert_eq!(city(&m).unwrap().lit, vec![Lit { label: "src/main.rs", colour, running: true }]);
-        m.update(Action::SessionsAtWork { found: vec![found("s9", true, "shell", "cargo test")] });
+        m.update(Action::SetSessions { found: vec![found("s9", true, "shell", "cargo test")], day: 0 });
         assert_eq!(agents(&m), Some(vec![(1, None)]), "a shell line: at the edge");
-        m.update(Action::SessionsAtWork { found: vec![] });
+        m.update(Action::SetSessions { found: vec![], day: 0 });
         assert_eq!(agents(&m), Some(vec![]));
         // A task with a live chat: its chat decides; its session at work adds nothing.
         let mut m = task_in_app();
         m.tasks.link(1, crate::sessions::Link { runner: "codex".into(), id: "s9".into(), state: None });
-        m.update(Action::SessionsAtWork { found: vec![found("s9", true, "files", "src/lib.rs")] });
+        m.update(Action::SetSessions { found: vec![found("s9", true, "files", "src/lib.rs")], day: 0 });
         assert_eq!(agents(&m), Some(vec![(1, None)]), "its turn runs, at no file yet: once");
     }
 

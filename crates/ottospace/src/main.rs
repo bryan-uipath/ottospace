@@ -1322,13 +1322,13 @@ struct Workspace {
     calls: u64,
     /// Reads agent sessions on a thread of its own. `None`: the settings turn it off.
     sessions: Option<sessions::Poller>,
-    /// The core holds sessions that were found: they are cleared when the Tasks section closes.
+    /// The core holds sessions that were found: cleared when nothing that reads them is on show.
     sessions_listed: bool,
     /// The agent CLIs our panes run, as last told to the core (`PaneAgents`).
     pane_agents: Vec<ottospace_core::sessions::PaneAgent>,
     /// When the panes' processes were last read for it: at most once a second.
     pane_agents_read: Option<Instant>,
-    /// The last read went to the Tasks section's list (else only to the Repos section's dots).
+    /// The last read was for the Tasks section or a session's space (else for Repos or a city).
     sessions_tasks: bool,
     /// The core was told the `session_quiet_minutes` setting.
     sessions_quiet_told: bool,
@@ -3946,7 +3946,7 @@ impl Workspace {
     /// The reading itself is on the poller's thread.
     fn poll_sessions(&mut self, window: &Window, cx: &mut Context<Self>) {
         let now = now_ms();
-        // Read for the Repos section's dots and a code city's agents too; listed only while Tasks is open.
+        // Read for the Tasks section, a session's space, the Repos section's dots and a code city's agents.
         // A session's space on show lists them as Tasks does: its watch and the counts need them.
         let tasks = self.model.sidebar == Some(Section::Tasks) || self.model.shows_session();
         let city = self.model.empty_places().into_iter().any(|at| self.model.city_at(at).is_some());
@@ -3971,16 +3971,8 @@ impl Workspace {
             cx.notify();
         }
         if tasks != self.sessions_tasks && open {
-            // Tasks closed into Repos: its list goes at once. Either way, read again now.
+            // Tasks opened or closed into Repos: read again now.
             self.sessions_tasks = tasks;
-            if !tasks && self.sessions_listed {
-                self.dispatch(
-                    Action::SetSessions { found: Vec::new(), day: day_start(now) },
-                    Origin::System,
-                    window,
-                    cx,
-                );
-            }
             if let Some(poller) = &mut self.sessions {
                 poller.again();
             }
@@ -4045,11 +4037,8 @@ impl Workspace {
             self.sessions_listed = open && !stopped;
             // The time too: ages and the range are counted from it.
             self.dispatch(Action::Tick { now }, Origin::System, window, cx);
-            let read = match tasks || found.is_empty() {
-                true => Action::SetSessions { found, day: day_start(now) },
-                false => Action::SessionsAtWork { found },
-            };
-            self.dispatch(read, Origin::System, window, cx);
+            // Whichever section asked, one list: the counts, the cards and the city read the same.
+            self.dispatch(Action::SetSessions { found, day: day_start(now) }, Origin::System, window, cx);
             cx.notify();
         }
         if stopped && !self.sessions_stopped {

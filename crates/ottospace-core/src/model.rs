@@ -1233,11 +1233,6 @@ pub enum Action {
     SessionQuiet {
         ms: u64,
     },
-    /// The sessions the shell read while the Repos section, not Tasks, is open: only for the
-    /// checkouts' dots (`repo_dots`) and the tasks that follow them. Nothing is listed.
-    SessionsAtWork {
-        found: Vec<Found>,
-    },
     /// The agent CLIs our terminal panes run, by their processes (`sessions::PaneAgent`): read by
     /// the shell while a code city is on show, for its agents. No request of the socket sends it.
     PaneAgents {
@@ -2837,7 +2832,6 @@ impl Action {
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
             | Action::SessionsInPanes { .. }
-            | Action::SessionsAtWork { .. }
             | Action::PaneAgents { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
@@ -3358,7 +3352,6 @@ impl Action {
             | Action::SetSessions { .. }
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
-            | Action::SessionsAtWork { .. }
             | Action::PaneAgents { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionsInPanes { .. }
@@ -6831,7 +6824,7 @@ impl Model {
             Action::SetSessions { found, day } => {
                 let kept = self.list_row();
                 self.found = sessions::kept(found);
-                self.at_work = self.found.iter().filter(|s| s.active).cloned().collect();
+                self.at_work = self.found.iter().filter(|s| s.works()).cloned().collect();
                 self.session_day = day;
                 let seen = self.found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
                 self.follow_sessions(seen.collect());
@@ -6840,17 +6833,6 @@ impl Model {
             }
             Action::SessionQuiet { ms } => self.session_quiet_ms = ms,
             Action::PaneAgents { found } => self.pane_agents = found,
-            Action::SessionsAtWork { found } => {
-                let kept = self.list_row();
-                // Not listed: the Elsewhere group and its actions see none of it.
-                self.found.clear();
-                let found = sessions::kept(found);
-                let seen = found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
-                self.follow_sessions(seen.collect());
-                self.at_work = found.into_iter().filter(|s| s.active).collect();
-                self.note_cards(effects);
-                self.list_back(kept);
-            }
             Action::SessionsSeen { seen } => {
                 let seen = seen.into_iter().map(|s| (s.runner, s.id, s.active, Some(s.last_activity)));
                 self.follow_sessions(seen.collect());
@@ -10098,9 +10080,9 @@ impl Model {
         if let Some((_, why)) = self.waiting(runner, id) {
             return (Some(why), last);
         }
-        // Held, and not at work: its file quiet and its runner's record not busy (`Found::active`).
+        // Held, and not at work: its file quiet, its record not busy, no sub-agent at work (`Found::works`).
         let held = RunnerId::named(runner).is_some_and(|r| r.spec().disk.held)
-            && listed.is_some_and(|s| Self::found_runs(s) && !s.active);
+            && listed.is_some_and(|s| Self::found_runs(s) && !s.works());
         let quiet =
             self.session_quiet_ms > 0 && last.is_some_and(|at| self.now.saturating_sub(at) >= self.session_quiet_ms);
         let on = self.features.on(Feature::TerminalTasks);
@@ -10140,7 +10122,7 @@ impl Model {
                 runner: runner.clone(),
                 id: id.clone(),
                 name,
-                active: listed.is_some_and(|s| s.active),
+                active: listed.is_some_and(Found::works),
                 doing: needs.map(|w| format!("needs you · {}", w.label())).or(listed.and_then(Found::doing)),
                 age: last.map(|at| tasks::age(at, self.now)),
                 pane: self.runs_in(&runner, &id),
@@ -11806,7 +11788,6 @@ mod tests {
         Action::SessionQuiet { .. },
         Action::SessionsSeen { .. },
         Action::SessionsInPanes { .. },
-        Action::SessionsAtWork { .. },
         Action::PaneAgents { .. },
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
@@ -12220,7 +12201,6 @@ mod tests {
             Action::SessionQuiet { ms: 0 },
             Action::SessionsSeen { seen: Vec::new() },
             Action::SessionsInPanes { found: Vec::new() },
-            Action::SessionsAtWork { found: Vec::new() },
             Action::PaneAgents { found: Vec::new() },
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
@@ -17204,7 +17184,23 @@ mod tests {
         let (runner, id, cwd, repo) = (runner.to_string(), id.to_string(), cwd.to_string(), cwd.to_string());
         let (station, label, title, model, held) = (None, None, None, None, false);
         let (started, last_activity) = (None, Some(at));
-        Found { runner, id, cwd, repo, started, last_activity, active, station, label, title, model, held }
+        let (subagents, sub_files) = (0, Vec::new());
+        Found {
+            runner,
+            id,
+            cwd,
+            repo,
+            started,
+            last_activity,
+            active,
+            station,
+            label,
+            title,
+            model,
+            held,
+            subagents,
+            sub_files,
+        }
     }
 
     /// The Elsewhere group as (count in range, ids of the rows drawn, count in all).
@@ -17488,7 +17484,7 @@ mod tests {
         let closed = || {
             let mut m = conversations();
             m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
-            m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
+            m.update(Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::System));
             let idle = of_session("claude", IDLE);
             // No dead end: Resume session shows, and nothing says it cannot.
             assert_eq!((m.talk_note(), m.talk_resumes(), m.take_over_ready(&idle)), (None, Some(true), true));
@@ -17513,7 +17509,7 @@ mod tests {
         assert!(m.talk_note().is_some_and(|note| note.contains("running in another terminal")));
         // Never opened: a session not listed still opens nothing.
         let mut m = conversations();
-        m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
+        m.update(Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::System));
         assert_eq!(m.update(Action::SessionOpen { runner: "claude".into(), id: IDLE.into() }), []);
         assert_eq!(m.talk, None);
     }
@@ -17537,7 +17533,7 @@ mod tests {
         // Closed and reopened from its tab, unlisted too: read first, then gone on with.
         m.update(Action::TaskStop { id: idle.clone() });
         m.update(Action::AgentExited { task: idle.clone() }.sent_by(Origin::System));
-        m.update(Action::SessionsAtWork { found: Vec::new() }.sent_by(Origin::System));
+        m.update(Action::SetSessions { found: Vec::new(), day: 0 }.sent_by(Origin::System));
         let read = Effect::ReadSession { runner: "claude".into(), id: IDLE.into() };
         assert_eq!(m.update(Action::TalkStart), [read]);
     }
@@ -18258,6 +18254,21 @@ mod tests {
         // Another space on show: nothing asks for the sessions.
         m.update(Action::SpaceOpen { space: Owner::Home });
         assert!(!m.shows_session());
+    }
+
+    /// The owner's case: a terminal session quiet past its turn while its sub-agents work is at
+    /// work, not "your turn"; they done, it is its turn.
+    #[test]
+    fn a_held_session_whose_subagents_work_is_not_your_turn() {
+        let now = 100 * sessions::QUIET_MS;
+        let mut m = cards_model(now);
+        let quiet = Found { held: true, ..session("claude", "h", "/code/app", false, now - sessions::QUIET_MS) };
+        let working = Found { subagents: 2, ..quiet.clone() };
+        m.update(Action::SetSessions { found: vec![working], day: 0 }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("h".into(), sessions::CardState::Running)]);
+        assert_eq!(m.agents().in_terminal, 1);
+        m.update(Action::SetSessions { found: vec![quiet], day: 0 }.sent_by(Origin::System));
+        assert_eq!(cards(&m), [("h".into(), sessions::CardState::NeedsYou)]);
     }
 
     #[test]

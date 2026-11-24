@@ -328,26 +328,56 @@ fn read(
     // How far a transcript was read is kept while its session is listed, at work or not: after a
     // pause the reading goes on from there, not from the start of a long file. (A file replaced
     // or cut short starts over by itself: the cursor knows which file it read.)
-    follows.retain(|path, _| sessions.iter().any(|(_, session)| session.path == *path));
-    let mut found = Vec::new();
+    // The sub-agents' files followed this round: kept with the listed sessions' (below).
+    let mut subs_seen: Vec<PathBuf> = Vec::new();
+    let (mut found, mut live) = (Vec::new(), 0);
     for (index, (runner, session)) in sessions.iter().enumerate() {
         let Some(repo) = repo_of(&checkouts, session) else { continue };
+        let mut seen = as_found(session, repo, now);
+        // A live session may be quiet while its sub-agents work in files of their own: at work.
+        // Live ones are few (a process each), so they are looked at however long ago they wrote.
+        live += usize::from(seen.held);
+        // Its own `active` stays its file's and record's, as the slow round reads it (`seen`).
+        let looked = seen.held && live <= FOLLOWED;
+        let subs: Vec<SessionRef> = match looked {
+            true => runner.subagents(session).into_iter().filter(active).take(SUBAGENTS).collect(),
+            false => Vec::new(),
+        };
         let (mut station, mut label) = (None, None);
-        if active(session) && index < FOLLOWED {
+        if (seen.active || !subs.is_empty()) && (index < FOLLOWED || looked) {
             let follow = follows.entry(session.path.clone()).or_default();
             advance(*runner, session, follow);
             if follow.caught_up {
                 let name = |station| serde_json::to_value(station).ok().and_then(|v| v.as_str().map(str::to_string));
                 station = follow.snapshot.station().and_then(name);
                 label = follow.snapshot.running.last().map(|call| call.summary.clone());
+                seen.subagents = follow.snapshot.subagents.len();
             }
+        }
+        seen.subagents = seen.subagents.max(subs.len());
+        // Each sub-agent at work: the file it is at, as its own file says.
+        for sub in &subs {
+            subs_seen.push(sub.path.clone());
+            let follow = follows.entry(sub.path.clone()).or_default();
+            advance(*runner, sub, follow);
+            seen.sub_files.extend(follow.caught_up.then(|| file_at(&follow.snapshot)).flatten());
         }
         files.insert((session.runner.name().to_string(), session.id.clone()), session.path.clone());
         // From the end of the file, read again only when the file changed: not a transcript followed.
         let (title, model) = if index < TITLED { (runner.title(session), runner.model(session)) } else { (None, None) };
-        found.push(Found { station, label, title, model, ..as_found(session, repo, now) });
+        found.push(Found { station, label, title, model, ..seen });
     }
+    follows.retain(|path, _| subs_seen.contains(path) || sessions.iter().any(|(_, s)| s.path == *path));
     found
+}
+
+/// The most sub-agents of one session whose files are followed at once: the first listed.
+const SUBAGENTS: usize = 8;
+
+/// The file a session's newest call is at: its running call's, else its last one's, if a file's.
+fn file_at(snapshot: &Snapshot) -> Option<String> {
+    let call = snapshot.running.last().or(snapshot.recent.back())?;
+    (call.station == ottospace_core::activity::Station::Files).then(|| call.summary.clone())
 }
 
 /// The longest listed checkout the session started in or below: a worktree inside its
@@ -375,6 +405,8 @@ fn as_found(session: &SessionRef, repo: &std::path::Path, now: u64) -> Found {
         title: None,
         model: None,
         held,
+        subagents: 0,
+        sub_files: Vec::new(),
     }
 }
 
@@ -589,5 +621,48 @@ mod tests {
         let after = look(&all);
         assert_eq!((after[0].active, now - after[0].last_activity), (true, 120_000));
         assert!(!look(&all)[0].active, "and not again at the next look");
+    }
+
+    /// The owner's case: a `claude` in another terminal, its own file quiet for minutes while its
+    /// sub-agents work (their files under its folder). Read at work, its sub-agents counted, and
+    /// the file each is at given by name.
+    #[test]
+    fn a_live_session_waiting_on_its_subagents_is_at_work_with_their_files() {
+        let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let root = crate::scratch::Scratch::dir(&format!("ottospace-subs-{}", std::process::id()));
+        let (config, repo) = (root.as_ref().join("claude"), root.as_ref().join("app"));
+        std::fs::create_dir_all(&repo).unwrap();
+        let id = "77777777-7777-4777-8777-777777777777";
+        let project = config.join("projects").join(ottospace_sessions::claude::slug(&repo));
+        std::fs::create_dir_all(project.join(id).join("subagents")).unwrap();
+        // Made-up records. Its own file: a prompt, then a background agent's call, long ago.
+        let main = project.join(format!("{id}.jsonl"));
+        let user = serde_json::json!({"type": "user", "message": {"role": "user", "content": "made-up"},
+            "timestamp": "2026-11-13T09:00:00.000Z", "cwd": repo});
+        let agent = serde_json::json!({"type": "tool_use", "id": "toolu_a", "name": "Agent",
+            "input": {"subagent_type": "Explore", "prompt": "made-up"}});
+        let call = serde_json::json!({"type": "assistant", "message": {"id": "msg_1", "content": [agent]},
+            "timestamp": "2026-11-13T09:00:01.000Z"});
+        std::fs::write(&main, format!("{user}\n{call}\n")).unwrap();
+        let old = SystemTime::now() - Duration::from_secs(600);
+        std::fs::File::options().append(true).open(&main).unwrap().set_modified(old).unwrap();
+        // Its sub-agent, in a worktree elsewhere, reads a file now.
+        let reads = serde_json::json!({"type": "tool_use", "id": "toolu_r", "name": "Read",
+            "input": {"file_path": "/elsewhere/app-wt/src/auth.rs"}});
+        let sub = serde_json::json!({"type": "assistant", "message": {"id": "msg_s", "content": [reads]},
+            "timestamp": "2026-11-13T09:10:00.000Z", "isSidechain": true});
+        std::fs::write(project.join(id).join("subagents/agent-a1.jsonl"), format!("{sub}\n")).unwrap();
+        // This test's own process holds it, idle.
+        std::fs::create_dir_all(config.join("sessions")).unwrap();
+        let record =
+            serde_json::json!({"pid": std::process::id(), "sessionId": id, "status": "idle", "updatedAt": now});
+        std::fs::write(config.join("sessions/1.json"), record.to_string()).unwrap();
+        let reader = ottospace_sessions::claude::Claude::new(vec![config.clone()]);
+        let listed =
+            [Repo { name: "app".into(), path: repo.to_string_lossy().into(), branch: None, worktrees: vec![] }];
+        let (mut follows, mut files) = (HashMap::new(), HashMap::new());
+        let found = read(&[&reader], &listed, now, &mut follows, &mut files);
+        let at = |f: &Found| (f.held, f.active, f.subagents, f.sub_files.clone());
+        assert_eq!(found.iter().map(at).collect::<Vec<_>>(), [(true, false, 1, vec!["src/auth.rs".to_string()])]);
     }
 }
