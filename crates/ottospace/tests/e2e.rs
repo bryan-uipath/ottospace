@@ -10229,9 +10229,7 @@ fn a_session_opened_before_the_section_closed_resumes_or_says_why_not() {
     let reading = otto.user_start();
     assert_eq!(reading["state"]["talk"]["task"]["id"], idle, "{reading}");
     let argv = otto.wait_for("claude --resume, read first", |_| agent_argv(&bin, "claude"));
-    // Now task 1's: its MCP server too.
-    assert_eq!(without_mcp(&argv), [below.to_str().unwrap(), "--resume", idle]);
-    assert!(argv.iter().any(|a| a == "--mcp-config"), "{argv:?}");
+    assert_eq!(argv, [below.to_str().unwrap(), "--resume", idle]);
 
     // Stopped, and its file gone: read again on Resume, and the drawer says why nothing starts.
     std::fs::remove_file(bin.join("claude.argv")).unwrap();
