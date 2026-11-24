@@ -175,12 +175,12 @@ fn fields_of(event: &str) -> &'static [&'static str] {
         "listen_counts" => &["bundle", "buffers", "loud", "lines"],
         // The picker's list of an app's windows: how many, and why each other was left out.
         "pick_list" => &["bundle", "listed", "skipped"],
-        // Where a new window of a hosted app went, and why: never its title.
         // The developer's timed spin of a code city: frame times and counts only.
         "city_spin" => &[
             "steps", "done", "frames", "mean", "p50", "p95", "p99", "max", "over_16", "over_33", "repeats", "wait_p50",
             "wait_p95", "wait_max", "boxes",
         ],
+        // Where a new window of a hosted app went, and why: never its title.
         "place" => {
             &["bundle", "subrole", "modal", "sheet", "size", "pane", "min_width", "place", "why", "rule", "slot"]
         }

@@ -1462,7 +1462,6 @@ impl Workspace {
 pub(crate) struct Spin {
     floor: Floor,
     at: At,
-    origin: Origin,
     step: usize,
     /// Its frames are asked for (`city_spin_frames`), from the frame after it began.
     asked: bool,
@@ -1519,8 +1518,7 @@ impl Workspace {
         };
         self.dispatch(Action::CityCamera { at, step: CameraStep::Grab }, origin, window, cx);
         self.city_drawn.borrow_mut().waits = Some((floor, Vec::new()));
-        let spin =
-            Spin { floor, at, origin, step: 0, asked: false, last: None, frames: Vec::new(), repeats: 0, shown: None };
+        let spin = Spin { floor, at, step: 0, asked: false, last: None, frames: Vec::new(), repeats: 0, shown: None };
         self.city_spin = Some(spin);
         cx.notify();
     }
@@ -1537,6 +1535,11 @@ impl Workspace {
     /// the next step; after the last, the camera back where it was and the numbers told.
     fn city_spin_frame(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(mut spin) = self.city_spin.take() else { return };
+        // A frame asked for by a spin Esc ended: the new one asks its own.
+        if !spin.asked {
+            self.city_spin = Some(spin);
+            return;
+        }
         let now = Instant::now();
         if let Some(last) = spin.last {
             spin.frames.push((now - last).as_secs_f32() * 1e3);
@@ -1556,7 +1559,7 @@ impl Workspace {
             return self.city_spin_end(spin, true, window, cx);
         }
         spin.step += 1;
-        self.dispatch(Action::CityCamera { at: spin.at, step: CameraStep::Spin }, spin.origin, window, cx);
+        self.dispatch(Action::CityCamera { at: spin.at, step: CameraStep::Spin }, Origin::User, window, cx);
         self.city_spin = Some(spin);
         cx.on_next_frame(window, |this, window, cx| this.city_spin_frame(window, cx));
         cx.notify();
@@ -1565,7 +1568,7 @@ impl Workspace {
     /// A spin ends (all its steps, or Esc): its camera back, its numbers in a toast, the event
     /// log and a test run's state.
     fn city_spin_end(&mut self, spin: Spin, done: bool, window: &mut Window, cx: &mut Context<Self>) {
-        self.dispatch(Action::CityCamera { at: spin.at, step: CameraStep::Cancel }, spin.origin, window, cx);
+        self.dispatch(Action::CityCamera { at: spin.at, step: CameraStep::Cancel }, Origin::User, window, cx);
         let mut frames = spin.frames;
         frames.sort_by(f32::total_cmp);
         let mut waits = self.city_drawn.borrow_mut().waits.take().map(|(_, waits)| waits).unwrap_or_default();
