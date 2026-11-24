@@ -326,6 +326,7 @@ struct Mark {
     text: String,
     bounds: [f32; 4],
     top: (f32, f32),
+    face: [(f32, f32); 4],
 }
 
 /// A picture made: where, in shares of it, the lit buildings and the things it may name are;
@@ -585,7 +586,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     let marks_at = Instant::now();
     let marks: Vec<Mark> = (scene.blocks.iter().enumerate())
         .filter(|_| !rising)
-        .filter_map(|(_, b)| {
+        .filter_map(|(i, b)| {
             let place = b.place?;
             let tier = match b.kind {
                 Kind::Plate(tier) if tier <= WALL_TIERS => Tier::Wall,
@@ -596,7 +597,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
             let top = camera.project(b.top())?;
             let label = &plan.places[place].label;
             let text = if tier == Tier::File { label.clone() } else { label.to_uppercase() };
-            Some(Mark { place, tier, text, bounds: camera.bounds(b)?, top })
+            Some(Mark { place, tier, text, bounds: camera.bounds(b)?, top, face: scene.outline(i)? })
         })
         .collect();
     if !rising {
@@ -1423,7 +1424,8 @@ fn paint(
         .filter(|(_, b)| city_labels::sized(*b, [w, h]))
         .collect();
     let extent = |b: &[f32; 4]| b[2].max(b[3]);
-    marks.sort_by(|a, b| a.0.tier.cmp(&b.0.tier).then(extent(&b.1).total_cmp(&extent(&a.1))));
+    // In `city_labels::place`'s order: the largest first, whatever its tier.
+    marks.sort_by(|a, b| extent(&b.1).total_cmp(&extent(&a.1)).then(a.0.place.cmp(&b.0.place)));
     marks.truncate(SHAPED);
     let style_of = |tier: Tier| match tier {
         Tier::Wall => (theme::TEXT_XS, Hsla::from(rgb(theme::MUTED))),
@@ -1438,6 +1440,7 @@ fn paint(
             tier: m.tier,
             bounds: *b,
             top: at(m.top),
+            face: m.face.map(at),
             size: [f32::from(line.width), style_of(m.tier).0 + 4.],
         })
         .collect();

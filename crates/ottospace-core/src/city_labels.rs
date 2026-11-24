@@ -26,11 +26,13 @@ pub struct Candidate {
     pub bounds: Rect,
     /// The middle of its top on screen: its name is centred there.
     pub top: [f32; 2],
+    /// Its top face on screen, corner by corner: a folder's name must lie inside it.
+    pub face: [[f32; 2]; 4],
     /// The name's size.
     pub size: [f32; 2],
 }
 
-/// Named from this many points on screen, up to `MOST_SHARE` of the view's longer side.
+/// Named from this many points on screen, up to `MOST_SHARE` of the view's height.
 pub const LEAST: f32 = 40.;
 pub const MOST_SHARE: f32 = 0.45;
 /// At most this many names.
@@ -49,11 +51,27 @@ fn extent(bounds: Rect) -> f32 {
 }
 
 /// Whether a thing this large on screen may be named in a view this size: one partly in the view,
-/// from `LEAST` to `MOST_SHARE` of the view (the original's band: far out the districts, near in
-/// the files).
+/// from `LEAST` to `MOST_SHARE` of the view's height (the original's band: far out the districts,
+/// near in the files).
 pub fn sized(bounds: Rect, view: [f32; 2]) -> bool {
     let e = extent(bounds);
-    overlaps(bounds, [0., 0., view[0], view[1]]) && (LEAST..=MOST_SHARE * view[0].max(view[1])).contains(&e)
+    overlaps(bounds, [0., 0., view[0], view[1]]) && (LEAST..=MOST_SHARE * view[1]).contains(&e)
+}
+
+/// Where a face crosses the row at `y`, left and right; none if it does not.
+fn across(face: [[f32; 2]; 4], y: f32) -> Option<(f32, f32)> {
+    let xs: Vec<f32> = (0..4)
+        .filter_map(|i| {
+            let (a, b) = (face[i], face[(i + 1) % 4]);
+            let (lo, hi) = (a[1].min(b[1]), a[1].max(b[1]));
+            if y < lo || y > hi || (b[1] - a[1]).abs() < 1e-6 {
+                return None;
+            }
+            Some(a[0] + (b[0] - a[0]) * (y - a[1]) / (b[1] - a[1]))
+        })
+        .collect();
+    let (l, r) = xs.iter().fold((f32::MAX, f32::MIN), |(l, r), x| (l.min(*x), r.max(*x)));
+    (l <= r).then_some((l, r))
 }
 
 fn overlaps(a: Rect, b: Rect) -> bool {
@@ -68,12 +86,15 @@ fn inside(r: Rect, view: [f32; 2]) -> bool {
     r[0] >= 0. && r[1] >= 0. && r[0] + r[2] <= view[0] && r[1] + r[3] <= view[1]
 }
 
-/// Where `c`'s name goes: centred on the middle of its top. A folder's plinth must hold it: as
-/// wide on screen as the name and its inset each side; else it waits for the camera to come in.
+/// Where `c`'s name goes: centred on the middle of its top. A folder's plinth must hold it: its
+/// top face, as drawn, spans the name and an inset each side along the name's top, middle and
+/// bottom rows; else it waits for the camera to come in.
 fn spot(c: &Candidate) -> Option<Rect> {
     let [w, h] = c.size;
     let [x, y] = c.top;
-    let holds = c.tier == Tier::File || w + 2. * INSET <= c.bounds[2];
+    let (left, right) = (x - w / 2. - INSET, x + w / 2. + INSET);
+    let row = |y: f32| across(c.face, y).is_some_and(|(l, r)| l <= left && right <= r);
+    let holds = c.tier == Tier::File || [y - h / 2., y, y + h / 2.].into_iter().all(row);
     holds.then_some([x - w / 2., y - h / 2., w, h])
 }
 
@@ -141,7 +162,8 @@ mod tests {
     const VIEW: [f32; 2] = [800., 500.];
 
     fn thing(key: usize, tier: Tier, x: f32, y: f32, side: f32) -> Candidate {
-        Candidate { key, tier, bounds: [x, y, side, side], top: [x + side / 2., y + side / 2.], size: [60., 14.] }
+        let face = [[x, y], [x + side, y], [x + side, y + side], [x, y + side]];
+        Candidate { key, tier, bounds: [x, y, side, side], top: [x + side / 2., y + side / 2.], face, size: [60., 14.] }
     }
 
     /// A made-up city: a grid of things of many sizes, some overlapping.
@@ -188,6 +210,20 @@ mod tests {
         }
         // A file's name is centred too, at any width its size allows.
         assert_eq!(place(&[thing(1, Tier::File, 100., 100., 40.)], VIEW, &[], &[]), [(1, [90., 113., 60., 14.])]);
+        // A long thin plinth across the view's diagonal: wide bounds, a narrow face where its name
+        // would sit. Not named.
+        let mut thin = thing(1, Tier::Folder, 100., 100., 200.);
+        thin.face = [[100., 110.], [110., 100.], [300., 290.], [290., 300.]];
+        assert_eq!(place(&[thin], VIEW, &[], &[]), []);
+    }
+
+    /// The band's top is 45% of the view's height, as the original: a wide view names no district
+    /// taller than that.
+    #[test]
+    fn the_largest_named_is_under_half_the_views_height() {
+        let tall = thing(1, Tier::Folder, 100., 50., 240.);
+        assert_eq!(place(&[tall], [1000., 400.], &[], &[]), []);
+        assert_eq!(place(&[thing(1, Tier::Folder, 100., 50., 170.)], [1000., 400.], &[], &[]).len(), 1);
     }
 
     #[test]
