@@ -33,7 +33,7 @@ pub struct Agent<'a> {
     /// At no file: the checkout's paths its running shell line names (`city_shell::paths`), files
     /// or folders, relative to it; the shell takes the first that is in the city.
     pub near: Vec<String>,
-    /// A call of it runs now (for a session read from its file: its newest is a shell line).
+    /// A call of it runs now (for a session read from its file: a call it started has not ended).
     pub busy: bool,
 }
 
@@ -126,11 +126,6 @@ fn file_of(s: &crate::sessions::Found) -> Option<&str> {
     s.label.as_deref().filter(|_| file)
 }
 
-/// A session read from its file is in a shell line now (no command is read from it).
-fn shell(s: &crate::sessions::Found) -> bool {
-    s.station.as_deref().is_some_and(|station| station.eq_ignore_ascii_case(Station::Shell.name()))
-}
-
 impl Model {
     /// The empty places on show: in the main window and each folded-out one, the tab if it has
     /// no pane, else its empty panes.
@@ -221,7 +216,7 @@ impl Model {
                 colour: task.colour,
                 at: file_of(s),
                 near: Vec::new(),
-                busy: shell(s),
+                busy: s.station.is_some(),
             };
             (works && !chatted).then_some((task.id, agent))
         });
@@ -236,7 +231,7 @@ impl Model {
                 colour: None,
                 at: file_of(s),
                 near: Vec::new(),
-                busy: shell(s),
+                busy: s.station.is_some(),
             });
         let agents: Vec<Agent> = tasks.into_iter().map(|(_, agent)| agent).chain(sessions).collect();
         // A session's file is lit too: in its task's colour if a task has it, else in none.
@@ -552,7 +547,7 @@ mod tests {
         let city = city(&m).unwrap();
         let who = Who::Session { runner: "claude", id: "s1", title: Some("fix the loop") };
         let near = Vec::new();
-        assert_eq!(city.agents, vec![Agent { who, colour: None, at: Some("src/main.rs"), near, busy: false }]);
+        assert_eq!(city.agents, vec![Agent { who, colour: None, at: Some("src/main.rs"), near, busy: true }]);
         assert_eq!(city.lit, vec![Lit { label: "src/main.rs", colour: None, running: true }]);
         m.update(Action::SessionsAtWork { found: vec![found(true, "shell", "cargo test")] });
         assert_eq!(agents(&m), Some(vec![(0, None)]), "a shell line: at no file");

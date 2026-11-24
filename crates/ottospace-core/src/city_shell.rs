@@ -8,37 +8,26 @@ const MOST_BYTES: usize = 2048;
 const MOST_PATHS: usize = 8;
 
 /// The paths a shell `line` names inside `checkout` (absolute), relative to it, in order, each
-/// once. The line runs in the checkout until a `cd` says otherwise; a `cd` out of it, or to a
-/// place not known, stops relative words counting until a `cd` back.
+/// once. The line runs in the checkout until a `cd` says otherwise (one followed by `&&`, `;` or
+/// a new line: a `cd` in a pipeline stays in its stage); a `cd` out of it, or to a place not
+/// known, stops relative words counting until a `cd` back.
 pub fn paths(line: &str, checkout: &str) -> Vec<String> {
     let checkout = checkout.trim_end_matches('/');
-    let mut end = line.len().min(MOST_BYTES);
-    while !line.is_char_boundary(end) {
-        end -= 1;
-    }
     // Where the line is now, relative to the checkout ("": its root); none: not known.
     let mut cwd = Some(String::new());
     let mut found: Vec<String> = Vec::new();
-    for command in line[..end].split(['\n', ';', '|', '&']) {
-        // A quoted word whole (`"src/main.rs"`); a piece of one with a space in it (`'docs/a`) is
-        // no path.
-        let mut words = command.split_whitespace().map(|word| {
-            let quoted = |q: char| word.len() > 1 && word.starts_with(q) && word.ends_with(q);
-            match word.trim_matches(['"', '\'']) {
-                bare if bare.len() == word.len() || quoted('"') || quoted('\'') => bare,
-                _ => "",
-            }
-        });
-        let Some(program) = words.next() else { continue };
+    for (words, then) in commands(line) {
+        let Some((program, args)) = words.split_first() else { continue };
         if program == "cd" {
-            cwd = words.next().and_then(|dir| inside(dir, checkout, cwd.as_deref()));
+            if then {
+                cwd = args.first().and_then(|dir| inside(dir, checkout, cwd.as_deref()));
+            }
             continue;
         }
-        for word in words {
+        for word in args {
             let Some(path) = inside(word, checkout, cwd.as_deref()).filter(|path| !path.is_empty()) else { continue };
             // A bare word (`test`, `main`) is a subcommand or a name, not a path.
-            let shaped = word.starts_with('/') || path.contains(['/', '.']);
-            if shaped && !found.contains(&path) {
+            if word.contains(['/', '.']) && !found.contains(&path) {
                 found.push(path);
                 if found.len() == MOST_PATHS {
                     return found;
@@ -47,6 +36,73 @@ pub fn paths(line: &str, checkout: &str) -> Vec<String> {
         }
     }
     found
+}
+
+/// A line's commands, read to `MOST_BYTES` (a word cut there is dropped): each its words, quotes
+/// taken off (a quoted word may hold spaces and separators), and whether the next runs after it
+/// (`&&`, `;`, a new line) rather than beside it (`|`, `&`). A `#` outside quotes, at a word's
+/// start, comments out the rest of its line. A `\` keeps the next character as it is.
+fn commands(line: &str) -> Vec<(Vec<String>, bool)> {
+    let mut end = line.len().min(MOST_BYTES);
+    while !line.is_char_boundary(end) {
+        end -= 1;
+    }
+    let cut = end < line.len();
+    let mut out: Vec<(Vec<String>, bool)> = Vec::new();
+    let (mut words, mut word, mut quote, mut started) = (Vec::new(), String::new(), None, false);
+    let mut chars = line[..end].chars().peekable();
+    let mut comment = false;
+    while let Some(c) = chars.next() {
+        if comment {
+            comment = c != '\n';
+            if comment {
+                continue;
+            }
+        }
+        match (quote, c) {
+            (Some(q), c) if c == q => quote = None,
+            (Some(_), '\\') if quote == Some('"') => word.extend(chars.next()),
+            (Some(_), c) => word.push(c),
+            (None, '"' | '\'') => (quote, started) = (Some(c), true),
+            (None, '\\') => {
+                word.extend(chars.next());
+                started = true;
+            }
+            (None, '#') if !started => comment = true,
+            (None, c) if c.is_whitespace() || matches!(c, ';' | '|' | '&') => {
+                if started {
+                    words.push(std::mem::take(&mut word));
+                    started = false;
+                }
+                let then = match c {
+                    ';' | '\n' => Some(true),
+                    '&' if chars.peek() == Some(&'&') => {
+                        chars.next();
+                        Some(true)
+                    }
+                    '|' if chars.peek() == Some(&'|') => {
+                        chars.next();
+                        Some(true)
+                    }
+                    '|' | '&' => Some(false),
+                    _ => None,
+                };
+                if let Some(then) = then {
+                    out.push((std::mem::take(&mut words), then));
+                }
+            }
+            (None, c) => {
+                word.push(c);
+                started = true;
+            }
+        }
+    }
+    // A word the cut went through (or an open quote) is no word.
+    if started && !cut && quote.is_none() {
+        words.push(word);
+    }
+    out.push((words, true));
+    out
 }
 
 /// `word` as a path in the checkout, relative to it, from `cwd`; none if it is not one (a flag,
@@ -92,7 +148,13 @@ mod tests {
             ("cd && cat src/main.rs", vec![]),
             ("cat /code/application/x.rs /etc/hosts ../up.rs", vec![]),
             ("cat $HOME/x.rs src/*.rs ~/a.rs `pwd`/b.rs https://x.example/a.rs", vec![]),
-            ("cat \"src/main.rs\" 'docs/a b.md'", vec!["src/main.rs"]),
+            ("cat \"src/main.rs\" 'docs/a b.md'", vec!["src/main.rs", "docs/a b.md"]),
+            ("ls src/ ./docs; cat ./Makefile", vec!["src", "docs", "Makefile"]),
+            ("cd sdk && npm test", vec![]),
+            ("echo 'x; cd docs ;' && cat src/main.rs", vec!["src/main.rs"]),
+            ("cd docs | cat src/main.rs", vec!["src/main.rs"]),
+            ("cargo test # src/a.rs", vec![]),
+            ("git commit -m \"fix\" && cat a\\ b.rs", vec!["a b.rs"]),
             ("cargo build 2>&1 > out.log", vec!["out.log"]),
             ("cat src/a.rs src/a.rs /code/app/src/a.rs", vec!["src/a.rs"]),
         ];
@@ -107,6 +169,11 @@ mod tests {
         assert_eq!(paths(&format!("cat {}", many.join(" ")), APP), many[..MOST_PATHS]);
         let late = format!("echo {} src/late.rs", "x".repeat(MOST_BYTES));
         assert_eq!(paths(&late, APP), Vec::<String>::new());
+        // Cut inside a word: the word is dropped, never read as a shorter path.
+        let through = format!("cat{}src/a.rs", " ".repeat(MOST_BYTES - 8));
+        assert_eq!(paths(&through, APP), Vec::<String>::new());
+        // A checkout with a space, quoted.
+        assert_eq!(paths("cd \"/code/my app\" && cat src/a.rs", "/code/my app"), ["src/a.rs"]);
         // Cut inside a character: no panic.
         assert_eq!(paths(&"é".repeat(MOST_BYTES), APP), Vec::<String>::new());
     }
