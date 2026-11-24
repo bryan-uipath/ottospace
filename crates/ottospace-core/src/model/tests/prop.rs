@@ -416,9 +416,35 @@ impl Gen<'_> {
         let real: Vec<(crate::filed::Source, String)> =
             self.m.filed.list.iter().map(|d| (d.source, d.key.clone())).collect();
         self.one_of(&real, |g| {
-            let source = g.rng.pick(&crate::filed::SOURCES);
-            (source, g.rng.pick(&["slack:C1:1.0", "jira:ABC-1", "k", "", "../k", "a b"]).to_string())
+            use crate::filed::Source as S;
+            // Most in their source's format, two of one Slack channel; some not.
+            let good = [
+                (S::Slack, "slack:C1:1.0"),
+                (S::Slack, "slack:C1:2.0"),
+                (S::Slack, "slack:C2:1.0"),
+                (S::Jira, "jira:ABC-1"),
+                (S::Routine, "routine:dri:x"),
+                (S::Calendar, "calendar:e1"),
+                (S::AgentSession, "agent_session:q1"),
+            ];
+            let (source, key) = match g.rng.below(4) {
+                0 => (g.rng.pick(&crate::filed::SOURCES), g.rng.pick(&["k", "", "../k", "a b", "slack::1"])),
+                _ => g.rng.pick(&good),
+            };
+            (source, key.to_string())
         })
+    }
+
+    /// The item triage shows, most of the time; else any filed one, or none there is.
+    fn sort_item(&mut self) -> u64 {
+        let shown = self.m.decisions.as_ref().and_then(|run| run.sort.as_ref()).and_then(|sort| sort.item);
+        match shown.filter(|_| !self.rng.one_in(4)) {
+            Some(id) => id,
+            None => {
+                let real: Vec<u64> = self.m.filed.list.iter().map(|d| d.id).collect();
+                self.one_of(&real, |g| g.rng.pick(&[0, 1, u64::MAX]))
+            }
+        }
     }
 
     /// A filing's time: the model's, an hour on, a week on (past the default expiry), or anything.
@@ -1832,8 +1858,29 @@ const MAKERS: &[Make] = &[
             }
             kept.push(other);
         }
-        Action::RestoreDecisions { kept }
+        let trusted = g.rng.coin().then(|| crate::filed::Trust {
+            source: crate::filed::Source::Slack,
+            scope: g.rng.pick(&["C1", "", "slack:"]).into(),
+        });
+        Action::RestoreDecisions { kept, trusted: trusted.into_iter().collect() }
     },
+    // Triage: its card's keys, on the item on show (else a stray one).
+    |_| Action::SortStart,
+    |_| Action::SortSkip,
+    |g| {
+        let until = g.filed_time();
+        let how = g.rng.pick(&[
+            crate::filed::Sort::Keep,
+            crate::filed::Sort::Now { until },
+            crate::filed::Sort::Later { until },
+            crate::filed::Sort::NotMine,
+            crate::filed::Sort::Dismiss,
+        ]);
+        Action::SortItem { id: g.sort_item(), how }
+    },
+    |g| Action::SortToggle { id: g.sort_item(), claims: g.rng.coin() },
+    |g| Action::SortPromote { id: g.sort_item() },
+    |_| Action::SortUndo,
     // Zoom-out: open or back, the selection, into a tile (else a stray tab).
     |_| Action::ZoomOut,
     |g| Action::ZoomMove { dir: g.dir() },
@@ -2445,12 +2492,22 @@ fn check_decisions(m: &Model) -> Result<(), String> {
         ensure!(m.tab_of(run.pane) == Some(run.tab), "its card is in tab {:?}", m.tab_of(run.pane));
         return Ok(());
     }
-    ensure!(!queue.is_empty(), "Decisions open with nothing waiting");
-    ensure!(
-        (queue[0].task, queue[0].ticket) == (run.task, run.ticket),
-        "card {:?} on show, not the queue's first",
-        (run.task, run.ticket)
-    );
+    // Triage on show: no question with it, and its item one that waits to be sorted.
+    if let Some(sort) = &run.sort {
+        ensure!(run.task.is_none() && run.ticket.is_none(), "triage and card {:?} on show", run.task);
+        ensure!(m.features.on(Feature::DecisionSources), "triage on show with its flag off");
+        let waits = |id: u64| m.filed.get(id).is_some_and(|d| d.to_sort(m.now));
+        ensure!(sort.item.is_none_or(waits), "triage shows item {:?}, which waits for nothing", sort.item);
+        let all_sorted = sort.item.is_none() && !sort.undo.is_empty();
+        ensure!(m.filed.to_sort(m.now) > 0 || all_sorted, "triage on show with nothing to sort");
+    } else {
+        ensure!(!queue.is_empty(), "Decisions open with nothing waiting");
+        ensure!(
+            (Some(queue[0].task), Some(queue[0].ticket)) == (run.task, run.ticket),
+            "card {:?} on show, not the queue's first",
+            (run.task, run.ticket)
+        );
+    }
     ensure!(cards == [run.pane], "card panes {cards:?}, the run's {}", run.pane);
     ensure!(
         tabs.len() == 1 && tabs[0].id == run.tab,
@@ -2459,7 +2516,13 @@ fn check_decisions(m: &Model) -> Result<(), String> {
         run.tab
     );
     ensure!(m.tab_of(run.pane) == Some(run.tab), "its card is in tab {:?}", m.tab_of(run.pane));
-    ensure!(run.at == run.done.len() + 1 && run.of == run.done.len() + queue.len(), "{} of {}", run.at, run.of);
+    let triage = usize::from(run.sort.is_some() || (!run.sorted && m.sortable()));
+    ensure!(
+        run.at == run.done.len() + 1 && run.of == run.done.len() + queue.len() + triage,
+        "{} of {}",
+        run.at,
+        run.of
+    );
     ensure!(tabs[0].title == format!("Decisions · {} of {}", run.at, run.of), "its tab reads {:?}", tabs[0].title);
     Ok(())
 }
@@ -2476,7 +2539,24 @@ fn check_filed(m: &Model) -> Result<(), String> {
         ensure!(!d.open() || !open.iter().any(twin), "two open of key {:?}", d.key);
         ensure!(crate::filed::valid_key(&d.key), "a key that is no key: {:?}", d.key);
         ensure!(d.source != From::TerminalSession, "a client filed a terminal session's");
-        ensure!((d.triage == Triage::Pending) == d.source.spec().triage, "{:?} triaged as {:?}", d.source, d.triage);
+        let triaged = d.source.spec().triage || d.triage == Triage::Skipped;
+        ensure!(triaged, "{:?} triaged as {:?}", d.source, d.triage);
+        // An open item skips triage exactly while the scope its key names is trusted.
+        let trusted = m.filed.trusts(d.source, &d.key);
+        if d.open() && d.source.spec().triage && d.triage != Triage::Sorted {
+            ensure!((d.triage == Triage::Skipped) == trusted, "{} triaged {:?}, trusted {trusted}", d.id, d.triage);
+        }
+        // No acceptance stands for other words than it was given to.
+        if d.triage == Triage::Sorted || (d.triage == Triage::Skipped && trusted) {
+            ensure!(
+                d.accepted.revision == d.revision,
+                "{} accepted at {}, now {}",
+                d.id,
+                d.accepted.revision,
+                d.revision
+            );
+        }
+        ensure!(crate::filed::scope_of(d.source, &d.key).is_ok(), "a key not its source's: {:?}", d.key);
         let line = |text: &str| text.chars().count() <= MAX_LINE + 1 && text.chars().all(crate::capture::shows);
         let one_line = line(&d.summary) && line(&d.question) && d.options.iter().all(|c| line(&c.label));
         ensure!(one_line && !d.question.is_empty(), "words not kept: {:?} {:?}", d.summary, d.question);
@@ -2490,6 +2570,10 @@ fn check_filed(m: &Model) -> Result<(), String> {
         }
     }
     ensure!(open.len() <= OPEN_ALL, "{} open", open.len());
+    // A promotion trusts a scope a key can name: never a free prefix or a whole source.
+    for t in &m.filed.trusted {
+        ensure!(crate::filed::valid_scope(t.source, &t.scope), "trusts {t:?}");
+    }
     for source in crate::filed::SOURCES {
         let of = open.iter().filter(|d| d.source == source).count();
         ensure!(of <= OPEN_PER_SOURCE, "{of} open from {source:?}");
@@ -5658,6 +5742,11 @@ impl Run {
                         "{action:?} wrote {decision:?}, not what is held"
                     );
                 }
+                // Only the user's P, or their Z of it, writes what skips triage; and it is what is held.
+                Effect::SaveTrust { trusted } => {
+                    let acts = user && matches!(action, Action::SortPromote { .. } | Action::SortUndo);
+                    ensure!(acts && *trusted == m.filed.trusted, "{origin:?}'s {action:?} wrote trust.json");
+                }
                 Effect::RemoveDecision { id } => {
                     let held = m.filed.get(*id).is_some();
                     ensure!(!held, "{action:?} removed decision {id}, still held");
@@ -6467,6 +6556,7 @@ fn code(sent: &Envelope) -> String {
         ("why", "crate::listen::Ended"),
         ("read", "crate::viewer::Read"),
         ("result", "crate::clone::Failure"),
+        ("how", "crate::filed::Sort"),
     ];
     // A mark is long, and half of it is JSON already: it is given as its file's text.
     if let Action::RestoreMarks { marks, extra } = &sent.action {
@@ -6479,9 +6569,10 @@ fn code(sent: &Envelope) -> String {
         let filing = serde_json::to_string(filing).unwrap_or_default();
         return format!("decision_file({filing:?}, {now}).sent_by(Origin::{:?})", sent.origin);
     }
-    if let Action::RestoreDecisions { kept } = &sent.action {
-        let kept = serde_json::to_string(kept).unwrap_or_default();
-        return format!("restore_decisions({kept:?}).sent_by(Origin::{:?})", sent.origin);
+    if let Action::RestoreDecisions { kept, trusted } = &sent.action {
+        let (kept, trusted) =
+            (serde_json::to_string(kept).unwrap_or_default(), serde_json::to_string(trusted).unwrap_or_default());
+        return format!("restore_decisions({kept:?}, {trusted:?}).sent_by(Origin::{:?})", sent.origin);
     }
     // Its source is a decision's, not a capture's (`source` names `ax::Source` elsewhere).
     if let Action::DecisionWithdraw { source, key, now } = &sent.action {
@@ -6760,8 +6851,12 @@ fn decision_file(filing: &str, now: u64) -> Action {
 }
 
 #[allow(dead_code)] // for a regression `code` writes; none is pasted yet
-fn restore_decisions(kept: &str) -> Action {
-    Action::RestoreDecisions { kept: serde_json::from_str(kept).expect("decisions are JSON") }
+fn restore_decisions(kept: &str, trusted: &str) -> Action {
+    let read = "decisions are JSON";
+    Action::RestoreDecisions {
+        kept: serde_json::from_str(kept).expect(read),
+        trusted: serde_json::from_str(trusted).expect(read),
+    }
 }
 
 fn restore_marks(marks: &str, extra: &str) -> Action {

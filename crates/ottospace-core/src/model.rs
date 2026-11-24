@@ -1880,10 +1880,31 @@ pub enum Action {
         key: String,
         now: u64,
     },
-    /// The decisions kept on disk, read at start. The shell's alone.
+    /// The decisions kept on disk, read at start, and the prefixes the user promoted. The shell's alone.
     RestoreDecisions {
         kept: Vec<crate::filed::Decision>,
+        trusted: Vec<crate::filed::Trust>,
     },
+    /// ↵ on triage's card: sort its items, the first filed first. Only the user's.
+    SortStart,
+    /// S on triage's card: not in this run. Only the user's.
+    SortSkip,
+    /// One key on the item `id` on show: kept, taken now, put off, not mine, dismissed. Only the user's.
+    SortItem {
+        id: u64,
+        how: crate::filed::Sort,
+    },
+    /// U (`claims`) counts the item's claims, C flips its role, before its key. Only the user's.
+    SortToggle {
+        id: u64,
+        claims: bool,
+    },
+    /// P: the item's source's prefix skips triage from now; its waiting items with it. Only the user's.
+    SortPromote {
+        id: u64,
+    },
+    /// Z: the last sort or promotion of this run taken back. Only the user's.
+    SortUndo,
     /// ⌘⇧\: every tab of the space on show as a tile (`zoom_out`); zoomed out, back to the tab it
     /// opened on. Only the user's.
     ZoomOut,
@@ -2954,6 +2975,12 @@ impl Action {
             | Action::DecisionFile { .. }
             | Action::DecisionWithdraw { .. }
             | Action::RestoreDecisions { .. }
+            | Action::SortStart
+            | Action::SortSkip
+            | Action::SortItem { .. }
+            | Action::SortToggle { .. }
+            | Action::SortPromote { .. }
+            | Action::SortUndo
             | Action::CityCamera { .. }
             | Action::ZoomMove { .. }
             | Action::ZoomEnter { .. } => false,
@@ -2991,7 +3018,14 @@ impl Action {
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
             | Action::DecisionsClose => Some(Feature::Decisions),
-            Action::DecisionFile { .. } | Action::DecisionWithdraw { .. } => Some(Feature::DecisionSources),
+            Action::DecisionFile { .. }
+            | Action::DecisionWithdraw { .. }
+            | Action::SortStart
+            | Action::SortSkip
+            | Action::SortItem { .. }
+            | Action::SortToggle { .. }
+            | Action::SortPromote { .. }
+            | Action::SortUndo => Some(Feature::DecisionSources),
             Action::SessionUnhide { .. } => Some(Feature::TerminalTasks),
             Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. } => Some(Feature::ZoomOut),
             Action::ListenStart { .. }
@@ -3523,6 +3557,10 @@ pub enum Effect {
     /// A closed decision's time is up: remove its file.
     RemoveDecision {
         id: u64,
+    },
+    /// The user promoted or took back a prefix: write `<home>/decisions/trust.json`.
+    SaveTrust {
+        trusted: Vec<crate::filed::Trust>,
     },
     /// The Repos list's entries changed: write them, in this order, as `repos` in the settings
     /// file.
@@ -4999,7 +5037,13 @@ impl Model {
             | Action::DecisionsAsk { .. }
             | Action::DecisionsSkip { .. }
             | Action::DecisionsLater { .. }
-            | Action::DecisionsClose => Some(decisions::USERS_ALONE),
+            | Action::DecisionsClose
+            | Action::SortStart
+            | Action::SortSkip
+            | Action::SortItem { .. }
+            | Action::SortToggle { .. }
+            | Action::SortPromote { .. }
+            | Action::SortUndo => Some(decisions::USERS_ALONE),
             // The overview covers the user's work: only they zoom, and nothing takes the keyboard under it.
             _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
             action if self.zoom.is_some() && action.takes_keyboard() => Some(zoom::ZOOMED_OUT),
@@ -5449,8 +5493,9 @@ impl Model {
         let finished: Vec<TaskId> =
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
-        self.settle_decisions(origin, drawer_keys, &mut effects);
+        // What expired is closed before Decisions picks what it shows.
         self.settle_filed(&mut effects);
+        self.settle_decisions(origin, drawer_keys, &mut effects);
         self.settle_spaces(origin, &home);
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         // After the tabs out: a fold-in may move the main window's tab (seed 37143).
@@ -7540,6 +7585,12 @@ impl Model {
             action @ (Action::DecisionFile { .. }
             | Action::DecisionWithdraw { .. }
             | Action::RestoreDecisions { .. }) => self.filed_act(action, effects),
+            action @ (Action::SortStart
+            | Action::SortSkip
+            | Action::SortItem { .. }
+            | Action::SortToggle { .. }
+            | Action::SortPromote { .. }
+            | Action::SortUndo) => self.sort_act(action, effects),
             Action::ZoomOut => self.zoom_toggle(effects),
             Action::ZoomMove { dir } => self.zoom_move(dir),
             Action::ZoomEnter { tab } => self.zoom_enter(tab, effects),
@@ -11619,6 +11670,12 @@ mod tests {
         Action::DecisionFile { .. },
         Action::DecisionWithdraw { .. },
         Action::RestoreDecisions { .. },
+        Action::SortStart,
+        Action::SortSkip,
+        Action::SortItem { .. },
+        Action::SortToggle { .. },
+        Action::SortPromote { .. },
+        Action::SortUndo,
         Action::ZoomOut,
         Action::ZoomMove { .. },
         Action::ZoomEnter { .. },
@@ -12032,7 +12089,13 @@ mod tests {
             Action::DecisionsClose,
             Action::DecisionFile { filing: Box::new(crate::filed::tests::filing()), now: 1 },
             Action::DecisionWithdraw { source: crate::filed::Source::Slack, key: "k".into(), now: 1 },
-            Action::RestoreDecisions { kept: Vec::new() },
+            Action::RestoreDecisions { kept: Vec::new(), trusted: Vec::new() },
+            Action::SortStart,
+            Action::SortSkip,
+            Action::SortItem { id: 1, how: crate::filed::Sort::Keep },
+            Action::SortToggle { id: 1, claims: true },
+            Action::SortPromote { id: 1 },
+            Action::SortUndo,
             Action::ZoomOut,
             Action::ZoomMove { dir: Dir::Right },
             Action::ZoomEnter { tab: None },
@@ -12651,6 +12714,12 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
+                    Action::SortStart
+                    | Action::SortSkip
+                    | Action::SortItem { .. }
+                    | Action::SortToggle { .. }
+                    | Action::SortPromote { .. }
+                    | Action::SortUndo => Some(decisions::USERS_ALONE),
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
@@ -19957,6 +20026,12 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
+                    Action::SortStart
+                    | Action::SortSkip
+                    | Action::SortItem { .. }
+                    | Action::SortToggle { .. }
+                    | Action::SortPromote { .. }
+                    | Action::SortUndo => Some(decisions::USERS_ALONE),
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),

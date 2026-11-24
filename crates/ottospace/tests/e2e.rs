@@ -18408,6 +18408,10 @@ fn a_filed_decision_waits_to_be_sorted_updates_by_key_and_keeps_its_words_out_of
         reply["error"].as_str().unwrap_or_default().to_string()
     };
     assert!(refused(&|f| f["key"] = json!("../x")).contains("key"));
+    assert!(
+        refused(&|f| f["key"] = json!("slack:general:1.0")).contains("slack:<channel>:<ts>"),
+        "its source's format"
+    );
     assert!(refused(&|f| f["source"] = json!("terminal_session")).contains("ottospace's own"));
     let http = json!({"open_link": {"url": "http://example.com/"}});
     assert!(refused(&|f| f["options"][0]["act"] = http.clone()).contains("https"));
@@ -18421,10 +18425,12 @@ fn a_filed_decision_waits_to_be_sorted_updates_by_key_and_keeps_its_words_out_of
     assert_eq!(otto.raw(&json!({"cmd": "decision_withdraw", "source": "slack", "key": key}).to_string())["ok"], false);
     // Twenty open from one source at most.
     for n in 0..20 {
-        otto.call(json!({"cmd": "decision_file", "source": "slack", "key": format!("k{n}"), "question": "Made up?"}));
+        let key = format!("slack:C{n}:1.0");
+        otto.call(json!({"cmd": "decision_file", "source": "slack", "key": key, "question": "Made up?"}));
     }
-    let past =
-        otto.raw(&json!({"cmd": "decision_file", "source": "slack", "key": "k20", "question": "Made up?"}).to_string());
+    let past = otto.raw(
+        &json!({"cmd": "decision_file", "source": "slack", "key": "slack:C20:1.0", "question": "Made up?"}).to_string(),
+    );
     assert!(past["error"].as_str().unwrap_or_default().contains("20 open from slack"), "{past}");
     drop(otto);
 
@@ -18441,4 +18447,52 @@ fn a_filed_decision_waits_to_be_sorted_updates_by_key_and_keeps_its_words_out_of
     let otto = Otto::launch("decisions-filed-off");
     assert_eq!(otto.raw(&filing.to_string())["error"], "feature off: decision_sources");
     assert_eq!(otto.call(json!({"cmd": "state"}))["filed"], Value::Null);
+}
+
+/// Triage (`decision_sources`, in Decisions): made-up items filed over the socket wait as one
+/// card, "Sort 3 new items", after any agent's question. Only the user opens it and sorts: one key
+/// an item (T now, N not mine, D dismiss), Z takes the last back, P lets a channel skip triage.
+/// The status bar says how many wait to be sorted.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn filed_decisions_are_sorted_one_key_each_by_the_user_alone() {
+    let otto = Otto::launch_with("triage", &[("OTTOSPACE_FEATURES", "decisions,decision_sources")]);
+    let mut ids = Vec::new();
+    for (source, key) in [("slack", "slack:C0MADEUP:1.0"), ("slack", "slack:C0MADEUP:2.0"), ("jira", "jira:ABC-1")] {
+        let filed = otto.call(json!({
+            "cmd": "decision_file", "source": source, "key": key,
+            "summary": format!("Made-up item {key}"), "question": "Take it this week?"
+        }));
+        ids.push(filed["id"].as_u64().unwrap());
+    }
+    assert_eq!(otto.call(json!({"cmd": "state"}))["filed"]["to_sort"], 3);
+    let item = |reply: &Value| reply["state"]["decisions"]["sort"]["item"].clone();
+    let row = |reply: &Value, id: u64| {
+        let rows = reply["filed"]["rows"].as_array().cloned().unwrap_or_default();
+        rows.into_iter().find(|row| row["id"].as_u64() == Some(id)).unwrap_or_default()
+    };
+    // A client opens nothing and sorts nothing.
+    assert_eq!(otto.call(json!({"cmd": "key", "keys": "cmd-j"}))["state"]["decisions"], Value::Null);
+    let opened = otto.user_key("cmd-j");
+    assert_eq!((item(&opened), &opened["state"]["decisions"]["task"]), (Value::Null, &Value::Null), "{opened}");
+    assert_eq!(item(&otto.call(json!({"cmd": "key", "keys": "enter"}))), Value::Null);
+    // The user's ↵: the first filed first. T takes it now; Z takes that back.
+    assert_eq!(item(&otto.user_key("enter")), json!(ids[0]));
+    let now = otto.user_key("t");
+    assert_eq!((&row(&now, ids[0])["triage"], item(&now)), (&json!("sorted"), json!(ids[1])));
+    let back = otto.user_key("z");
+    assert_eq!((&row(&back, ids[0])["triage"], item(&back)), (&json!("pending"), json!(ids[0])));
+    assert_eq!(row(&otto.user_key("n"), ids[0])["status"], "not_mine");
+    // P: the channel skips triage from now.
+    let promoted = otto.user_key("p");
+    assert_eq!((&row(&promoted, ids[1])["triage"], &promoted["filed"]["trusted"]), (&json!("skipped"), &json!(1)));
+    // D on the last: "All sorted" (Z could take it back); Esc closes Decisions.
+    let done = otto.user_key("d");
+    let sort = &done["state"]["decisions"]["sort"];
+    assert_eq!(
+        (&row(&done, ids[2])["status"], &sort["item"], &sort["left"]),
+        (&json!("dismissed"), &Value::Null, &json!(0))
+    );
+    assert_eq!(done["filed"]["to_sort"], 0);
+    assert_eq!(otto.user_key("escape")["state"]["decisions"], Value::Null);
 }

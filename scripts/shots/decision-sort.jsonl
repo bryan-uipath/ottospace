@@ -1,0 +1,23 @@
+# Triage (`decision_sources` in Decisions): three made-up items filed over the socket wait as one
+# card, "Sort 3 new items", and `· 3 to sort` beside needs you. ⌘J opens it; ↵ shows the first item,
+# U counts its claims; T sorts it and the next shows.
+{"env":{"OTTOSPACE_FEATURES":"decisions,decision_sources"}}
+{"cmd":"split","kind":"empty"}
+{"cmd":"decision_file","source":"slack","key":"slack:C0MADEUP:1763500000.000100","summary":"Asked in #made-up-rollout whether the flag can flip before 5","question":"Reply to the rollout thread today, or hand it over?","suggest":{"projects":["beacon"],"role":"core","role_why":"the flag is Beacon's"},"claims":{"person_waits":true},"evidence":[{"kind":"quote","text":"can we flip it before 5?","provenance":{"source":"slack","who":"person"}}]}
+{"cmd":"decision_file","source":"jira","key":"jira:ABC-123","summary":"ABC-123: the made-up export times out for large files","question":"Take ABC-123 this week?","suggest":{"projects":["atlas"],"role":"ancillary"}}
+{"cmd":"decision_file","source":"routine","key":"routine:dri:made-up","summary":"Made-up error rate up 2% on the staging dashboard","question":"Look into it today?"}
+{"settle":300}
+{"shot":"to-sort"}
+{"cmd":"key","keys":"cmd-j","as":"user"}
+{"until":"state.decisions.sort"}
+{"settle":300}
+{"shot":"card"}
+{"cmd":"key","keys":"enter","as":"user"}
+{"settle":200}
+{"shot":"item"}
+{"cmd":"key","keys":"u","as":"user"}
+{"settle":120}
+{"shot":"claims"}
+{"cmd":"key","keys":"t","as":"user"}
+{"settle":200}
+{"shot":"next"}

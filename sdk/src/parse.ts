@@ -28,6 +28,7 @@ import type {
   Slot,
   Offer,
   Decisions,
+  DecisionSorting,
   SlotDialog,
   Viewer,
   ViewerDrawn,
@@ -36,6 +37,7 @@ import type {
   Captured,
   Note,
   NoteReply,
+  DecisionAccepted,
   DecisionAct,
   DecisionAt,
   DecisionChoice,
@@ -894,8 +896,8 @@ const decisionSource = oneOf(
   ["agent_session", "terminal_session", "slack", "jira", "pr_review", "calendar", "routine"] as const,
   "a decision's source",
 );
-const decisionStatus = oneOf(["open", "withdrawn", "expired"] as const, "a decision's status");
-const decisionTriage = oneOf(["pending", "skipped"] as const, "triage");
+const decisionStatus = oneOf(["open", "withdrawn", "expired", "dismissed", "not_mine"] as const, "a decision's status");
+const decisionTriage = oneOf(["pending", "skipped", "sorted"] as const, "triage");
 const via = oneOf(["socket"] as const, "how a decision came");
 
 export function decisionFileReply(value: unknown): DecisionFileReply {
@@ -998,7 +1000,21 @@ export function decisionReply(value: unknown): DecisionReply {
       task: orNull(num)(d.task, at("task")),
       status: decisionStatus(d.status, at("status")),
       closed: orNull(num)(d.closed, at("closed")),
+      later: orNull(num)(d.later, at("later")),
+      accepted: decisionAccepted(d.accepted, at("accepted")),
+      revised: list(str)(d.revised, at("revised")),
     },
+  };
+}
+
+function decisionAccepted(value: unknown, at: string): DecisionAccepted {
+  const o = fields(value, at);
+  return {
+    project: orNull(str)(o.project, `${at}.project`),
+    role: orNull(oneOf(["core", "ancillary"] as const, "a role"))(o.role, `${at}.role`),
+    claims: bool(o.claims, `${at}.claims`),
+    now_until: orNull(num)(o.now_until, `${at}.now_until`),
+    revision: num(o.revision, `${at}.revision`),
   };
 }
 
@@ -1022,7 +1038,12 @@ function filedRow(value: unknown, at: string): FiledRow {
 
 function filed(value: unknown, at: string): Filed {
   const o = fields(value, at);
-  return { open: num(o.open, `${at}.open`), to_sort: num(o.to_sort, `${at}.to_sort`), rows: list(filedRow)(o.rows, `${at}.rows`) };
+  return {
+    open: num(o.open, `${at}.open`),
+    to_sort: num(o.to_sort, `${at}.to_sort`),
+    trusted: num(o.trusted, `${at}.trusted`),
+    rows: list(filedRow)(o.rows, `${at}.rows`),
+  };
 }
 
 export function taskBriefReply(value: unknown): TaskBriefReply {
@@ -2073,11 +2094,24 @@ function decisions(value: unknown, at: string): Decisions {
   return {
     tab: num(o.tab, `${at}.tab`),
     pane: num(o.pane, `${at}.pane`),
-    task: num(o.task, `${at}.task`),
-    ticket: num(o.ticket, `${at}.ticket`),
+    task: orNull(num)(o.task, `${at}.task`),
+    ticket: orNull(num)(o.ticket, `${at}.ticket`),
+    sort: orNull(decisionSorting)(o.sort, `${at}.sort`),
     at: num(o.at, `${at}.at`),
     of: num(o.of, `${at}.of`),
     queue: list(card)(o.queue, `${at}.queue`),
+  };
+}
+
+function decisionSorting(value: unknown, at: string): DecisionSorting {
+  const o = fields(value, at);
+  return {
+    item: orNull(num)(o.item, `${at}.item`),
+    claims: bool(o.claims, `${at}.claims`),
+    role: orNull(oneOf(["core", "ancillary"] as const, "a role"))(o.role, `${at}.role`),
+    done: num(o.done, `${at}.done`),
+    left: num(o.left, `${at}.left`),
+    revision: num(o.revision, `${at}.revision`),
   };
 }
 

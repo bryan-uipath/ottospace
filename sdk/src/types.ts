@@ -673,8 +673,16 @@ export interface DecisionFileArgs {
   expires?: number | null;
   task?: TaskId | null;
 }
-export type DecisionStatus = "open" | "withdrawn" | "expired";
-export type DecisionTriage = "pending" | "skipped";
+export type DecisionStatus = "open" | "withdrawn" | "expired" | "dismissed" | "not_mine";
+export type DecisionTriage = "pending" | "skipped" | "sorted";
+/** What the user took of the filer's word when sorting, given to one revision of its words. */
+export interface DecisionAccepted {
+  project: string | null;
+  role: "core" | "ancillary" | null;
+  claims: boolean;
+  now_until: number | null;
+  revision: number;
+}
 export interface DecisionFileReply {
   ok: true;
   id: number;
@@ -704,6 +712,10 @@ export interface Decision {
   task: TaskId | null;
   status: DecisionStatus;
   closed: number | null;
+  later: number | null;
+  accepted: DecisionAccepted;
+  /** What its filer changed since the user sorted it. */
+  revised: string[];
 }
 export interface DecisionReply {
   ok: true;
@@ -727,6 +739,8 @@ export interface FiledRow {
 export interface Filed {
   open: number;
   to_sort: number;
+  /** How many source prefixes the user promoted out of triage. */
+  trusted: number;
   rows: FiledRow[];
 }
 
@@ -1509,11 +1523,24 @@ export interface Zoom {
 export interface Decisions {
   tab: number;
   pane: PaneId;
-  task: TaskId;
-  ticket: number;
+  /** The question on show: its task and ticket; null while triage shows. */
+  task: TaskId | null;
+  ticket: number | null;
+  /** Triage on show (`decision_sources`): its card (`item` null) or the item being sorted. */
+  sort: DecisionSorting | null;
   at: number;
   of: number;
   queue: { task: TaskId; ticket: number; priority: number; since: number }[];
+}
+
+/** Triage in Decisions: the item on show (an id of `filed`), and what the user left on it. */
+export interface DecisionSorting {
+  item: number | null;
+  claims: boolean;
+  role: "core" | "ancillary" | null;
+  done: number;
+  left: number;
+  revision: number;
 }
 
 /** A slot: a pane that keeps its place and waits for a window the user named. */

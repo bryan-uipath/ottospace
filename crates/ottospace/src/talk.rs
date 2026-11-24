@@ -391,7 +391,7 @@ impl Workspace {
             ("talk", "chat-deny-note", _) => Action::TalkDenyNote,
             // The Decisions card's Skip and Later, as their clicks.
             ("decision", "skip" | "later", _) => {
-                let Some((task, ticket)) = self.model.decisions.as_ref().map(|run| (run.task, run.ticket)) else {
+                let Some((task, ticket)) = self.model.decision_card() else {
                     return true;
                 };
                 match name {
@@ -405,13 +405,13 @@ impl Workspace {
             // A question card's rows and buttons: `chat-ask:<question>:<row>`. The drawer's, or the
             // Decisions card's (`decision:`), whose card is the run's.
             ("talk" | "decision", _, _) if name.starts_with("chat-ask") => {
-                let host = self.model.decisions.as_ref().map(|run| run.task).filter(|_| kind == "decision");
+                let host = self.model.decisions.as_ref().and_then(|run| run.task).filter(|_| kind == "decision");
                 let shown_subject = host.map(Subject::Task).or(shown.clone());
                 let cards =
                     shown_subject.as_ref().and_then(|subject| self.model.chat(subject)).map(|c| &c.transcript.cards);
                 let shown = match host {
                     Some(_) => {
-                        let ticket = self.model.decisions.as_ref().map(|run| run.ticket);
+                        let ticket = self.model.decisions.as_ref().and_then(|run| run.ticket);
                         cards.and_then(|cards| cards.iter().find(|card| Some(card.ticket) == ticket))
                     }
                     None => self.model.shown_chat().and_then(|chat| chat.transcript.cards.front()),

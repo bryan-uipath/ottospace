@@ -4,7 +4,7 @@
 
 use gpui::{AnyElement, Context, Div, FontWeight, KeyDownEvent, Window, div, prelude::*, px, rgb};
 use ottospace_core::model::chat::Key;
-use ottospace_core::model::decisions::LATER_MS;
+use ottospace_core::model::decisions::{LATER_MS, Sorting};
 use ottospace_core::talk::Subject;
 use ottospace_core::{Action, theme};
 
@@ -18,7 +18,10 @@ impl Workspace {
     /// The card pane's body: its header, the ask card, its foot.
     pub(crate) fn decision_body(&self, cx: &mut Context<Self>) -> AnyElement {
         let Some(run) = self.model.decisions.as_ref() else { return div().into_any_element() };
-        let (task, ticket) = (run.task, run.ticket);
+        if let Some(sort) = &run.sort {
+            return self.sort_body(sort, (run.at, run.of), cx);
+        }
+        let Some((task, ticket)) = run.task.zip(run.ticket) else { return div().into_any_element() };
         let subject = Subject::Task(task);
         let chat = self.model.chat(&subject);
         let card = chat.and_then(|chat| Some((chat, chat.form()?)));
@@ -86,6 +89,115 @@ impl Workspace {
                     .child(foot),
             )
             .into_any_element()
+    }
+
+    /// Triage (`decision_sources`, the look provisional): its card, "Sort 3 new items", or the
+    /// item being sorted: where it came from, what came in, what the filer suggests and claims
+    /// (counted only once the user says), and its keys. One thing at a time; never a list.
+    fn sort_body(&self, sort: &Sorting, (at, of): (usize, usize), cx: &mut Context<Self>) -> AnyElement {
+        let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
+        let now = crate::now_ms();
+        let (head, body, keys): (String, Vec<AnyElement>, Vec<(&str, &str, &str)>) = match sort.item {
+            None if sort.left == 0 => {
+                let line = muted(format!("{} sorted in this run.", sort.done)).into_any_element();
+                ("All sorted".into(), vec![line], vec![("sort-undo", "Undo (z)", "z")])
+            }
+            None => {
+                let n = sort.left;
+                let line = muted(format!("Each takes one key. {} sorted in this run.", sort.done)).into_any_element();
+                let keys = vec![("sort-start", "Sort (↵)", "enter"), ("sort-skip", "Not now (s)", "s")];
+                (format!("Sort {n} new item{}", if n == 1 { "" } else { "s" }), vec![line], keys)
+            }
+            Some(id) => {
+                let Some(d) = self.model.filed.get(id) else { return div().into_any_element() };
+                let from = format!("{} · {}", d.source.name(), ottospace_core::tasks::age(d.filed, now));
+                let role = sort.role.map(|role| match role {
+                    ottospace_core::filed::Role::Core => "core",
+                    ottospace_core::filed::Role::Ancillary => "ancillary",
+                });
+                let suggest = match (d.suggest.projects.first(), role) {
+                    (Some(project), Some(role)) => format!("Suggested: {project} · {role} (c)"),
+                    (Some(project), None) => format!("Suggested: {project}"),
+                    (None, Some(role)) => format!("Suggested: {role} (c)"),
+                    (None, None) => "No project suggested".into(),
+                };
+                let due = d.claims.due.map(|due| match due > now {
+                    true => format!("due in {}", ottospace_core::tasks::age(now, due)),
+                    false => format!("overdue {}", ottospace_core::tasks::age(due, now)),
+                });
+                let waits = d.claims.person_waits.then(|| "someone waits".to_string());
+                let claims: Vec<String> = waits.into_iter().chain(due).collect();
+                let counted = if sort.claims { "counted (u)" } else { "not counted (u)" };
+                let claims = (!claims.is_empty()).then(|| format!("Claims: {} · {counted}", claims.join(" · ")));
+                let evidence = (!d.evidence.is_empty()).then(|| format!("{} pieces of evidence", d.evidence.len()));
+                // Sorted before, then changed by its filer: what changed, so it is not taken for what was sorted.
+                let revised =
+                    (!d.revised.is_empty()).then(|| format!("Changed since you sorted it: {}", d.revised.join(", ")));
+                let body = [
+                    Some(muted(from).into_any_element()),
+                    Some(
+                        crate::cut_text(d.summary.clone())
+                            .text_base()
+                            .font_weight(FontWeight::SEMIBOLD)
+                            .into_any_element(),
+                    ),
+                    Some(muted(d.question.clone()).into_any_element()),
+                    Some(muted(suggest).into_any_element()),
+                    revised.map(|line| div().text_xs().text_color(rgb(theme::TEXT)).child(line).into_any_element()),
+                    claims.map(|line| muted(line).into_any_element()),
+                    evidence.map(|line| muted(line).into_any_element()),
+                ];
+                let keys = vec![
+                    ("sort-keep", "Keep (↵)", "enter"),
+                    ("sort-now", "Now (t)", "t"),
+                    ("sort-later", "Later (l)", "l"),
+                    ("sort-not-mine", "Not mine (n)", "n"),
+                    ("sort-dismiss", "Dismiss (d)", "d"),
+                ];
+                ("Is this a priority, and where does it slot in?".into(), body.into_iter().flatten().collect(), keys)
+            }
+        };
+        // A click is its key: the core says what the key does.
+        let buttons = keys.into_iter().enumerate().map(|(n, (id, label, key))| {
+            let kind = if n == 0 { Button::Primary(label.into()) } else { Button::Ghost(Face::Label(label.into())) };
+            ui::button(id, kind, State::Rest).on_click(cx.listener(move |this, _, window, cx| {
+                let mods = ottospace_core::keys::Mods::default();
+                if let Key::Act(action) = this.model.sort_click(key, mods, crate::now_ms()) {
+                    drop(this.dispatch(action, this.input, window, cx));
+                }
+            }))
+        });
+        // P trusts exactly the scope shown here: a channel, a project, a repository, a routine.
+        let scope =
+            sort.item.and_then(|id| self.model.filed.get(id)).map(|d| {
+                match ottospace_core::filed::scope_label(d.source, &d.key) {
+                    Some(scope) => format!(" · p skip triage for {scope} from now"),
+                    None => String::new(),
+                }
+            });
+        let hint = match scope {
+            None if sort.left == 0 => "z takes the last back · Esc close".to_string(),
+            None => "↵ sort · s not now · Esc close".to_string(),
+            Some(scope) => format!("u count its claims · c core or ancillary{scope} · z undo · Esc close"),
+        };
+        let header = div()
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(div().flex_1().min_w_0().child(crate::cut_text(head).text_sm().font_weight(FontWeight::SEMIBOLD)))
+            .child(muted(format!("{at} of {of}")));
+        let column = div()
+            .w_full()
+            .max_w(px(WIDTH))
+            .flex()
+            .flex_col()
+            .gap_2()
+            .p_3()
+            .child(header)
+            .children(body)
+            .child(div().flex().flex_wrap().items_center().gap_1().pt_2().children(buttons))
+            .child(muted(hint));
+        div().size_full().flex().justify_center().child(column).into_any_element()
     }
 
     /// A key while the card pane has the keyboard. True: it was the card's.

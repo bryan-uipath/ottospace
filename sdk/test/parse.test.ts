@@ -356,12 +356,13 @@ test("a filed decision parses: the state's row, and its words labelled untrusted
     id: 9, source: "slack", via: "socket", triage: "pending", status: "open", revision: 2, filed: 1, updated: 2,
     expires: 3, task: null, options: 1, evidence: 1,
   };
-  const filed = snapshot({ ...replyWith(null), filed: { open: 1, to_sort: 1, rows: [row] } }).filed;
+  const filed = snapshot({ ...replyWith(null), filed: { open: 1, to_sort: 1, trusted: 0, rows: [row] } }).filed;
   assert.deepEqual(filed?.rows[0], row);
   const decision = {
     untrusted: true, warning: "w", id: 9, source: "slack", key: "slack:C0:1.0", via: "socket", revision: 2, filed: 1,
     updated: 2, summary: "s", question: "q?", recommend: 0, why: "", triage: "pending", expires: 3, task: null,
-    status: "open", closed: null,
+    status: "open", closed: null, later: null, revised: ["claims"],
+    accepted: { project: null, role: null, claims: false, now_until: null, revision: 0 },
     options: [{ label: "Draft", consequence: "", act: { draft_reply: { text: "made-up" } } }],
     evidence: [{ kind: "file", text: "", at: { path: "/code/app/a.rs", lines: [3, 9] }, provenance: null }],
     suggest: { projects: ["beacon"], role: "core", role_why: "" },

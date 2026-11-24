@@ -249,16 +249,31 @@ The suggested area is preselected when the filer's suggestion names a project li
 
 ### Earning the right to skip triage
 
-- **Only the user promotes**: a source, or a source and key prefix (`routine:dri:`, a channel
-  `slack:C0MADEUP:`), from the Sort card's menu or the Decisions strip's source menu ("Skip
-  triage for this source"). Its items then rank at once with the filer's suggestions and claims
-  accepted, marked `by: trusted source`.
+- **Only the user promotes, and only a named scope.** Each source's key has a closed format
+  (`slack:<channel>:<ts>`, `jira:<PROJECT>-<n>`, `pr_review:<owner>:<repo>:<n>`,
+  `routine:<name>:<incident>`; `agent_session:<id>` and `calendar:<id>` have no scope); a filing
+  whose key is not its source's is refused. P promotes the scope of the item on show, a field of
+  that format (the channel, the project, the repository, the routine), which the card names before
+  the key ("p skip triage for Slack channel C0MADEUP"). Never a free prefix, never a whole source:
+  there is no way to promote one (built, slice 1b). Its items then rank at once with the filer's
+  suggestions and claims accepted.
+- **What a promotion means.** The socket cannot prove who filed: any same-user client can file
+  under a promoted channel, and its claims count at once. So promotion trusts the *filers* of that
+  scope, not only the people in it. It stays bounded: the caps hold for a promoted scope (20 open
+  per source, 30 filings per source an hour), and in slice 2 the three-in-a-row rule spaces its
+  cards like any source's.
+- **New words are new triage.** An update that changes what a sorted item says (summary, question,
+  options, why, evidence, suggestion, claims, task) puts it back in triage, takes back what the
+  user accepted (its claims, its role), and the card says what changed ("Changed since you sorted
+  it: question, claims"). Only a new time (`expires`) leaves it sorted. Under a promoted scope the
+  filer's word stands for each new revision. Every acceptance names the revision it was given to,
+  and a property check holds that none stands for other words (built, slice 1b).
 - **ottospace may offer, never decide**: at the end of a sort run where the last 10 items from one
   prefix were all slotted as suggested, one line: "↻ dri: 10 of 10 as suggested. Let it skip
   triage?" ↵ promotes; anything else and it is not asked again for 10 more.
 - **Revocable at once**: the same menu, or `!` on any card from it ("back to triage"), which puts
   its open items back in triage too.
-- Kept in `<home>/decisions/trust.json` (the prefixes and when promoted). A test run writes none
+- Kept in `<home>/decisions/trust.json` (the scopes promoted). A test run writes none
   without `OTTOSPACE_HOME`. Not in the state as text: counts only.
 
 ## 5. The week's focus
@@ -418,7 +433,7 @@ Per area, this week, from what ottospace already holds (pure: counted from recor
 | Counts | From |
 |---|---|
 | Tasks done | tasks of the area with `finished_at` this week |
-| Pull requests merged | linked repositories' pull requests merged this week: a new read-only `gh` read (Open 6) |
+| Pull requests merged | linked repositories' pull requests merged this week: a new read-only `gh` read (Decided 16) |
 | Decisions answered | a per-week counter in `focus.json`, counted when the user answers (records are deleted, and a key's revisions reuse one record) |
 | Agent time | the area's tasks' agent time this week: a per-week counter beside `progress::Clock`'s day total (new: it keeps a lifetime and one day's time) |
 | Waiting on you | its open decisions and its tasks under Needs you, now |
@@ -504,6 +519,11 @@ default, which the user sets per card); sorting; setting focus; promoting a sour
 - **Retention**: `<home>/decisions/<id>.json`, 0600, deleted 14 days after it closed; Forget at
   once. `focus.json` keeps weeks' areas and counts; the user may clear a week.
 - **People**: an author is kept only inside a quote's text; the record says `a person`.
+- **Promotion and updates** (built, slice 1b): a promotion trusts one named scope of its
+  source's key format, shown on the card before P, never a prefix or a whole source; anyone who
+  can reach the socket can file under it, within the caps. An update that changes a sorted item's
+  words returns it to triage and takes back what the user accepted; see "Earning the right to
+  skip triage".
 - **The guide** (`skill/guide.md`, a new "Decisions" section): file decision-ready items with a
   one-line summary; one key per thread, update rather than file again, withdraw when moot; put
   others' words in evidence quotes; suggest a project and a role with a reason, and claims only
@@ -537,7 +557,7 @@ Each a pull request that stands alone, behind a new flag `decision_sources` (Exp
    Evidence: the core tests of §6; e2e set by hand, proposed then confirmed, proposed then
    declined, rollover with time passed in; shots of the confirm card and the why line.
 3. **Progress against focus.** The tallies, area states, Unplanned and displaced, the Week strip,
-   the rollover snapshot. The merged-PR read if Open 6 says yes. Evidence: core tests of each
+   the rollover snapshot. The merged-PR read (Decided 16), and AGENTS.md's network rule reworded with it. Evidence: core tests of each
    state with times passed in; a shot of the strip; the `gh` stand-in (`OTTOSPACE_GH`) for merged
    pull requests.
 4. **Acts.** `start_task` with the quoted brief, `draft_reply` with Copy and Open thread,
@@ -568,7 +588,7 @@ From #424 (owner, 2026-11-23), standing unless marked:
    `.md`), case-insensitive; a task's `#tag` that matches one is that project.
 4. ~~W from the drag only~~. **Replaced**: priority comes from the week's focus (§5, §6); the
    drag order feeds nothing but the Projects section.
-5. **Nothing interrupts** in these slices (see Open 5 for an on-call rule).
+5. **Nothing interrupts** in these slices (an on-call rule comes after slice 2: Decided 15).
 6. **Retention**: closed decisions deleted after 14 days; Forget for sooner.
 7. **No per-card "first" pin**; `t` (take now) in triage is a sort, for today only.
 8. **A dismissed thread comes back** only when more urgent, and then to triage.
@@ -585,6 +605,19 @@ Added (owner, 2026-11-23):
     that read the weekly note (`focus_set`) and confirmed by the user. ottospace never reads or
     writes the note.
 14. **Expiry tied to its asker** where ottospace can check it (working default, reversible).
+15. **An "urgent" rule for an on-call week** (owner, 2026-11-23): a rule the user sets may raise
+    `needs you`. By source and scope only (a routine such as `dri`, a pager channel; the scopes of
+    the key formats), never by keyword (a keyword matches untrusted text, so anyone in a channel
+    could raise it); it ends on a date the user sets; it raises the count and puts the card first,
+    with no sound, notice or focus change. Built after slice 2.
+16. **A second read-only `gh` call** (owner, 2026-11-23): pull requests merged this week in the
+    listed repositories, for progress against focus. And the network rule is too narrow as one
+    named command: in the slice that adds this read (progress against focus), AGENTS.md's rule is
+    reworded to the principle it protects. The shell may read, through the user's own `gh`, with a
+    fixed argv and read-only subcommands, data about repositories the user listed (open and merged
+    pull requests today; a new read is added by naming it in the rule and in `prs.rs`); never a
+    write, never another repository, never a shell; `OTTOSPACE_GH` stands in for it in tests. The
+    calendar clause stays as it is. AGENTS.md is not changed before that slice.
 
 ## 11. Open questions (the owner's)
 
@@ -595,14 +628,8 @@ Added (owner, 2026-11-23):
 3. **Promotion scope**: a whole source, or a source and key prefix (a channel, a routine)?
    Recommend the prefix: one noisy channel should not ride on a trusted one.
 4. **Stalled after 2 working days with nothing moved?** Recommend yes; a setting only if asked.
-5. **An "urgent" rule for an on-call week**: a rule the user sets that may raise `needs you`.
-   Recommend: by source and key prefix only (`routine:dri:`, a pager channel), never by keyword
-   (a keyword matches untrusted text, so anyone in a channel could raise it); bounded by an end
-   date the user sets (or the week a "DRI" area is in focus); it raises the count and puts the
-   card first, with no sound, notice or focus change. Built after slice 2.
-6. **A second `gh` read** (pull requests merged this week in linked repositories) for progress:
-   read-only, a fixed argv, beside `repos_prs`. Recommend yes; AGENTS.md's network line changes
-   with it.
+5. *Decided: see Decided 15.*
+6. *Decided: see Decided 16.*
 7. **Carry-over at a new week**: offer to keep last week's focus, or start empty and wait for a
    proposal? Recommend the offer, unless a proposal is already waiting.
 8. **An agent's own question filed over the socket** skips triage by default (its task is work

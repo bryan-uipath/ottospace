@@ -1630,6 +1630,19 @@ on its task; the right rail shows it. Panes you add close when you answer, skip 
 card. A card answered elsewhere leaves; after the last, Decisions closes and the tab you came from is back. Never kept.
 Only you open, answer, skip or close it.
 
+With `decision_sources` on too, what agents and routines file (`decision_file`) waits in triage:
+after the agents' questions, one card, "Sort 3 new items" (the status bar says `· 3 to sort`
+beside needs you; nothing pings). ↵ sorts them, S leaves them for another run. Each item, the
+first filed first, shows where it came from, what came in, what the filer suggests and claims
+(someone waits, a deadline: not counted until you press U). One key each: ↵ keeps it (under the
+project it suggests), T takes it now (for today), L puts it off a day, N not mine, D dismisses;
+C flips core or ancillary, Z takes the last back, P lets its scope skip triage from now: the
+Slack channel, Jira project, repository or routine its key names, shown on the card before you
+press it (never a whole source; kept in `~/.ottospace/decisions/trust.json`; Z takes it back, its
+items back in triage). A sorted item whose filer then changes what it says (not only its time)
+comes back to triage, says what changed, and keeps nothing you accepted. The look is
+provisional. Only you sort.
+
 ### Projects
 
 With `projects` on and `projects_dir` set, the left rail has a Projects cell under Repos. Its list

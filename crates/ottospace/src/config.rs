@@ -545,6 +545,20 @@ pub fn save_decision(decision: &ottospace_core::filed::Decision) -> io::Result<(
     write_mode(&dir, &format!("{}.json", decision.id), text.as_bytes(), Some(0o600))
 }
 
+/// The prefixes the user promoted out of triage: `trust.json` in the decisions folder.
+pub fn load_trust() -> Vec<ottospace_core::filed::Trust> {
+    let file = decisions_dir().map(|dir| dir.join("trust.json"));
+    let bytes = file.and_then(|file| crate::collect::read_plain(&file, MAX_DECISION_BYTES));
+    bytes.and_then(|bytes| serde_json::from_slice(&bytes).ok()).unwrap_or_default()
+}
+
+/// Writes `trust.json` (0600), whole or not at all. Nothing in a test run that named no folder.
+pub fn save_trust(trusted: &[ottospace_core::filed::Trust]) -> io::Result<()> {
+    let Some(dir) = decisions_dir() else { return Ok(()) };
+    let text = serde_json::to_string_pretty(trusted).map_err(io::Error::other)? + "\n";
+    write_mode(&dir, "trust.json", text.as_bytes(), Some(0o600))
+}
+
 /// Removes a decision's file. One that is gone already is removed.
 pub fn remove_decision(id: u64) -> io::Result<()> {
     let Some(dir) = decisions_dir() else { return Ok(()) };
