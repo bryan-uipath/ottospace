@@ -36,6 +36,7 @@ impl Reader {
                     false,
                     &[],
                     &|_| true,
+                    &|| false,
                 );
                 let cut = read.as_ref().is_some_and(|(_, cut)| *cut);
                 let paths = read.map(|(files, _)| files.into_iter().map(|(path, _)| path).collect());

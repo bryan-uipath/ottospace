@@ -190,8 +190,8 @@ Why not paths (the "Oblique" alternative this note first named): GPUI has no dep
 every building would be three paths painted back to front each frame, 15,000 paths at 5,000
 files; a rendered picture costs one image a frame however large the city.
 
-**Level of detail**: none needed for the GPU (50,000 boxes are one draw). A city over 20,000
-files, 4 MB of names or 10 s to read is not drawn (the lattice stays).
+**Level of detail**: none needed for the GPU (50,000 boxes are one draw). A city over 600,000
+files, 64 MB of names or 60 s to read is not drawn (the lattice stays).
 
 **Frames**: none at rest. A picture is made when the file list, the lit set or the tab's size
 changes, and a paint happens then. A camera move (slice 7) would be the only animation.
@@ -268,7 +268,8 @@ person is only nearer.
   argv is fixed and hardened as the status bar's (`child::git_read`: no hooks, fsmonitor, pager,
   system config or prompt), and runs only in a checkout the person listed in Repos
   (`status_bar::reads_changes`: a repository's config can run programs). Nothing leaves the machine.
-- **Limits**: 10 seconds, 4 MB of names, 20,000 files. Past any of them there is no city, and
+- **Limits**: 60 seconds, 64 MB of names, 600,000 files (20,000, 4 MB and 10 s before the
+  large-city measurement). Past any of them there is no city, and
   the lattice stays: half a city would put files in other places than the whole one.
 - **Coupling** (proposed): files changed in the same commits, from the same one `git log`
   (`--name-only`, the last 500 commits, commits over 30 files skipped: a rename sweep couples

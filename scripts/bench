@@ -35,8 +35,8 @@ temp folder, `/bin/sh` terminals, no apps, no repositories or sessions of the us
 
   spin                 the code city turned once round by the Developer command's spin (`city_spin`: a
                        step a frame, as a steady drag), at CI's window, for a made-up repository of
-                       9,500 files in 900 folders (`shot.made_up_repo`; `--city-large`: also 50,000
-                       in 6,800, past the city's 20,000-file limit, so it shows none). From the app:
+                       9,500 files in 900 folders (`shot.made_up_repo`; `--city-large`: also 50,000,
+                       60,000, 200,000 and 600,000 files, folders in proportion, empty). From the app:
                        each frame's time from the one before (mean, p50, p95, p99, max, over 16.7 and
                        33 ms), frames that showed the picture the frame before did, and a new
                        picture's wait from made to painted; from the trace, per picture: boxes,
@@ -420,7 +420,9 @@ def city_motion(binary, scratch, files):
 
 
 SPINS = [(9500, 900, 8)]
-LARGE = (50000, 6800, 9)
+# Config-repository shaped, folders in proportion: empty files (a stat is a stat; 600,000 of
+# 7 KB would not fit a runner's disk).
+LARGE = [(50000, 6800, 9), (60000, 8160, 9), (200000, 27200, 9), (600000, 81600, 9)]
 
 
 def city_spin(binary, scratch, files, folders, deepest):
@@ -429,7 +431,7 @@ def city_spin(binary, scratch, files, folders, deepest):
     None: a build with no spin, or no city (too many files)."""
     tree = os.path.realpath(os.path.join(scratch, f"repo-{files}"))
     if not os.path.isdir(tree):
-        shot.made_up_repo(tree, files, folders, deepest)
+        shot.made_up_repo(tree, files, folders, deepest, empty=files > 10000)
     env = {"OTTOSPACE_FEATURES": "code_city", "GIT_CONFIG_GLOBAL": "/dev/null", "OTTOSPACE_E2E_WINDOW": "1024x674"}
     inst = launch(binary, env)
     last = lambda: max([e.get("ms", 0) for e in trace_events(inst)] or [0])
@@ -438,7 +440,8 @@ def city_spin(binary, scratch, files, folders, deepest):
         inst.wait("the repository listed", lambda: shot.path_get(inst.state(), "repos_bar.0") is not None)
         inst.ok({"cmd": "open_repo", "path": tree})
         inst.ok({"cmd": "close"})
-        if not inst.wait("the city", lambda: shot.path_get(inst.state(), "city.picture") is not None, timeout=60, fail=False):
+        # 600,000 files take about 30 s to read.
+        if not inst.wait("the city", lambda: shot.path_get(inst.state(), "city.picture") is not None, timeout=240, fail=False):
             return None
         time.sleep(1)
         start = last()
@@ -446,7 +449,7 @@ def city_spin(binary, scratch, files, folders, deepest):
             return None
         # Asked seldom: a state's reply is the main thread's work too.
         inst.poll = 0.5
-        inst.wait("the spin", lambda: shot.path_get(inst.state(), "city.spin.result") is not None, timeout=120)
+        inst.wait("the spin", lambda: shot.path_get(inst.state(), "city.spin.result") is not None, timeout=300)
         inst.poll = 0.02
         spun = shot.path_get(inst.state(), "city.spin.result")
         events = [e for e in trace_events(inst) if e.get("ms", -1) >= start]
@@ -557,7 +560,7 @@ def bench(sides, args, scratch):
         for name, by in runs.items()
     }
     say(f"code city spun ({MOTION_RUNS} runs a side) ...")
-    sizes = SPINS + ([LARGE] if args.city_large else [])
+    sizes = SPINS + (LARGE if args.city_large else [])
     spins = {name: {size[0]: [] for size in sizes} for name in names}
     for i in range(MOTION_RUNS):
         for name in order_of(names, i):
@@ -714,7 +717,7 @@ def main():
     parser.add_argument("--runs", type=int, default=10)
     parser.add_argument("--cold-runs", type=int, default=5)
     parser.add_argument("--out", default=os.path.join(REPO, ".bench"))
-    parser.add_argument("--city-large", action="store_true", help="also spin 50,000 files (slow; past the city's limit)")
+    parser.add_argument("--city-large", action="store_true", help="also spin 50,000, 60,000, 200,000 and 600,000 files (slow)")
     args = parser.parse_args()
     if args.runs < 1 or args.cold_runs < 1:
         parser.error("--runs and --cold-runs: at least 1")
