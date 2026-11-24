@@ -1090,14 +1090,23 @@ mod tests {
             (Some(WORKTREE), "Delete this worktree?".into(), false)
         );
         assert!(m.row_menu().is_none());
-        // As the app's other questions: the user's ↵ deletes; Esc or any other key keeps it.
+        // It cannot be undone: the user's ⌘↵ deletes, ↵ alone does nothing; Esc or any other key keeps it.
         let cmd = Mods { cmd: true, ..Mods::default() };
+        let shift = Mods { shift: true, ..Mods::default() };
         for (key, mods) in
-            [("escape", Mods::default()), ("backspace", cmd), ("y", Mods::default()), ("enter", cmd), ("d", cmd)]
+            [("escape", Mods::default()), ("backspace", cmd), ("y", Mods::default()), ("enter", shift), ("d", cmd)]
         {
             assert_eq!(Confirm::answer_delete(key, mods, Origin::User), Some(Action::QuitCancel), "{key}");
         }
-        assert_eq!(Confirm::answer_delete("enter", Mods::default(), Origin::User), Some(Action::QuitConfirm));
+        assert_eq!(Confirm::answer_delete("enter", cmd, Origin::User), Some(Action::QuitConfirm));
+        assert_eq!(Confirm::answer_delete("enter", Mods::default(), Origin::User), None);
+        // Its buttons: Keep it, then the red Delete worktree with ⌘↵.
+        let [no, yes] = confirm.answers();
+        assert_eq!((no.label, no.action, no.look), ("Keep it", Action::QuitCancel, crate::model::Look::Cancel));
+        assert_eq!(
+            (yes.label, yes.action, yes.look, yes.keys),
+            ("Delete worktree", Action::QuitConfirm, crate::model::Look::Destroys, &["⌘", "↵"][..])
+        );
         for origin in [Origin::Socket, Origin::System] {
             assert_eq!(Confirm::answer_delete("enter", Mods::default(), origin), None);
             assert_eq!(Confirm::answer_delete("escape", Mods::default(), origin), None);

@@ -791,6 +791,8 @@ enum Mark {
     Heading(Heading, u8),
     /// A draft's row of the quit question, by its place in `Confirm::unsent`.
     QuitRow(usize),
+    /// A question's buttons: its way out (0), its yes (1), its × (2).
+    ConfirmButton(u8),
     /// A side overlay (`overlay_panels`): the sidebar's (true) or the drawer's.
     Overlay(bool),
     /// The new-task box centred over the panes (`overlay_panels`).
@@ -4361,6 +4363,8 @@ impl Workspace {
             "toast": self.toast_snapshot(),
             // Where each draft's row of the quit question is drawn, by its place in `confirm.unsent`.
             "quit_rows": self.quit_rows(),
+            // Where the question's buttons are drawn: no, yes, ×. Empty: no question.
+            "confirm_buttons": self.confirm_buttons(),
             // How many problems the last read of `settings.json` found.
             "settings_errors": self.model.settings_errors(),
             // The user's editor on a draft (⌃G): what it edits, never the text. Null: none runs.

@@ -1,9 +1,9 @@
 //! The quit question: ⌘Q asks before it ends a running program or agent, or loses a draft. And
 //! the other questions the dialog asks (dismiss, unlist, close, delete a worktree).
 
-use gpui::{Context, Keystroke, Window, div, prelude::*, px, rgb};
+use gpui::{Context, Keystroke, SharedString, Window, div, prelude::*, px, rgb};
 use ottospace_core::keys::Mods;
-use ottospace_core::model::{Confirm, Owner, Running, quit};
+use ottospace_core::model::{Confirm, Look, Owner, Running, quit};
 use ottospace_core::{Action, Kind, Origin, theme};
 
 use crate::{Workspace, dialog, ui};
@@ -69,11 +69,7 @@ impl Workspace {
         // terminal. (A client's key is no event of the keyboard's.)
         let held = self.input == Origin::User && ottospace_mac::window::key_repeating();
         if let Some(answer) = self.confirm_answer(key, self.input).filter(|_| !held) {
-            // Where each shell is now: the core keeps a worktree a terminal went into since.
-            if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) {
-                self.tell_terminals();
-            }
-            self.dispatch(answer, self.input, window, cx);
+            self.confirm_answered(answer, window, cx);
         }
         true
     }
@@ -85,145 +81,144 @@ impl Workspace {
         (0..rows).filter_map(|at| marks.get(&crate::Mark::QuitRow(at)).copied().map(crate::rect)).collect()
     }
 
-    /// The question, centred over the workspace. A click outside it cancels.
+    /// Where the question's buttons are drawn: its way out, its yes, its ×. Empty: no question.
+    pub fn confirm_buttons(&self) -> Vec<[f32; 4]> {
+        let marks = self.marks.borrow();
+        let drawn = |at| marks.get(&crate::Mark::ConfirmButton(at)).copied().map(crate::rect);
+        if self.model.confirm.is_none() { Vec::new() } else { (0..3).filter_map(drawn).collect() }
+    }
+
+    /// The question, centred over the workspace (`ui::dialog`): its title, one sentence, what it
+    /// acts on, then its answers as buttons, the core's (`Confirm::answers`). × , Esc and a click
+    /// outside it cancel.
     pub fn render_confirm(&self, confirm: &Confirm, cx: &mut Context<Self>) -> impl IntoElement + use<> {
-        // "Stop its agent and dismiss?": the task, and what ↵ does.
-        if let Some(task) = confirm.dismiss.and_then(|id| self.model.tasks.get(id)) {
-            let panel = dialog::floating(320.)
-                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(confirm.title()))
-                .child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child(task.title.clone()))
-                .child(dialog::hint("↵ stop and dismiss · esc cancel"));
-            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(panel);
-        }
-        // "Stop "<task>" and put it away?": Later on a task at work. Its conversation is kept.
-        if confirm.later.is_some() {
-            let said = "It is working. Its conversation is kept; you can resume it from Tasks.";
-            let panel = dialog::floating(320.)
-                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(confirm.title()))
-                .child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child(said))
-                .child(dialog::hint("↵ stop, resume later · esc keep running"));
-            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(panel);
-        }
-        // "Close <title>?": an owned window whose app says it has unsaved changes.
-        if let Some(pane) = confirm.edited {
+        let muted = || {
+            div().flex().flex_col().gap(px(theme::SPACE_1)).text_size(px(theme::TEXT_XS)).text_color(rgb(theme::MUTED))
+        };
+        let (title, purpose, body): (String, &str, Option<gpui::Div>) = if confirm.dismiss.is_some() {
+            // "Stop its agent and dismiss?": the task.
+            let task = confirm.dismiss.and_then(|id| self.model.tasks.get(id)).map(|task| task.title.clone());
+            (confirm.title(), "Its agent is still working.", task.map(|task| muted().child(task)))
+        } else if confirm.later.is_some() {
+            // "Stop "<task>" and put it away?": Later on a task at work. Its conversation is kept.
+            (confirm.title(), "It is working. Its conversation is kept; resume it from Tasks.", None)
+        } else if let Some(pane) = confirm.edited {
+            // "Close <title>?": an owned window whose app says it has unsaved changes.
             let title = match self.model.pane(pane).map(|pane| &pane.kind) {
                 Some(Kind::App { title, .. }) if !title.is_empty() => title.clone(),
                 Some(Kind::App { name, .. }) => format!("this {name} window"),
                 _ => "this window".into(),
             };
-            let panel = dialog::floating(320.)
-                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(format!("Close {title}?")))
-                .child(div().p_3().text_xs().text_color(rgb(theme::MUTED)).child("It has unsaved changes"))
-                .child(dialog::hint("↵ close · esc cancel"));
-            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(panel);
-        }
-        // "Unlist this repository?": which, that a task works there, and that no file goes.
-        if let Some(path) = &confirm.unlist {
+            (format!("Close {title}?"), "It has unsaved changes.", None)
+        } else if let Some(path) = &confirm.unlist {
+            // "Unlist <repo>?": that a task works there, and that no file goes.
             let name = ottospace_core::repos::name_of(path);
-            let panel = dialog::floating(320.)
-                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(format!("Unlist {name}?")))
-                .child(
-                    div()
-                        .p_3()
-                        .text_xs()
-                        .text_color(rgb(theme::MUTED))
-                        .child("A task works in it. It leaves the Repos list; nothing on disk changes."),
-                )
-                .child(dialog::hint("↵ unlist · esc cancel"));
-            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(panel);
-        }
-        // "Delete this worktree?": its branch and full path, and that nothing brings it back.
-        if let Some(path) = &confirm.delete {
+            (format!("Unlist {name}?"), "A task works in it. It leaves the Repos list; nothing on disk changes.", None)
+        } else if let Some(path) = &confirm.delete {
+            // "Delete the <branch> worktree?": its full path, and that nothing brings it back.
             let branch = self.model.linked_worktree(path).and_then(|(_, w)| w.branch.clone());
-            let branch = branch.unwrap_or_else(|| "(no branch)".into());
-            let said = format!("Delete the worktree of {branch} at {path}? Its branch is kept.");
-            let panel = dialog::floating(360.)
-                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::CONFIRM)).child(confirm.title()))
-                .child(
-                    div()
-                        .p_3()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(rgb(theme::MUTED))
-                        .child(said)
-                        .child("Its folder goes, and cannot be brought back. git keeps one with changes."),
-                )
-                .child(dialog::hint("↵ delete · esc keep"));
-            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(panel);
-        }
-        // "Close this workspace?": which, and the terminals that end once its Undo runs out.
-        if let Some(id) = confirm.close {
+            let title = branch.map_or_else(|| confirm.title(), |branch| format!("Delete the {branch} worktree?"));
+            let path = div()
+                .px(px(9.))
+                .py(px(7.))
+                .rounded(px(dialog::INNER_RADIUS))
+                .bg(rgb(theme::WELL))
+                .border_1()
+                .border_color(rgb(theme::BORDER))
+                .text_size(px(theme::TEXT_XS))
+                .font_family(crate::terminal::font_family())
+                .child(path.clone());
+            (
+                title,
+                "Its folder goes for good. The branch stays, and git refuses if it has changes.",
+                Some(div().child(path)),
+            )
+        } else if let Some(id) = confirm.close {
+            // "Close <workspace>?": the terminals that end once its Undo runs out.
             let name = self.model.space_title(&Owner::Workbook { id });
             let lines = confirm.lines().into_iter().map(|line| div().child(line));
-            let panel = dialog::floating(320.)
-                .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::TEXT)).child(format!("Close {name}?")))
-                .child(
-                    div()
-                        .p_3()
-                        .flex()
-                        .flex_col()
-                        .gap_1()
-                        .text_xs()
-                        .text_color(rgb(theme::MUTED))
-                        .child("It is not kept. Once its Undo runs out, closing ends these:")
-                        .children(lines),
-                )
-                .child(dialog::hint("↵ close · esc cancel"));
-            return dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
-                .flex()
-                .items_center()
-                .justify_center()
-                .child(panel);
-        }
-        // What quitting ends, then the drafts it loses: a section only with rows. A draft's row
-        // cancels and goes to it.
-        let section = |head: &'static str| div().pt_1().text_color(rgb(theme::TEXT)).child(head);
-        let sections = confirm.sections().into_iter().map(|(head, rows)| {
-            let drafts = head == quit::NOT_SENT;
-            let row = |(at, line): (usize, String)| match drafts {
-                // A list row, its words in line with the section's.
-                true => ui::list_row(("quit-row", at), ui::Row::Normal, ui::State::Rest)
-                    .mx(px(-theme::SPACE_2))
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        this.dispatch(Action::QuitGo { row: at }, this.input, window, cx);
-                    }))
-                    .child(crate::mark(&self.marks, crate::Mark::QuitRow(at)))
-                    .child(line)
-                    .into_any_element(),
-                false => div().child(line).into_any_element(),
+            (
+                format!("Close {name}?"),
+                "It is not kept. Once its Undo runs out, closing ends these:",
+                Some(muted().children(lines)),
+            )
+        } else {
+            // What quitting ends, then the drafts it loses: a section only with rows. A draft's
+            // row cancels and goes to it.
+            let head = |head: &'static str, count: usize| {
+                let head = format!("{} · {count}", head.trim_end_matches(':'));
+                div()
+                    .pt(px(theme::SPACE_1))
+                    .text_size(px(theme::TEXT_2XS))
+                    .text_color(rgb(theme::MUTED))
+                    .child(head.to_uppercase())
             };
-            div().flex().flex_col().gap_1().child(section(head)).children(rows.into_iter().enumerate().map(row))
+            let sections = confirm.sections().into_iter().map(|(name, rows)| {
+                let drafts = name == quit::NOT_SENT;
+                // All of them, not the rows: five and "and 3 more" end eight.
+                let count = if drafts { confirm.unsent.len() } else { confirm.running.len() + confirm.agents.len() };
+                let row = |(at, line): (usize, String)| match drafts {
+                    // A list row, its words in line with the section's.
+                    true => ui::list_row(("quit-row", at), ui::Row::Normal, ui::State::Rest)
+                        .mx(px(-theme::SPACE_2))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            this.dispatch(Action::QuitGo { row: at }, this.input, window, cx);
+                        }))
+                        .child(crate::mark(&self.marks, crate::Mark::QuitRow(at)))
+                        .child(line)
+                        .into_any_element(),
+                    false => div().text_size(px(theme::TEXT_XS)).child(line).into_any_element(),
+                };
+                div()
+                    .flex()
+                    .flex_col()
+                    .gap(px(theme::SPACE_1))
+                    .child(head(name, count))
+                    .children(rows.into_iter().enumerate().map(row))
+            });
+            // A long list scrolls; the buttons stay in reach under it.
+            let list = div().id("quit-sections").max_h(px(320.)).overflow_y_scroll().children(sections);
+            (confirm.title(), "These end, or are lost, when it quits.", Some(div().child(list)))
+        };
+        let answers = confirm.answers().into_iter().enumerate().map(|(at, answer)| {
+            let kind = match answer.look {
+                Look::Cancel => ui::Button::Secondary(answer.label.into()),
+                Look::Primary => ui::Button::Primary(answer.label.into()),
+                Look::Destroys => ui::Button::DangerPrimary(answer.label.into()),
+            };
+            let id = if at == 0 { "confirm:no" } else { "confirm:yes" };
+            let action = answer.action;
+            ui::dialog::action(id, kind, answer.keys, ui::State::Rest)
+                .child(self.controls.mark(id.to_string()))
+                .child(crate::mark(&self.marks, crate::Mark::ConfirmButton(at as u8)))
+                .on_click(cx.listener(move |this, _, window, cx| this.confirm_answered(action.clone(), window, cx)))
+                .into_any_element()
         });
-        let panel = dialog::floating(320.)
-            .child(div().px_3().pt_3().text_sm().text_color(rgb(theme::CONFIRM)).child(confirm.title()))
-            .child(div().p_3().flex().flex_col().gap_2().text_xs().text_color(rgb(theme::MUTED)).children(sections))
-            .child(dialog::hint("↵ quit · esc cancel"));
-        dialog::backdrop("confirm-backdrop", 0.5, Action::QuitCancel, cx)
+        let close = ui::dialog::close("confirm:close", ui::State::Rest)
+            .child(self.controls.mark("confirm:close".to_string()))
+            .child(crate::mark(&self.marks, crate::Mark::ConfirmButton(2)))
+            .on_click(cx.listener(|this, _, window, cx| this.confirm_answered(Action::QuitCancel, window, cx)));
+        let panel = ui::dialog::frame(
+            ui::dialog::QUESTION,
+            title,
+            Some(SharedString::from(purpose)),
+            close,
+            body,
+            ui::dialog::actions(None, None, answers.collect()),
+        );
+        dialog::backdrop("confirm-backdrop", ui::dialog::DIM, Action::QuitCancel, cx)
             .flex()
             .items_center()
             .justify_center()
             .child(panel)
+    }
+
+    /// The question answered, by a key or a button. Where each shell is now, first, for a delete:
+    /// the core keeps a worktree a terminal went into since.
+    fn confirm_answered(&mut self, answer: Action, window: &Window, cx: &mut Context<Self>) {
+        if self.model.confirm.as_ref().is_some_and(|c| c.delete.is_some()) {
+            self.tell_terminals();
+        }
+        self.dispatch(answer, self.input, window, cx);
     }
 }

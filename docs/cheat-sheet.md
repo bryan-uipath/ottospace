@@ -68,7 +68,7 @@ ottospace            # opens on the Repos list
 | Clone from GitHub | Repos' + ▸ From GitHub… (or "Clone from GitHub…" while it is empty): paste `owner/name` or a link, ↵. It goes in `~/code/<name>` (`clone_dir`) with your `gh`, and is listed. Esc stops it; a click outside hides it |
 | Stop listing a repository | Point at its name in Repos: the trash. Nothing on disk is touched. While a task works there it asks first (↵ unlists, Esc keeps it). A folder of repositories from older settings is one folded group: its trash takes it off whole |
 | New worktree | Point at a repository's name in Repos: +, type a branch, ↵. It goes in `~/.ottospace/worktrees/<repo>/<branch>` (`worktrees_dir`) and opens as a terminal tab |
-| Delete a worktree | Right-click its row in Repos: Delete worktree…, then ↵ (Esc keeps it). Its folder goes, its branch stays; git keeps one with changes, and the notice says why. Close its terminals, and mark its task done or dismiss it, first |
+| Delete a worktree | Right-click its row in Repos: Delete worktree…, then ⌘↵ or Delete worktree (↵ alone does nothing; Esc or Keep it keeps it). Its folder goes, its branch stays; git keeps one with changes, and the notice says why. Close its terminals, and mark its task done or dismiss it, first |
 | Fold a repository | Its chevron, or ← / → in list mode |
 | Reorder repositories | Drag a name in Repos, folded or not: a bar shows where it lands, Esc puts it back. Kept in `repos` in the settings |
 | A worktree's pull request | Its `#number` at the row's end: muted draft, ✓ ready, amber waiting, red failing. Hover for checks, review and merge; click opens it (via `gh`, `repos_prs`) |

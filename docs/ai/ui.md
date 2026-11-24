@@ -69,9 +69,6 @@ action row.
 - **Words**: sentence case; a button names its result (`Keep slot`, `Quit`), never `OK`.
 - **Backdrop**: one dim, 0.45, under every centred dialog.
 
-The slot dialog and the questions (`confirm.rs`) move onto this system in the pull requests
-stacked on this one; until then they keep their footer keys line and their own dims.
-
 The new-task box (`lifted`, `well`, `picker`, `chip`) is its own design (#394–#401) and not yet on
 this system: its keys line and legend stay.
 
