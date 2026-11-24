@@ -37,6 +37,7 @@ import type {
   Captured,
   Note,
   NoteReply,
+  DecisionAccepted,
   DecisionAct,
   DecisionAt,
   DecisionChoice,
@@ -895,8 +896,8 @@ const decisionSource = oneOf(
   ["agent_session", "terminal_session", "slack", "jira", "pr_review", "calendar", "routine"] as const,
   "a decision's source",
 );
-const decisionStatus = oneOf(["open", "withdrawn", "expired"] as const, "a decision's status");
-const decisionTriage = oneOf(["pending", "skipped"] as const, "triage");
+const decisionStatus = oneOf(["open", "withdrawn", "expired", "dismissed", "not_mine"] as const, "a decision's status");
+const decisionTriage = oneOf(["pending", "skipped", "sorted"] as const, "triage");
 const via = oneOf(["socket"] as const, "how a decision came");
 
 export function decisionFileReply(value: unknown): DecisionFileReply {
@@ -999,7 +1000,21 @@ export function decisionReply(value: unknown): DecisionReply {
       task: orNull(num)(d.task, at("task")),
       status: decisionStatus(d.status, at("status")),
       closed: orNull(num)(d.closed, at("closed")),
+      later: orNull(num)(d.later, at("later")),
+      accepted: decisionAccepted(d.accepted, at("accepted")),
+      revised: list(str)(d.revised, at("revised")),
     },
+  };
+}
+
+function decisionAccepted(value: unknown, at: string): DecisionAccepted {
+  const o = fields(value, at);
+  return {
+    project: orNull(str)(o.project, `${at}.project`),
+    role: orNull(oneOf(["core", "ancillary"] as const, "a role"))(o.role, `${at}.role`),
+    claims: bool(o.claims, `${at}.claims`),
+    now_until: orNull(num)(o.now_until, `${at}.now_until`),
+    revision: num(o.revision, `${at}.revision`),
   };
 }
 
@@ -2096,6 +2111,7 @@ function decisionSorting(value: unknown, at: string): DecisionSorting {
     role: orNull(oneOf(["core", "ancillary"] as const, "a role"))(o.role, `${at}.role`),
     done: num(o.done, `${at}.done`),
     left: num(o.left, `${at}.left`),
+    revision: num(o.revision, `${at}.revision`),
   };
 }
 

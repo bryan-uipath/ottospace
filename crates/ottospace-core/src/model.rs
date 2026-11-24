@@ -5493,8 +5493,9 @@ impl Model {
         let finished: Vec<TaskId> =
             fronts_were.into_iter().filter(|id| origin == Origin::User && !was_done(id)).collect();
         self.settle_tasks(undo && origin == Origin::User, &finished);
-        self.settle_decisions(origin, drawer_keys, &mut effects);
+        // What expired is closed before Decisions picks what it shows.
         self.settle_filed(&mut effects);
+        self.settle_decisions(origin, drawer_keys, &mut effects);
         self.settle_spaces(origin, &home);
         self.settle_out(out_from.clone(), origin == Origin::User, &mut effects);
         // After the tabs out: a fold-in may move the main window's tab (seed 37143).
@@ -12713,6 +12714,12 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
+                    Action::SortStart
+                    | Action::SortSkip
+                    | Action::SortItem { .. }
+                    | Action::SortToggle { .. }
+                    | Action::SortPromote { .. }
+                    | Action::SortUndo => Some(decisions::USERS_ALONE),
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
@@ -20019,6 +20026,12 @@ mod tests {
                     }
                     Action::TalkToggle => Some(rail::DRAWER_USERS),
                     _ if action.feature() == Some(Feature::Decisions) => Some(decisions::USERS_ALONE),
+                    Action::SortStart
+                    | Action::SortSkip
+                    | Action::SortItem { .. }
+                    | Action::SortToggle { .. }
+                    | Action::SortPromote { .. }
+                    | Action::SortUndo => Some(decisions::USERS_ALONE),
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),

@@ -2498,7 +2498,8 @@ fn check_decisions(m: &Model) -> Result<(), String> {
         ensure!(m.features.on(Feature::DecisionSources), "triage on show with its flag off");
         let waits = |id: u64| m.filed.get(id).is_some_and(|d| d.to_sort(m.now));
         ensure!(sort.item.is_none_or(waits), "triage shows item {:?}, which waits for nothing", sort.item);
-        ensure!(m.filed.to_sort(m.now) > 0, "triage on show with nothing to sort");
+        let all_sorted = sort.item.is_none() && !sort.undo.is_empty();
+        ensure!(m.filed.to_sort(m.now) > 0 || all_sorted, "triage on show with nothing to sort");
     } else {
         ensure!(!queue.is_empty(), "Decisions open with nothing waiting");
         ensure!(

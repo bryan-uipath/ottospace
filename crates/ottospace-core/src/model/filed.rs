@@ -60,6 +60,8 @@ impl Model {
                 }
                 return;
             }
+            // A key given to another revision of it does nothing: the card shows the new one first.
+            Action::SortItem { id, .. } if self.filed.get(id).is_some_and(|d| d.revision != sort.revision) => return,
             Action::SortItem { id, how } if shown(id) => {
                 if let Some(before) = self.filed.sort(id, how, sort.claims, sort.role, now) {
                     next.undo.push(Undo::Sorted(Box::new(before)));
@@ -91,8 +93,8 @@ impl Model {
                     let id = before.id;
                     if self.filed.put_back(*before) {
                         changed.push(id);
-                        (next.item, next.done) = (Some(id), next.done.saturating_sub(1));
-                        (next.claims, next.role) = (false, self.filed.get(id).and_then(|d| d.suggest.role));
+                        let undo = std::mem::take(&mut next.undo);
+                        next = self.sorting_at(Some(id), next.done.saturating_sub(1), undo);
                     }
                 }
                 Some(Undo::Promoted { source, scope }) => {
@@ -101,7 +103,9 @@ impl Model {
                     let back = ids.iter().filter(|id| self.filed.get(**id).is_some_and(|d| d.to_sort(now))).count();
                     next.done = next.done.saturating_sub(back);
                     let first = ids.iter().copied().find(|id| self.filed.get(*id).is_some_and(|d| d.to_sort(now)));
-                    next.item = first.or(next.item);
+                    // Shown as any next item is: nothing left on it from the one before.
+                    let undo = std::mem::take(&mut next.undo);
+                    next = self.sorting_at(first.or(next.item), next.done, undo);
                     changed.extend(ids);
                     effects.push(Effect::SaveTrust { trusted: self.filed.trusted.clone() });
                 }
@@ -195,7 +199,7 @@ mod tests {
         });
         let task = m.tasks.list[0].id;
         let mut asked = filing();
-        asked.source = Source::AgentSession;
+        (asked.source, asked.key) = (Source::AgentSession, "agent_session:q1".into());
         assert!(m.filing_refusal(&asked, 10).is_some(), "names no task");
         asked.task = Some(task);
         assert_eq!(m.filing_refusal(&asked, 10), None);
@@ -269,6 +273,9 @@ mod tests {
         assert_eq!(m.filed.get(c).unwrap().status, Status::Dismissed);
         // The one filed under the channel while it was trusted waits again, the promotion taken back.
         key(&mut m, "n");
+        // All sorted: Z may still take the last back; Esc closes.
+        assert_eq!(item(&m), Some(None));
+        key(&mut m, "escape");
         assert!(m.decisions.is_none(), "nothing left to sort");
         // S on the card: not in this run.
         file(&mut m, Source::Jira, "jira:ABC-2", 1_000);

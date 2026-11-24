@@ -51,6 +51,9 @@ pub struct Sorting {
     /// Sorted in this run, and waiting still.
     pub done: usize,
     pub left: usize,
+    /// The item's revision on show: a key for another (its filer changed it meanwhile) does nothing,
+    /// and its card starts again with nothing left on it.
+    pub revision: u32,
     /// What `z` takes back, the last first.
     #[serde(skip)]
     pub(crate) undo: Vec<Undo>,
@@ -115,9 +118,10 @@ impl Model {
 
     /// The sort card's run state at item `item`: its claims off, its role as suggested.
     pub(crate) fn sorting_at(&self, item: Option<u64>, done: usize, undo: Vec<Undo>) -> Sorting {
-        let role = item.and_then(|id| self.filed.get(id)).and_then(|d| d.suggest.role);
+        let shown = item.and_then(|id| self.filed.get(id));
+        let (role, revision) = (shown.and_then(|d| d.suggest.role), shown.map_or(0, |d| d.revision));
         let left = self.filed.to_sort(self.now);
-        Sorting { item, claims: false, role, done, left, undo }
+        Sorting { item, claims: false, role, done, left, revision, undo }
     }
 
     /// The questions waiting on the person: each task whose native agent runs and shows a question
@@ -220,13 +224,18 @@ impl Model {
         let Some(sort) = self.decisions.as_ref().and_then(|run| run.sort.as_ref()) else { return false };
         let on = self.features.on(Feature::DecisionSources);
         let waits = |id: u64| self.filed.get(id).is_some_and(|d| d.to_sort(now));
+        // With nothing left it says "All sorted" while Z can still take the last back.
+        let all_sorted = || (!sort.undo.is_empty()).then_some(None);
         let item = match sort.item {
             _ if !on => None,
             Some(id) if waits(id) => Some(Some(id)),
-            Some(_) => self.filed.next_to_sort(now).map(Some),
-            None => (self.filed.to_sort(now) > 0).then_some(None),
+            Some(_) => self.filed.next_to_sort(now).map(Some).or_else(all_sorted),
+            None => {
+                (self.filed.to_sort(now) > 0).then_some(None).or_else(|| (sort.done > 0).then(all_sorted).flatten())
+            }
         };
-        let fresh = item.flatten() != sort.item;
+        let revised = sort.item.and_then(|id| self.filed.get(id)).is_some_and(|d| d.revision != sort.revision);
+        let fresh = item.flatten() != sort.item || revised;
         let (done, undo) = (sort.done, sort.undo.clone());
         let next = item.map(|item| match fresh {
             true => self.sorting_at(item, done, undo),

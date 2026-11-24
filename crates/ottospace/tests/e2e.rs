@@ -18486,8 +18486,13 @@ fn filed_decisions_are_sorted_one_key_each_by_the_user_alone() {
     // P: the channel skips triage from now.
     let promoted = otto.user_key("p");
     assert_eq!((&row(&promoted, ids[1])["triage"], &promoted["filed"]["trusted"]), (&json!("skipped"), &json!(1)));
-    // D on the last: nothing left to sort, and Decisions closes.
+    // D on the last: "All sorted" (Z could take it back); Esc closes Decisions.
     let done = otto.user_key("d");
-    assert_eq!((&row(&done, ids[2])["status"], &done["state"]["decisions"]), (&json!("dismissed"), &Value::Null));
+    let sort = &done["state"]["decisions"]["sort"];
+    assert_eq!(
+        (&row(&done, ids[2])["status"], &sort["item"], &sort["left"]),
+        (&json!("dismissed"), &Value::Null, &json!(0))
+    );
     assert_eq!(done["filed"]["to_sort"], 0);
+    assert_eq!(otto.user_key("escape")["state"]["decisions"], Value::Null);
 }

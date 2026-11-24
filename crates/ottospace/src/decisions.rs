@@ -98,6 +98,10 @@ impl Workspace {
         let muted = |text: String| div().text_xs().text_color(rgb(theme::MUTED)).child(text);
         let now = crate::now_ms();
         let (head, body, keys): (String, Vec<AnyElement>, Vec<(&str, &str, &str)>) = match sort.item {
+            None if sort.left == 0 => {
+                let line = muted(format!("{} sorted in this run.", sort.done)).into_any_element();
+                ("All sorted".into(), vec![line], vec![("sort-undo", "Undo (z)", "z")])
+            }
             None => {
                 let n = sort.left;
                 let line = muted(format!("Each takes one key. {} sorted in this run.", sort.done)).into_any_element();
@@ -172,6 +176,7 @@ impl Workspace {
                 }
             });
         let hint = match scope {
+            None if sort.left == 0 => "z takes the last back · Esc close".to_string(),
             None => "↵ sort · s not now · Esc close".to_string(),
             Some(scope) => format!("u count its claims · c core or ancillary{scope} · z undo · Esc close"),
         };
