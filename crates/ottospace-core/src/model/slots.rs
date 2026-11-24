@@ -1899,7 +1899,7 @@ mod tests {
     /// window". Slots that each select any window of the app pair by size: pane 1 is half the tab,
     /// panes 2 and 3 a quarter each (ties in reading order); window 13 is the widest.
     #[test]
-    fn several_slots_of_one_app_take_its_windows_one_by_one_in_reading_order() {
+    fn several_app_only_slots_take_its_windows_by_size() {
         let mut m = Model::default();
         m.update(Action::Open { kind: meetings(1, "One"), axis: Right, beside: None });
         m.update(Action::Open { kind: meetings(2, "Two"), axis: Right, beside: None });
