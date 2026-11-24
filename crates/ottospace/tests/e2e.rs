@@ -18231,8 +18231,14 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
 
     let (root, otto) = setup("city", "code_city", true);
+    // Lit, on the standing picture (a rise's frames are half size, #437).
+    let standing = |c: &Value| {
+        let n = |v: &Value| v.as_f64().unwrap_or(0.);
+        let (b, scale) = (&c["bounds"], n(&c["scale"]));
+        c["picture"][0].as_f64() == Some((n(&b[2]) * scale).round())
+    };
     let lit = otto.wait_for("a lit building", |o| {
-        Some(city(o)).filter(|city| city["lit"].as_array().is_some_and(|lit| !lit.is_empty()))
+        Some(city(o)).filter(|city| city["lit"].as_array().is_some_and(|lit| !lit.is_empty()) && standing(city))
     });
     // Seven files and three folders (src, src/ui, docs): the ignored one is no building.
     assert_eq!((lit["places"].as_u64(), lit["groups"].as_u64()), (Some(10), Some(3)), "{lit}");
