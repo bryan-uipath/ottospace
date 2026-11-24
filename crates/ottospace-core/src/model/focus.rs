@@ -245,7 +245,11 @@ mod tests {
         let mut m = Model::default();
         projects(&mut m, &["atlas", "beacon"]);
         m.update(Action::SetWeek { week: "2026-W48".into() }.sent_by(Origin::System));
-        let area = |name: &str, project: &str, repos: Vec<String>| Area { name: name.into(), projects: vec![project.into()], repos };
+        let area = |name: &str, project: &str, repos: Vec<String>| Area {
+            name: name.into(),
+            projects: vec![project.into()],
+            repos,
+        };
         let own = area("Hiring push", "atlas", vec!["/code/ats".into()]);
         m.focus.set(&[own.clone(), area("B", "beacon", vec![]), area("C", "atlas", vec![])], SetBy::Proposal, 1);
         m.update(Action::FocusEditOpen);
