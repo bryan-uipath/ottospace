@@ -211,28 +211,33 @@ struct Follow {
     cwd: std::path::PathBuf,
     session: Option<ottospace_sessions::SessionRef>,
     cursor: ottospace_sessions::Cursor,
+    /// Its first read was given: `WatchFromStart` went with it.
+    begun: bool,
 }
 
 impl Follow {
     fn new(id: String, cwd: String) -> Self {
         let cursor = ottospace_sessions::Cursor::with_edits();
-        Self { id, cwd: cwd.into(), session: None, cursor }
+        Self { id, cwd: cwd.into(), session: None, cursor, begun: false }
     }
 
     /// One look: what its file says since the last, and whether more is there now. `Err`: not
     /// found or not read this time, tried again at the next look (a folder or file briefly gone).
+    /// A failed read looks the session up again at the next look (its file moved): the cursor
+    /// stays, and the reader starts over if the file it finds is another.
     fn step(&mut self, reader: &dyn ottospace_sessions::SessionReader) -> Result<(Vec<Event>, bool), ()> {
+        let session = match self.session.take() {
+            Some(session) => session,
+            None => {
+                let sessions = reader.sessions(std::slice::from_ref(&self.cwd)).map_err(drop)?;
+                sessions.into_iter().find(|session| session.id == self.id).ok_or(())?
+            }
+        };
+        let batch = reader.read(&session, self.cursor.clone(), WATCH_BUDGET).map_err(drop)?;
+        self.session = Some(session);
+        // Its first read, or its file replaced or cut short: what an earlier watch built goes first.
         let mut events = Vec::new();
-        if self.session.is_none() {
-            let sessions = reader.sessions(std::slice::from_ref(&self.cwd)).map_err(drop)?;
-            self.session = Some(sessions.into_iter().find(|session| session.id == self.id).ok_or(())?);
-            // Read from the start again: what an earlier watch built goes first.
-            events.push(Event::WatchFromStart);
-        }
-        let session = self.session.as_ref().ok_or(())?;
-        let batch = reader.read(session, self.cursor.clone(), WATCH_BUDGET).map_err(drop)?;
-        // Its file replaced or cut short: what was built from it goes.
-        if batch.restarted {
+        if !std::mem::replace(&mut self.begun, true) || batch.restarted {
             events.push(Event::WatchFromStart);
         }
         self.cursor = batch.cursor;
@@ -598,12 +603,19 @@ impl Workspace {
             self.drawer.watch = crate::config::session_dirs().map(|dirs| Watch::start(subject, runner, id, cwd, dirs));
         }
         let Some(watch) = &self.drawer.watch else { return false };
-        let turned = watch.told.replace(watch.following()) != watch.following();
+        let following = watch.following();
+        let turned = watch.told.replace(following) != following;
         let events: Vec<Event> = watch.read.try_iter().flatten().collect();
         if events.is_empty() {
             return turned;
         }
         let task = watch.subject.clone();
+        // Built again from the start: rows opened in what was built before are other rows now.
+        if events.contains(&Event::WatchFromStart)
+            && let Some(look) = self.drawer.looks.get_mut(&task)
+        {
+            (look.open, look.parsed) = (HashSet::new(), HashMap::new());
+        }
         self.dispatch(Action::AgentEvents { task, events, at: crate::now_ms() }, Origin::System, window, cx);
         true
     }
@@ -2781,6 +2793,25 @@ mod tests {
         std::fs::rename(&aside, &file).unwrap();
         append(&file, &format!("{}\n", call(2)));
         assert_eq!(calls(&follow.step(&reader).unwrap().0), 1, "only the new call");
+    }
+
+    /// A first read that fails (its file moved since it was found) finds it again at the next
+    /// look, and still starts the transcript over: nothing an earlier watch built is doubled.
+    #[test]
+    fn a_watch_whose_first_read_fails_finds_its_file_again_and_starts_over() {
+        let root = crate::scratch::Scratch::dir(&format!("ottospace-watch-moved-{}", std::process::id()));
+        let (config, cwd) = (root.as_ref().join("claude"), root.as_ref().join("app"));
+        std::fs::create_dir_all(&cwd).unwrap();
+        let id = "88888888-8888-4888-8888-888888888888";
+        let file = session_file(&config, &cwd, id);
+        let reader = ottospace_sessions::claude::Claude::new(vec![config.clone()]);
+        let mut follow = Follow::new(id.into(), cwd.to_string_lossy().into_owned());
+        let found =
+            ottospace_sessions::SessionReader::sessions(&reader, std::slice::from_ref(&follow.cwd)).unwrap().remove(0);
+        follow.session = Some(ottospace_sessions::SessionRef { path: file.with_extension("gone"), ..found });
+        assert!(follow.step(&reader).is_err());
+        let (events, _) = follow.step(&reader).unwrap();
+        assert!(matches!(events[..], [Event::WatchFromStart, Event::MessageElsewhere]), "{events:?}");
     }
 
     /// A large file (the owner's was 45 MB) is read whole in budget-sized looks, then followed.

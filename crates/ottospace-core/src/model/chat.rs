@@ -639,7 +639,7 @@ impl Model {
             Action::AgentEvents { task: subject, events, at }
                 if !self.chat(&subject).is_some_and(|chat| chat.transcript.live) =>
             {
-                if self.watch_target().is_none_or(|(watched, ..)| watched != subject) {
+                if !self.watching(&subject) {
                     return;
                 }
                 if self.chat(&subject).is_none() {

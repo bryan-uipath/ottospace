@@ -394,8 +394,10 @@ impl Model {
         };
         self.push_tab_of(of);
         if let Some(tab) = self.tabs.get_mut(self.active) {
-            tab.title = title.unwrap_or(std::mem::take(&mut tab.title));
-            tab.folder = folder.or(tab.folder.take());
+            if let Some(title) = title {
+                tab.title = title;
+            }
+            tab.folder = folder;
         }
     }
 
