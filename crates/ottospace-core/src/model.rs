@@ -1925,6 +1925,13 @@ pub enum Action {
     ZoomCamera {
         step: canvas::CanvasStep,
     },
+    /// Zoomed out: the user's drag put tile `tab` with its corner at `at` (the canvas's units).
+    ZoomPlace {
+        tab: u32,
+        at: [f32; 2],
+    },
+    /// Zoomed out: Tidy, every tile back on the grid (T, its button).
+    ZoomTidy,
     /// A key or click on the shown question card (`ask::Act`), `ticket` as in `TalkAnswer`: a
     /// move, a pick, ↵ (the answers go) or Esc (declined). Only the user's.
     TalkAsk {
@@ -2581,6 +2588,8 @@ impl Action {
                 | Action::ZoomOut
                 | Action::ZoomMove { .. }
                 | Action::ZoomCamera { .. }
+                | Action::ZoomPlace { .. }
+                | Action::ZoomTidy
                 | Action::ZoomEnter { .. }
         )
     }
@@ -2995,7 +3004,9 @@ impl Action {
             | Action::CityCamera { .. }
             | Action::ZoomMove { .. }
             | Action::ZoomEnter { .. }
-            | Action::ZoomCamera { .. } => false,
+            | Action::ZoomCamera { .. }
+            | Action::ZoomPlace { .. }
+            | Action::ZoomTidy => false,
         }
     }
 
@@ -3039,9 +3050,12 @@ impl Action {
             | Action::SortPromote { .. }
             | Action::SortUndo => Some(Feature::DecisionSources),
             Action::SessionUnhide { .. } | Action::HiddenPeek { .. } => Some(Feature::TerminalTasks),
-            Action::ZoomOut | Action::ZoomMove { .. } | Action::ZoomEnter { .. } | Action::ZoomCamera { .. } => {
-                Some(Feature::ZoomOut)
-            }
+            Action::ZoomOut
+            | Action::ZoomMove { .. }
+            | Action::ZoomEnter { .. }
+            | Action::ZoomCamera { .. }
+            | Action::ZoomPlace { .. }
+            | Action::ZoomTidy => Some(Feature::ZoomOut),
             Action::ListenStart { .. }
             | Action::ListenToggle { .. }
             | Action::ListenPause { .. }
@@ -4457,6 +4471,9 @@ pub struct Model {
     /// Each space's canvas camera as the user left it (`zoom_out`), kept in `layout.json`.
     #[serde(skip)]
     pub(crate) canvases: std::collections::HashMap<Owner, canvas::Camera>,
+    /// Tiles the user placed on the canvas, by tab id: each one's corner. Kept in `layout.json`.
+    #[serde(skip)]
+    pub(crate) placed: std::collections::HashMap<u32, [f32; 2]>,
     /// When each waiting card was first seen waiting, for the queue's age.
     #[serde(skip)]
     pub(crate) waiting: Vec<decisions::Seen>,
@@ -4642,6 +4659,7 @@ impl Default for Model {
             decisions: None,
             zoom: None,
             canvases: std::collections::HashMap::new(),
+            placed: std::collections::HashMap::new(),
             waiting: Vec::new(),
         };
         // Home's own tab, on show.
@@ -7627,6 +7645,8 @@ impl Model {
             Action::ZoomOut => self.zoom_toggle(effects),
             Action::ZoomMove { dir } => self.zoom_move(dir),
             Action::ZoomCamera { step } => self.zoom_camera(step),
+            Action::ZoomPlace { tab, at } => self.zoom_place(tab, at),
+            Action::ZoomTidy => self.zoom_tidy(),
             Action::ZoomEnter { tab } => self.zoom_enter(tab, effects),
             action @ (Action::BtwOpen
             | Action::BtwKeys { .. }
@@ -11757,6 +11777,8 @@ mod tests {
         Action::ZoomMove { .. },
         Action::ZoomEnter { .. },
         Action::ZoomCamera { .. },
+        Action::ZoomPlace { .. },
+        Action::ZoomTidy,
         Action::TalkAsk { .. },
         Action::TalkDenyNote,
         Action::TalkEscape,
@@ -12179,6 +12201,8 @@ mod tests {
             Action::ZoomMove { dir: Dir::Right },
             Action::ZoomEnter { tab: None },
             Action::ZoomCamera { step: canvas::CanvasStep::Fit },
+            Action::ZoomPlace { tab: 1, at: [0., 0.] },
+            Action::ZoomTidy,
             Action::TalkAsk { ticket: 1, act: crate::ask::Act::Submit },
             Action::TalkDenyNote,
             Action::TalkEscape,

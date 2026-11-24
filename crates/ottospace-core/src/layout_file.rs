@@ -165,6 +165,9 @@ pub struct SavedTab {
     /// Its space, by place in `spaces`. None: a session's, which is not kept.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub space: Option<usize>,
+    /// Where the user placed its tile on the zoomed-out canvas (`zoom_out`): its corner.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub placed: Option<[f32; 2]>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -386,12 +389,19 @@ impl Model {
                 (saved.tab, *last) = (Some(records.len()), None);
             }
             records.push(record);
-            links.push((book, marked, settings, space));
+            links.push((book, marked, settings, space, self.placed.get(&tab.id).copied()));
         }
         workbook::fit_history(&mut records);
         let tabs = records.into_iter().zip(links);
         let tabs = tabs
-            .map(|(tab, (workbook, marks, settings, space))| SavedTab { tab, workbook, marks, settings, space })
+            .map(|(tab, (workbook, marks, settings, space, placed))| SavedTab {
+                tab,
+                workbook,
+                marks,
+                settings,
+                space,
+                placed,
+            })
             .collect();
         let spaces: Vec<SavedSpace> = spaces.into_iter().map(|(.., saved)| saved).collect();
         let drawer = Drawer {
@@ -582,6 +592,12 @@ impl Model {
                 if let Some(history) = workbook::history_of(kept).filter(|_| started) {
                     effects.push(Effect::History { pane: *pane, history });
                 }
+            }
+            // Its tile where the user placed it; a corner not snapped is not read.
+            if let Some(at) =
+                saved.placed.and_then(crate::model::canvas::snapped).filter(|at| Some(*at) == saved.placed)
+            {
+                self.placed.insert(tab, at);
             }
             built.push((tab, panes));
         }
@@ -796,6 +812,21 @@ mod tests {
         assert!(camera.is_some_and(|c: Camera| c.scale < 0.5));
     }
 
+    /// A tile the user placed zoomed out (`zoom_out`) is kept with its tab, and comes back.
+    #[test]
+    fn a_placed_tile_is_kept_with_its_tab() {
+        let mut m = workspace();
+        m.update(Action::SelectTab { index: 0 });
+        m.update(Action::ZoomOut);
+        let tab = m.tabs[0].id;
+        m.update(Action::ZoomPlace { tab, at: [-2., 0.5] });
+        m.update(Action::ZoomOut);
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        assert_eq!(file.tabs.iter().filter_map(|t| t.placed).collect::<Vec<_>>(), [[-2., 0.5]]);
+        let (back, _) = restored(&m, file, &[], false);
+        assert_eq!(back.placed.values().copied().collect::<Vec<_>>(), [[-2., 0.5]]);
+    }
+
     /// A fresh model with `m`'s tasks and workspaces, and the file of `m` restored into it.
     fn restored(m: &Model, file: Layout, gone: &[&str], launch: bool) -> (Model, Vec<Effect>) {
         let mut fresh = Model::default();
@@ -947,6 +978,7 @@ mod tests {
             marks: Vec::new(),
             settings: None,
             space: None,
+            placed: None,
         };
         let none = Vec::new;
         file.tabs = vec![

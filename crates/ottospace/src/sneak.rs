@@ -319,6 +319,7 @@ impl Workspace {
             ("bar", "close") => Some(Action::CloseSidebar),
             // A tile of the overview (`zoom_out`): into its tab, as its click.
             ("zoom-tile", _) => number.map(|tab| Action::ZoomEnter { tab: Some(tab) }),
+            ("zoom-tidy", _) => Some(Action::ZoomTidy),
             // A waiting card's line under a task, `<task>:<line>`: as its click.
             ("task-pending", _) => {
                 let place =

@@ -16,6 +16,12 @@ pub const FARTHEST: f32 = 0.08;
 pub const FIT_NEAREST: f32 = 0.5;
 /// ⌘= and ⌘-: one step nearer or farther.
 pub const KEY_STEP: f32 = 1.25;
+/// A placed tile's corner snaps to this grid, in tabs: light enough to place by eye, firm enough
+/// that tiles line up without effort (about 28 points at a fit of four tabs).
+pub const SNAP: f32 = 0.25;
+/// How far from the grid's corner a tile may be placed, in tabs.
+const REACH: f32 = 1000.;
+
 /// The share of the view, on each axis, that some tile always reaches into.
 const KEEP: f32 = 0.1;
 
@@ -46,6 +52,34 @@ pub fn grid_spot(at: usize, n: usize) -> Rect {
     let cols = cols.max(1);
     let step = 1. + GRID_GAP;
     Rect { x: (at % cols) as f32 * step, y: (at / cols) as f32 * step, w: 1., h: 1. }
+}
+
+/// A placed tile's corner: snapped, or none when not a number or out of reach.
+pub fn snapped(at: [f32; 2]) -> Option<[f32; 2]> {
+    let snap = |v: f32| (v / SNAP).round() * SNAP;
+    at.iter().all(|v| v.is_finite() && v.abs() <= REACH).then(|| [snap(at[0]), snap(at[1])])
+}
+
+/// Each of `n` tiles' place: `placed[at]` where the user put it, else the next grid cell that no
+/// placed tile covers (a new tab takes the next free cell; nothing placed moves).
+pub fn spots(placed: &[Option<[f32; 2]>]) -> Vec<Rect> {
+    let n = placed.len();
+    let fixed: Vec<Rect> = placed.iter().flatten().map(|p| Rect { x: p[0], y: p[1], w: 1., h: 1. }).collect();
+    let overlaps = |a: &Rect, b: &Rect| a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+    let mut cell = 0;
+    placed
+        .iter()
+        .map(|p| match p {
+            Some(p) => Rect { x: p[0], y: p[1], w: 1., h: 1. },
+            None => loop {
+                let spot = grid_spot(cell, n);
+                cell += 1;
+                if !fixed.iter().any(|f| overlaps(f, &spot)) {
+                    break spot;
+                }
+            },
+        })
+        .collect()
 }
 
 /// The box round `tiles`; a unit box at the origin when there are none.
@@ -239,5 +273,21 @@ mod tests {
         // Already in view: it does not move.
         let fit = Camera::fit(e);
         assert_eq!(fit.showing(last, &t), fit);
+    }
+
+    #[test]
+    fn a_placed_tile_snaps_and_the_others_take_the_free_cells() {
+        assert_eq!(snapped([0.3, -1.12]), Some([0.25, -1.]));
+        assert_eq!((snapped([f32::NAN, 0.]), snapped([1e9, 0.])), (None, None));
+        // Four tabs, the second placed over the third's cell: the third and fourth go on.
+        let placed = [None, Some([0., 1.12]), None, None];
+        let s = super::spots(&placed);
+        assert_eq!(s[1], Rect { x: 0., y: 1.12, w: 1., h: 1. });
+        assert_eq!((s[0], s[2]), (grid_spot(0, 4), grid_spot(1, 4)));
+        assert_eq!(s[3], grid_spot(3, 4), "the cell under the placed tile is skipped");
+        let overlap = |a: Rect, b: Rect| a.x < b.x + b.w && b.x < a.x + a.w && a.y < b.y + b.h && b.y < a.y + a.h;
+        assert!([0, 2, 3].iter().all(|at| !overlap(s[*at], s[1])), "{s:?}");
+        // None placed: the grid.
+        assert_eq!(super::spots(&[None, None]), vec![grid_spot(0, 2), grid_spot(1, 2)]);
     }
 }

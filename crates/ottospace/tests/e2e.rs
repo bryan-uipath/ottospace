@@ -19071,3 +19071,64 @@ fn zoomed_out_the_canvas_zooms_about_the_pointer_pans_and_fits() {
         assert_eq!(camera(&otto.user_key("cmd-|")), left, "{size}");
     }
 }
+
+/// Zoomed out (`zoom_out`, slice 2): the user's drag of a tile places it where it is dropped,
+/// snapped; the others keep their cells; it stays placed when the overview opens again; Tidy (T,
+/// or its button, shown only then) puts it back on the grid. A client's drag places nothing, and
+/// a click still goes in.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn zoomed_out_a_dragged_tile_stays_placed_and_tidy_puts_it_back() {
+    for size in ["1024x674", "1400x900"] {
+        let env =
+            [("OTTOSPACE_FEATURES", "zoom_out"), ("OTTOSPACE_REDUCE_MOTION", "1"), ("OTTOSPACE_E2E_WINDOW", size)];
+        let otto = Otto::launch_with(&format!("place-{size}"), &env);
+        otto.call(json!({"cmd": "split"}));
+        for _ in 1..4 {
+            otto.call(json!({"cmd": "new_tab"}));
+            otto.call(json!({"cmd": "split"}));
+        }
+        let state = otto.call(json!({"cmd": "select_tab", "index": 0}));
+        let ids: Vec<String> =
+            (0..4).map(|at| state["state"]["tabs"][at]["id"].as_u64().unwrap().to_string()).collect();
+        otto.user_key("cmd-|");
+        // Each tile's corner from the first tile's, in points: the camera may move, the layout not.
+        let layout = |o: &Otto| {
+            let drawn = o.drawn();
+            let tiles: Vec<[f64; 4]> = ids.iter().map(|id| rect(&drawn["zoom_tiles"][id])).collect();
+            let base = tiles[0];
+            (tiles.iter().map(|t| [t[0] - base[0], t[1] - base[1]]).collect::<Vec<_>>(), base)
+        };
+        let (grid, first) = layout(&otto);
+        let h = first[3];
+        let same = |a: &[[f64; 2]], b: &[[f64; 2]]| {
+            a.iter().zip(b).all(|(p, q)| (p[0] - q[0]).abs() <= 1. && (p[1] - q[1]).abs() <= 1.)
+        };
+        assert!(otto.control_opt("zoom-tidy").is_none(), "{size}: no Tidy with nothing placed");
+        // A client's drag of the fourth tile places nothing.
+        let fourth = rect(&otto.drawn()["zoom_tiles"][&ids[3]]);
+        let from = at(fourth, 0.5, 0.5);
+        let to = [from[0], from[1] + 1.3 * h];
+        otto.drag(from, to);
+        assert!(same(&layout(&otto).0, &grid), "{size}");
+        // The user's: placed 1.3 tiles lower, snapped to a quarter tile; the others stay.
+        otto.user_drag(from, to);
+        let (placed, _) = layout(&otto);
+        let moved = placed[3][1] - grid[3][1];
+        assert!((moved - 1.25 * h).abs() <= 2. || (moved - 1.5 * h).abs() <= 2., "{size}: moved {moved} of {h}");
+        assert!((placed[3][0] - grid[3][0]).abs() <= 2., "{size}: {placed:?}");
+        assert!(same(&placed[..3], &grid[..3]), "{size}: {placed:?}");
+        assert!(otto.control_opt("zoom-tidy").is_some(), "{size}: Tidy offered");
+        // A click on a tile still goes in; opened again, it is where it was put.
+        let second = rect(&otto.drawn()["zoom_tiles"][&ids[1]]);
+        let entered = otto.user_click(at(second, 0.5, 0.5));
+        assert!(entered["state"]["zoom"].is_null(), "{size}");
+        otto.user_key("cmd-|");
+        let again = layout(&otto).0;
+        assert!((again[3][1] - grid[3][1] - moved).abs() <= 2., "{size}: {again:?}");
+        // T: back on the grid, and no Tidy.
+        otto.user_key("t");
+        assert!(same(&layout(&otto).0, &grid), "{size}");
+        assert!(otto.control_opt("zoom-tidy").is_none(), "{size}");
+    }
+}

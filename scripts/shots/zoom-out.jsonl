@@ -1,6 +1,7 @@
 # Zoom-out (`zoom_out` flag): ⌘⇧\ shows the workspace's tabs as tiles on a grid. One tab, then
 # four, then seven: made-up terminal lines in each. Then ↵ into the selected tile. `--record` films
-# the zoom out and back in. Then the canvas: nearer, a little farther than fitted, and as far as it goes.
+# the zoom out and back in. Then the canvas: nearer, a little farther than fitted, as far as it goes,
+# and a tile dragged down out of the grid.
 {"env":{"OTTOSPACE_FEATURES":"zoom_out"}}
 {"click":"top:new_workspace"}
 {"cmd":"key","keys":"cmd-d","as":"user"}
@@ -71,3 +72,8 @@
 {"cmd":"key","keys":"cmd-- cmd-- cmd-- cmd-- cmd-- cmd-- cmd-- cmd--","as":"user"}
 {"settle":400}
 {"shot":"far"}
+{"cmd":"key","keys":"cmd-0","as":"user"}
+{"settle":300}
+{"drag":{"rect":"zoom_tiles.4"},"at":[0.5,0.5],"by":[0,260]}
+{"settle":400}
+{"shot":"placed"}
