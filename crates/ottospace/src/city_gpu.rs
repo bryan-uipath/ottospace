@@ -18,9 +18,8 @@ pub struct Picture {
     pub copy_us: u64,
     /// Before the GPU: its boxes, buffers and textures made.
     pub prep_us: u64,
-    /// Of it: the boxes' instances (of them, each box's rise delay), and the textures and buffers made.
+    /// Of it: the boxes' instances ordered and placed, and textures and buffers made.
     pub boxes_us: u64,
-    pub delays_us: u64,
     pub alloc_us: u64,
 }
 
@@ -148,7 +147,60 @@ pub struct Gpu {
     pipeline: wgpu::RenderPipeline,
     /// For glass buildings: blended over what is drawn, writing no depth, drawn last, far first.
     glass: wgpu::RenderPipeline,
-    layout: wgpu::BindGroupLayout,
+    /// The frame's uniform (camera, eye, fog, background, light: 32 floats), bound once.
+    uniform: wgpu::Buffer,
+    group: wgpu::BindGroup,
+    /// Kept from picture to picture: a camera move makes no texture or buffer.
+    kept: std::cell::RefCell<Kept>,
+}
+
+/// The targets and read buffer of the last picture's size, and the instance buffer, as large as
+/// the largest city yet.
+#[derive(Default)]
+struct Kept {
+    targets: Option<Targets>,
+    instances: Option<wgpu::Buffer>,
+}
+
+struct Targets {
+    size: (u32, u32),
+    samples: wgpu::TextureView,
+    resolved: wgpu::Texture,
+    into: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    read: wgpu::Buffer,
+    row: u32,
+}
+
+/// A city's boxes as instances, but for where they stand: their colours, rise delays and how
+/// opaque, the solid first, then the glass. Made once a layout (`Boxes::new`); a camera move only
+/// orders the glass and copies each box's corners.
+pub struct Boxes {
+    base: Vec<[f32; 16]>,
+    /// Indices into the scene's blocks: the solid ones, then the glass.
+    solid: Vec<u32>,
+    glass: Vec<u32>,
+}
+
+impl Boxes {
+    pub fn new(scene: &Scene, glass: bool) -> Self {
+        let delays = scene.rise_delays();
+        let tint = |i: usize| scene.tints.get(i).copied().flatten();
+        let see_through = |b: &Block| glass && b.kind == Kind::Building;
+        let (mut solid, mut clear) = (Vec::new(), Vec::new());
+        let base = (scene.blocks.iter().enumerate())
+            .map(|(i, b)| {
+                let alpha = if see_through(b) { GLASS } else { 1. };
+                if see_through(b) {
+                    clear.push(i as u32)
+                } else {
+                    solid.push(i as u32)
+                }
+                instance(b, delays[i], tint(i), alpha)
+            })
+            .collect();
+        Self { base, solid, glass: clear }
+    }
 }
 
 impl Gpu {
@@ -224,7 +276,13 @@ impl Gpu {
             })
         };
         let (glass, pipeline) = (pipeline(true), pipeline(false));
-        Ok(Self { device, queue, pipeline, glass, layout })
+        let uniform = buffer(&device, &[0.; 32], wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &layout,
+            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
+        });
+        Ok(Self { device, queue, pipeline, glass, uniform, group, kept: Default::default() })
     }
 
     /// One draw of a one-box city at 16×16, its picture dropped: the first picture shown pays no
@@ -239,19 +297,39 @@ impl Gpu {
     /// `scene` as a picture `width` × `height` pixels, `rise` (0 to 1) of the way through its
     /// buildings' rise (1: standing), its buildings of glass or not, or why there is none.
     pub fn render(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {
+        self.render_boxes(scene, &Boxes::new(scene, glass), width, height, rise)
+    }
+
+    /// `render`, of `scene`'s boxes as made already (`Boxes::new`): a camera move's picture.
+    pub fn render_boxes(
+        &self,
+        scene: &Scene,
+        boxes: &Boxes,
+        width: u32,
+        height: u32,
+        rise: f32,
+    ) -> Result<Picture, String> {
+        if boxes.base.len() != scene.blocks.len() {
+            return Err("boxes of another scene".into());
+        }
         // An error of the GPU's (out of memory, a lost device) fails the picture; uncaught, wgpu
         // panics.
         let memory = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let valid = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let picture = self.draw(scene, width, height, rise, glass);
+        let picture = self.draw(scene, boxes, width, height, rise);
         let errors = [pollster::block_on(valid.pop()), pollster::block_on(memory.pop())];
-        match errors.into_iter().flatten().next() {
+        let picture = match errors.into_iter().flatten().next() {
             Some(error) => Err(format!("render: {error}")),
             None => picture,
+        };
+        // A failed one may leave its read buffer mapped: the next makes its targets again.
+        if picture.is_err() {
+            self.kept.borrow_mut().targets = None;
         }
+        picture
     }
 
-    fn draw(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {
+    fn draw(&self, scene: &Scene, boxes: &Boxes, width: u32, height: u32, rise: f32) -> Result<Picture, String> {
         let prepared = std::time::Instant::now();
         let camera = scene.camera.ok_or("no camera")?;
         let limit = self.device.limits().max_texture_dimension_2d;
@@ -260,23 +338,12 @@ impl Gpu {
         }
         let device = &self.device;
         let size = wgpu::Extent3d { width, height, depth_or_array_layers: 1 };
-        let texture = |format, samples, usage| {
-            device.create_texture(&wgpu::TextureDescriptor {
-                label: None,
-                size,
-                mip_level_count: 1,
-                sample_count: samples,
-                dimension: wgpu::TextureDimension::D2,
-                format,
-                usage,
-                view_formats: &[],
-            })
-        };
+        let mut kept = self.kept.borrow_mut();
         let allocating = std::time::Instant::now();
-        let target = wgpu::TextureUsages::RENDER_ATTACHMENT;
-        let samples = texture(FORMAT, SAMPLES, target);
-        let resolved = texture(FORMAT, 1, target | wgpu::TextureUsages::COPY_SRC);
-        let depth = texture(DEPTH, SAMPLES, target);
+        // Made again only when the size changes (a drag's half size, a resize).
+        if kept.targets.as_ref().is_none_or(|t| t.size != (width, height)) {
+            kept.targets = Some(targets(device, size));
+        }
         let mut alloc_us = allocating.elapsed().as_micros() as u64;
 
         // The frame: the camera, the eye, the fog (from a bit before the target to far past it,
@@ -289,63 +356,52 @@ impl Gpu {
         frame.extend(reach);
         frame.extend([bg[0], bg[1], bg[2], 1.]);
         frame.extend([-0.45, 1., -0.3, rise.clamp(0., 1.)]);
-        let uniform = buffer(device, &frame, wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST);
-        self.queue.write_buffer(&uniform, 0, &bytes(&frame));
-        // The solid boxes first; then the glass ones, the farthest first, each over what is behind it.
-        // Each box with its rise's delay and its folder's colour (`Scene::tints`; none: plain).
+        self.queue.write_buffer(&self.uniform, 0, &bytes(&frame));
+        // The solid boxes first; then the glass ones, the farthest first, each over what is behind
+        // it. Each as made once (`Boxes`), standing where the scene has it (a lit one's line of
+        // sight may cut others down).
         let boxing = std::time::Instant::now();
-        let delays = scene.rise_delays();
-        let delays_us = boxing.elapsed().as_micros() as u64;
-        let tint = |i: usize| scene.tints.get(i).copied().flatten();
-        let all = scene.blocks.iter().zip(delays.iter().copied()).enumerate().map(|(i, (b, d))| (b, d, tint(i)));
-        let see_through = |b: &Block| glass && b.kind == Kind::Building;
-        let mut clear: Vec<_> = all.clone().filter(|(b, ..)| see_through(b)).collect();
-        let far = |b: &Block| -(0..3).map(|i| (b.top()[i] - camera.eye[i]).powi(2)).sum::<f32>();
-        clear.sort_by(|a, b| far(a.0).total_cmp(&far(b.0)));
-        let solid = all.filter(|(b, ..)| !see_through(b));
-        let solid_count = solid.clone().count() as u32;
-        let boxes: Vec<f32> = (solid.map(|(b, d, t)| instance(b, d, t, 1.)))
-            .chain(clear.iter().map(|(b, d, t)| instance(b, *d, *t, GLASS)))
-            .flatten()
-            .collect();
+        let far = |i: &u32| {
+            let top = scene.blocks[*i as usize].top();
+            // Farthest first: a distance's bits order as it does (never negative).
+            std::cmp::Reverse((0..3).map(|k| (top[k] - camera.eye[k]).powi(2)).sum::<f32>().to_bits())
+        };
+        let mut clear = boxes.glass.clone();
+        clear.sort_by_cached_key(far);
+        let solid_count = boxes.solid.len() as u32;
+        let placed = |i: &u32| {
+            let (b, mut one) = (&scene.blocks[*i as usize], boxes.base[*i as usize]);
+            one[..3].copy_from_slice(&b.min);
+            one[3..6].copy_from_slice(&b.max);
+            one
+        };
+        let data: Vec<f32> = boxes.solid.iter().chain(&clear).map(placed).flatten().collect();
+        let bytes_of = bytes(&data);
         let boxes_us = boxing.elapsed().as_micros() as u64;
-        let instances = buffer(device, &boxes, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST);
-        self.queue.write_buffer(&instances, 0, &bytes(&boxes));
-        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &self.layout,
-            entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
-        });
-
-        // Rows of the read back are padded to 256 bytes.
-        let row = (width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
         let allocating = std::time::Instant::now();
-        let read = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: u64::from(row) * u64::from(height),
-            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-            mapped_at_creation: false,
-        });
+        if kept.instances.as_ref().is_none_or(|b| b.size() < bytes_of.len() as u64) {
+            kept.instances = Some(buffer(device, &data, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST));
+        }
         alloc_us += allocating.elapsed().as_micros() as u64;
+        let (Some(t), Some(instances)) = (&kept.targets, &kept.instances) else { return Err("no targets".into()) };
+        let (row, read) = (t.row, t.read.clone());
+        self.queue.write_buffer(instances, 0, &bytes_of);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
-            let view = samples.create_view(&Default::default());
-            let into = resolved.create_view(&Default::default());
-            let depth_view = depth.create_view(&Default::default());
             let [r, g, b] = bg.map(f64::from);
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: None,
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                    view: &view,
+                    view: &t.samples,
                     depth_slice: None,
-                    resolve_target: Some(&into),
+                    resolve_target: Some(&t.into),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1. }),
                         store: wgpu::StoreOp::Discard,
                     },
                 })],
                 depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: &depth_view,
+                    view: &t.depth,
                     depth_ops: Some(wgpu::Operations { load: wgpu::LoadOp::Clear(1.), store: wgpu::StoreOp::Discard }),
                     stencil_ops: None,
                 }),
@@ -354,20 +410,21 @@ impl Gpu {
                 multiview_mask: None,
             });
             pass.set_pipeline(&self.pipeline);
-            pass.set_bind_group(0, &group, &[]);
-            pass.set_vertex_buffer(0, instances.slice(..));
+            pass.set_bind_group(0, &self.group, &[]);
+            pass.set_vertex_buffer(0, instances.slice(..bytes_of.len() as u64));
             pass.draw(0..36, 0..solid_count);
             pass.set_pipeline(&self.glass);
             pass.draw(0..36, solid_count..scene.blocks.len() as u32);
         }
         encoder.copy_texture_to_buffer(
-            resolved.as_image_copy(),
+            t.resolved.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &read,
                 layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: None },
             },
             size,
         );
+        drop(kept);
         let prep_us = prepared.elapsed().as_micros() as u64;
         let started = std::time::Instant::now();
         self.queue.submit([encoder.finish()]);
@@ -377,23 +434,53 @@ impl Gpu {
         mapped.recv().map_err(|e| e.to_string())?.map_err(|e| format!("map: {e}"))?;
         let gpu_us = started.elapsed().as_micros() as u64;
         let started = std::time::Instant::now();
-        let padded = read.slice(..).get_mapped_range().map_err(|e| format!("map: {e}"))?;
-        // Row by row, as slices: a byte at a time took 15 ms for a 3200×2000 picture.
         let mut bgra = Vec::with_capacity(width as usize * 4 * height as usize);
-        for line in padded.chunks(row as usize) {
-            bgra.extend_from_slice(&line[..width as usize * 4]);
+        {
+            let padded = read.slice(..).get_mapped_range().map_err(|e| format!("map: {e}"))?;
+            // Row by row, as slices: a byte at a time took 15 ms for a 3200×2000 picture.
+            for line in padded.chunks(row as usize) {
+                bgra.extend_from_slice(&line[..width as usize * 4]);
+            }
         }
-        Ok(Picture {
-            width,
-            height,
-            bgra,
-            gpu_us,
-            copy_us: started.elapsed().as_micros() as u64,
-            prep_us,
-            boxes_us,
-            delays_us,
-            alloc_us,
+        // Unmapped: the next picture copies into it again.
+        read.unmap();
+        let copy_us = started.elapsed().as_micros() as u64;
+        Ok(Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us })
+    }
+}
+
+/// A picture's targets: multisampled colour and depth, the resolved colour, and its read buffer
+/// (rows padded to 256 bytes).
+fn targets(device: &wgpu::Device, size: wgpu::Extent3d) -> Targets {
+    let texture = |format, samples, usage| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: None,
+            size,
+            mip_level_count: 1,
+            sample_count: samples,
+            dimension: wgpu::TextureDimension::D2,
+            format,
+            usage,
+            view_formats: &[],
         })
+    };
+    let target = wgpu::TextureUsages::RENDER_ATTACHMENT;
+    let resolved = texture(FORMAT, 1, target | wgpu::TextureUsages::COPY_SRC);
+    let row = (size.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+    let read = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: u64::from(row) * u64::from(size.height),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    Targets {
+        size: (size.width, size.height),
+        samples: texture(FORMAT, SAMPLES, target).create_view(&Default::default()),
+        into: resolved.create_view(&Default::default()),
+        depth: texture(DEPTH, SAMPLES, target).create_view(&Default::default()),
+        resolved,
+        read,
+        row,
     }
 }
 
@@ -537,6 +624,24 @@ mod tests {
                 assert!((1..=2).contains(&rows), "{scale}×: the {edge} edge is {rows} rows");
             }
         }
+    }
+
+    /// Kept targets and boxes draw what fresh ones do: a view, another size and view, then the
+    /// first again from the kept boxes, byte for byte. No GPU: nothing to check.
+    #[test]
+    fn kept_targets_and_boxes_draw_the_same_picture() {
+        let Ok(gpu) = Gpu::new() else { return eprintln!("no GPU: skipped") };
+        let files: Vec<(String, u64)> =
+            (0..300).map(|i| (format!("d{}/e{}/f{i}.rs", i % 5, i % 3), 300 + i * 97)).collect();
+        let plan = atlas::atlas(&atlas::repo(&files));
+        let turned = View::default().orbited(40., -10.);
+        let scene = ottospace_core::scene::scene(&plan, &[], 1.6, &turned);
+        let fresh = gpu.render(&scene, 320, 200, 1., true).unwrap();
+        let boxes = Boxes::new(&scene, true);
+        let other = ottospace_core::scene::scene(&plan, &[], 1.6, &View::default());
+        drop(gpu.render_boxes(&other, &boxes, 160, 100, 1.).unwrap());
+        let kept = gpu.render_boxes(&scene, &boxes, 320, 200, 1.).unwrap();
+        assert!(kept.bgra == fresh.bgra, "the kept picture differs");
     }
 
     /// A 32-bit BMP, top row first: enough to look at a picture.

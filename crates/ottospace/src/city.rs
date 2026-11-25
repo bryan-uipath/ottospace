@@ -30,7 +30,7 @@ use ottospace_core::settings::expand_home;
 use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{status_bar, theme};
 
-use crate::city_gpu::{Gpu, Picture};
+use crate::city_gpu::{Boxes, Gpu, Picture};
 use crate::home::Floor;
 use crate::{Workspace, rect};
 
@@ -106,10 +106,11 @@ type Exclude = Vec<(String, Vec<String>)>;
 
 /// A thread of its own that answers each job with `work`, in order: of the jobs waiting, only
 /// the last of each `key` (a newer ask for the same thing replaces the older), the others answered
-/// `None`. Each job comes back with its answer. Wakes the app for each.
+/// `None`. Each job comes back with its answer, and `answered` is called after each.
 fn latest_each<J, K, R>(
     key: fn(&J) -> K,
     mut work: impl FnMut(&J) -> R + Send + 'static,
+    answered: impl Fn() + Send + 'static,
 ) -> (Sender<J>, Receiver<(J, Option<R>)>)
 where
     J: Send + 'static,
@@ -128,8 +129,8 @@ where
                 if done.send((job, answer)).is_err() {
                     return;
                 }
+                answered();
             }
-            ottospace_mac::wake::post();
         }
     });
     (jobs, answers)
@@ -158,6 +159,7 @@ impl Reader {
                 let started = Instant::now();
                 (read(Path::new(dir), roots, exclude), started.elapsed().as_micros() as u64)
             },
+            ottospace_mac::wake::post,
         );
         Self { jobs, reads, asked: HashMap::new(), held: HashMap::new(), came: 0, read_us: None }
     }
@@ -550,6 +552,9 @@ type PaintJob = (Floor, Key, Arc<Atlas>);
 /// size that moved on is skipped: `latest_each`). The GPU is opened at the first, or before it
 /// (`warm`), and kept; none (or `OTTOSPACE_CITY_NO_GPU` in a test run) and every picture fails.
 pub struct Painter {
+    /// Rung for each picture made: the main thread takes it at once (`Bell::rung`), not at the
+    /// loop's next tick, so a turn's picture is painted on the next frame.
+    pub(crate) bell: Arc<Bell>,
     jobs: Sender<PaintJob>,
     made: Receiver<(PaintJob, Option<Result<Made, String>>)>,
     gpu: Locked<Option<Result<Gpu, String>>>,
@@ -584,6 +589,8 @@ impl Painter {
         // The layouts made and their colours, by what they depend on, the newest last: a rise's
         // frames and a camera's moves lay one out once (two places of one checkout, two sizes).
         let mut last: Layouts = Vec::new();
+        let bell = Arc::new(Bell::default());
+        let ring = bell.clone();
         let (jobs, made) = latest_each(
             |job: &PaintJob| job.0,
             move |(_, key, plan): &PaintJob| {
@@ -598,8 +605,12 @@ impl Painter {
                     Err("the render panicked".into())
                 })
             },
+            move || {
+                ottospace_mac::wake::post();
+                ring.ring();
+            },
         );
-        Self { jobs, made, gpu, warming: Arc::default() }
+        Self { bell, jobs, made, gpu, warming: Arc::default() }
     }
 
     /// Opens the GPU on a thread of its own, if not yet: a city on show asks before its first
@@ -613,8 +624,39 @@ impl Painter {
     }
 }
 
-/// Layouts kept, newest last, with their folders' colours: by `Key::laid`.
-type Layouts = Vec<(Key, Layout, Vec<Option<(u32, u32)>>)>;
+/// A signal from the picture's thread to the main thread: rung, and awaited (`rung`).
+#[derive(Default)]
+pub(crate) struct Bell {
+    rung: std::sync::atomic::AtomicBool,
+    waiter: std::sync::Mutex<Option<std::task::Waker>>,
+}
+
+impl Bell {
+    fn ring(&self) {
+        self.rung.store(true, std::sync::atomic::Ordering::SeqCst);
+        if let Some(waker) = self.waiter.lock().ok().and_then(|mut waiter| waiter.take()) {
+            waker.wake();
+        }
+    }
+
+    /// Ready once rung since the last time it was.
+    pub(crate) fn rung(&self) -> impl std::future::Future<Output = ()> + '_ {
+        std::future::poll_fn(move |cx| {
+            // The waker first, then the flag: a ring between the two is seen by the flag.
+            if let Ok(mut waiter) = self.waiter.lock() {
+                *waiter = Some(cx.waker().clone());
+            }
+            if self.rung.swap(false, std::sync::atomic::Ordering::SeqCst) {
+                std::task::Poll::Ready(())
+            } else {
+                std::task::Poll::Pending
+            }
+        })
+    }
+}
+
+/// Layouts kept, newest last, with their folders' colours and boxes: by `Key::laid`.
+type Layouts = Vec<(Key, Layout, Vec<Option<(u32, u32)>>, Arc<Boxes>)>;
 
 /// Layouts kept for camera moves: a place or two of one checkout, at their sizes.
 const KEPT_LAYOUTS: usize = 4;
@@ -629,8 +671,8 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     let (w, h) = key.size;
     let laid = key.laid();
     let kept = last.iter().position(|(was, ..)| *was == laid).map(|at| last.remove(at));
-    let (layout, tints) = match kept {
-        Some((_, layout, tints)) => (layout, tints),
+    let (layout, tints, boxes) = match kept {
+        Some((_, layout, tints, boxes)) => (layout, tints, Some(boxes)),
         None => {
             let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
             let layout = scene::layout(plan, &lit, w as f32 / h as f32, f32::from_bits(key.lower));
@@ -638,26 +680,30 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
             let user = key.folders.iter().cloned().collect();
             let rule = FolderColours::new(&user).unwrap_or_else(|_| FolderColours::built_in());
             let tints = city_colours::tints(plan, &layout.blocks, &rule);
-            (layout, tints)
+            (layout, tints, None)
         }
     };
     let mut scene = layout.scene(&key.view());
-    scene.tints = tints.clone();
-    last.push((laid, layout, tints));
+    // Its boxes' colours and delays, once a layout: a camera move only places them.
+    let boxes = boxes.unwrap_or_else(|| {
+        scene.tints = tints.clone();
+        Arc::new(Boxes::new(&scene, key.glass))
+    });
+    last.push((laid, layout, tints, boxes.clone()));
     if last.len() > KEPT_LAYOUTS {
         last.remove(0);
     }
     let scene_us = started.elapsed().as_micros() as u64;
     let (rw, rh) = key.render_size();
-    let Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, delays_us, alloc_us } =
-        gpu.render(&scene, rw, rh, f32::from(key.rise) / 1000., key.glass)?;
+    let Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us } =
+        gpu.render_boxes(&scene, &boxes, rw, rh, f32::from(key.rise) / 1000.)?;
     let camera = scene.camera.ok_or("no camera")?;
     let made_at = Instant::now();
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
     let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
     // Where a picture's time goes, for the bench (`scripts/bench`'s city motion): numbers only.
     let image_us = made_at.elapsed().as_micros() as u64;
-    let fields = serde_json::json!({ "scene_us": scene_us, "prep_us": prep_us, "boxes_us": boxes_us, "delays_us": delays_us, "alloc_us": alloc_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": rw, "h": rh });
+    let fields = serde_json::json!({ "scene_us": scene_us, "prep_us": prep_us, "boxes_us": boxes_us, "alloc_us": alloc_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": rw, "h": rh });
     crate::trace::record("city_picture", fields);
     // Each lit building's bounds, and the middle of its top (never hidden).
     let lit = (scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))))
@@ -2439,7 +2485,7 @@ mod tests {
             .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
             .filter(|e| e["ev"] == "city_picture" && e["w"] == 1280)
             .collect();
-        for field in ["scene_us", "prep_us", "delays_us", "boxes_us", "alloc_us", "gpu_us", "copy_us", "image_us"] {
+        for field in ["scene_us", "prep_us", "boxes_us", "alloc_us", "gpu_us", "copy_us", "image_us"] {
             let v = pictures.iter().filter_map(|e| e[field].as_f64()).map(|us| us / 1e3).collect();
             stages.insert(field.trim_end_matches("_us"), v);
         }
@@ -2448,7 +2494,7 @@ mod tests {
         println!("turn: 240 pictures at 1280×750 (half of 2560×1500), ms");
         println!("| stage | mean | p50 | p95 | p99 | max | over 16.7 | over 33 |");
         println!("|---|---|---|---|---|---|---|---|");
-        for name in ["scene", "prep", "delays", "boxes", "alloc", "gpu", "copy", "image", "drop old", "picture total"] {
+        for name in ["scene", "prep", "boxes", "alloc", "gpu", "copy", "image", "drop old", "picture total"] {
             let Some(v) = stages.get_mut(name).filter(|v| !v.is_empty()) else { continue };
             v.sort_by(f64::total_cmp);
             let p = |q: f64| v[((v.len() as f64 * q).ceil() as usize).clamp(1, v.len()) - 1];
