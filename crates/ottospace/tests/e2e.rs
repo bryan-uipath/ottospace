@@ -4180,12 +4180,12 @@ fn the_text_field_moves_selects_and_undoes() {
         (Some("normal"), Some("tidy"), &Value::Null)
     );
 
-    // A line wider than the box scrolls: the caret stays inside it.
+    // A line wider than the box wraps: the box grows, the caret stays inside it.
     let long = "a long line of words that goes on and on ".repeat(4);
     otto.call(json!({"cmd": "compose", "text": long.trim()}));
     let drawn = otto.drawn();
     let (b, x) = (rect(&drawn["field"]["bounds"]), drawn["field"]["cursor_x"].as_f64().unwrap());
-    assert!(x > b[0] + b[2] - 20.0 && x <= b[0] + b[2], "the caret is at the right edge: {}", drawn["field"]);
+    assert!(b[3] > 40.0 && x > b[0] && x <= b[0] + b[2], "wrapped, the caret inside: {}", drawn["field"]);
     key("cmd-left");
     assert_eq!(otto.drawn()["field"]["cursor_x"].as_f64(), Some(b[0]));
 }
@@ -15380,7 +15380,8 @@ fn ctrl_g_edits_the_new_task_line_in_the_users_editor() {
     otto.wait_for("the editor again", |_| given().filter(|g| g == "fix zoom"));
     editor_quits(&ctl, Some("fix zoom\nin the canvas\n"), 0);
     let back = otto.wait_for("the editor's end", |o| Some(state(o)).filter(|s| s["editor"].is_null()));
-    assert_eq!(back["state"]["compose"], "fix zoom in the canvas");
+    // The box keeps lines: the editor's come back as they were, the last break dropped.
+    assert_eq!(back["state"]["compose"], "fix zoom\nin the canvas");
     assert_eq!(back["state"]["tasks"]["list"].as_array().map(Vec::len), Some(0), "nothing filed");
     assert_eq!(back["field"]["of"], "compose");
     assert!(drafts(&home).is_empty(), "{:?}", drafts(&home));
