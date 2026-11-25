@@ -42,9 +42,9 @@ impl LiveLayer {
         Some(LiveLayer { view, layer })
     }
 
-    /// The `CAMetalLayer`, for a GPU surface (wgpu's `SurfaceTargetUnsafe::CoreAnimationLayer`).
-    pub fn metal_layer(&self) -> *mut c_void {
-        Retained::as_ptr(&self.layer) as *mut c_void
+    /// The `CAMetalLayer`, held, for a GPU surface on another thread.
+    pub fn metal_layer(&self) -> MetalLayer {
+        MetalLayer(self.layer.clone())
     }
 
     /// Placed at `x`, `y` (points from the window's top left), `w` × `h`, at `scale` pixels a
@@ -62,6 +62,22 @@ impl LiveLayer {
 
     pub fn hide(&self) {
         self.view.setHidden(true);
+    }
+}
+
+/// A held `CAMetalLayer`: alive while any copy is, whatever happens to its view.
+#[derive(Clone)]
+pub struct MetalLayer(Retained<CAMetalLayer>);
+
+// SAFETY: only retained, released and handed to wgpu off the main thread; a `CAMetalLayer`'s
+// drawables may be asked for from any thread. Its view stays the main thread's.
+unsafe impl Send for MetalLayer {}
+unsafe impl Sync for MetalLayer {}
+
+impl MetalLayer {
+    /// Its address: for wgpu's `SurfaceTargetUnsafe::CoreAnimationLayer`, and to tell layers apart.
+    pub fn as_ptr(&self) -> *mut c_void {
+        Retained::as_ptr(&self.0) as *mut c_void
     }
 }
 

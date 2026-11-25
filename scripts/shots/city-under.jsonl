@@ -1,7 +1,7 @@
 # A terminal over the code city on its live layer (`city_live_layer`; a test run's `city_under`:
 # the city behind panes is not built). Dense made-up text in several colours (dim, bright, bold),
 # a run of coloured background cells, box-drawing lines, the cursor and a selection, over the
-# city at 85% and 60% background opacity, still and turning, then opaque (no city seen). How
+# city at 85% and 60% background opacity, then opaque (no city seen). How
 # text composites over a live layer: fringes, contrast.
 {"env":{"OTTOSPACE_FEATURES":"code_city,city_live_layer"}}
 {"tree":"repos/app","files":400}
@@ -18,10 +18,6 @@
 {"cmd":"city_under","pane":1,"opacity":0.6}
 {"settle":800}
 {"shot":"over-60"}
-{"cmd":"city_spin"}
-{"settle":1200}
-{"shot":"over-60-turning"}
-{"until":"city.spin.result"}
 {"cmd":"city_under","pane":1,"opacity":1.0}
 {"settle":800}
 {"shot":"opaque"}

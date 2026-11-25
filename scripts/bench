@@ -404,16 +404,8 @@ def city_motion(binary, scratch, files):
     tree = os.path.realpath(os.path.join(scratch, f"city-{files}"))
     if not os.path.isdir(tree):
         shot.made_up_tree(tree, files)
-    # `live`: drawn on its live layer (`city_live_layer`); a build with no such flag draws none.
-    features = "code_city,city_live_layer" if live else "code_city"
-    env = {"OTTOSPACE_FEATURES": features, "GIT_CONFIG_GLOBAL": "/dev/null", "OTTOSPACE_E2E_WINDOW": "1024x674"}
-    try:
-        inst = launch(binary, env)
-    except Failed:
-        # A build that knows no such flag refuses to start: no live path to spin.
-        if live:
-            return None
-        raise
+    env = {"OTTOSPACE_FEATURES": "code_city", "GIT_CONFIG_GLOBAL": "/dev/null", "OTTOSPACE_E2E_WINDOW": "1024x674"}
+    inst = launch(binary, env)
     last = lambda: max([e.get("ms", 0) for e in trace_events(inst)] or [0])
     try:
         inst.ok({"cmd": "repo_add", "path": tree})
@@ -464,8 +456,16 @@ def city_spin(binary, scratch, files, folders, deepest, live=False):
     tree = os.path.realpath(os.path.join(scratch, f"repo-{files}"))
     if not os.path.isdir(tree):
         shot.made_up_repo(tree, files, folders, deepest, empty=files > 10000)
-    env = {"OTTOSPACE_FEATURES": "code_city", "GIT_CONFIG_GLOBAL": "/dev/null", "OTTOSPACE_E2E_WINDOW": "1024x674"}
-    inst = launch(binary, env)
+    # `live`: drawn on its live layer (`city_live_layer`); a build with no such flag draws none.
+    features = "code_city,city_live_layer" if live else "code_city"
+    env = {"OTTOSPACE_FEATURES": features, "GIT_CONFIG_GLOBAL": "/dev/null", "OTTOSPACE_E2E_WINDOW": "1024x674"}
+    try:
+        inst = launch(binary, env)
+    except Failed:
+        # A build that knows no such flag refuses to start: no live path to spin.
+        if live:
+            return None
+        raise
     last = lambda: max([e.get("ms", 0) for e in trace_events(inst)] or [0])
     try:
         inst.ok({"cmd": "repo_add", "path": tree})
@@ -763,19 +763,20 @@ def spin_table(result):
     lines = ["", f"Code city spun once round (240 steps, a step a frame), at 1024×674, the median of {MOTION_RUNS} runs a side "
              "on both paths: the picture painted by GPUI as an image, and the city's live layer (`city_live_layer`) "
              "(frame: from one frame to the next; repeated: frames with no new picture since the frame before (a new image "
-             "painted, or a present on the layer); wait: a step's picture from its place asking to it shown (painted, or "
-             "presented); render: each picture on its thread; CPU frame: render to paint on the main thread; upload: a new picture into GPUI's atlas):", "",
-             "| side, path | files | frames | mean | p50 | p95 | p99 | max | over 16.7 | over 33 | repeated | wait p50 / p95 / p99 / max | render p50 / p95 | CPU frame p50 / p95 | pictures | boxes / textures / GPU (p95) / copy out (p95) / image (ms) | upload p50 / p95 |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+             "painted, or a present on the layer); wait: a new picture from made to painted (the image path's); shown: a step's "
+             "picture from its place asking to it shown (painted, or presented); render: each picture on its thread; CPU frame: render to paint on the main thread; upload: a new picture into GPUI's atlas):", "",
+             "| side, path | files | frames | mean | p50 | p95 | p99 | max | over 16.7 | over 33 | repeated | wait p50 / p95 / max | shown p50 / p95 / p99 | render p50 / p95 | CPU frame p50 / p95 | pictures | boxes / textures / GPU (p95) / copy out (p95) / image (ms) | upload p50 / p95 |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
     rows = [(f"{name}, {path}", files, m) for name, side in result.items()
             for path, key in (("image", "spin"), ("live layer", "spin_live")) for files, m in (side.get(key) or {}).items()]
     for name, files, m in rows:
             if m is None:
-                lines.append(f"| {name} | {files:,} | no city or no spin |" + " |" * 14)
+                lines.append(f"| {name} | {files:,} | no city or no spin |" + " |" * 15)
                 continue
             lines.append(
                 f"| {name} | {files:,} | {f(m['frames'], 0)} | {f(m['mean'])} | {f(m['p50'])} | {f(m['p95'])} | {f(m['p99'])} | {f(m['max'])} | "
-                f"{f(m['over_16'], 0)} | {f(m['over_33'], 0)} | {f(m['repeats'], 0)} | {f(m['wait_p50'])} / {f(m['wait_p95'])} / {f(m.get('wait_p99'))} / {f(m['wait_max'])} | "
+                f"{f(m['over_16'], 0)} | {f(m['over_33'], 0)} | {f(m['repeats'], 0)} | {f(m['wait_p50'])} / {f(m['wait_p95'])} / {f(m['wait_max'])} | "
+                f"{f(m.get('shown_p50'))} / {f(m.get('shown_p95'))} / {f(m.get('shown_p99'))} | "
                 f"{f(m.get('render_p50'))} / {f(m.get('render_p95'))} | "
                 f"{f(m.get('cpu_frame_ms'))} / {f(m.get('cpu_frame_p95'))} | {f(m.get('pictures'), 0)} | "
                 f"{f(m.get('boxes_ms'))} / {f(m.get('alloc_ms'))} / {f(m.get('gpu_ms'))} ({f(m.get('gpu_p95'))}) / {f(m.get('copy_ms'))} ({f(m.get('copy_p95'))}) / {f(m.get('image_ms'))} | "

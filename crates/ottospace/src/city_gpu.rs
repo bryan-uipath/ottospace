@@ -140,6 +140,9 @@ fn colour(kind: Kind) -> ([f32; 3], [f32; 3]) {
     }
 }
 
+/// A live layer gave no drawable this time (`render_into`): not a failure of the picture.
+pub(crate) const NO_DRAWABLE: &str = "no drawable";
+
 /// The device kept between pictures.
 pub struct Gpu {
     /// Kept for surfaces of live layers (`live_surface`).
@@ -339,7 +342,7 @@ impl Gpu {
     ) -> Result<Picture, String> {
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
-            other => return Err(format!("no drawable: {other:?}")),
+            other => return Err(format!("{NO_DRAWABLE}: {other:?}")),
         };
         let (width, height) = (frame.texture.width(), frame.texture.height());
         let view = frame.texture.create_view(&Default::default());
