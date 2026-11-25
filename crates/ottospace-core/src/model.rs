@@ -8640,13 +8640,13 @@ impl Model {
         let card = *self.shown_space() == Owner::Decisions
             && self.front(&Owner::Decisions).map(Subject::Task).as_ref() == Some(&subject);
         // With `terminal_tasks`, a session no task has is looked at where the user is: its
-        // conversation over the space on show, no tab. Going on with it here gives it its own.
+        // conversation over the space on show, no tab. One opened so and gone on with (Resume)
+        // stays there: a start never changes the tab on show.
         let own = self.spaces.iter().any(|space| space.of == Owner::of(&subject));
+        let fresh = !own && !asked && !self.agent_runs(&subject);
         let glance = matches!(subject, Subject::Session { .. })
             && self.features.on(Feature::TerminalTasks)
-            && !own
-            && !asked
-            && !self.agent_runs(&subject);
+            && (fresh || self.glanced(&subject));
         if glance {
             self.glance = Some((self.shown_space().clone(), subject.clone()));
         } else if !card {
@@ -17701,6 +17701,9 @@ mod tests {
     #[test]
     fn opening_a_session_goes_on_with_it_in_the_drawer_where_it_started() {
         let mut m = conversations();
+        // A space of its own: without `terminal_tasks` (with it, it opens in place).
+        let features = Features::all().with(Feature::TerminalTasks, false);
+        m.update(Action::SetFeatures { features }.sent_by(Origin::System));
         let open = |m: &mut Model, runner: &str, id: &str| {
             started(m, Action::SessionOpen { runner: runner.into(), id: id.into() })
         };
@@ -18568,13 +18571,19 @@ mod tests {
         m.update(open());
         m.update(Action::SessionAdopt { runner: "claude".into(), id: "h".into() }.sent_by(Origin::Socket));
         assert!(m.glance.is_none(), "a task has it now");
-        // Resume: its own space, not in place.
+        // Resume: gone on with where it is, the tab on show kept; another space on show, it goes,
+        // and opened again it has a space of its own (its agent runs).
         let mut m = cards_model(now);
         let idle =
             Found { held: false, ..session("claude", "11111111-1111-4111-8111-111111111111", "/code/app", false, 1) };
         m.update(Action::SetSessions { found: vec![idle], day: 0 }.sent_by(Origin::System));
         m.update(Action::SessionOpen { runner: "claude".into(), id: "11111111-1111-4111-8111-111111111111".into() });
-        m.update(Action::TalkStart);
+        let shown = m.shown_space().clone();
+        let started = m.update(Action::TalkStart);
+        assert!(started.iter().any(|e| matches!(e, Effect::StartAgent { .. })), "{started:?}");
+        assert!(m.glance.is_some() && *m.shown_space() == shown);
+        m.update(Action::SpaceOpen { space: Owner::Home });
+        m.update(Action::SessionOpen { runner: "claude".into(), id: "11111111-1111-4111-8111-111111111111".into() });
         assert!(m.glance.is_none() && matches!(m.shown_space(), Owner::Session { .. }));
         // Hidden, its agent still in a city: the user's click opens it.
         let mut m = cards_model(now);

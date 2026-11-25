@@ -7436,6 +7436,35 @@ fn random_actions_keep_the_model_sound_for_long() {
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
 
+/// A terminal session opened in place (`terminal_tasks`), then the user's Resume: it went on in
+/// a tab of its own, so a TalkStart changed the tab on show. Gone on with, it stays in place.
+#[test]
+fn resuming_a_session_opened_in_place_keeps_the_tab_on_show() {
+    let idle = Found {
+        runner: "claude".into(),
+        id: "8f14e45f-ceea-467f-a8d3-0242ac130001".into(),
+        cwd: "/code/app".into(),
+        repo: "/code/app".into(),
+        started: Some(1),
+        last_activity: Some(5),
+        active: false,
+        station: None,
+        label: None,
+        title: None,
+        model: None,
+        held: false,
+        subagents: 0,
+        sub_files: Vec::new(),
+    };
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.into(),
+        Action::SetSessions { found: vec![idle], day: 0 }.sent_by(Origin::System),
+        Action::SessionOpen { runner: "claude".into(), id: "8f14e45f-ceea-467f-a8d3-0242ac130001".into() }.into(),
+        Action::TalkStart.into(),
+    ])
+    .unwrap();
+}
+
 /// The status bar's "in a terminal" (`TerminalAgentGo`) goes to that agent's pane, in another
 /// tab: the check had no place for it among the actions that select a tab.
 #[test]
