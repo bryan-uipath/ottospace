@@ -56,7 +56,7 @@ pub fn choose_font(window: &Window) -> Option<String> {
     let font = if installed {
         wanted.clone()
     } else {
-        settings::Terminal { font_size: wanted.font_size, ..Default::default() }
+        settings::Terminal { font: settings::Terminal::default().font, ..wanted.clone() }
     };
     let _ = FONT.set(font);
     (!installed).then(|| format!("settings.json: the font \"{}\" is not installed; using Menlo", wanted.font))
@@ -68,14 +68,14 @@ pub fn font_in_use() -> serde_json::Value {
     serde_json::json!({ "name": font.font, "size": font.font_size })
 }
 
-/// Size of one character cell: the font's advance, rounded up to whole device pixels (as Ghostty
-/// does: every column's glyph then lands on the pixel grid alike), by the line height.
+/// Size of one character cell: the font's advance, rounded to whole device pixels (up by default,
+/// as Ghostty does: every column's glyph then lands on the pixel grid alike), by the line height.
 pub fn cell_size(window: &Window) -> Size<Pixels> {
     let (text, chosen) = (window.text_system(), terminal_font());
     let size_px = px(chosen.font_size);
     let width = text.em_advance(text.resolve_font(&font(chosen.font.clone())), size_px).unwrap_or(size_px * 0.6);
     let scale = window.scale_factor();
-    size(px((f32::from(width) * scale).ceil() / scale), px(chosen.line_height()))
+    size(px(chosen.cell_pixels(f32::from(width) * scale) / scale), px(chosen.line_height()))
 }
 
 /// `v` on the nearest whole device pixel at `scale`: 12.6 → 13 at 1x, 12.6 → 12.5 at 2x.
