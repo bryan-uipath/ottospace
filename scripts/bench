@@ -707,7 +707,7 @@ def table(result, meta):
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--bin", help="the ottospace binary (default: cargo build this tree)")
-    parser.add_argument("--compare", metavar="BASE", help="BASE (before) against this tree (after)")
+    parser.add_argument("--compare", metavar="BASE", help="BASE (before) against HEAD as committed (after), both built alike")
     parser.add_argument("--bin-before")
     parser.add_argument("--bin-after")
     parser.add_argument("--release", action="store_true", help="release builds (default: dev, as CI's cache)")
@@ -725,8 +725,10 @@ def main():
     scratch = tempfile.mkdtemp(prefix="ottospace-bench-")
     try:
         if args.compare:
+            # Both sides built alike, each in a worktree of its own: an A/A run of one commit against
+            # itself put its after side's city 28% slower when the after binary was built apart.
             before = args.bin_before or shot.build_ref(args.compare, scratch, cargo)
-            after = args.bin_after or shot.build(REPO, os.path.join(scratch, "ottospace-after"), None, cargo)
+            after = args.bin_after or shot.build_ref("HEAD", scratch, cargo, side="after")
             sides = {"before": before, "after": after}
         else:
             sides = {"this": args.bin or shot.build(REPO, os.path.join(scratch, "ottospace"), None, cargo)}

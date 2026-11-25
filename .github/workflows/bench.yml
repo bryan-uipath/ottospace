@@ -71,7 +71,8 @@ jobs:
           if [ "$EVENT" = pull_request ]; then
             base="$(git rev-parse HEAD^1)"
             echo "base: $base"
-            set -- --compare "$base" --bin-after "$RUNNER_TEMP/ottospace-after"
+            # Both sides built by the bench alike (scripts/bench): the build above only warms the cache.
+            set -- --compare "$base"
           else
             set -- --bin "$RUNNER_TEMP/ottospace-after"
           fi

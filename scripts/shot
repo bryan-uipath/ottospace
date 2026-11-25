@@ -584,18 +584,18 @@ def build(tree, dest, target=None, args=()):
     return dest
 
 
-def build_ref(ref, scratch, args=()):
+def build_ref(ref, scratch, args=(), side="before"):
     """`cargo build` of commit `ref` in a temporary worktree under `scratch`, with its own target
-    folder there; returns the binary (also used by scripts/bench)."""
+    folder there; returns the binary, `ottospace-<side>` (also used by scripts/bench)."""
     sha = subprocess.run(["git", "-C", REPO, "rev-parse", "--verify", ref + "^{commit}"],
                          capture_output=True, text=True)
     if sha.returncode != 0:
         raise Failed(f"no commit {ref}")
-    tree = os.path.join(scratch, "base")
+    tree = os.path.join(scratch, "base" if side == "before" else f"tree-{side}")
     subprocess.run(["git", "-C", REPO, "worktree", "add", "--detach", "-q", tree, sha.stdout.strip()], check=True)
     # A target folder of its own: the workspace's crates hash alike in both trees, and one
     # folder would leave the other tree's build of them looking fresh. A clone costs no space.
-    target = os.path.join(scratch, "target")
+    target = os.path.join(scratch, "target" if side == "before" else f"target-{side}")
     if os.path.isdir(target_dir()):
         subprocess.run(["cp", "-Rc", target_dir(), target], check=False)
         # Swift's module cache records its path and fails once moved ("missing required
@@ -608,7 +608,7 @@ def build_ref(ref, scratch, args=()):
                     shutil.rmtree(os.path.join(build_dir, name), ignore_errors=True)
     try:
         # A committed tree: its Cargo.lock as is, never resolved again.
-        return build(tree, os.path.join(scratch, "ottospace-before"), target, ("--locked", *args))
+        return build(tree, os.path.join(scratch, f"ottospace-{side}"), target, ("--locked", *args))
     finally:
         subprocess.run(["git", "-C", REPO, "worktree", "remove", "--force", tree], check=False)
 
