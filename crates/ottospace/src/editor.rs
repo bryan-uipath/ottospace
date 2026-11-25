@@ -118,7 +118,7 @@ impl Workspace {
         if let Some(name) = editor.terminal.program().filter(|name| !shells.contains(&name.as_str())) {
             editor.name = Some(name);
         }
-        let dirty = editor.terminal.take_dirty();
+        let dirty = editor.terminal.take_shown();
         if !editor.terminal.exited() {
             if dirty {
                 cx.notify();

@@ -5424,7 +5424,7 @@ impl Workspace {
             if let Some(bounds) = self.cells.get(id) {
                 terminal.fit(bounds.get().size, self.cell);
             }
-            redraw |= terminal.take_dirty();
+            redraw |= terminal.take_shown();
             if let Some(text) = terminal.take_copy_ask() {
                 asks.push((*id, text));
             }
@@ -5458,15 +5458,17 @@ impl Workspace {
         }
     }
 
-    /// Any terminal's new output (a pane's, the drawer agent's, the editor's): a frame asked for.
-    /// Not while one is asked for already: that frame reads every grid as it is then.
+    /// New output of a terminal on show (a pane's, the drawer agent's, the editor's): a frame asked
+    /// for; a hidden tab's draws nothing. Not while one is asked for already: that frame reads every
+    /// grid as it is then.
     fn take_output(&mut self, cx: &mut Context<Self>) {
         if self.output {
+            self.terminals.values().for_each(Terminal::frame_asked);
             return;
         }
-        let panes = self.terminals.values().map(|t| t.take_dirty());
-        let drawer = self.drawer.agents.values().map(|a| a.terminal.take_dirty());
-        let editor = self.drawer.editor.iter().map(|e| e.terminal.take_dirty());
+        let panes = self.terminals.values().map(|t| t.take_shown());
+        let drawer = self.drawer.agents.values().map(|a| a.terminal.take_shown());
+        let editor = self.drawer.editor.iter().map(|e| e.terminal.take_shown());
         // Every one taken (no short cut): each is drawn by the one frame.
         if panes.chain(drawer).chain(editor).fold(false, |any, dirty| any | dirty) {
             self.output = true;
@@ -9761,6 +9763,7 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        terminal::frame_begun();
         // The cell on this display's pixel grid: again once the window moves to another scale.
         self.cell = terminal::cell_size(window);
         self.scale = window.scale_factor();
