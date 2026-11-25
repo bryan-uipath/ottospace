@@ -2282,16 +2282,22 @@ impl Workspace {
                     }
                 }
                 Effect::StopAgent { task } => agents.extend(self.stop_agent(task)),
-                Effect::AgentSend { task, text } => self.native_input(task, NativeInput::Send(text.clone())),
+                // Not written (its agent had ended): the core puts it back first in the queue.
+                Effect::AgentSend { task, text } => {
+                    if !self.native_input(task, NativeInput::Send(text.clone())) {
+                        let failed = Action::AgentSendFailed { task: task.clone(), text: text.clone() };
+                        drop(self.dispatch(failed, Origin::System, window, cx));
+                    }
+                }
                 Effect::AgentAnswer { task, ticket, allow, message } => {
                     let answer = NativeInput::Answer { ticket: *ticket, allow: *allow, message: message.clone() };
-                    self.native_input(task, answer);
+                    drop(self.native_input(task, answer));
                 }
                 Effect::AgentAnswers { task, ticket, answers } => {
                     let answers = NativeInput::Answers { ticket: *ticket, answers: answers.clone() };
-                    self.native_input(task, answers);
+                    drop(self.native_input(task, answers));
                 }
-                Effect::AgentInterrupt { task } => self.native_input(task, NativeInput::Interrupt),
+                Effect::AgentInterrupt { task } => drop(self.native_input(task, NativeInput::Interrupt)),
                 Effect::AgentSideQuestion { task, id, question, history } => {
                     agents.extend(self.side_question(task, *id, question, history))
                 }

@@ -435,24 +435,28 @@ impl Workspace {
     }
 
     /// A message, an answer or an interrupt the core asked for, to the agent.
-    pub(crate) fn native_input(&mut self, subject: &Subject, input: NativeInput) {
-        let Some(native) = self.drawer.native.get_mut(subject) else { return };
+    /// False: a message it could not write (no agent, or its pipe broke as it ended).
+    pub(crate) fn native_input(&mut self, subject: &Subject, input: NativeInput) -> bool {
+        let sends = matches!(input, NativeInput::Send(_));
+        let Some(native) = self.drawer.native.get_mut(subject) else { return !sends };
         let input = match input {
             NativeInput::Send(text) => Input::Send { text, images: Vec::new() },
             NativeInput::Interrupt => Input::Interrupt,
             NativeInput::Answer { ticket: n, allow, message } => {
                 let answer = if allow { Answer::Allow } else { Answer::Deny { message } };
-                let Some(ticket) = native.take(n) else { return };
+                let Some(ticket) = native.take(n) else { return true };
                 Input::Answer { ticket, answer }
             }
             NativeInput::Answers { ticket: n, answers } => {
-                let Some(ticket) = native.take(n) else { return };
+                let Some(ticket) = native.take(n) else { return true };
                 Input::Answer { ticket, answer: Answer::Questions(answers) }
             }
         };
         if let Err(err) = native.driver.send(input) {
             self.broke(format!("claude: {err}"));
+            return !sends;
         }
+        true
     }
 
     /// A btw's question to the agent, beside its turn. `BtwFailed` if it could not be sent.
@@ -2398,7 +2402,7 @@ impl Workspace {
         let head = format!("{n} queued · {when}");
         let stops = self.model.send_now_stops(&chat.subject);
         let now_tip = if stops { "Stop this turn, then send this" } else { "Send this into the turn now" };
-        let button = |kind: &'static str, at: usize, label: &'static str, tip: &'static str, action: Action| {
+        let button = |kind: &'static str, at: u64, label: &'static str, tip: &'static str, action: Action| {
             crate::ui::button(
                 (kind, at),
                 crate::ui::Button::Ghost(crate::ui::Face::Label(label.into())),
@@ -2411,23 +2415,18 @@ impl Workspace {
                 cx.listener(move |this, _, window, cx| drop(this.dispatch(action.clone(), this.input, window, cx))),
             )
         };
-        let rows = queue.iter().enumerate().map(|(at, text)| {
+        let rows = queue.iter().map(|queued| {
+            let at = queued.id;
             // One line of it: the first, cut.
-            let line = text.lines().next().unwrap_or_default().to_string();
+            let line = queued.text.lines().next().unwrap_or_default().to_string();
             div()
                 .flex()
                 .items_center()
                 .gap_1()
                 .child(div().flex_1().min_w_0().truncate().text_xs().text_color(rgb(theme::MUTED)).child(line))
-                .child(button("queue-now", at, "Send now", now_tip, Action::QueueSendNow { index: at }))
-                .child(button(
-                    "queue-edit",
-                    at,
-                    "Edit",
-                    "Back in the composer, unsent",
-                    Action::QueueEdit { index: at },
-                ))
-                .child(button("queue-remove", at, "×", "Remove it, unsent", Action::QueueRemove { index: at }))
+                .child(button("queue-now", at, "Send now", now_tip, Action::QueueSendNow { id: at }))
+                .child(button("queue-edit", at, "Edit", "Back in the composer, unsent", Action::QueueEdit { id: at }))
+                .child(button("queue-remove", at, "×", "Remove it, unsent", Action::QueueRemove { id: at }))
         });
         let head = div().text_xs().text_color(rgb(theme::MUTED)).child(head);
         Some(div().flex().flex_col().gap_0p5().child(head).children(rows))

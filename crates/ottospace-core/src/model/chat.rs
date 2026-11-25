@@ -10,7 +10,7 @@ use crate::ask::{self, Act, Form};
 use crate::edit::Field;
 use crate::runner::{RunnerId, Status, Support};
 use crate::talk::{self, Chip, Subject};
-use crate::tasks::{Group, State};
+use crate::tasks::{Group, Queued, State};
 use crate::transcript::{Event, Transcript, View};
 
 /// Why a client's send, answer, interrupt or switch is refused.
@@ -394,7 +394,7 @@ impl Model {
         if ending || chat.held || !chat.transcript.live || chat.transcript.busy() || !waiting {
             return;
         }
-        let Some(text) = self.queue_mut(subject).map(|queue| queue.remove(0)) else { return };
+        let Some(text) = self.queue_mut(subject).map(|queue| queue.remove(0).text) else { return };
         if let Some(chat) = self.chat_mut(subject) {
             chat.transcript.send(&text, now);
         }
@@ -412,11 +412,11 @@ impl Model {
 
     /// The messages queued in `subject`'s conversation, oldest first: its task's. None for a
     /// session no task owns.
-    pub fn queue_of(&self, subject: &Subject) -> &[String] {
+    pub fn queue_of(&self, subject: &Subject) -> &[Queued] {
         subject.task().and_then(|id| self.tasks.get(id)).map_or(&[], |task| &task.queued)
     }
 
-    fn queue_mut(&mut self, subject: &Subject) -> Option<&mut Vec<String>> {
+    fn queue_mut(&mut self, subject: &Subject) -> Option<&mut Vec<Queued>> {
         let id = subject.task()?;
         self.tasks.list.iter_mut().find(|task| task.id == id).map(|task| &mut task.queued)
     }
@@ -431,12 +431,22 @@ impl Model {
     /// Queues `text` in `subject`'s conversation, last. False: no task to keep it, or no room
     /// (the box says so); the words stay where they are.
     fn enqueue(&mut self, subject: &Subject, text: String, effects: &mut Vec<Effect>) -> bool {
-        let used: usize = self.queue_of(subject).iter().map(|text| text.chars().count()).sum();
+        let used: usize = self.queue_of(subject).iter().map(|queued| queued.text.chars().count()).sum();
         if used + text.chars().count() > MAX_QUEUE {
             effects.push(Effect::Notice { text: QUEUE_FULL.into() });
             return false;
         }
-        self.queue_mut(subject).map(|queue| queue.push(text)).is_some()
+        let queued = self.queued(text);
+        self.queue_mut(subject).map(|queue| queue.push(queued)).is_some()
+    }
+
+    /// `text` as a queued message, with an id no other has had in this run, nor in the tasks read
+    /// back.
+    fn queued(&mut self, text: String) -> Queued {
+        let kept = self.tasks.list.iter().flat_map(|task| task.queued.iter().map(|queued| queued.id)).max();
+        let id = self.queue_next.max(kept.map_or(1, |id| id + 1));
+        self.queue_next = id + 1;
+        Queued { id, text }
     }
 
     /// What "send now" (⌘↵) does in `subject` while its turn runs: true, it stops the turn first
@@ -461,8 +471,9 @@ impl Model {
                 effects.push(Effect::AgentSend { task: subject.clone(), text });
             }
             running => {
+                let queued = self.queued(text);
                 if let Some(queue) = self.queue_mut(&subject) {
-                    queue.insert(0, text);
+                    queue.insert(0, queued);
                 }
                 if running && !carded && !ending {
                     if let Some(chat) = self.chat_mut(&subject) {
@@ -898,9 +909,11 @@ impl Model {
             }
             // Not while the user's editor has the draft: an edit would be written over by its save.
             Action::QueueEdit { .. } if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
-            act @ (Action::QueueRemove { index } | Action::QueueEdit { index } | Action::QueueSendNow { index }) => {
+            // By the row's id: a row the queue has moved on from (sent meanwhile) is no other row.
+            act @ (Action::QueueRemove { id } | Action::QueueEdit { id } | Action::QueueSendNow { id }) => {
                 let Some(subject) = self.shown_chat().map(|chat| chat.subject.clone()) else { return };
-                let Some(text) = self.queue_of(&subject).get(index).cloned() else { return };
+                let Some(index) = self.queue_of(&subject).iter().position(|queued| queued.id == id) else { return };
+                let text = self.queue_of(&subject)[index].text.clone();
                 match act {
                     // Back in the composer, after what is written there; if all of it fits. Hidden
                     // from the state as a btw answer is: it may have been one.
@@ -920,6 +933,25 @@ impl Model {
                         self.queue_mut(&subject).map(|queue| queue.remove(index));
                         self.send_now(text, effects);
                     }
+                }
+            }
+            // Not delivered (its agent had ended): first in its queue again, held for the user's ↵
+            // (its row says so; no notice: the shell's news interrupts nobody).
+            Action::AgentSendFailed { .. } if self.by_user => {}
+            Action::AgentSendFailed { task: subject, text } => {
+                if subject.task().is_some() {
+                    let queued = self.queued(text);
+                    if let Some(queue) = self.queue_mut(&subject) {
+                        queue.insert(0, queued);
+                    }
+                    if let Some(chat) = self.chat_mut(&subject) {
+                        chat.held = true;
+                    }
+                } else if let Some(chat) = self.chat_mut(&subject) {
+                    // No task to queue it: back in the composer, after what is written there.
+                    let before = chat.draft.text().trim_end().to_string();
+                    let joined = if before.is_empty() { text } else { format!("{before}\n{text}") };
+                    chat.draft = Field::lines_of(&joined, MAX_DRAFT);
                 }
             }
             Action::TalkAnswer { allow, ticket } => {
@@ -1076,6 +1108,11 @@ mod tests {
 
     fn events(m: &mut Model, subject: &Subject, events: Vec<Event>) -> Vec<Effect> {
         m.update(Action::AgentEvents { task: subject.clone(), events, at: 5 }.sent_by(Origin::System))
+    }
+
+    /// The words of `subject`'s queued messages, in order.
+    fn texts(m: &Model, subject: &Subject) -> Vec<String> {
+        m.queue_of(subject).iter().map(|queued| queued.text.clone()).collect()
     }
 
     fn typed(m: &mut Model, text: &str) {
@@ -1457,7 +1494,7 @@ mod tests {
         assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::Running));
         typed(&mut m, "more");
         assert_eq!(m.update(Action::TalkSend), [], "a turn runs: ↵ queues it");
-        assert_eq!(m.queue_of(&one), ["more"]);
+        assert_eq!(texts(&m, &one), ["more"]);
         let ended = events(&mut m, &one, vec![Event::TurnStarted, Event::TurnFinished { outcome: Outcome::Completed }]);
         assert_eq!(ended, [Effect::AgentSend { task: one.clone(), text: "more".into() }], "sent once the turn ends");
         assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::Running));
@@ -1474,17 +1511,14 @@ mod tests {
         let id = one.task().unwrap_or_default();
         let turn = |m: &mut Model, events| super::tests::events(m, &one, events);
         let done = || vec![Event::TurnFinished { outcome: Outcome::Completed }];
-        let queue = |m: &Model| m.queue_of(&one).to_vec();
+        let queue = |m: &Model| texts(m, &one);
         typed(&mut m, "first");
         m.update(Action::TalkSend);
         for text in ["second", "third"] {
             typed(&mut m, text);
             assert_eq!(m.update(Action::TalkSend), []);
         }
-        assert_eq!(
-            (queue(&m), m.tasks.get(id).map(|t| t.queued.clone())),
-            (vec!["second".into(), "third".into()], Some(vec!["second".into(), "third".into()]))
-        );
+        assert_eq!(queue(&m), ["second", "third"]);
         // A task serialised (the state, the inbox, a socket reply) has their count, never their
         // words; only its file has them, and reads them back.
         let state = serde_json::to_string(&m.tasks).unwrap_or_default();
@@ -1492,7 +1526,9 @@ mod tests {
         let json = serde_json::json!(task).to_string();
         assert!(state.contains("\"queued\":2") && !state.contains("second") && !json.contains("second"), "{json}");
         let file = task.file_json();
-        assert_eq!(file["queued"], serde_json::json!(["second", "third"]));
+        let words: Vec<&str> =
+            file["queued"].as_array().into_iter().flatten().filter_map(|q| q["text"].as_str()).collect();
+        assert_eq!(words, ["second", "third"]);
         let back: crate::tasks::Task = serde_json::from_value(file).unwrap_or_else(|e| panic!("{e}"));
         assert_eq!(back.queued, task.queued);
         let counted: crate::tasks::Task = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
@@ -1500,9 +1536,9 @@ mod tests {
         // A client queues, edits, removes and sends nothing.
         for theirs in [
             Action::TalkSendNow,
-            Action::QueueRemove { index: 0 },
-            Action::QueueEdit { index: 0 },
-            Action::QueueSendNow { index: 0 },
+            Action::QueueRemove { id: 1 },
+            Action::QueueEdit { id: 1 },
+            Action::QueueSendNow { id: 1 },
         ] {
             assert_eq!(m.refusal(&theirs, Origin::Socket), Some(super::USERS_ALONE));
         }
@@ -1525,8 +1561,9 @@ mod tests {
             typed(&mut m, text);
             m.update(Action::TalkSend);
         }
-        m.update(Action::QueueEdit { index: 1 });
-        m.update(Action::QueueRemove { index: 0 });
+        let ids: Vec<u64> = m.queue_of(&one).iter().map(|queued| queued.id).collect();
+        m.update(Action::QueueEdit { id: ids[1] });
+        m.update(Action::QueueRemove { id: ids[0] });
         assert_eq!((queue(&m), m.chat(&one).map(|chat| chat.draft.text().to_string())), (vec![], Some("sixth".into())));
         // ⌘↵ while a turn runs, Claude Code (no message mid-turn): the turn stops, the message goes first after it.
         assert!(m.send_now_stops(&one));
@@ -1548,7 +1585,7 @@ mod tests {
         typed(&mut m, "now");
         events(&mut m, &one, vec![card(4, false)]);
         assert_eq!(m.update(Action::TalkSendNow), [], "no stop while a question waits");
-        assert_eq!(m.queue_of(&one), ["now"]);
+        assert_eq!(texts(&m, &one), ["now"]);
         m.update(Action::TalkAnswer { allow: false, ticket: 4 });
         typed(&mut m, &"x".repeat(super::MAX_QUEUE));
         let full = m.update(Action::TalkSend);
@@ -1565,7 +1602,38 @@ mod tests {
         let up =
             fresh.update(Action::AgentStarted { task: subject.clone(), session: None, at: 1 }.sent_by(Origin::System));
         assert!(fresh.chat(&subject).is_some_and(|chat| chat.held), "{up:?}");
-        assert_eq!(fresh.queue_of(&subject), ["now"]);
+        assert_eq!(texts(&fresh, &subject), ["now"]);
+    }
+
+    /// A row names its message by id: the turn ending between the row's draw and the click sends
+    /// the first; the click on the row drawn first then acts on nothing, never on the next one.
+    /// A message whose write failed (its agent had ended) is back first in the queue, held.
+    #[test]
+    fn a_row_acts_on_its_own_message_and_an_undelivered_one_comes_back_first() {
+        let mut m = two_live();
+        let one = first(&m);
+        typed(&mut m, "go");
+        m.update(Action::TalkSend);
+        for text in ["alpha", "beta"] {
+            typed(&mut m, text);
+            m.update(Action::TalkSend);
+        }
+        let drawn: Vec<u64> = m.queue_of(&one).iter().map(|queued| queued.id).collect();
+        // The turn ends: alpha goes. The user's click was on alpha's row, drawn before.
+        let sent = events(&mut m, &one, vec![Event::TurnFinished { outcome: Outcome::Completed }]);
+        assert_eq!(sent, [Effect::AgentSend { task: one.clone(), text: "alpha".into() }]);
+        m.update(Action::QueueRemove { id: drawn[0] });
+        assert_eq!(texts(&m, &one), ["beta"], "beta stays: the click was alpha's");
+        // alpha was never written: first again, held for the user.
+        let back = Action::AgentSendFailed { task: one.clone(), text: "alpha".into() };
+        assert_eq!(m.refusal(&back, Origin::Socket), Some(super::RUNNERS_ALONE));
+        m.update(back.clone());
+        assert_eq!(texts(&m, &one), ["beta"], "the user's report is nothing: only the runner's");
+        m.update(back.sent_by(Origin::System));
+        assert_eq!(texts(&m, &one), ["alpha", "beta"]);
+        assert!(m.chat(&one).is_some_and(|chat| chat.held));
+        let ids: Vec<u64> = m.queue_of(&one).iter().map(|queued| queued.id).collect();
+        assert!(!drawn.contains(&ids[0]), "a new id: an old row's click is not this message's");
     }
 
     /// A runner that takes a message mid-turn gets "send now" in the turn; Claude Code's is off

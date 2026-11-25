@@ -1855,9 +1855,10 @@ const MAKERS: &[Make] = &[
     },
     |_| Action::TalkSend,
     |_| Action::TalkSendNow,
-    |g| Action::QueueRemove { index: g.rng.below(3) },
-    |g| Action::QueueEdit { index: g.rng.below(3) },
-    |g| Action::QueueSendNow { index: g.rng.below(3) },
+    |g| Action::QueueRemove { id: g.rng.below(6) as u64 },
+    |g| Action::QueueEdit { id: g.rng.below(6) as u64 },
+    |g| Action::QueueSendNow { id: g.rng.below(6) as u64 },
+    |g| Action::AgentSendFailed { task: g.subject(), text: g.rng.pick(&["go on", "and the docs"]).to_string() },
     |g| Action::TalkAnswer { allow: g.rng.coin(), ticket: g.card() },
     |g| Action::TalkExpand { ticket: g.card() },
     |g| Action::TalkAsk { ticket: g.card(), act: g.ask_act() },
@@ -3337,8 +3338,16 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(m.picker_menu().is_none_or(|menu| m.compose_pickers().contains(&menu.mark)), "a list of no picker");
     // A queued message is never empty, and a queue stays small enough for its task's file.
     for task in &m.tasks.list {
-        ensure!(task.queued.iter().all(|text| !text.trim().is_empty()), "an empty message queued in task {}", task.id);
-        let used: usize = task.queued.iter().map(|text| text.chars().count()).sum();
+        ensure!(task.queued.iter().all(|q| !q.text.trim().is_empty()), "an empty message queued in task {}", task.id);
+        let ids: std::collections::BTreeSet<u64> = task.queued.iter().map(|q| q.id).collect();
+        ensure!(ids.len() == task.queued.len(), "task {} queues two messages under one id", task.id);
+        // A message that did not reach its agent comes back over the limit rather than be lost.
+        let used: usize = task
+            .queued
+            .iter()
+            .map(|q| q.text.chars().count())
+            .sum::<usize>()
+            .saturating_sub(crate::model::chat::MAX_DRAFT);
         ensure!(used <= crate::model::chat::MAX_QUEUE, "task {} queues {used} characters", task.id);
     }
     if let Some((of, field)) = m.open_field() {
@@ -5382,7 +5391,18 @@ impl Run {
         let edited = |subject: &Subject| {
             saved && editing_before.as_ref().is_some_and(|e| e.target == editor::Target::Chat(subject.clone()))
         };
-        for chat in m.chats.iter().filter(|chat| !user && !edited(&chat.subject)) {
+        // Or the user's own message comes back to it: one that waited on a start that failed, or a
+        // send its agent never got (`AgentSendFailed`, a session no task owns).
+        let returned = |chat: &chat::Chat| {
+            let was = chats_before.iter().find(|was| was.subject == chat.subject);
+            let waited = was.and_then(|was| was.queued.clone()).filter(|_| chat.queued.is_none());
+            let failed = match &action {
+                Action::AgentSendFailed { task, text } if *task == chat.subject => Some(text.clone()),
+                _ => None,
+            };
+            [waited, failed].into_iter().flatten().any(|text| chat.draft.text().ends_with(text.as_str()))
+        };
+        for chat in m.chats.iter().filter(|chat| !user && !edited(&chat.subject) && !returned(chat)) {
             let before = drafts.iter().find(|(subject, _)| *subject == chat.subject).map(|(_, text)| text.as_str());
             ensure!(before.unwrap_or("") == chat.draft.text(), "{origin:?} changed the draft of {:?}", chat.subject);
         }

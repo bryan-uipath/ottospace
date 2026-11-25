@@ -372,7 +372,7 @@ pub struct Task {
     /// over a restart. Unsent words: a task serialises them as their count alone (the socket,
     /// the state, the inbox); only its file has them (`file_json`).
     #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "count", deserialize_with = "texts")]
-    pub queued: Vec<String>,
+    pub queued: Vec<Queued>,
     /// When it was filed (milliseconds since 1970). `None`: filed before this was kept.
     #[serde(default)]
     pub created: Option<u64>,
@@ -434,7 +434,7 @@ impl Task {
     pub fn file_json(&self) -> serde_json::Value {
         let mut value = serde_json::to_value(self.for_file()).unwrap_or_default();
         if let Some(fields) = value.as_object_mut().filter(|_| !self.queued.is_empty()) {
-            fields.insert("queued".into(), self.queued.clone().into());
+            fields.insert("queued".into(), serde_json::to_value(&self.queued).unwrap_or_default());
         }
         value
     }
@@ -583,17 +583,25 @@ enum Undo {
     Dismiss { id: TaskId },
 }
 
+/// A message queued in a task's conversation: its words, and an id of its own, so a click on its
+/// row acts on it even if the queue moved under the pointer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Queued {
+    pub id: u64,
+    pub text: String,
+}
+
 /// Queued messages as their count: never their words (`Task::queued`).
-fn count<S: serde::Serializer>(queued: &[String], serializer: S) -> Result<S::Ok, S::Error> {
+fn count<S: serde::Serializer>(queued: &[Queued], serializer: S) -> Result<S::Ok, S::Error> {
     serializer.serialize_u64(queued.len() as u64)
 }
 
 /// Queued messages from a task's file: their words; a count (a state's copy) brings none back.
-fn texts<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<String>, D::Error> {
+fn texts<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Queued>, D::Error> {
     #[derive(Deserialize)]
     #[serde(untagged)]
     enum Kept {
-        Texts(Vec<String>),
+        Texts(Vec<Queued>),
         Count(serde::de::IgnoredAny),
     }
     Ok(match Kept::deserialize(deserializer)? {
@@ -709,7 +717,7 @@ impl Tasks {
     }
 
     /// The messages queued in its conversation, kept with it.
-    pub fn set_queued(&mut self, id: TaskId, queued: Vec<String>) {
+    pub fn set_queued(&mut self, id: TaskId, queued: Vec<Queued>) {
         if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
             task.queued = queued;
         }
