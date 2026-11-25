@@ -132,7 +132,11 @@ impl Live {
             }
         };
         let rate = f64::from(app_audio::RATE);
-        let recogniser = Arc::new(Recogniser::new(None, rate, heard).ok_or("the recogniser did not start")?);
+        let recogniser = Recogniser::new(None, rate, heard).map_err(|why| {
+            event_log::event("listen_failed", serde_json::json!({ "why": why.code() }));
+            format!("the recogniser did not start: {why}")
+        })?;
+        let recogniser = Arc::new(recogniser);
         let (into, fed) = (taken.clone(), recogniser.clone());
         let counted = counts.clone();
         let samples = move |samples: &[f32], _: Option<f64>| {

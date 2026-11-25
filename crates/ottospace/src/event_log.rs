@@ -173,6 +173,7 @@ fn fields_of(event: &str) -> &'static [&'static str] {
         "listen_audio_filter" => &["bundle", "pids"],
         "listen_quiet" => &["bundle", "pids", "buffers"],
         "listen_counts" => &["bundle", "buffers", "loud", "lines"],
+        "listen_failed" => &["why"],
         // The picker's list of an app's windows: how many, and why each other was left out.
         "pick_list" => &["bundle", "listed", "skipped"],
         // The developer's timed spin of a code city: frame times and counts only.
@@ -423,6 +424,7 @@ mod tests {
             ("listen_audio_filter", json!({ "bundle": "us.zoom.xos", "pids": 3 })),
             ("listen_quiet", json!({ "bundle": "us.zoom.xos", "pids": 1, "buffers": 0 })),
             ("listen_counts", json!({ "bundle": "us.zoom.xos", "buffers": 500, "loud": 0, "lines": 0 })),
+            ("listen_failed", json!({ "why": "no_format" })),
             (
                 "place",
                 json!({ "bundle": "us.zoom.xos", "subrole": "AXStandardWindow", "modal": false, "sheet": false,
@@ -472,7 +474,7 @@ mod tests {
             write(event, fields, Some(&*dir));
         }
         let text = fs::read_to_string(dir.join(NAME)).unwrap();
-        assert_eq!(text.lines().count(), 25, "{text}");
+        assert_eq!(text.lines().count(), 26, "{text}");
         // `at` is each line's time, never overwritten by a field.
         assert!(
             text.lines().all(|line| serde_json::from_str::<Value>(line).unwrap()["at"].as_str().unwrap().len() == 25)
