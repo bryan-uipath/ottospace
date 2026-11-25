@@ -9,8 +9,9 @@ use crate::activity::{Pulse, Station};
 use crate::city_shell;
 use crate::features::Feature;
 use crate::glance::{Glance, Words};
+use crate::layout::Axis;
 use crate::model::spaces::Owner;
-use crate::model::{Action, Model, Origin};
+use crate::model::{Action, Effect, Model, Origin};
 use crate::scene::View;
 use crate::talk::Subject;
 use crate::tasks::TaskId;
@@ -152,6 +153,7 @@ pub const SPIN_DEGREES: f32 = 360. / SPIN_STEPS as f32;
 
 /// Only the user's pointer moves a city's camera: a client's drag is refused.
 pub(crate) const USERS_ALONE: &str = "only the user's pointer moves the city's camera";
+pub(crate) const OPEN_USERS: &str = "only the user's double-click opens a file or folder from the city";
 
 /// Each place's camera (a tab, or an empty pane, showing a city), each checkout's last one used,
 /// and the drag in flight with the view it started from.
@@ -470,6 +472,36 @@ impl Model {
         }
         self.cameras.places.insert((at, key.clone()), view);
         self.cameras.views.insert(key, view);
+    }
+
+    /// The user's double-click on a building or district of `at`'s city: the file `id` (from the
+    /// checkout's root) in a viewer, as Go to opens one; a folder (`folder`) in a terminal there, as
+    /// Repos opens a checkout. In the empty pane the city is in (its tab's, for an empty tab, if
+    /// the keyboard is there). Nothing for a place that shows no city, or a path that is not a
+    /// plain one inside the checkout (`..`, `.`, empty parts, absolute).
+    pub(crate) fn city_open(&mut self, at: At, id: &str, folder: bool, effects: &mut Vec<Effect>) {
+        // A file that shares a folder's name has `/` at the end of its id (`atlas::repo`); a folder never.
+        let id = if folder { id } else { id.strip_suffix('/').unwrap_or(id) };
+        let plain = !id.is_empty() && id.split('/').all(|part| !matches!(part, "" | "." | ".."));
+        let shown = plain && self.empty_places().contains(&at);
+        let Some(dir) = self.city_at(at).filter(|_| shown).map(|city| city.dir.trim_end_matches('/').to_string())
+        else {
+            return;
+        };
+        let path = format!("{dir}/{id}");
+        let pane = match at {
+            At::Pane(pane) => Some(pane),
+            At::Tab(tab) if self.tabs.get(self.active).is_some_and(|shown| shown.id == tab) => None,
+            At::Tab(_) => return,
+        };
+        if folder {
+            if let Some(pane) = pane {
+                self.focus(pane, effects);
+            }
+            self.open_terminal_at(Axis::Right, Some(path), effects);
+        } else {
+            self.open_file(path, Axis::Right, pane, false, None, effects);
+        }
     }
 
     /// Every camera inside its clamps, and a drag only of a camera kept: for the model's check.
@@ -1061,6 +1093,74 @@ src/main.rs:9:loop
         assert_eq!(m.city_agent_click(session, Origin::User), Some(open), "its conversation, as its row opens it");
         assert_eq!(m.city_agent_click(session, Origin::Socket), None);
         assert_eq!(m.city_agent_click(Who::Pane { pane: 1, runner: "claude" }, Origin::User), None);
+    }
+
+    /// The user's double-click opens a building's file in a viewer and a district's folder in a
+    /// terminal there, in the empty place the city is in; a client's is refused, as is a path out
+    /// of the checkout, and a place that shows no city.
+    #[test]
+    fn the_users_double_click_opens_a_file_or_a_folder_from_the_city() {
+        let open = |m: &mut Model, at: At, id: &str, folder: bool, by: Origin| {
+            let before = m.panes.len();
+            m.update(Action::CityOpen { at, id: id.into(), folder }.sent_by(by));
+            (m.panes.len() > before).then(|| m.panes.last().map(|p| (p.kind.clone(), p.cwd.clone()))).flatten()
+        };
+        let file = |path: &str| Some((Kind::File { path: path.into() }, None));
+        for (id, folder) in [("src/a.rs", false), ("src", true), ("../etc/x", false), ("", true), ("/etc", false)] {
+            let mut m = task_in_app();
+            let at = m.empty_places()[0];
+            assert_eq!(open(&mut m, at, id, folder, Origin::Socket), None, "{id}: a client's");
+            assert_eq!(open(&mut m, at, id, folder, Origin::System), None, "{id}: the system's");
+        }
+        let mut m = task_in_app();
+        let at = m.empty_places()[0];
+        for bad in ["../etc/passwd", "src/../../x", "./a", "a//b", "", "/etc/x"] {
+            assert_eq!(open(&mut m, at, bad, false, Origin::User), None, "{bad}");
+        }
+        assert_eq!(open(&mut m, at, "src/a.rs", false, Origin::User), file("/code/app/src/a.rs"));
+        // The viewer covers the floor: no city there now, so no second open.
+        assert_eq!(open(&mut m, at, "src/b.rs", false, Origin::User), None);
+        // A district: a terminal in its folder. A file that shares a folder's name (`a/`) is the file.
+        let mut m = task_in_app();
+        let at = m.empty_places()[0];
+        assert_eq!(
+            open(&mut m, at, "src/ui", true, Origin::User),
+            Some((Kind::Terminal, Some("/code/app/src/ui".into())))
+        );
+        let mut m = task_in_app();
+        assert_eq!(open(&mut m, at, "a/", false, Origin::User), file("/code/app/a"));
+        // An empty pane's city: it fills that pane, beside a terminal.
+        let mut m = task_in_app();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Empty });
+        let empty = m.empty_places();
+        let [At::Pane(pane)] = empty[..] else { panic!("{empty:?}") };
+        m.update(Action::FocusCycle { delta: 1 });
+        assert_eq!(open(&mut m, empty[0], "src/a.rs", false, Origin::User), None, "fills the pane: none new");
+        assert_eq!(m.pane(pane).map(|p| p.kind.clone()), Some(Kind::File { path: "/code/app/src/a.rs".into() }));
+        // A folder's id has no `/` at its end.
+        let mut m = task_in_app();
+        assert_eq!(open(&mut m, at, "src/", true, Origin::User), None);
+        // A city not on show (its tab behind another): nothing opens, and the tab stays behind.
+        let mut m = task_in_app();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Empty });
+        let [hidden] = m.empty_places()[..] else { panic!() };
+        m.update(Action::SpaceOpen { space: Owner::Home });
+        let shown = m.active;
+        assert_eq!(open(&mut m, hidden, "src/a.rs", false, Origin::User), None);
+        assert_eq!((m.active, m.empty_places().contains(&hidden)), (shown, false));
+        let At::Pane(pane) = hidden else { panic!() };
+        assert_eq!(m.pane(pane).map(|p| p.kind.clone()), Some(Kind::Empty));
+        // While the key reference has the keyboard, it waits, as any pane action.
+        let mut m = task_in_app();
+        m.update(Action::ToggleKeys);
+        assert_eq!(open(&mut m, at, "src/a.rs", false, Origin::User), None);
+        assert!(m.empty_places().contains(&at));
+        // With the flag off, no city: nothing opens.
+        let mut m = task_in_app();
+        m.update(Action::SetFeatures { features: Features::default() }.sent_by(Origin::System));
+        assert_eq!(open(&mut m, at, "src/a.rs", false, Origin::User), None);
     }
 
     /// The user's camera moves, stays in its clamps, survives switching tabs, and comes back

@@ -19057,6 +19057,72 @@ fn a_live_layers_hovered_beam_turns_with_its_picture() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A double-click in the code city opens what is under it, as the user's own act: a building's
+/// file in a viewer, a district's folder in a terminal, in the tab the city is in. A client's
+/// double-click and the user's single click open nothing.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_double_click_on_the_city_opens_a_file_or_a_folder() {
+    let root = support::temp(&format!("ottospace-e2e-city-open-{}", std::process::id()));
+    let app = root.join("repos/app");
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q"]);
+    let mut files = Vec::new();
+    for dir in ["src", "docs"] {
+        for i in 0..4 {
+            let file = app.join(format!("{dir}/f{i}.rs"));
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(&file, "x\n".repeat(20 + 30 * i)).unwrap();
+            files.push(format!("{dir}/f{i}.rs"));
+        }
+    }
+    let app = app.canonicalize().unwrap();
+    let home = user_folder("city-open", &json!({"repos": [app], "restore_layout": false}).to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "code_city"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ];
+    let otto = Otto::launch_with("city-open", &env);
+    let in_app = |rel: &str| app.join(rel).to_string_lossy().into_owned();
+    // The tab of the checkout, emptied: its city, with a spot over a building and a folder.
+    let spots = || {
+        otto.call(json!({"cmd": "open_repo", "path": app}));
+        otto.call(json!({"cmd": "close"}));
+        let ready = |s: &Value| !s["file"].is_null() && !s["folder"].is_null();
+        let spots = otto.wait_for("a city to point at", |o| {
+            Some(o.call(json!({"cmd": "state"}))["city"]["spots"].clone()).filter(ready)
+        });
+        let point = |v: &Value| [v[0].as_f64().unwrap(), v[1].as_f64().unwrap()];
+        (point(&spots["file"]), point(&spots["folder"]))
+    };
+    let press = |p: [f64; 2], clicks: u64, user: bool| {
+        for action in ["down", "up"] {
+            let mut event = json!({"cmd": "mouse", "action": action, "x": p[0], "y": p[1], "clicks": clicks});
+            if user {
+                event["as"] = json!("user");
+            }
+            otto.call(event);
+        }
+        otto.call(json!({"cmd": "state"}))["state"]["panes"].as_array().unwrap().clone()
+    };
+    let (file, folder) = spots();
+    assert!(press(file, 1, false).is_empty() && press(file, 2, false).is_empty(), "a client's opens nothing");
+    assert!(press(file, 1, true).is_empty(), "the user's single click opens nothing");
+    let panes = press(file, 2, true);
+    let opened = panes.iter().find_map(|p| p["kind"]["path"].as_str().map(str::to_string));
+    assert!(files.iter().any(|f| opened.as_deref() == Some(&in_app(f))), "a file of the city: {panes:?}");
+    assert_eq!((panes.len(), &panes[0]["kind"]["type"]), (1, &json!("file")), "{panes:?}");
+    // Back to the city: a district's folder in a terminal.
+    otto.call(json!({"cmd": "close"}));
+    let (_, folder_again) = spots();
+    assert_eq!(folder_again, folder, "the same city");
+    press(folder, 1, true);
+    let panes = press(folder, 2, true);
+    let cwd = panes.iter().find_map(|p| p["cwd"].as_str().map(str::to_string));
+    assert!(["src", "docs"].iter().any(|d| cwd.as_deref() == Some(&in_app(d))), "{panes:?}");
+}
+
 /// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,
 /// inside the picture, again after a zoom. The user's pointer on a folder's ground outlines its
 /// top face and hangs its label by its near edge or the pointer; on a building, a beam a share of

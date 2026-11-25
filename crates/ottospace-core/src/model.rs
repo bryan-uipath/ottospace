@@ -1574,6 +1574,13 @@ pub enum Action {
         at: city::At,
         step: city::CameraStep,
     },
+    /// The user's double-click in the code city of an empty place: the file `id` (a path from
+    /// the checkout's root) in a viewer, or the folder (`folder`) in a terminal (`model::city`).
+    CityOpen {
+        at: city::At,
+        id: String,
+        folder: bool,
+    },
     /// The button went down on the report's picture, at `at` (0..1 of it).
     BugPress {
         at: [f64; 2],
@@ -2710,6 +2717,7 @@ impl Action {
                 | Action::NewEmptyTab
                 | Action::EditSettings
                 | Action::OpenFile { .. }
+                | Action::CityOpen { .. }
                 | Action::ProjectOpen { .. }
                 | Action::ViewerEdit { .. }
                 | Action::SelectTab { .. }
@@ -3201,6 +3209,7 @@ impl Action {
             | Action::FocusEditToggle { .. }
             | Action::FocusEditSave { .. }
             | Action::CityCamera { .. }
+            | Action::CityOpen { .. }
             | Action::ZoomMove { .. }
             | Action::ZoomEnter { .. }
             | Action::ZoomCamera { .. }
@@ -3237,7 +3246,7 @@ impl Action {
             Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } | Action::TalkWide => {
                 Some(Feature::OverlayPanels)
             }
-            Action::CityCamera { .. } => Some(Feature::CodeCity),
+            Action::CityCamera { .. } | Action::CityOpen { .. } => Some(Feature::CodeCity),
             Action::DecisionsOpen
             | Action::DecisionsAsk { .. }
             | Action::DecisionsSkip { .. }
@@ -5557,6 +5566,7 @@ impl Model {
             Action::DialToggle => Some(chat::DIAL_USERS),
             Action::FillDisplay | Action::FillWindow { .. } => Some(crate::fill::USERS_ALONE),
             Action::CityCamera { .. } => Some(city::USERS_ALONE),
+            Action::CityOpen { .. } => Some(city::OPEN_USERS),
             Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(displays::USERS_ALONE),
             // Only the shell's display watcher says what the displays are.
             Action::SetDisplays { .. } if origin == Origin::Socket => Some(displays::SHELLS_ALONE),
@@ -7939,6 +7949,7 @@ impl Model {
                 self.bug_start(word, size, (controls, panes), picture, effects)
             }
             Action::CityCamera { at, step } => self.camera(at, step),
+            Action::CityOpen { at, id, folder } => self.city_open(at, &id, folder, effects),
             Action::BugPress { at } => drop(self.bug.as_mut().map(|report| report.press(at))),
             Action::BugDrag { to } => drop(self.bug.as_mut().map(|report| report.drag_to(to))),
             Action::BugRelease { at } => drop(self.bug.as_mut().map(|report| report.release(at))),
@@ -12189,6 +12200,7 @@ mod tests {
         Action::CaptureStart { .. },
         Action::BugStart { .. },
         Action::CityCamera { .. },
+        Action::CityOpen { .. },
         Action::BugPress { .. },
         Action::BugDrag { .. },
         Action::BugRelease { .. },
@@ -12631,6 +12643,7 @@ mod tests {
                 picture: true,
             },
             Action::CityCamera { at: city::At::Tab(1), step: city::CameraStep::Reset },
+            Action::CityOpen { at: city::At::Tab(1), id: "src/a.rs".into(), folder: false },
             Action::BugPress { at: [0.5, 0.5] },
             Action::BugDrag { to: [0.5, 0.5] },
             Action::BugRelease { at: [0.5, 0.5] },
@@ -13472,6 +13485,7 @@ mod tests {
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::LinkOpen { .. } => Some(crate::term_links::USERS_ALONE),
                     Action::CityCamera { .. } => Some(city::USERS_ALONE),
+                    Action::CityOpen { .. } => Some(city::OPEN_USERS),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),
@@ -21238,6 +21252,7 @@ mod tests {
                     Action::PrOpen { .. } => Some(crate::prs::USERS_ALONE),
                     Action::LinkOpen { .. } => Some(crate::term_links::USERS_ALONE),
                     Action::CityCamera { .. } => Some(city::USERS_ALONE),
+                    Action::CityOpen { .. } => Some(city::OPEN_USERS),
                     Action::SetPrs { .. } if origin == Origin::Socket => Some("only ottospace reads pull requests"),
                     Action::SetHeads { .. } if origin == Origin::Socket => Some("only ottospace reads the checkouts"),
                     Action::SessionWork { .. } if origin == Origin::Socket => Some("only ottospace reads sessions"),

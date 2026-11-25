@@ -1766,6 +1766,9 @@ nearest folder's with a named colour (`city_folder_colors`, over built-in ones: 
 name alone; a file in the root is grey. So `crates/a/tests/x.rs` is a test's colour, and adding
 a file or a folder changes no other building's colour. A lit building keeps its task's colour.
 
+- A double-click on a building opens its file in a viewer (as Go to does), on a district its
+  folder in a terminal (as a Repos row does), in the tab or pane the city is in. Only the
+  user's own double-click: a client's opens nothing.
 - The file an agent reads or edits now is tinted in its task's colour (in a task's space, that
   task's agent; elsewhere every task working in that checkout, as the Repos dots count them): while
   the call runs, and after it while the agent still works and has run no other call. A shell

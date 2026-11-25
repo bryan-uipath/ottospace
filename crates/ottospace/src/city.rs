@@ -1548,8 +1548,8 @@ impl Workspace {
             div().size_full().child(lattice).child(picture).into_any_element()
         };
         // The user's pointer moves its camera: a middle drag pans, a left drag past a click
-        // turns it, the wheel zooms. A moved one has a quiet way back at its corner (a double
-        // click is kept for going into a file).
+        // turns it, the wheel zooms. A moved one has a quiet way back at its corner. A double
+        // click opens the file or folder under it.
         let id = match floor {
             Floor::Main => "tab".to_string(),
             Floor::Pane(id) => id.to_string(),
@@ -1644,7 +1644,8 @@ impl Workspace {
     }
 
     /// A press on a city: over the hints, theirs. A middle press grabs it to pan; a left press is
-    /// a click (the pane takes focus) until it moves past `CLICK_SLOP`.
+    /// a click (the pane takes focus) until it moves past `CLICK_SLOP`; a second one, a
+    /// double-click, opens the file or folder under it (`Action::CityOpen`).
     fn city_press(&mut self, floor: Floor, at: At, e: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         if self.input != Origin::User || self.over_hints(floor, e.position) || self.city_spin.is_some() {
             return;
@@ -1654,11 +1655,29 @@ impl Workspace {
         if !on {
             return;
         }
+        // A double-click opens what is under it: a building's file, a district's folder. On the
+        // ground, a press as any other.
+        let target = (e.button == MouseButton::Left && e.click_count == 2).then(|| self.city_target(floor, e.position));
+        if let Some((id, folder)) = target.flatten() {
+            cx.stop_propagation();
+            self.dispatch(Action::CityOpen { at, id, folder }, self.input, window, cx);
+            return;
+        }
         let moving = e.button == MouseButton::Middle;
         self.city_drag = Some(CityDrag { floor, at, button: e.button, from: e.position, last: e.position, moving });
         if moving {
             self.city_step(at, CameraStep::Grab, window, cx);
         }
+    }
+
+    /// The place under `at` in `floor`'s city, as drawn: its id and whether it is a folder. None
+    /// over the hints, the ground or no picture.
+    fn city_target(&self, floor: Floor, at: Point<Pixels>) -> Option<(String, bool)> {
+        let drawn = self.city_drawn.borrow();
+        let block = drawn.under(floor, at, self.home.borrow().hints_at(floor))?;
+        let made = drawn.picture(drawn.places.get(&floor)?)?;
+        let place = made.plan.places.get(made.scene.blocks.get(block)?.place?)?;
+        Some((place.id.clone(), place.group))
     }
 
     /// The pointer moved with a city's drag held: a left drag turns the camera (past a click),

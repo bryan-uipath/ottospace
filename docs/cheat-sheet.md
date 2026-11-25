@@ -57,6 +57,7 @@ ottospace            # opens on the Repos list
 | Zoomed out: place a tile, tidy | Drag a tile; T (or Tidy) puts them all back on the grid |
 | See a checkout as a 3D city, the file its agents are at lit (`code_city` flag) | An empty tab or pane of a task, a workspace with a default worktree, or a repository's tab |
 | Name a building or district of the city | Point at it |
+| Open a building's file (viewer) or a district's folder (terminal) | Double-click it |
 | Move the city's camera | Middle drag (wheel held) pans, wheel zooms, left drag turns; trackpad: scroll pans, ⌥ scroll turns, ⌘ scroll zooms. Esc mid-drag puts it back; Reset view (its corner) brings back the overseeing view |
 | Save the tab into its workspace, else as a new one | ⌘⇧S |
 | Fill the whole display, over the menu bar and Dock | ⌃⌘F, the green button, or the expand button at the top right (again to restore) |
