@@ -1596,6 +1596,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `terminal_tasks` | Experimental | off | Terminal sessions as tasks: A live Claude Code or Codex you started in a terminal is listed with the tasks, read-only, until it ends |
 | `zoom_out` | Experimental | off | Zoom out (⌘⇧\\): Every tab of the workspace on show at once, as tiles on a grid |
 | `decision_sources` | Experimental | off | Decisions from any source: Agents and routines file decisions over the socket (Slack, Jira, a session): they wait to be sorted |
+| `city_live_layer` | Experimental | off | Code city on a live layer: The code city drawn straight to a layer of its own under the window's content, a new picture each display refresh (with code_city) |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,

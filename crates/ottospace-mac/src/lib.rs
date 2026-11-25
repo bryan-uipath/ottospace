@@ -11,6 +11,7 @@ pub mod hotkey;
 pub mod icon;
 pub mod image;
 pub mod input;
+pub mod live_layer;
 pub mod locale;
 pub mod magnify;
 pub mod meeting;

@@ -2026,9 +2026,16 @@ export interface CitySpun {
   over_33: number;
   /** Frames that showed the picture the frame before showed. */
   repeats: number;
+  /** A step's picture from its place asking to it shown: painted, or presented on the live layer. */
   wait_p50: number;
   wait_p95: number;
+  wait_p99: number;
   wait_max: number;
+  /** Each picture's render on its thread (ms). */
+  render_p50: number;
+  render_p95: number;
+  /** Drawn on the live layer (`city_live_layer`), not painted as an image. */
+  live: boolean;
   boxes: number;
 }
 

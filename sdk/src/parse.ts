@@ -2593,7 +2593,11 @@ function citySpun(value: unknown, at: string): CitySpun {
     repeats: n("repeats"),
     wait_p50: n("wait_p50"),
     wait_p95: n("wait_p95"),
+    wait_p99: n("wait_p99"),
     wait_max: n("wait_max"),
+    render_p50: n("render_p50"),
+    render_p95: n("render_p95"),
+    live: bool(o.live, `${at}.live`),
     boxes: n("boxes"),
   };
 }

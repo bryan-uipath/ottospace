@@ -250,9 +250,10 @@ Design note: `docs/ai/attention/plan.md`.
     task has), `rect`, `cone` (it shines on a building), `fan` `[k, n]`, `hovered`, `pulsing` (a call of it runs), `subagents` (the sub-agents it runs)), `glimmer` (the reads' flashes, searches' sweeps and
     found files' lights playing now: `flash`, `sweep`, `found`, counts), `spin` (`running`, and the last
     spin's `result`: `steps`, `done`, `frames`, each frame's time from the one before as `mean`, `p50`,
-    `p95`, `p99`, `max`, `over_16`, `over_33` (ms), `repeats` (frames that showed the picture the
-    frame before did), a new picture's wait from made to painted `wait_p50`, `wait_p95`, `wait_max`,
-    `boxes`). `counts.city_reads`: the reads, a city on show or not;
+    `p95`, `p99`, `max`, `over_16`, `over_33` (ms), `repeats` (frames with no new picture since the
+    frame before: no new image painted, or with `city_live_layer` no present on the live layer), a
+    step's picture from its place asking to it shown (painted, or presented) `wait_p50`, `wait_p95`,
+    `wait_p99`, `wait_max`, each picture's render `render_p50`, `render_p95`, `live`, `boxes`). `counts.city_reads`: the reads, a city on show or not;
     `counts.city_beam_frames`: the frames the hovered beam's fade asked for (none under Reduce Motion);
     `counts.city_fade_frames`: the frames a first picture's fade-in over the lattice asked for, and
     `counts.city_rise_frames` those its rise painted (none at rest, none under Reduce Motion);
@@ -413,7 +414,8 @@ Design note: `docs/ai/attention/plan.md`.
   `scripts/bench`; not a required check: whoever merges a red run says in the pull request whether
   the regression is real and accepted. Nightly and by hand on `main`: the JSON alone, for trends.
   With the label `pr-bench-large` as well, it also spins the code city of 50,000 to 600,000 made-up
-  files (`--city-large`).
+  files (`--city-large`). With `pr-bench-release`, both sides are built in release (`--release`), as the app
+  ships; its spins also hold the live layer (`city_live_layer`) to a few repeated frames at 9,500 files.
 - `.github/workflows/duped.yml`, on pull requests (not docs-only ones), on `ubuntu-latest`:
   `duped check --base origin/<base>` (a merge group: its `base_sha`; the release binary, pinned by version and checksum) fails on an
   added helper identical to one already there, or an identical file of 10 lines or more. A deliberate

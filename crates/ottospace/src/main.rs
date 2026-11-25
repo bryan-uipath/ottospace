@@ -9930,11 +9930,15 @@ impl Render for Workspace {
         // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
         let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
+        // The city's live layers under this window (`city_live_layer`): the background is painted
+        // round them, so they show through; with none, as one fill.
+        let holes = self.city_live_holes();
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(theme::BACKGROUND))
+            .when(holes.is_empty(), |root| root.bg(rgb(theme::BACKGROUND)))
+            .when(!holes.is_empty(), |root| root.child(city::background_around(holes)))
             .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
             .capture_any_mouse_down(cx.listener(Self::overlay_press))

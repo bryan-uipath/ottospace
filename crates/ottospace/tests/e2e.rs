@@ -18948,6 +18948,41 @@ fn typing_is_timed_from_key_to_painted_echo() {
     });
     assert!(stopped["keys"].as_u64().unwrap() < 250, "{stopped}");
     assert_eq!(panes(&otto), before);
+
+/// With `city_live_layer` the city is drawn on a layer of its own under the window: a spin counts
+/// that layer's presents, as `live`, and puts the camera back.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_live_layer_spins_the_city_and_counts_its_presents() {
+    let root = support::temp(&format!("ottospace-e2e-city-live-{}", std::process::id()));
+    let app = root.join("repos/app");
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q"]);
+    for (file, bytes) in [("src/main.rs", 900), ("src/lib.rs", 4000), ("docs/a.md", 300), ("README.md", 2000)] {
+        std::fs::create_dir_all(app.join(file).parent().unwrap()).unwrap();
+        std::fs::write(app.join(file), "x".repeat(bytes)).unwrap();
+    }
+    let app = app.canonicalize().unwrap();
+    let home = user_folder("city-live", &json!({"repos": [app], "restore_layout": false}).to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", "code_city,city_live_layer"),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ];
+    let otto = Otto::launch_with("city-live", &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    otto.wait_for("a city", |o| Some(city(o)).filter(|c| !c["picture"].is_null()));
+    let before = city(&otto)["view"].clone();
+    otto.call(json!({"cmd": "city_spin"}));
+    let spun = otto.wait_for("the spin", |o| Some(city(o)["spin"]["result"].clone()).filter(|r| !r.is_null()));
+    assert_eq!((spun["done"].clone(), spun["live"].clone()), (json!(true), json!(true)), "{spun}");
+    assert!(spun["frames"].as_u64().unwrap() >= 200 && spun["render_p50"].as_f64().unwrap() > 0., "{spun}");
+    assert_eq!(city(&otto)["view"], before);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,
