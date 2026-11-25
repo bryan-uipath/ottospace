@@ -223,6 +223,10 @@ pub enum Event {
     Hook,
     /// A watched session's file says a message was sent there: its words stay in the file.
     MessageElsewhere,
+    /// A watched session's file says what the user wrote there: shown as a message of theirs.
+    UserText {
+        text: Text,
+    },
     /// A watched session's file is read again from its start: what was built from it goes.
     WatchFromStart,
 }
@@ -240,6 +244,8 @@ impl Event {
                 | Event::Compaction
                 | Event::Error { .. }
                 | Event::MessageElsewhere
+                | Event::UserText { .. }
+                | Event::Text { .. }
                 | Event::WatchFromStart
         )
     }
@@ -920,13 +926,21 @@ impl Transcript {
             Event::WatchFromStart => {}
             Event::Hook => self.activity.hook(at),
             Event::MessageElsewhere => {
-                // A new message there: its calls before it are over.
-                self.activity.settle(None, at);
-                self.activity.message(at);
-                self.settle();
+                self.message_there(at);
                 self.push(Entry::Notice(if self.past { Notice::MessageBefore } else { Notice::MessageElsewhere }));
             }
+            Event::UserText { text } => {
+                self.message_there(at);
+                self.push(Entry::User { text });
+            }
         }
+    }
+
+    /// A new message in a watched session's file: its calls before it are over.
+    fn message_there(&mut self, at: u64) {
+        self.activity.settle(None, at);
+        self.activity.message(at);
+        self.settle();
     }
 
     /// Calls still running when their turn ends never finished: shown as failed.
@@ -1219,6 +1233,10 @@ mod tests {
         assert!(model(&w) == Some(1) && lit(&w));
         w.fold(Event::MessageElsewhere, 3);
         assert!(!lit(&w), "a new message there");
+        w.fold(call("d"), 4);
+        w.fold(Event::UserText { text: Text::new("made-up words") }, 5);
+        assert!(!lit(&w), "its words too");
+        assert!(matches!(&w.items.back().unwrap().entry, Entry::User { text } if text.text() == "made-up words"));
         w.fold(call("c"), 4);
         w.started(true);
         assert!(!lit(&w), "taken over here");

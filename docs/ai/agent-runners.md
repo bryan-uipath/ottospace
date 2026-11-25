@@ -160,7 +160,8 @@ The cases:
 - **ottospace quit and its agent ended.** Every quit ends its agents first (`on_app_quit`): a
   native one's process group is killed (as Stop does), a terminal one is hung up on. On
   restart: not live. The drawer shows what the session's file has (`Model::watch_target`, a
-  task's past: calls, diff cards, a line per message, never its words; `Transcript.past`, not
+  task's past: calls, diff cards, the user's messages and the model's replies as a chat shows
+  them (`Cursor::with_words`); `Transcript.past`, not
   read-only), the composer offers Resume, and a message goes on with `--resume <id>`.
 - **ottospace died (crash, `kill -9`) and its agent lives on.** Its stdin closed with us: the
   CLI ends by itself, at once when idle, after its turn otherwise. While it lives it holds the

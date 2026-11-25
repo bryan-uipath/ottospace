@@ -218,6 +218,13 @@ fn head(path: &Path) -> Option<Head> {
     })
 }
 
+/// A message's text: a string, or its `text` items one after another.
+fn text_of(value: &Value) -> String {
+    let items = value.as_array().map(Vec::as_slice).unwrap_or_default();
+    let texts = items.iter().filter(|item| item["type"] == "text").filter_map(|item| item["text"].as_str());
+    value.as_str().map_or_else(|| texts.collect::<Vec<_>>().join("\n\n"), str::to_string)
+}
+
 fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
     let at = jsonl::time_of(record);
     let mut emit = |what| events.push(Event { at, what });
@@ -232,7 +239,14 @@ fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
             }
         }
         ("compacted", _) => emit(What::Compaction { tokens_after: None }),
-        ("event_msg", "user_message") => emit(What::UserMessage),
+        ("event_msg", "user_message") => {
+            emit(cursor.said(true, || text_of(&payload["message"])).unwrap_or(What::UserMessage))
+        }
+        ("event_msg", "agent_message") => {
+            if let Some(said) = cursor.said(false, || text_of(&payload["message"])) {
+                emit(said);
+            }
+        }
         ("event_msg", "token_count") => {
             // `info` is null on a record that only carries rate limits.
             let info = &payload["info"];
@@ -261,7 +275,9 @@ fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
         ("event_msg", "item_completed") => {
             let item = &payload["item"];
             match item["type"].as_str() {
-                Some("UserMessage") => emit(What::UserMessage),
+                Some("UserMessage") => {
+                    emit(cursor.said(true, || text_of(&item["content"])).unwrap_or(What::UserMessage))
+                }
                 // No call id here: the command is the open `exec` call's, if exactly one is open.
                 Some("CommandExecution") => {
                     let only = (cursor.open.len() == 1).then(|| cursor.open.first().cloned()).flatten();
@@ -464,6 +480,32 @@ mod tests {
 
     fn record(kind: &str, payload: Value) -> Value {
         json!({"timestamp": "2026-11-12T09:00:00.000Z", "type": kind, "payload": payload})
+    }
+
+    /// The words of a message and a reply only for the watch view's cursor.
+    #[test]
+    fn words_only_for_a_cursor_that_asks() {
+        let said = [
+            record("event_msg", json!({"type": "user_message", "message": "secret prompt"})),
+            record("event_msg", json!({"type": "agent_message", "message": "secret reply"})),
+        ];
+        let read = |mut cursor: Cursor| {
+            let mut events = Vec::new();
+            said.iter().for_each(|r| record_events(r, &mut cursor, &mut events));
+            events.into_iter().map(|e| e.what).collect::<Vec<_>>()
+        };
+        assert_eq!(read(Cursor::default()), [What::UserMessage]);
+        let text = ottospace_core::transcript::Text::new;
+        let words = [
+            What::Words { user: true, text: text("secret prompt") },
+            What::Words { user: false, text: text("secret reply") },
+        ];
+        assert_eq!(read(Cursor::with_words()), words);
+        // The current format (0.166): the prompt in `item_completed`'s `UserMessage` content.
+        let item = json!({"type": "UserMessage", "content": [{"type": "text", "text": "secret prompt"}]});
+        let (mut cursor, mut events) = (Cursor::with_words(), Vec::new());
+        record_events(&record("event_msg", json!({"type": "item_completed", "item": item})), &mut cursor, &mut events);
+        assert_eq!(events.into_iter().map(|e| e.what).collect::<Vec<_>>(), [words[0].clone()]);
     }
 
     fn exec(call: &str) -> Value {

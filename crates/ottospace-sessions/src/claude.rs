@@ -366,8 +366,23 @@ fn user(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
     // What is left is a prompt, unless Claude Code wrote it itself (`isMeta`, a compaction summary).
     let written = content.is_string() || !blocks.is_empty();
     if results.is_empty() && written && record["isMeta"] != true && record["isCompactSummary"] != true {
-        emit(What::UserMessage);
+        let typed = || content.as_str().map(str::to_string).unwrap_or_else(|| texts(blocks));
+        // Claude Code's own records as a user's (a slash command, its output, bash mode, an
+        // interrupt): a message, never words the user wrote.
+        let own = |text: &str| OWN.iter().any(|mark| text.trim_start().starts_with(mark));
+        let said =
+            cursor.said(true, typed).filter(|what| !matches!(what, What::Words { text, .. } if own(text.text())));
+        emit(said.unwrap_or(What::UserMessage));
     }
+}
+
+/// How Claude Code's own records written as the user's begin.
+const OWN: [&str; 4] = ["<command-", "<local-command-", "<bash-", "[Request interrupted"];
+
+/// The text blocks of a message's content, one after another: not a picture, call or thinking.
+fn texts(blocks: &[Value]) -> String {
+    let text = blocks.iter().filter(|b| b["type"] == "text").filter_map(|b| b["text"].as_str());
+    text.collect::<Vec<_>>().join("\n\n")
 }
 
 fn assistant(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
@@ -404,7 +419,14 @@ fn assistant(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
             emit(What::Error { kind: "refusal".to_string() });
         }
     }
-    for block in message["content"].as_array().map(Vec::as_slice).unwrap_or_default() {
+    let blocks = message["content"].as_array().map(Vec::as_slice).unwrap_or_default();
+    for block in blocks {
+        // Each text block where it is, as a live chat shows it: a reply, a call, a reply.
+        if block["type"] == "text"
+            && let Some(said) = cursor.said(false, || block["text"].as_str().unwrap_or_default().to_string())
+        {
+            emit(said);
+        }
         let (Some("tool_use"), Some(id), Some(tool)) =
             (block["type"].as_str(), id_of(&block["id"]), block["name"].as_str())
         else {
@@ -628,6 +650,58 @@ mod tests {
         };
         assert_eq!(read(Cursor::default()), (None, None));
         assert_eq!(read(Cursor::with_edits()), (Some("echo secret".into()), Some("secret out".into())));
+    }
+
+    /// What the user and the model wrote leaves the crate only for the watch view's cursor; a
+    /// thinking block never does.
+    #[test]
+    fn words_only_for_a_cursor_that_asks() {
+        let prompt = serde_json::json!({ "type": "user", "message": { "content": "secret prompt" } });
+        let blocks = serde_json::json!([{ "type": "thinking", "thinking": "secret thought" },
+            { "type": "text", "text": "secret reply" }]);
+        let reply = serde_json::json!({ "type": "assistant", "message": { "id": "m", "content": blocks } });
+        let read = |mut cursor: Cursor| {
+            let mut events = Vec::new();
+            record_events(&prompt, false, &mut cursor, &mut events);
+            record_events(&reply, false, &mut cursor, &mut events);
+            let words = events.iter().filter_map(|e| match &e.what {
+                What::Words { user, text } => Some((*user, text.text().to_string())),
+                _ => None,
+            });
+            let messages = events.iter().filter(|e| e.what == What::UserMessage).count();
+            (words.collect::<Vec<_>>(), messages)
+        };
+        assert_eq!(read(Cursor::with_edits()), (vec![], 1));
+        let words = vec![(true, "secret prompt".to_string()), (false, "secret reply".to_string())];
+        assert_eq!(read(Cursor::with_words()), (words, 0), "in place of the marker; no thought");
+        // Claude Code's own records written as the user's: a message, never the user's words.
+        for own in [
+            "<command-name>/model</command-name>",
+            "<local-command-stdout>Set</local-command-stdout>",
+            "<bash-input>ls</bash-input>",
+            "[Request interrupted by user]",
+        ] {
+            let record = serde_json::json!({ "type": "user", "message": { "content": own } });
+            let (mut cursor, mut events) = (Cursor::with_words(), Vec::new());
+            record_events(&record, false, &mut cursor, &mut events);
+            assert_eq!(events.into_iter().map(|e| e.what).collect::<Vec<_>>(), [What::UserMessage], "{own}");
+        }
+        // A reply, a call, a reply: in that order, as a live chat shows them.
+        let blocks = serde_json::json!([{ "type": "text", "text": "before" },
+            { "type": "tool_use", "id": "t", "name": "Read", "input": { "file_path": "/w/a.rs" } },
+            { "type": "text", "text": "after" }]);
+        let record = serde_json::json!({ "type": "assistant", "message": { "id": "m2", "content": blocks } });
+        let (mut cursor, mut events) = (Cursor::with_words(), Vec::new());
+        record_events(&record, false, &mut cursor, &mut events);
+        let order: Vec<&str> = events
+            .iter()
+            .filter_map(|e| match &e.what {
+                What::Words { text, .. } => Some(text.text()),
+                What::ToolStart { .. } => Some("call"),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(order, ["before", "call", "after"]);
     }
 
     #[test]

@@ -217,7 +217,7 @@ struct Follow {
 
 impl Follow {
     fn new(id: String, cwd: String) -> Self {
-        let cursor = ottospace_sessions::Cursor::with_edits();
+        let cursor = ottospace_sessions::Cursor::with_words();
         Self { id, cwd: cwd.into(), session: None, cursor, begun: false }
     }
 
@@ -299,11 +299,14 @@ impl Drop for Watch {
     }
 }
 
-/// What a session file's event shows in a watched transcript: labels only, never text.
+/// What a session file's event shows in a watched transcript: as a live chat shows it, the
+/// user's and the model's words too. Untrusted text, drawn only: never in the state or a log.
 fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
     use ottospace_sessions::What;
     match &event.what {
         What::UserMessage => vec![Event::MessageElsewhere],
+        What::Words { user: true, text } => vec![Event::UserText { text: text.clone() }],
+        What::Words { user: false, text } => vec![Event::Text { text: text.clone() }],
         What::ModelStep { model, usage, window } => {
             let context = usage.map(|usage| usage.input.saturating_add(usage.output));
             let usage = Event::Usage { context, window: *window, cost_micro_usd: None };
@@ -1000,7 +1003,7 @@ impl Workspace {
             .border_color(rgb(theme::BORDER))
             .text_xs()
             .text_color(rgb(theme::MUTED))
-            .child(div().flex_1().child("Another terminal runs it. Read-only: its calls and edits, never its words."))
+            .child(div().flex_1().child("Read-only: another terminal runs it. Nothing is sent from here."))
             .child(take)
     }
 
@@ -2295,6 +2298,8 @@ impl Workspace {
                 ("Write the next message", if chat.armed { "esc again stops" } else { "esc esc stops" })
             }
             _ if chat.queued.is_some() => ("Starting the agent…", "your message goes once it runs"),
+            // Another terminal writes it: nothing is typed here.
+            _ if chat.transcript.watched && !chat.transcript.live => ("", "Read-only: another terminal runs it"),
             // Sending resumes the session.
             _ if !chat.transcript.live && self.model.shown_draft_chat().is_some() => ("Resume…", ""),
             _ if !chat.transcript.live => ("The agent ended", "Read-only here"),
@@ -2778,7 +2783,8 @@ mod tests {
         let reader = ottospace_sessions::claude::Claude::new(vec![config.clone()]);
         let mut follow = Follow::new(id.into(), cwd.to_string_lossy().into_owned());
         let (events, more) = follow.step(&reader).unwrap();
-        assert!(matches!(events[..], [Event::WatchFromStart, Event::MessageElsewhere]) && !more, "{events:?}");
+        let said = Event::UserText { text: Text::new("made-up prompt") };
+        assert!(matches!(&events[..], [Event::WatchFromStart, first] if *first == said) && !more, "{events:?}");
         // Half a record: nothing yet. Its end: the call.
         let line = call(1);
         let (half, rest) = line.split_at(line.len() / 2);
@@ -2793,6 +2799,12 @@ mod tests {
         std::fs::rename(&aside, &file).unwrap();
         append(&file, &format!("{}\n", call(2)));
         assert_eq!(calls(&follow.step(&reader).unwrap().0), 1, "only the new call");
+        // A reply: its words, as a chat shows them.
+        let message = serde_json::json!({"id": "msg_r", "content": [{"type": "text", "text": "made-up reply"}]});
+        append(&file, &format!("{}\n", serde_json::json!({"type": "assistant", "message": message})));
+        let reply = Event::Text { text: Text::new("made-up reply") };
+        let events = follow.step(&reader).unwrap().0;
+        assert_eq!(events.into_iter().filter(|e| matches!(e, Event::Text { .. })).collect::<Vec<_>>(), [reply]);
     }
 
     /// A first read that fails (its file moved since it was found) finds it again at the next
@@ -2811,7 +2823,7 @@ mod tests {
         follow.session = Some(ottospace_sessions::SessionRef { path: file.with_extension("gone"), ..found });
         assert!(follow.step(&reader).is_err());
         let (events, _) = follow.step(&reader).unwrap();
-        assert!(matches!(events[..], [Event::WatchFromStart, Event::MessageElsewhere]), "{events:?}");
+        assert!(matches!(events[..], [Event::WatchFromStart, Event::UserText { .. }]), "{events:?}");
     }
 
     /// A large file (the owner's was 45 MB) is read whole in budget-sized looks, then followed.

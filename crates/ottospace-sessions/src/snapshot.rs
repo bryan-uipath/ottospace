@@ -75,7 +75,7 @@ impl Snapshot {
             self.last_event = Some(self.last_event.unwrap_or(0).max(at));
         }
         match &event.what {
-            What::UserMessage => {
+            What::UserMessage | What::Words { user: true, .. } => {
                 *self.counts.entry(Station::You).or_default() += 1;
                 self.errors = 0;
                 // A new turn: a call with no end by now was interrupted and will never get one.
@@ -150,7 +150,7 @@ impl Snapshot {
                 }
             }
             What::ModelChange { to, .. } => self.model = Some(to.clone()),
-            What::Cwd { .. } => {}
+            What::Cwd { .. } | What::Words { user: false, .. } => {}
         }
     }
 

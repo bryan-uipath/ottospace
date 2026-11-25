@@ -15437,7 +15437,8 @@ fn real_cli_native_smoke() {
 }
 
 /// A session another process holds is watched from its file: the header says so, and each
-/// record that lands shows, an edit with its card. The state has the card's counts only.
+/// record that lands shows, its prompt as the user's message and an edit with its card. The state
+/// has shapes and counts only.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_watched_session_says_so_and_shows_its_edits_as_they_land() {
@@ -15473,6 +15474,9 @@ fn a_watched_session_says_so_and_shows_its_edits_as_they_land() {
         (chat["transcript"]["watched"] == true && chat["transcript"]["entries"].as_array()?.len() == 1).then_some(chat)
     });
     assert_eq!(first["transcript"]["live"], false, "{first}");
+    // The prompt as the user's message, by its shape: its words drawn, never in the state.
+    assert_eq!(first["transcript"]["entries"][0]["kind"], "user", "{first}");
+    assert!(!otto.call(json!({"cmd": "state"})).to_string().contains("made-up prompt"));
     otto.control("talk:talk-watching");
 
     // A record lands: the edit's call, with its card.
