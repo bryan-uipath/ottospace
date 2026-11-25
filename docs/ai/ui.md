@@ -26,7 +26,7 @@ sneak label and its rect in the state), the tooltip and the click.
 | `button` | an action | `Primary(label)`: what the pane is for, the accent fill. `Secondary(label)`: outlined and filled, beside a primary. `Icon(svg)`: outlined, reads as a button (the rails' collapse arrows). `Ghost(Face)`: no outline at rest, a header's small words (`Stop`, `Resume`) and icons (`+`). `Danger(label)`: a destructive act beside others, red words, no fill. `DangerPrimary(label)`: what a dialog that exists to destroy is for, red-filled |
 | `pill` | a short label in a fill | `Key { lit, small }`: a key cap, lit while held. `Mode(accent)`: the status bar's mode |
 | `lifted` | a dialog over the panes (the new-task box) | none: a faint ring, a close and a deep shadow, a light along its top |
-| `well` | a field set into a `lifted` dialog | its edge's accent |
+| `well` | a field set into a `lifted` dialog | none: a quiet edge, as a dialog's `text_box` |
 | `picker` | a choice in the new-task box's edge (project, repository, agent) | its accent; `open` while its list shows; one line, cut with … |
 | `chip` | an attachment in the new-task box: a meeting, the workspace in front, a folder | an accent for its text, or none; the caller adds its × |
 | `list_row` | a row of a list | `Normal`: a sidebar row, full colour. `Dim`: a row under a heading (a checkout), muted until hover or the keys |

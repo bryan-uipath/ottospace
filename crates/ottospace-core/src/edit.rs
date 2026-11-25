@@ -21,6 +21,9 @@ pub enum Motion {
     WordRight,
     Start,
     End,
+    /// To byte `at` (snapped back to a character): the shell's ↑ or ↓ in a field of several lines,
+    /// to the row it drew above or below.
+    At(usize),
 }
 
 /// One change to a field.
@@ -298,6 +301,7 @@ impl Field {
             }
             Motion::Start => 0,
             Motion::End => self.text.len(),
+            Motion::At(at) => self.snap(at),
         }
     }
 
@@ -563,9 +567,9 @@ pub(crate) mod fuzz {
         }
 
         pub(crate) fn edit(&mut self, len: usize) -> Edit {
-            let to = [Left, Right, WordLeft, WordRight, Start, End][self.below(6)];
             // Bytes and UTF-16 offsets from anywhere, inside a character and past the end too.
             let at = self.below(len + 3);
+            let to = [Left, Right, WordLeft, WordRight, Start, End, At(at)][self.below(7)];
             match self.below(16) {
                 0 | 1 => Edit::Insert(self.text()),
                 2 => Edit::Paste(self.text()),
@@ -777,6 +781,18 @@ pub(crate) mod tests {
         assert_eq!(f.selected(), "two three\nfour");
         f.apply(Edit::Click { at: 99, count: 3, shift: false });
         assert_eq!(f.selected(), "four");
+    }
+
+    #[test]
+    fn a_move_to_a_byte_lands_on_a_character() {
+        let mut f = Field::of_lines("one\nt\u{e9}a");
+        f.apply(Edit::Move { to: At(2), select: false });
+        assert_eq!(f.cursor(), 2);
+        // Inside é: back to its start. Past the end: the end.
+        f.apply(Edit::Move { to: At(6), select: true });
+        assert_eq!((f.cursor(), f.selected()), (5, "e\nt"));
+        f.apply(Edit::Move { to: At(99), select: false });
+        assert_eq!(f.cursor(), f.text().len());
     }
 
     #[test]
