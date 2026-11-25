@@ -1353,7 +1353,9 @@ impl Workspace {
             },
             // The hints as this frame laid them out.
             move |_, drawn: Shared, window, cx| {
-                paint(&drawn, floor, home.borrow().hints_at(floor), &floating, &glimpses, window, cx)
+                with_asked_camera(&drawn, floor, || {
+                    paint(&drawn, floor, home.borrow().hints_at(floor), &floating, &glimpses, window, cx)
+                })
             },
         );
         // A press on an agent's icon: the user's own goes to its task (`Model::city_agent_click`).
@@ -2055,6 +2057,28 @@ fn area(floor: Bounds<Pixels>, hints: Bounds<Pixels>) -> Bounds<Pixels> {
     if hints.size.width > px(0.) && tall { below } else { floor }
 }
 
+/// A live picture is on its layer as soon as made, before GPUI's next frame: `paint` draws over
+/// it with the camera this frame asked for, which the layer shows at the same refresh. Put back
+/// after: the picture may be another place's too, and its hit tests are its own camera's.
+fn with_asked_camera(drawn: &Shared, floor: Floor, paint: impl FnOnce()) {
+    let swap = |drawn: &mut Drawn| {
+        let place = drawn.places.get(&floor)?;
+        let view = place.asked.as_ref()?.view();
+        let key = drawn.picture(place).filter(|made| made.live)?.key.clone();
+        let made = drawn.pictures.get_mut(&key)?;
+        let (fit, own) = (made.scene.fit?, made.scene.camera?);
+        made.scene.camera = Some(fit.camera(&view, own.aspect));
+        Some((key, own))
+    };
+    let swapped = swap(&mut drawn.borrow_mut());
+    paint();
+    if let Some((key, own)) = swapped {
+        if let Some(made) = drawn.borrow_mut().pictures.get_mut(&key) {
+            made.scene.camera = Some(own);
+        }
+    }
+}
+
 /// The picture made for this folder, as large as its area (a stale one stretched until the new
 /// one comes); a backing behind the hints, so they read over any building; and the root's
 /// folders' names, none behind the hints.
@@ -2078,16 +2102,6 @@ fn paint(
     let mut glimmer = std::mem::take(&mut place.glimmer);
     let (waited, fade, first_ms, laid) = (place.waited, place.fade, place.first_ms, place.since);
     let drawn = &mut *drawn;
-    // A live picture is on its layer as soon as made, before GPUI's next frame: what GPUI draws
-    // over it takes the camera this frame asked for, which the layer shows at the same refresh.
-    let of = drawn.places.get(&floor);
-    let asked = of.and_then(|place| place.asked.as_ref()).map(Key::view);
-    let key = of.and_then(|place| drawn.picture(place)).map(|made| made.key.clone());
-    if let Some(made) = key.and_then(|key| drawn.pictures.get_mut(&key)).filter(|made| made.live) {
-        if let (Some(view), Some(fit), Some(camera)) = (asked, made.scene.fit, made.scene.camera) {
-            made.scene.camera = Some(fit.camera(&view, camera.aspect));
-        }
-    }
     let made = drawn.places.get(&floor).and_then(|place| drawn.picture(place));
     // A frame of the rise rendered too slowly: no rise for this city, its standing picture fades in.
     // The GPU's time: the layout (made once, before the first frame) and names (none while it

@@ -19059,10 +19059,10 @@ fn a_live_layer_spins_the_city_and_counts_its_presents() {
 }
 
 /// On a live layer the city's picture shows as soon as made, before GPUI's next frame: the hovered
-/// beam GPUI draws over it moves with a turn in the very frame that asks for its picture.
+/// beam GPUI draws over it moves with a turn in the frame that asks, where the turn's picture has it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_live_layers_hovered_beam_turns_with_the_frame_that_asks() {
+fn a_live_layers_hovered_beam_turns_with_its_picture() {
     let (otto, root, home) = city_shown("city-live-beam", "code_city,city_live_layer");
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
     let numbers = |v: &Value| v.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect::<Vec<_>>();
@@ -19073,8 +19073,16 @@ fn a_live_layers_hovered_beam_turns_with_the_frame_that_asks() {
     // ⌥ and a trackpad's scroll turn the camera; the reply's frame is the one that asks.
     let turn = json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dx": 2, "dy": 0, "precise": true,
         "modifiers": ["alt"], "as": "user"});
-    let turned = otto.call(turn)["city"]["hovered"]["beam"].clone();
+    let reply = otto.call(turn)["city"].clone();
+    let turned = reply["hovered"]["beam"].clone();
     assert!(!turned.is_null() && turned != beam, "the beam moved with the turn: {beam} then {turned}");
+    // Where the turn's own picture, once made, puts it: the same, so it turned the layer's way.
+    let renders = reply["renders"].as_u64().unwrap();
+    let made = otto.wait_for("the turn's picture", |o| {
+        Some(city(o)).filter(|c| c["renders"].as_u64() > Some(renders) && !c["hovered"]["beam"].is_null())
+    });
+    let (a, b) = (numbers(&turned), numbers(&made["hovered"]["beam"]));
+    assert!(a.iter().zip(&b).all(|(a, b)| (a - b).abs() < 0.5), "drawn {a:?}, its picture's {b:?}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
