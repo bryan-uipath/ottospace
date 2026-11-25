@@ -63,8 +63,6 @@ const EASE: Duration = Duration::from_millis(200);
 const TIMEOUT: Duration = Duration::from_secs(60);
 const MOST_BYTES: u64 = 64 << 20;
 const MOST_FILES: usize = 600_000;
-/// The lines and the log: their own time, after the list's.
-const COUNT_TIMEOUT: Duration = Duration::from_secs(10);
 /// A file is read for its lines no further than the most a file weighs (`atlas::MOST`), nor than
 /// this many bytes; a NUL in its first `BINARY` bytes makes it binary.
 const MOST_LINES: u64 = atlas::MOST;
@@ -73,6 +71,8 @@ const BINARY: usize = 8000;
 /// A city's commits: a year's, at most this many (the owner's city's cap), said in this much.
 const COMMITS: &str = "20000";
 const LOG_BYTES: u64 = 32 << 20;
+/// What git's count of a commit's lines may say: a `ls-tree -l` line is ~60 bytes and a name.
+const COUNT_BYTES: u64 = 2 * MOST_BYTES;
 const KEEP_LOG: Duration = Duration::from_secs(3600);
 /// git's empty tree (SHA-1): lines from it to a commit are the commit's lines.
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
@@ -258,26 +258,27 @@ fn read(
     roots: &[String],
     exclude: &[(String, Vec<String>)],
     kept: &mut Kept,
-    gone: &dyn Fn() -> bool,
+    gone: &(dyn Fn() -> bool + Sync),
 ) -> Option<Atlas> {
     let rule = city_filter::Exclude::new(&exclude_for(dir, exclude));
     let keep = |name: &str| !rule.excludes(name);
     let limits = (MOST_FILES, MOST_BYTES, TIMEOUT);
     let (files, _) = checkout_files(dir, roots, limits, true, &rule.git_patterns(), &keep, gone)?;
     // The list has its limit; the lines and the log another as long.
-    let late = Instant::now() + COUNT_TIMEOUT;
+    let late = Instant::now() + TIMEOUT;
     let top = dir.canonicalize().ok().filter(|_| !files.is_empty())?;
-    let head = head(&top, late);
+    let head = head(&top, late, gone);
     // Kept for its commit, an hour at most: a commit a year old falls out of the year.
     let kept_log = kept.log.as_ref().filter(|(was, _, at)| Some(was) == head.as_ref() && at.elapsed() < KEEP_LOG);
     let kept_log = kept_log.map(|(_, commits, _)| commits.clone());
     // The log runs beside the lines' count: two gits at once, the first picture sooner.
     let (lined, log) = std::thread::scope(|scope| {
-        let log = kept_log.is_none().then(|| scope.spawn(|| commits(&top, late)));
-        let lined = count_lines(&top, files, head.as_ref(), kept, gone);
+        let log = kept_log.is_none().then(|| scope.spawn(|| commits(&top, head.as_deref(), late, gone)));
+        let lined = count_lines(&top, files, head.as_ref(), kept, late, gone);
         (lined, log.and_then(|log| log.join().ok()))
     });
-    let lined = lined?;
+    // Its place closed while git ran: no answer.
+    let lined = lined.filter(|_| !gone())?;
     let commits = match (kept_log, log) {
         (Some(commits), _) => commits,
         (None, log) => {
@@ -298,17 +299,18 @@ fn count_lines(
     files: Vec<(String, u64)>,
     head: Option<&String>,
     kept: &mut Kept,
+    late: Instant,
     gone: &dyn Fn() -> bool,
 ) -> Option<Vec<(String, u64)>> {
     // git counts the lines of what it tracks (quick: its own code, each blob once), with a limit
     // of its own; a file it does not know, or whose size is not the commit's, is read here.
     let known = kept.committed.as_ref().filter(|(was, _)| Some(was) == head).map(|(_, lines)| lines.clone());
     let committed = known.or_else(|| {
-        let lines = Arc::new(committed_lines(top, Instant::now() + COUNT_TIMEOUT)?);
-        kept.committed = head.cloned().map(|head| (head, lines.clone()));
+        let head = head?;
+        let lines = Arc::new(committed_lines(top, head, late, gone)?);
+        kept.committed = Some((head.clone(), lines.clone()));
         Some(lines)
     });
-    let late = Instant::now() + COUNT_TIMEOUT;
     let mut lined = Vec::with_capacity(files.len());
     let mut sized = HashMap::with_capacity(files.len());
     for (name, bytes) in files {
@@ -322,7 +324,7 @@ fn count_lines(
         let by_git = at.map(|(_, lines)| if *lines > 0 { lines + 1 } else { 0 });
         let count = by_git.unwrap_or_else(|| {
             let known = kept.lines.get(&name).filter(|(was, _)| *was == bytes).map(|(_, lines)| *lines);
-            let count = known.unwrap_or_else(|| lines(&top.join(&name)));
+            let count = known.unwrap_or_else(|| if bytes == 0 { 0 } else { lines(&top.join(&name)) });
             sized.insert(name.clone(), (bytes, count));
             count
         });
@@ -332,29 +334,35 @@ fn count_lines(
     Some(lined)
 }
 
-/// Each file of the commit checked out at `top`: its size in bytes and its lines, as git counts
+/// Each file of commit `head` at `top`: its size in bytes and its lines, as git counts
 /// them (`--numstat` from the empty tree, `ls-tree -l`); none for a file git calls binary (a NUL,
 /// or its attributes) or will not count. Nothing of the working tree is read (no filter runs).
 /// None if git fails (no commit yet, a SHA-256 repository) or is late.
-fn committed_lines(top: &Path, late: Instant) -> Option<HashMap<String, (u64, u64)>> {
+fn committed_lines(
+    top: &Path,
+    head: &str,
+    late: Instant,
+    gone: &dyn Fn() -> bool,
+) -> Option<HashMap<String, (u64, u64)>> {
     let git = |args: &[&str]| {
         let mut git = crate::child::git_read(top);
         git.args(args).env("GIT_NO_LAZY_FETCH", "1");
-        let said = crate::child::run(git, late.saturating_duration_since(Instant::now()), LOG_BYTES).ok()?;
+        let left = late.saturating_duration_since(Instant::now());
+        let said = crate::child::run_until(git, left, COUNT_BYTES, gone).ok()?;
         said.ok.then_some(said.out)
     };
     let diff = ["diff", "--numstat", "-z", "--no-renames", "--relative", "--no-ext-diff", "--no-textconv"];
-    let counts = atlas::numstat(&git(&[&diff[..], &[EMPTY_TREE, "HEAD", "--", "."]].concat())?);
-    let sizes = atlas::tree_sizes(&git(&["ls-tree", "-r", "-l", "-z", "HEAD", "--", "."])?);
+    let counts = atlas::numstat(&git(&[&diff[..], &[EMPTY_TREE, head, "--", "."]].concat())?);
+    let sizes = atlas::tree_sizes(&git(&["ls-tree", "-r", "-l", "-z", head, "--", "."])?);
     let both = counts.into_iter().filter_map(|(path, n)| Some((sizes.get(&path).copied()?, n?.0, path)));
     Some(both.map(|(size, lines, path)| (path, (size, lines))).collect())
 }
 
 /// The commit checked out at `top`, if any: what the commits read last are good for.
-fn head(top: &Path, late: Instant) -> Option<String> {
+fn head(top: &Path, late: Instant, gone: &dyn Fn() -> bool) -> Option<String> {
     let mut head = crate::child::git_read(top);
     head.args(["rev-parse", "--verify", "-q", "HEAD"]);
-    let said = crate::child::run(head, late.saturating_duration_since(Instant::now()), 256).ok()?;
+    let said = crate::child::run_until(head, late.saturating_duration_since(Instant::now()), 256, gone).ok()?;
     Some(said.out.trim().to_string()).filter(|head| said.ok && !head.is_empty())
 }
 
@@ -364,7 +372,7 @@ fn head(top: &Path, late: Instant) -> Option<String> {
 fn lines(path: &Path) -> u64 {
     use std::io::{BufRead, BufReader, Read};
     use std::os::unix::fs::OpenOptionsExt;
-    let open = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(path);
+    let open = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path);
     let Ok(file) = open else { return 0 };
     let mut file = BufReader::with_capacity(64 << 10, file.take(MOST_READ));
     match file.fill_buf() {
@@ -385,13 +393,18 @@ fn lines(path: &Path) -> u64 {
 /// read's limit (`late`) comes first: every building is then a stub. Paths are the checkout's
 /// own (a folder inside a larger repository: relative to it). Never fetches a missing object (a
 /// partial clone). With it, whether git said all (else its newest commits, cut at `LOG_BYTES`).
-fn commits(top: &Path, late: Instant) -> (HashMap<String, u32>, bool) {
+fn commits(top: &Path, head: Option<&str>, late: Instant, gone: &dyn Fn() -> bool) -> (HashMap<String, u32>, bool) {
+    let Some(head) = head else { return (HashMap::new(), false) };
     let mut log = crate::child::git_read(top);
     log.args(["log", "--since=12.months", "-n", COMMITS, "--no-renames", "--root", "--relative", "--name-only"]);
-    log.args(["-z", "--format=%x01", "--no-show-signature", "--no-color", "--", "."]);
+    log.args(["-z", "--format=%x01", "--no-show-signature", "--no-color", head, "--", "."]);
     log.env("GIT_NO_LAZY_FETCH", "1");
-    match crate::child::run(log, late.saturating_duration_since(Instant::now()), LOG_BYTES) {
-        Ok(said) if said.ok || said.out.len() as u64 >= LOG_BYTES => (atlas::touched(&said.out), said.ok),
+    match crate::child::run_until(log, late.saturating_duration_since(Instant::now()), LOG_BYTES, gone) {
+        Ok(said) if said.ok => (atlas::touched(&said.out), true),
+        // Cut at `LOG_BYTES`: its last path may be cut too (`src/a` of `src/abc`), so it is dropped.
+        Ok(said) if said.out.len() as u64 >= LOG_BYTES => {
+            (atlas::touched(&said.out[..said.out.rfind('\0').map_or(0, |at| at + 1)]), false)
+        }
         _ => (HashMap::new(), false),
     }
 }
@@ -3335,7 +3348,8 @@ mod tests {
         git(&["init", "-q"]);
         git(&["add", "-f", "."]);
         git(&["-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "c"]);
-        let committed = committed_lines(&top, Instant::now() + COUNT_TIMEOUT).unwrap();
+        let (late, no) = (Instant::now() + TIMEOUT, &|| false);
+        let committed = committed_lines(&top, &head(&top, late, no).unwrap(), late, no).unwrap();
         assert_eq!(committed.get("src/a.rs"), Some(&(6, 3)));
         assert_eq!((committed.get("b.bin"), committed.get("c.js")), (None, None), "binary to git: read");
     }
@@ -3384,10 +3398,12 @@ mod tests {
             let lines: u64 = files.iter().map(|(name, _)| lines(&top.join(name))).sum();
             let counted = ms(started);
             let started = Instant::now();
-            let by_git = committed_lines(&top, Instant::now() + COUNT_TIMEOUT).unwrap_or_default();
+            let (late, no) = (Instant::now() + TIMEOUT, &|| false);
+            let at = head(&top, late, no);
+            let by_git = at.as_deref().and_then(|at| committed_lines(&top, at, late, no)).unwrap_or_default();
             let by_git = (by_git.values().map(|(_, lines)| lines).sum::<u64>(), ms(started));
             let started = Instant::now();
-            let commits = commits(&top, Instant::now() + COUNT_TIMEOUT).0.len();
+            let commits = commits(&top, at.as_deref(), Instant::now() + TIMEOUT, no).0.len();
             let logged = ms(started);
             println!(
                 "{} files, {places:?} places in {all:.1} ms (again {again:.1}): list {listed:.1}, {lines} lines \

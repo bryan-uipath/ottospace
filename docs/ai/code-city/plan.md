@@ -290,7 +290,7 @@ person is only nearer.
   argv is fixed and hardened as the status bar's (`child::git_read`: no hooks, fsmonitor, pager,
   system config or prompt), and runs only in a checkout the person listed in Repos
   (`status_bar::reads_changes`: a repository's config can run programs). Nothing leaves the machine.
-- **Limits**: 60 seconds for the list, 10 more for the lines (the log has what is left, else no
+- **Limits**: 60 seconds for the list, 60 more for the lines (the log has what is left, else no
   heights), 64 MB of names, 600,000 files (20,000, 4 MB and 10 s before the large-city
   measurement), 32 MB of log. Past any of the others there is no city, and
   the lattice stays: half a city would put files in other places than the whole one.
