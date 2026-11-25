@@ -1429,9 +1429,18 @@ mod tests {
             (queue(&m), m.tasks.get(id).map(|t| t.queued.clone())),
             (vec!["second".into(), "third".into()], Some(vec!["second".into(), "third".into()]))
         );
-        // The state has their count, never their words.
+        // A task serialised (the state, the inbox, a socket reply) has their count, never their
+        // words; only its file has them, and reads them back.
         let state = serde_json::to_string(&m.tasks).unwrap_or_default();
-        assert!(state.contains("\"queued\":2") && !state.contains("second"), "{state}");
+        let task = m.tasks.get(id).cloned().unwrap_or_else(|| panic!("task {id}"));
+        let json = serde_json::json!(task).to_string();
+        assert!(state.contains("\"queued\":2") && !state.contains("second") && !json.contains("second"), "{json}");
+        let file = task.file_json();
+        assert_eq!(file["queued"], serde_json::json!(["second", "third"]));
+        let back: crate::tasks::Task = serde_json::from_value(file).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back.queued, task.queued);
+        let counted: crate::tasks::Task = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
+        assert!(counted.queued.is_empty(), "a count brings no words back");
         // A client queues, edits, removes and sends nothing.
         for theirs in [
             Action::TalkSendNow,

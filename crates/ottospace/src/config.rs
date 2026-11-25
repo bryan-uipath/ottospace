@@ -343,7 +343,8 @@ pub fn remove_stale_drafts() {
 pub fn save_task(task: &Task) -> io::Result<()> {
     let Some(dir) = tasks_dir() else { return Ok(()) };
     // Less of a reference than the session knows: the folder may be shared.
-    let text = serde_json::to_string_pretty(&task.for_file()).map_err(io::Error::other)? + "\n";
+    // Its queued messages' words too: only here (`Task::file_json`).
+    let text = serde_json::to_string_pretty(&task.file_json()).map_err(io::Error::other)? + "\n";
     write_whole(&dir, &format!("{}.json", task.id), &text)
 }
 

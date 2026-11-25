@@ -3985,7 +3985,8 @@ fn check_views(m: &Model) -> Result<(), String> {
         "no project is not last"
     );
     for task in &m.tasks.list {
-        let text = serde_json::to_string(&task.for_file()).map_err(|e| e.to_string())?;
+        // Its file's form: its queued words are only there (`file_json`).
+        let text = serde_json::to_string(&task.file_json()).map_err(|e| e.to_string())?;
         let back: Task =
             serde_json::from_str(&text).map_err(|e| format!("task {} does not read back: {e}", task.id))?;
         ensure!(back == task.for_file(), "task {} reads back changed", task.id);
@@ -4085,7 +4086,6 @@ fn check_state(m: &Model) -> Result<(), String> {
         let text = serde_json::to_string(what).unwrap_or_default();
         serde_json::from_str::<T>(&text).is_ok_and(|read| read == *what)
     }
-    ensure!(round_trips(&m.tasks.list), "the tasks do not read back as written");
     ensure!(round_trips(&m.repos), "the repositories do not read back as written");
     ensure!(round_trips(&m.found), "the sessions do not read back as written");
     ensure!(m.panes.iter().all(|pane| round_trips(&pane.kind)), "a pane's kind does not read back as written");
