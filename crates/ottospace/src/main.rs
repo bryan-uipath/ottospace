@@ -1184,7 +1184,6 @@ struct Workspace {
     /// Where the agent chip's line was last painted; none while it is the badge alone.
     chip_line: Rc<Cell<Option<Bounds<Pixels>>>>,
     /// The shown dial's moving parts: view state, stepped each frame it is drawn.
-    dial_motion: RefCell<dial::DialMotion>,
     /// The working lines' sweep (`ui::shimmer`): frames while one is drawn.
     sweep: ui::Sweep,
     /// The seal, fold and land of the user's Done, while it plays.
@@ -1797,10 +1796,6 @@ impl Workspace {
                         if runs && ticks.every(30, 0) {
                             cx.notify();
                         }
-                        // A dial lit is drawn again each second; at rest only on a change.
-                        if ticks.every(60, 0) && this.dial_moves() {
-                            cx.notify();
-                        }
                         if ticks.every(60, 0) {
                             this.seek_sessions(window, cx);
                         }
@@ -1998,7 +1993,6 @@ impl Workspace {
             home: home::Shared::default(),
             controls: sneak::Controls::default(),
             chip_line: Rc::default(),
-            dial_motion: RefCell::default(),
             sweep: ui::Sweep::default(),
             seals: seal::Seals::default(),
             fly: fly::Fly::default(),
@@ -4810,8 +4804,6 @@ impl Workspace {
                 "city_glimmer_frames": self.city_glimmer_frames(),
                 // Frames a city's camera asked for easing back after a reset: none at rest, none under Reduce Motion.
                 "city_frames": self.city_frames.get(),
-                // Frames the dial asked for because something in it moves: none at rest.
-                "dial_frames": self.dial_motion.borrow().frames,
                 // Frames a working line's sweep asked for: none at rest, none under Reduce Motion.
                 "shimmer_frames": self.sweep.frames.get(),
                 // Frames an animated picture in a viewer moved on to: none paused, off show or under Reduce Motion.
@@ -9877,7 +9869,6 @@ impl Render for Workspace {
         }
         self.controls.begin();
         self.chip_line.set(None);
-        self.dial_motion.borrow_mut().moving = false;
         // Before anything is drawn this frame: where the drawer and the rail were is last frame's.
         let seal = self.render_seal(window, cx);
         let card_seal = self.render_card_seal(window);

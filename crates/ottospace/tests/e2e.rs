@@ -13752,10 +13752,10 @@ fn dial_fixtures() -> Vec<(&'static str, String)> {
     vec![("turn1.jsonl", turn1.join("\n")), ("turn2.jsonl", turn2.join("\n"))]
 }
 
-/// The dial over a native chat: each call lights and counts at its station; a failure's red dot
-/// goes with the user's next message; the ring turns amber at 70% and red at 90%. The user's
-/// click (or ⌘⇧A) collapses it to its marker and back; a client's state says counts only, and
-/// the user's choice outlives a restart.
+/// The lights over a native chat: each call lights and counts at its station; a failure's red dot
+/// goes with the user's next message; the context is amber at 70% and red at 90%. The user's
+/// click on the picture (or ⌘⇧A) collapses the row to its marker and back; a client's state says
+/// counts only, and the user's choice outlives a restart.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
@@ -13781,31 +13781,21 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     }
     assert_eq!((&first["pulse"], &first["failed"], &first["lit"]), (&json!("idle"), &json!(true), &json!(false)));
     assert_eq!((&first["context"], &first["collapsed"]), (&json!(0.75), &json!(false)), "open while it runs");
-    // Centred in the drawer.
-    let (face, body) = (otto.control("talk:dial"), otto.call(json!({"cmd": "state"}))["drawer"]["body"].clone());
-    let body: Vec<f64> = body.as_array().expect("the drawer is drawn").iter().filter_map(Value::as_f64).collect();
-    let off = (face[0] + face[2] / 2.) - (body[0] + body[2] / 2.);
-    assert!(off.abs() <= 2., "{face:?} in {body:?}");
+    // In the header: a light per tool station, the context bar on its bottom edge.
+    let (shell, context, head) = (otto.control("talk:light:shell"), otto.control("talk:context"), otto.control("talk"));
+    assert!(shell[0] >= head[0] && shell[0] + shell[2] <= head[0] + head[2], "{shell:?} in {head:?}");
+    assert!(context[3] <= 4., "a thin bar: {context:?}");
     // Counts and stations only: no command, path or host.
     let said = first.to_string();
     assert!(!said.contains("cargo") && !said.contains("auth.rs") && !said.contains("example.com"), "{said}");
-    // At rest nothing in it moves: once its dots have settled, no frame is asked for.
-    let frames = |o: &Otto| o.call(json!({"cmd": "state"}))["counts"]["dial_frames"].as_u64().unwrap();
-    otto.wait_for("the dial at rest", |o| (dial(o)["animating"] == false).then_some(()));
-    let rest = frames(&otto);
-    std::thread::sleep(Duration::from_millis(300));
-    assert_eq!((frames(&otto), dial(&otto)["animating"].clone()), (rest, json!(false)), "no frames at rest");
 
     // The user's next message: the red dot goes; Shell is lit while its call runs; the ring is red.
     otto.user_click(at(otto.control("talk"), 0.5, 0.5));
     otto.user_key("g o enter");
     let second = otto.wait_for("the second turn's call", |o| Some(dial(o)).filter(|d| d["level"] == "red"));
     assert_eq!(spot(&second, "shell"), (json!(3), json!(0), json!(true)), "{second}");
-    // Two calls run there: its dot is the larger for it, and pulses, a frame after a frame.
     let shell = second["stations"].as_array().unwrap().iter().find(|s| s["station"] == "shell").cloned().unwrap();
-    assert_eq!((&shell["running"], &second["animating"]), (&json!(2), &json!(true)), "{second}");
-    let moving = frames(&otto);
-    otto.wait_for("frames while a call runs", |o| (frames(o) > moving + 5).then_some(()));
+    assert_eq!(shell["running"], json!(2), "{second}");
     assert_eq!((&second["pulse"], &second["failed"], &second["lit"]), (&json!("running"), &json!(false), &json!(true)));
     assert_eq!(second["context"], json!(0.92));
 
@@ -13821,10 +13811,6 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     // ⌘⇧A, the palette's Toggle Agent Dial, does the same.
     otto.user_key("cmd-shift-a");
     assert_eq!(dial(&otto)["collapsed"], true);
-    // Collapsed, nothing moves though the calls run on.
-    let collapsed = frames(&otto);
-    std::thread::sleep(Duration::from_millis(300));
-    assert_eq!((frames(&otto), dial(&otto)["animating"].clone()), (collapsed, json!(false)), "none collapsed");
 
     // The user stops it (a running task is not gone on with from another run).
     otto.user_key("cmd-shift-p");
@@ -13849,30 +13835,6 @@ fn the_dial_counts_calls_by_station_and_keeps_the_users_collapse() {
     assert_eq!(resumed["collapsed"], true, "{resumed}");
     again.control("talk:dial-marker");
     drop(again);
-    let _ = std::fs::remove_dir_all(&root);
-}
-
-/// With Reduce Motion (a test run's `OTTOSPACE_REDUCE_MOTION`) a lit station is its colour and
-/// size alone: no frame is asked for while its calls run.
-#[test]
-#[ignore = "opens a window; run with `cargo e2e`"]
-fn the_dial_holds_still_with_reduce_motion() {
-    let (root, _record, env) = native_setup("dial-calm", &dial_fixtures(), &[("OTTOSPACE_REDUCE_MOTION", "1")]);
-    let otto = launch_env("dial-calm", &env);
-    otto.call(json!({"cmd": "split", "kind": "empty"}));
-    otto.call(json!({"cmd": "task_new", "line": "fix login >app"}));
-    otto.call(json!({"cmd": "section", "section": "tasks"}));
-    let dial = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"]["dial"].clone();
-    otto.start_task(1);
-    otto.wait_for("the first turn's end", |o| Some(dial(o)).filter(|d| d["level"] == "amber"));
-    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
-    otto.user_key("g o enter");
-    let working = otto.wait_for("the second turn's calls", |o| Some(dial(o)).filter(|d| d["level"] == "red"));
-    assert_eq!((&working["lit"], &working["animating"]), (&json!(true), &json!(false)), "{working}");
-    std::thread::sleep(Duration::from_millis(300));
-    let state = otto.call(json!({"cmd": "state"}));
-    assert_eq!(state["counts"]["dial_frames"], 0, "lit, and still");
-    drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
 

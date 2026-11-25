@@ -82,9 +82,6 @@ pub const HALF_LIFE_MS: u64 = 10 * 60_000;
 /// The context ring turns amber, then red.
 pub const AMBER: f32 = 0.7;
 pub const RED: f32 = 0.9;
-/// A lit call's arcs fill in a minute (inner) and ten (outer).
-pub const INNER_MS: u64 = 60_000;
-pub const OUTER_MS: u64 = 600_000;
 /// The most calls kept as running: a stream that starts calls and never ends them stays small.
 const MAX_RUNNING: usize = 64;
 
@@ -509,9 +506,6 @@ impl Dial {
         self.timed && self.spot(Station::Model).is_some_and(|spot| spot.lit)
     }
 }
-
-/// The dial shows its lines only when there is room: the drawer is at least this wide.
-pub const LINES_MIN_WIDTH: f32 = 360.;
 
 #[cfg(test)]
 mod tests {

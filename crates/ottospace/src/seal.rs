@@ -115,7 +115,6 @@ impl Workspace {
         let width = sealing.panel.map(|panel| panel.size.width);
         let content = (frame.content > 0.).then(|| width).flatten().map(|width| {
             let header = self.talk_header(&subject, cx);
-            let dial = self.dial_section(&subject, f32::from(width), cx);
             let body = self.chat_body(&subject, cx);
             div()
                 .absolute()
@@ -127,7 +126,6 @@ impl Workspace {
                 .flex_col()
                 .overflow_hidden()
                 .children(header)
-                .children(dial)
                 .child(body)
         });
         let sealing = self.seals.now.as_ref()?;
