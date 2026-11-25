@@ -331,11 +331,23 @@ pub struct Terminal {
     /// In points. Kept between 6 and 72.
     #[serde(default = "default_font_size")]
     pub font_size: f32,
+    #[serde(default)]
+    pub cell_width: CellWidth,
+}
+
+/// How a cell's width meets the display's pixels: the font's advance rounded up (wider cells,
+/// fewer columns, as Ghostty does) or down (as many columns as before, glyphs closer together).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CellWidth {
+    #[default]
+    RoundUp,
+    RoundDown,
 }
 
 impl Default for Terminal {
     fn default() -> Self {
-        Self { font: default_font(), font_size: default_font_size() }
+        Self { font: default_font(), font_size: default_font_size(), cell_width: CellWidth::default() }
     }
 }
 
@@ -351,6 +363,16 @@ impl Terminal {
     /// The height of a terminal row for this font size: 13 → 18, as before there were settings.
     pub fn line_height(&self) -> f32 {
         (self.font_size * 18. / 13.).round()
+    }
+
+    /// A cell's width in whole device pixels from the font's advance in them (`cell_width`): 7.22
+    /// → 8 rounded up, 7 down; never under one pixel.
+    pub fn cell_pixels(&self, advance: f32) -> f32 {
+        match self.cell_width {
+            CellWidth::RoundUp => advance.ceil(),
+            CellWidth::RoundDown => advance.floor(),
+        }
+        .max(1.)
     }
 }
 
@@ -1006,6 +1028,19 @@ mod tests {
         assert_eq!((settings.sessions, settings.session_dirs), (None, None));
     }
 
+    /// A cell is whole pixels wide: the advance rounded up unless the file says down.
+    #[test]
+    fn a_cell_is_the_advance_rounded_up_or_down_to_whole_pixels() {
+        let up = Settings::parse("{}").unwrap().terminal;
+        let down = Settings::parse(r#"{ "terminal": { "cell_width": "round_down" } }"#).unwrap().terminal;
+        assert_eq!((up.cell_width, down.cell_width), (CellWidth::RoundUp, CellWidth::RoundDown));
+        // Meslo 12 at 1x, then at 2x; a whole advance stays; a tiny one is a pixel.
+        for (advance, want) in [(7.2246, (8., 7.)), (14.4492, (15., 14.)), (8., (8., 8.)), (0.4, (1., 1.))] {
+            assert_eq!((up.cell_pixels(advance), down.cell_pixels(advance)), want, "{advance}");
+        }
+        assert!(Settings::parse(r#"{ "terminal": { "cell_width": "round" } }"#).is_err());
+    }
+
     #[test]
     fn sessions_can_be_turned_off_and_their_directories_named() {
         let text = r#"{ "sessions": false, "session_dirs": { "claude": ["~/.claude", "~/.claude-work"] } }"#;
@@ -1082,7 +1117,7 @@ mod tests {
         assert_eq!(size(r#"{"terminal":{"font_size":400}}"#).font_size, 72.);
         assert_eq!(
             size(r#"{"terminal":{"font_size":1,"font":" "}}"#),
-            Terminal { font: "Menlo".into(), font_size: 6. }
+            Terminal { font: "Menlo".into(), font_size: 6., cell_width: CellWidth::RoundUp }
         );
         assert_eq!(size(r#"{"terminal":{"font_size":16}}"#).line_height(), 22.);
     }

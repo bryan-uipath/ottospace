@@ -246,7 +246,7 @@ restart, and the rest applies at once:
 
 ```json
 {
-  "terminal": { "font": "JetBrains Mono", "font_size": 14 },
+  "terminal": { "font": "JetBrains Mono", "font_size": 14, "cell_width": "round_up" },
   "repos": ["~/code/app", "~/code/web"],
   "tasks": "~/notes/tasks",
   "sessions": true,

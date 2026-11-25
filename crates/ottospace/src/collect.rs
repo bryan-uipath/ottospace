@@ -853,7 +853,7 @@ impl Workspace {
                 let (screen, cell) = (screen.clone(), self.cell);
                 canvas(
                     |_, _, _| {},
-                    move |bounds, _, window, cx| terminal::paint(&screen, bounds, cell, focused, &[], window, cx),
+                    move |bounds, _, window, _| terminal::paint(&screen, bounds, cell, focused, &[], window),
                 )
                 .size_full()
                 .into_any_element()

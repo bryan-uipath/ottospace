@@ -832,6 +832,11 @@ fn terminal_runs_a_typed_command() {
         lines(o).as_array()?.iter().any(|l| l.as_str().is_some_and(ok)).then_some(())
     });
 
+    // A cell is whole device pixels wide: every column's glyph lands on the pixel grid alike.
+    let state = otto.call(json!({"cmd": "state"}));
+    let (scale, width) = (state["counts"]["scale"].as_f64().unwrap(), state["cell"][0].as_f64().unwrap());
+    assert_eq!((width * scale).fract(), 0., "cell {} at scale {scale}", state["cell"]);
+
     // A split halves the pane, so the grid loses columns.
     let cols = |o: &Otto| o.call(json!({"cmd": "state"}))["terminals"]["1"]["cols"].as_u64();
     let wide = otto.wait_for("the grid to fit the pane", |o| cols(o).filter(|c| *c > 80));
