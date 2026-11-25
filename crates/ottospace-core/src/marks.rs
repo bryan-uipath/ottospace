@@ -53,6 +53,10 @@ pub enum RecordKind {
         #[serde(default)]
         top: u32,
     },
+    /// An explorer of a checkout.
+    Explorer {
+        root: String,
+    },
 }
 
 impl RecordKind {
@@ -62,6 +66,7 @@ impl RecordKind {
         match (self, kind) {
             (RecordKind::Terminal, Kind::Terminal) => true,
             (RecordKind::File { path, .. }, Kind::File { path: open }) => path == open,
+            (RecordKind::Explorer { root }, Kind::Explorer { root: open }) => root == open,
             (
                 RecordKind::App { bundle, name, .. },
                 Kind::App { bundle: b, name: n, .. } | Kind::Slot { bundle: b, name: n },
@@ -390,7 +395,7 @@ impl PaneRecord {
             RecordKind::Terminal => self.cwd.clone().map(Need::Dir),
             RecordKind::App { bundle, name, .. } => Some(Need::App { bundle: bundle.clone(), name: name.clone() }),
             // A file that is gone says so in its viewer.
-            RecordKind::Empty | RecordKind::File { .. } => None,
+            RecordKind::Empty | RecordKind::File { .. } | RecordKind::Explorer { .. } => None,
         }
     }
 
@@ -399,6 +404,7 @@ impl PaneRecord {
         match &self.kind {
             RecordKind::App { name, .. } => name.clone(),
             RecordKind::File { path, .. } => directory_name(path).unwrap_or("file").to_string(),
+            RecordKind::Explorer { root } => directory_name(root).unwrap_or("explorer").to_string(),
             _ => self.cwd.as_deref().and_then(directory_name).unwrap_or("shell").to_string(),
         }
     }
@@ -417,6 +423,7 @@ impl PaneRecord {
                 (!fine).then_some("its app or title is too long or not one line")
             }
             RecordKind::File { path, .. } if !crate::viewer::sound(path) => Some("its file is not an absolute path"),
+            RecordKind::Explorer { root } if !crate::viewer::sound(root) => Some("its folder is not an absolute path"),
             _ => None,
         }
     }
@@ -481,6 +488,7 @@ impl Mark {
             Target::Tab(_) => "tab",
             Target::Pane(PaneRecord { kind: RecordKind::App { .. }, .. }) => "app",
             Target::Pane(PaneRecord { kind: RecordKind::File { .. }, .. }) => "file",
+            Target::Pane(PaneRecord { kind: RecordKind::Explorer { .. }, .. }) => "explorer",
             Target::Pane(_) => "terminal",
         }
     }
@@ -882,6 +890,7 @@ impl Model {
             Kind::File { path } => {
                 RecordKind::File { path: path.clone(), top: self.viewer(pane.id).map_or(0, |v| v.top) }
             }
+            Kind::Explorer { root } => RecordKind::Explorer { root: root.clone() },
         };
         // Where the shell is now, as the shell crate read it; else where it started.
         let now = cwds.iter().find(|(id, _)| *id == pane.id).map(|(_, cwd)| cwd.clone());
@@ -1073,6 +1082,14 @@ impl Model {
                     launch: true,
                 });
             }
+            // A checkout Repos still lists: its explorer again, bound to the mark.
+            Target::Pane(PaneRecord { kind: RecordKind::Explorer { root }, .. }) => {
+                let root = root.clone();
+                if self.repo_listed(&root) {
+                    let pane = self.open(Kind::Explorer { root }, axis, None, effects);
+                    self.marks.bind(id, pane);
+                }
+            }
             Target::Pane(_) => {}
             Target::Tab(record) => {
                 // A task's tab goes to its space, while the task is live; else to no space:
@@ -1167,6 +1184,13 @@ impl Model {
                     });
                 }
                 (RecordKind::File { path, top }, None) => self.restore_viewer(pane, path, *top, effects),
+                // Its folders listed again by the shell; git's marks only of a checkout Repos lists.
+                (RecordKind::Explorer { root }, None) => {
+                    if let Some(open) = self.panes.iter_mut().find(|open| open.id == pane) {
+                        open.kind = Kind::Explorer { root: root.clone() };
+                        effects.push(Effect::Opened(pane));
+                    }
+                }
                 (RecordKind::Empty, None) => {}
             }
         }

@@ -92,7 +92,9 @@ blank lines.
   and slugs, task boxes, table alignment and widths, callouts, footnotes, bare addresses, Slack
   mentions, `#anchor` links); `highlight.rs` colours fences by label and code files by extension;
   `picture.rs` sizes thumbnails. Left: GPUI wraps a long address before any `/`.
-- **D, explorer**: a tree pane of a folder; `j`/`k` with `vim::Keys`; each file it moves to goes
-  to `OpenFile { beside: explorer, reuse: true }`.
+- **D, explorer** (built: `Kind::Explorer`, `crate::explorer`, `explorer_pane.rs`): a checkout's
+  tree; arrows and typed letters (not `j`/`k`: letters go to names); ↵ sends a file to
+  `OpenFile { beside: explorer, reuse: true }`. `Model::explorer_selection` is the pane's fact a
+  city behind it may follow (not built).
 - **E, comments**: `V` in the viewer starts a line selection (a `Keys` motion extends it); a
   comment is kept by path and line range, never in the file.

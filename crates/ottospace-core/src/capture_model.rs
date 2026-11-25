@@ -124,7 +124,7 @@ impl Model {
             return None;
         }
         match &pane.kind {
-            Kind::Empty | Kind::Slot { .. } | Kind::File { .. } | Kind::Decision => None,
+            Kind::Empty | Kind::Slot { .. } | Kind::File { .. } | Kind::Explorer { .. } | Kind::Decision => None,
             Kind::Terminal => Some(Source::Terminal {
                 cwd: read.and_then(|f| f.cwd.clone()).or_else(|| pane.cwd.clone()),
                 program: read.and_then(|f| f.program.clone()),

@@ -11,7 +11,7 @@ use crate::Workspace;
 
 /// Files listed at most, and bytes of names: past either, the first ones, and the list says so.
 pub const MOST_FILES: usize = 50_000;
-const MOST_BYTES: u64 = 16 << 20;
+pub(crate) const MOST_BYTES: u64 = 16 << 20;
 
 /// A folder's files: its paths (`None`: git could not list them), and whether there were more.
 type Read = (String, Option<Vec<String>>, bool);

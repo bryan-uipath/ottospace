@@ -53,6 +53,15 @@ pub enum Item {
     /// A tab closed, as its × does; or folded out to another display (`multi_monitor` on).
     Close,
     FoldOut,
+    /// A Repos row: an explorer of that checkout.
+    ExplorerHere,
+    /// An explorer's row: the file in the viewer beside, or below; shown in Finder; its full
+    /// path copied; a terminal in the folder.
+    Open,
+    OpenBelow,
+    Reveal,
+    CopyPath,
+    TerminalHere,
 }
 
 impl Serialize for Item {
@@ -83,6 +92,12 @@ impl Item {
             Item::SlotClear => "slot_clear",
             Item::Close => "close",
             Item::FoldOut => "fold_out",
+            Item::ExplorerHere => "explorer_here",
+            Item::Open => "open",
+            Item::OpenBelow => "open_below",
+            Item::Reveal => "reveal",
+            Item::CopyPath => "copy_path",
+            Item::TerminalHere => "terminal_here",
         }
     }
 
@@ -107,6 +122,12 @@ impl Item {
             Item::SlotClear => "Clear slot",
             Item::Close => "Close",
             Item::FoldOut => "Fold out",
+            Item::ExplorerHere => "Open in explorer",
+            Item::Open => "Open",
+            Item::OpenBelow => "Open below",
+            Item::Reveal => "Reveal in Finder",
+            Item::CopyPath => "Copy path",
+            Item::TerminalHere => "Open terminal here",
         }
     }
 }
@@ -124,6 +145,8 @@ pub enum MenuOf {
     Pane(crate::model::PaneId),
     /// A tab of the tab row, by its id: a right click on it.
     Tab(u32),
+    /// A row of explorer `pane`, by its path from the root: a right click on it.
+    Explorer(crate::model::PaneId, String),
 }
 
 impl From<ListRow> for MenuOf {
@@ -178,8 +201,21 @@ impl Model {
             MenuOf::Row(ListRow::Workbook(id)) if !self.workbooks.is_kept(*id) => {
                 &[Item::Rename, Item::Keep, Item::Delete]
             }
-            // A linked worktree, never a repository's own folder.
-            MenuOf::Row(ListRow::Repo(path)) if self.linked_worktree(path).is_some() => &[Item::DeleteWorktree],
+            // Any checkout: its explorer; a linked worktree, never a repository's own folder: delete it.
+            MenuOf::Row(ListRow::Repo(path)) if self.linked_worktree(path).is_some() => {
+                &[Item::DeleteWorktree, Item::ExplorerHere]
+            }
+            MenuOf::Row(ListRow::Repo(_)) => &[Item::ExplorerHere],
+            // A folder; a file; a link (shown, never read through).
+            MenuOf::Explorer(pane, path) => {
+                let row = self.explorer(*pane).and_then(|e| e.rows().into_iter().find(|row| row.path == *path));
+                match row {
+                    Some(row) if row.link => &[Item::CopyPath],
+                    Some(row) if row.dir => &[Item::TerminalHere, Item::Reveal, Item::CopyPath],
+                    Some(_) => &[Item::Open, Item::OpenBelow, Item::Reveal, Item::CopyPath],
+                    None => &[],
+                }
+            }
             MenuOf::Row(row) => row_items(row),
             // On the top row: Rename, and Keep while it is temporary.
             MenuOf::Space(id) if !self.workbooks.is_kept(*id) => &[Item::Rename, Item::Keep],
@@ -254,6 +290,8 @@ impl Model {
             MenuOf::ReposAdd => self.sidebar == Some(crate::model::Section::Repos) && !self.repo_dirs.fixed,
             // On the tab on show.
             MenuOf::Pane(id) => self.layout.as_ref().is_some_and(|layout| layout.leaves().contains(id)),
+            // A row of an explorer on show.
+            MenuOf::Explorer(pane, _) => self.layout.as_ref().is_some_and(|layout| layout.leaves().contains(pane)),
             // On the row of the space on show; never Home's own, nor Decisions'.
             MenuOf::Tab(id) => self.space_tabs(self.shown_space()).iter().any(|at| {
                 self.tabs
@@ -312,6 +350,11 @@ impl Model {
             (_, Item::Resume) => return Some(Action::ListenResume { at }),
             (_, Item::LocalFolder) => return Some(Action::RepoPickFolder),
             (_, Item::FromGitHub) => return Some(Action::CloneOpen),
+            (MenuOf::Row(ListRow::Repo(path)), Item::ExplorerHere) => {
+                return Some(Action::ExplorerOpen { root: Some(path.clone()), axis: crate::layout::Axis::Right });
+            }
+            // The explorer's acts: done as the menu closes (`explorer_act`), none to wait for.
+            (MenuOf::Explorer(..), _) => return Some(Action::RowMenuClose),
             (MenuOf::Row(ListRow::Repo(path)), Item::DeleteWorktree) => {
                 return Some(Action::WorktreeDelete { path: path.clone() });
             }
@@ -351,8 +394,16 @@ impl Model {
             self.row_menu = self.row_menu.take().filter(|_| index.is_none());
             return;
         };
-        let top = self.row_menu.take().is_some_and(|menu| matches!(menu.row, MenuOf::Space(_)));
+        let menu = self.row_menu.take();
+        let top = menu.as_ref().is_some_and(|menu| matches!(menu.row, MenuOf::Space(_)));
+        if let Some(RowMenu { row: MenuOf::Explorer(pane, path), selected, items, .. }) = menu {
+            if let Some(item) = index.or(selected).and_then(|at| items.get(at)) {
+                self.explorer_act(pane, &path, *item, effects);
+            }
+            return;
+        }
         match action {
+            Action::ExplorerOpen { root, axis } => self.explorer_open(root, axis, effects),
             Action::WorkbookEdit { workbook, tab } => {
                 self.workbook_edit(workbook, tab);
                 // Typed in its item on the top row, where it was right-clicked.

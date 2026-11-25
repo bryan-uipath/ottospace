@@ -732,6 +732,7 @@ fn row_pane(pane: &PaneRecord) -> RowPane {
         RecordKind::App { name, .. } => RowPane { kind: "app", app: Some(name.clone()), lines: 0, has_command: false },
         RecordKind::Empty => RowPane { kind: "empty", app: None, lines: 0, has_command: false },
         RecordKind::File { .. } => RowPane { kind: "file", app: None, lines: 0, has_command: false },
+        RecordKind::Explorer { .. } => RowPane { kind: "explorer", app: None, lines: 0, has_command: false },
     }
 }
 

@@ -111,6 +111,7 @@ commands! {
     PrevTab: "Previous Tab", Tabs;
     CloseTab: "Close Tab", Tabs;
     RenameTab: "Rename Tab", Tabs;
+    FileExplorer: "File Explorer", Panes;
     FoldTab: "Fold Tab Out or In", Tabs;
     ZoomOut: "Zoom Out or In", View;
     NewTask: "New Task", Tasks;

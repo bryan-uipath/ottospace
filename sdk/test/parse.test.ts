@@ -106,6 +106,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     crop: {},
     terminals: {},
     viewers: {},
+    explorers: {},
     copied: null,
     picker_rows: null,
     palette_rows: null,

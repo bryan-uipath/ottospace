@@ -20,6 +20,8 @@ pub enum Binding {
     SplitRight,
     SplitDown,
     PickPane,
+    /// ⌘⇧X: a file explorer of the checkout on show.
+    FileExplorer,
     ClosePane,
     FocusNext,
     /// ⌘⌥ arrows. `focus_dir` was ⌘⌃'s: its count is of the old key, so it is not read.
@@ -82,6 +84,7 @@ pub const ALL: &[Binding] = &[
     Binding::SplitRight,
     Binding::SplitDown,
     Binding::PickPane,
+    Binding::FileExplorer,
     Binding::ClosePane,
     Binding::FocusNext,
     Binding::FocusWay,
@@ -137,6 +140,7 @@ impl Binding {
             Binding::SplitRight => &[C::SplitRight],
             Binding::SplitDown => &[C::SplitDown],
             Binding::PickPane => &[C::PickPane, C::PickPaneDown],
+            Binding::FileExplorer => &[C::FileExplorer],
             Binding::ClosePane => &[C::ClosePane],
             Binding::FocusNext => &[C::FocusNext, C::FocusPrev],
             Binding::FocusWay => &[C::FocusLeft, C::FocusRight, C::FocusUp, C::FocusDown],
@@ -198,6 +202,7 @@ impl Binding {
             B::SplitRight
             | B::SplitDown
             | B::PickPane
+            | B::FileExplorer
             | B::ClosePane
             | B::FocusNext
             | B::FocusWay
@@ -246,6 +251,7 @@ impl Binding {
             B::SplitRight => "Terminal right",
             B::SplitDown => "Terminal below",
             B::PickPane => "New pane, right / below",
+            B::FileExplorer => "File explorer of the checkout",
             B::ClosePane => "Close pane",
             B::FocusNext => "Next / previous pane",
             B::FocusWay => "Focus that way",
@@ -738,6 +744,7 @@ mod tests {
             panes,
             [
                 "pick_pane",
+                "file_explorer",
                 "focus_next",
                 "focus_way",
                 "resize_way",

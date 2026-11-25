@@ -30,6 +30,7 @@ pub mod diff;
 pub mod double_cmd;
 pub mod edit;
 pub mod empty;
+pub mod explorer;
 pub mod features;
 pub mod filed;
 pub mod fill;

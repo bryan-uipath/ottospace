@@ -533,6 +533,11 @@ impl Workspace {
                 None
             }
             ("meeting-row-join", _) => name.parse().ok().map(|id| Action::CalendarJoin { id }),
+            // An explorer's row (`explorer-row:3:2`) and its Show ignored.
+            ("explorer-row", _) => name.split_once(':').and_then(|(pane, row)| {
+                Some(Action::ExplorerClick { pane: pane.parse().ok()?, row: row.parse().ok()? })
+            }),
+            ("explorer-ignored", _) => name.parse().ok().map(|pane| Action::ExplorerIgnored { pane }),
             _ => {
                 match (kind, number) {
                     ("tab", Some(tab)) => self.select_tab(tab, window, cx),

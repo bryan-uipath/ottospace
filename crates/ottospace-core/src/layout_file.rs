@@ -234,7 +234,7 @@ fn empty_unknown_kinds(value: &mut serde_json::Value) {
     for pane in panes {
         let Some(kind) = pane.get_mut("kind") else { continue };
         let known = kind.get("type").and_then(serde_json::Value::as_str);
-        if !matches!(known, Some("empty" | "terminal" | "app" | "file")) {
+        if !matches!(known, Some("empty" | "terminal" | "app" | "file" | "explorer")) {
             *kind = serde_json::json!({ "type": "empty" });
         }
     }

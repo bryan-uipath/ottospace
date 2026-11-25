@@ -1399,6 +1399,81 @@ fn a_tab_is_renamed_in_place_from_its_right_click_or_a_double_click() {
     assert_eq!(tab(&otto), (id, auto));
 }
 
+/// The File Explorer (⌘⇧X) on the checkout on show: folders first, an ignored file hidden until
+/// Show ignored, a link listed and never followed, git's marks; arrows and → open a folder, ↵ a
+/// file in a viewer beside; a row's right click copies its path. The state has its shape only.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_file_explorer_lists_a_checkout_opens_its_files_and_never_follows_a_link() {
+    let root = support::temp(&format!("ottospace-e2e-explorer-{}", std::process::id()));
+    let app = root.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::create_dir_all(root.join("outside")).unwrap();
+    std::fs::write(root.join("outside/elsewhere.txt"), "made-up").unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    std::fs::write(app.join("src/main.rs"), "fn main() {}\n").unwrap();
+    std::fs::write(app.join("README.md"), "# Made up\n").unwrap();
+    std::fs::write(app.join(".gitignore"), "build.log\n").unwrap();
+    git(&app, &["add", "."]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
+    std::fs::write(app.join("build.log"), "made-up").unwrap();
+    std::fs::write(app.join("README.md"), "# Made up, changed\n").unwrap();
+    std::os::unix::fs::symlink(root.join("outside"), app.join("out")).unwrap();
+    let app = app.canonicalize().unwrap();
+    let settings = json!({"repos": [&app], "restore_layout": false}).to_string();
+    let home = user_folder("explorer", &settings);
+    let otto = Otto::launch_with(
+        "explorer",
+        &[("OTTOSPACE_HOME", home.to_str().unwrap()), ("GIT_CONFIG_GLOBAL", "/dev/null"), ("GIT_CONFIG_NOSYSTEM", "1")],
+    );
+    let app_path = app.to_string_lossy().into_owned();
+    otto.wait_for("the checkout listed", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["repos"][0]["path"] == app_path.as_str()).then_some(())
+    });
+    otto.call(json!({"cmd": "open_repo", "path": app_path}));
+    otto.user_key("cmd-shift-x");
+    let shape = |o: &Otto| {
+        let s = o.call(json!({"cmd": "state"}));
+        let id = s["state"]["panes"].as_array()?.iter().find(|p| p["kind"]["type"] == "explorer")?["id"].as_u64()?;
+        let shape = s["explorers"][id.to_string()].clone();
+        (shape["reading"] == 0 && shape["marked"].as_u64() > Some(0)).then_some((id, shape))
+    };
+    let (id, first) = otto.wait_for("the explorer read with git's marks", shape);
+    let paths = |v: &Value| {
+        v["paths"].as_array().unwrap().iter().filter_map(|p| p.as_str().map(String::from)).collect::<Vec<_>>()
+    };
+    // Folders first; the link listed; the ignored log hidden; `.git` never.
+    assert_eq!(paths(&first), ["src", ".gitignore", "out", "README.md"], "{first}");
+    // → opens `src`; ↓ to its file; ↵ opens it in a viewer beside, the keyboard stays.
+    otto.user_key("right");
+    let opened = otto.wait_for("src listed", |o| shape(o).filter(|(_, s)| s["rows"] == 5).map(|(_, s)| s));
+    assert_eq!(paths(&opened)[1], "src/main.rs");
+    otto.user_key("down enter");
+    let path = app.join("src/main.rs").to_string_lossy().into_owned();
+    otto.wait_for("the file in a viewer", |o| {
+        let s = o.call(json!({"cmd": "state"}));
+        s["state"]["panes"].as_array()?.iter().any(|p| p["kind"] == json!({"type": "file", "path": path})).then_some(())
+    });
+    // The link: → does not open it.
+    otto.user_key("o");
+    otto.user_key("right");
+    assert_eq!(shape(&otto).unwrap().1["rows"], 5);
+    // Show ignored: the log too.
+    otto.user_click(at(otto.control(&format!("explorer-ignored:{id}")), 0.5, 0.5));
+    assert!(paths(&shape(&otto).unwrap().1).contains(&"build.log".to_string()));
+    // A row's right click: Copy path.
+    let row = otto.control(&format!("explorer-row:{id}:0"));
+    for action in ["down", "up"] {
+        let p = at(row, 0.5, 0.5);
+        otto.call(json!({"cmd": "mouse", "action": action, "button": "right", "x": p[0], "y": p[1], "as": "user"}));
+    }
+    let menu = otto.drawn()["row_menu"].clone();
+    assert_eq!(menu["explorer"], id, "{menu}");
+    let copy = menu["items"].as_array().unwrap().iter().position(|i| i["item"] == "copy_path").unwrap();
+    let copied = otto.user_click(at(rect(&menu["items"][copy]["rect"]), 0.5, 0.5));
+    assert_eq!(copied["copied"], app.join("src").to_string_lossy().as_ref());
+}
+
 /// The user's right click on a linked worktree's row: its menu, Delete worktree…, the question
 /// (⌘↵ deletes, ↵ alone does nothing, Esc or Keep it keeps), then git removes a clean one and keeps its branch; a dirty one stays, git's reason said.
 #[test]
@@ -1434,9 +1509,12 @@ fn a_right_click_on_a_worktree_deletes_it_after_the_question_and_keeps_a_dirty_o
         otto.call(event("up"));
         otto.drawn()
     };
-    // The repository's own folder has no menu: git cannot remove it.
+    // The repository's own folder: its explorer alone, git cannot remove it.
     let state = right_click(at(rect(&otto.drawn()["repos_bar"][0]["rows"][0]["row"]), 0.5, 0.5));
-    assert!(state["row_menu"].is_null(), "{}", state["row_menu"]);
+    let labels: Vec<&str> =
+        state["row_menu"]["items"].as_array().unwrap().iter().filter_map(|i| i["label"].as_str()).collect();
+    assert_eq!(labels, ["Open in explorer"], "{}", state["row_menu"]);
+    otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
     let p = at(row(&otto.drawn(), &clean).unwrap(), 0.3, 0.5);
 
     // The user's: at the pointer, inside the window, one item.
