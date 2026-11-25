@@ -49,7 +49,7 @@ pub struct Drawn {
     lines: Vec<(usize, WrappedLine)>,
     rows: Vec<Row>,
     first: usize,
-    shaped: Option<(SharedString, Option<Range<usize>>, Pixels)>,
+    shaped: Option<(SharedString, Option<Range<usize>>, Vec<(Range<usize>, u32)>, Pixels)>,
     line_height: Pixels,
     pointer_y: Pixels,
 }
@@ -214,9 +214,11 @@ impl Workspace {
     pub fn field_place(&self, at: usize) -> Option<(Pixels, Bounds<Pixels>, Pixels)> {
         let drawn = self.field.borrow();
         let empty = self.model.open_field().is_none_or(|(_, field)| field.text().is_empty());
-        let x = match &drawn.line {
-            Some(line) if !empty => line.x_for_index(at),
-            _ => px(0.),
+        let x = match (&drawn.line, drawn.place(at)) {
+            _ if empty => px(0.),
+            (_, Some((x, _))) => x,
+            (Some(line), None) => line.x_for_index(at),
+            (None, None) => px(0.),
         };
         (drawn.bounds.size.width > px(1.))
             .then(|| (drawn.bounds.left() + x - drawn.scroll, drawn.bounds, drawn.viewport))
@@ -319,7 +321,12 @@ impl Workspace {
                 marked: field.marked(),
                 placeholder: placeholder.into(),
                 accent: theme::accent(self.model.mode()),
-                rows: if matches!(of, "talk" | "btw") { ROWS } else { 1 },
+                // The new-task box has several rows; a capture's title in the bar, one.
+                rows: match of {
+                    "talk" | "btw" => ROWS,
+                    "compose" if self.model.bar_draft().is_none() => ROWS,
+                    _ => 1,
+                },
             })
     }
 }
@@ -601,30 +608,7 @@ impl Element for FieldElement {
             true => (self.placeholder.clone(), rgb(theme::MUTED).into()),
             false => (self.text.clone(), style.color),
         };
-        let run = |len: usize, color: gpui::Hsla, underline: bool| TextRun {
-            len,
-            font: style.font(),
-            color,
-            background_color: None,
-            // A composition in progress is underlined.
-            underline: underline.then_some(UnderlineStyle { color: Some(color), thickness: px(1.), wavy: false }),
-            strikethrough: None,
-        };
-        // One run between each two places where the look changes: a tag's ends, the composition's.
-        let (marked, spans) = (self.marked.clone().filter(|_| !empty), self.spans.iter().filter(|_| !empty));
-        let mut cuts: Vec<usize> = spans.clone().flat_map(|(range, _)| [range.start, range.end]).collect();
-        cuts.extend(marked.iter().flat_map(|m| [m.start, m.end]));
-        cuts.extend([0, shown.len()]);
-        cuts.retain(|cut| *cut <= shown.len() && shown.is_char_boundary(*cut));
-        cuts.sort_unstable();
-        cuts.dedup();
-        let part = |ends: &[usize]| {
-            let (from, to) = (ends[0], ends[1]);
-            let tag = spans.clone().find(|(range, _)| range.start <= from && to <= range.end);
-            let composing = marked.as_ref().is_some_and(|m| m.start <= from && to <= m.end);
-            run(to - from, tag.map_or(color, |(_, tint)| rgb(*tint).into()), composing)
-        };
-        let runs: Vec<TextRun> = cuts.windows(2).map(part).collect();
+        let runs = self.runs(&shown, color, style.font(), empty);
         let font_size = style.font_size.to_pixels(window.rem_size());
         let line = window.text_system().shape_line(shown, font_size, &runs, None);
         let x = |index: usize| if empty { px(0.) } else { line.x_for_index(index) };
@@ -669,6 +653,33 @@ impl Element for FieldElement {
 }
 
 impl FieldElement {
+    /// The text's runs: one between each two places where the look changes, a tag's ends (in its
+    /// colour) and the composition's (underlined).
+    fn runs(&self, shown: &str, color: gpui::Hsla, font: gpui::Font, empty: bool) -> Vec<TextRun> {
+        let run = |len: usize, color: gpui::Hsla, underline: bool| TextRun {
+            len,
+            font: font.clone(),
+            color,
+            background_color: None,
+            underline: underline.then_some(UnderlineStyle { color: Some(color), thickness: px(1.), wavy: false }),
+            strikethrough: None,
+        };
+        let (marked, spans) = (self.marked.clone().filter(|_| !empty), self.spans.iter().filter(|_| !empty));
+        let mut cuts: Vec<usize> = spans.clone().flat_map(|(range, _)| [range.start, range.end]).collect();
+        cuts.extend(marked.iter().flat_map(|m| [m.start, m.end]));
+        cuts.extend([0, shown.len()]);
+        cuts.retain(|cut| *cut <= shown.len() && shown.is_char_boundary(*cut));
+        cuts.sort_unstable();
+        cuts.dedup();
+        let part = |ends: &[usize]| {
+            let (from, to) = (ends[0], ends[1]);
+            let tag = spans.clone().find(|(range, _)| range.start <= from && to <= range.end);
+            let composing = marked.as_ref().is_some_and(|m| m.start <= from && to <= m.end);
+            run(to - from, tag.map_or(color, |(_, tint)| rgb(*tint).into()), composing)
+        };
+        cuts.windows(2).map(part).collect()
+    }
+
     /// True while the caret shows. Asks for the redraw of the next blink, for the field with
     /// the keyboard only: one that only shows asks for none.
     fn blink(&self, drawn: &mut Drawn, cx: &mut App) -> bool {
@@ -705,25 +716,9 @@ impl FieldElement {
         let mut drawn = self.drawn.borrow_mut();
         // Shaped again only when the text, its composition or the width changed: not to blink.
         let marked = self.marked.clone().filter(|_| !empty);
-        let key = Some((shown.clone(), marked.clone(), bounds.size.width));
+        let key = Some((shown.clone(), marked.clone(), self.spans.clone(), bounds.size.width));
         if drawn.shaped != key || drawn.line_height != line_height {
-            let run = |len: usize, underline: bool| TextRun {
-                len,
-                font: style.font(),
-                color,
-                background_color: None,
-                // A composition in progress is underlined.
-                underline: underline.then_some(UnderlineStyle { color: Some(color), thickness: px(1.), wavy: false }),
-                strikethrough: None,
-            };
-            let runs: Vec<TextRun> = match &marked {
-                Some(m) => [(m.start, false), (m.end - m.start, true), (shown.len() - m.end, false)]
-                    .into_iter()
-                    .filter(|(len, _)| *len > 0)
-                    .map(|(len, under)| run(len, under))
-                    .collect(),
-                None => vec![run(shown.len(), false)],
-            };
+            let runs = self.runs(&shown, color, style.font(), empty);
             drawn.lines = wrapped(&shown, font_size, &runs, Some(bounds.size.width), window);
             drawn.rows = rows_of(&drawn.lines);
             (drawn.shaped, drawn.line_height) = (key, line_height);
@@ -744,6 +739,14 @@ impl FieldElement {
                 let top = row.top.unwrap_or(bounds.top());
                 let x = |index: usize| bounds.left() + if empty { px(0.) } else { drawn.row_x(row, index) };
                 let (start, end) = (row.range.start, row.range.end);
+                // A tag that is understood sits on a faint chip of its own colour, on its row.
+                for (range, tint) in
+                    self.spans.iter().filter(|(range, _)| !empty && range.start < end && range.end > start)
+                {
+                    let (from, to) = (x(range.start.max(start)) - px(2.), x(range.end.min(end)) + px(2.));
+                    let chip = Bounds::from_corners(point(from, top + px(1.)), point(to, top + line_height - px(1.)));
+                    window.paint_quad(fill(chip, gpui::Hsla::from(rgb(*tint)).opacity(0.14)).corner_radii(px(4.)));
+                }
                 let (from, to) = (self.selection.start.max(start), self.selection.end.min(end));
                 if from < to || (self.selection.start < start && self.selection.end > end) {
                     let quad = Bounds::from_corners(point(x(from), top), point(x(to.max(from)), top + line_height));

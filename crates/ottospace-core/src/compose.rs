@@ -26,6 +26,8 @@ pub struct Draft {
     /// each once.
     pub refs: Vec<String>,
     pub priority: Option<u8>,
+    /// The lines after the title's, as typed: the rest of what the task's agent is asked.
+    pub body: Option<String>,
 }
 
 /// A tag in a line: where its word is (bytes), and its mark. `p`: a priority.
@@ -72,7 +74,8 @@ fn words(line: &str) -> Vec<&str> {
 pub(crate) fn spaced(line: &str) -> Vec<std::ops::Range<usize>> {
     let (mut words, mut start, mut escaped) = (Vec::new(), None, false);
     for (at, c) in line.char_indices() {
-        let ends = c.is_whitespace() && !escaped;
+        // A line break ends a word even after a backslash: a word is on one line.
+        let ends = (c.is_whitespace() && !escaped) || c == '\n';
         match (ends, start) {
             (true, Some(from)) => {
                 words.push(from..at);
@@ -206,7 +209,7 @@ fn tag(word: &str, known: &impl Fn(char, &str) -> bool) -> Option<(char, String)
     tag.or_else(pointed).or_else(|| priority.map(|digit| ('p', digit.to_string())))
 }
 
-/// Reads a line. `known(mark, name)`: see `tag`. Of two `#project`, `>repo`, `@agent` or
+/// Reads a line, or several: the first with words is the title, the rest its body. `known(mark, name)`: see `tag`. Of two `#project`, `>repo`, `@agent` or
 /// priorities the last one counts; every `/path`, `$skill` and `^reference` is kept. A path also
 /// stays in the title: what the agent reads keeps every word of it.
 pub fn parse(line: &str, known: impl Fn(char, &str) -> bool) -> Draft {
@@ -217,7 +220,9 @@ pub fn parse(line: &str, known: impl Fn(char, &str) -> bool) -> Draft {
             list.push(item);
         }
     };
-    for word in words(line) {
+    // Tags count up to the title's line; the lines after it are the body, read as text.
+    let rest = body_start(line, &known);
+    for word in words(&line[..rest.unwrap_or(line.len())]) {
         match tag(word, &known) {
             Some(('#', project)) => draft.project = Some(project),
             Some(('>', repo)) => draft.repo = Some(repo),
@@ -233,14 +238,45 @@ pub fn parse(line: &str, known: impl Fn(char, &str) -> bool) -> Draft {
         }
     }
     draft.title = title.join(" ");
+    // Its indentation kept: only blank lines around it go.
+    let body = rest.map(|at| line[at..].trim_start_matches(['\n', '\r']).trim_end().to_string());
+    draft.body = body.filter(|body| !body.trim().is_empty());
     draft
+}
+
+/// Where the body of `line` starts: after the first line that has a word other than a tag (the
+/// title's). None: no line after it. e.g. `#web\nfix it\nslowly` → the byte of `slowly`.
+pub fn body_start(line: &str, known: impl Fn(char, &str) -> bool) -> Option<usize> {
+    let mut at = 0;
+    for text in line.split('\n') {
+        let next = at + text.len() + 1;
+        if words(text).into_iter().any(|word| matches!(tag(word, &known), None | Some(('/', _)))) {
+            return (next <= line.len()).then_some(next);
+        }
+        at = next;
+    }
+    None
+}
+
+/// A title longer than `most` characters cut with …, and asked whole first in the body.
+pub(crate) fn cut_title(draft: &mut Draft, most: usize) {
+    if draft.title.chars().count() > most {
+        let whole = std::mem::take(&mut draft.title);
+        draft.title = whole.chars().take(most - 1).chain(['…']).collect();
+        draft.body = Some(match draft.body.take() {
+            Some(body) => format!("{whole}\n{body}"),
+            None => whole,
+        });
+    }
 }
 
 /// Where the tags of a line are, by the rules `parse` reads it with: what the box draws as
 /// understood.
 pub fn spans(line: &str, known: impl Fn(char, &str) -> bool) -> Vec<Span> {
     let span = |range: std::ops::Range<usize>| tag(&line[range.clone()], &known).map(|(mark, _)| Span { range, mark });
-    spaced(line).into_iter().filter_map(span).collect()
+    // None in the body: it is read as text.
+    let head = body_start(line, &known).unwrap_or(line.len());
+    spaced(line).into_iter().filter(|word| word.start < head).filter_map(span).collect()
 }
 
 /// A part of the line a task was filed from, as its first message shows it: its words, or a tag
@@ -328,6 +364,16 @@ pub fn read(line: &str, repo: impl Fn(&str) -> bool, pointed: impl Fn(&str) -> b
 /// As `spans`, against what is known.
 pub fn read_spans(line: &str, repo: impl Fn(&str) -> bool, pointed: impl Fn(&str) -> bool, known: &Known) -> Vec<Span> {
     spans(line, knows(repo, pointed, known))
+}
+
+/// As `body_start`, against what is known.
+pub fn read_body_start(
+    line: &str,
+    repo: impl Fn(&str) -> bool,
+    pointed: impl Fn(&str) -> bool,
+    known: &Known,
+) -> Option<usize> {
+    body_start(line, knows(repo, pointed, known))
 }
 
 /// The first of `agent` and `skills` that names nothing known, for a caller that gives them
@@ -435,7 +481,8 @@ pub fn word_end(line: &str, cursor: usize) -> usize {
     // The backslashes right before the cursor, an odd number of them: the next character is kept.
     let mut escaped = line[..cursor].chars().rev().take_while(|c| *c == '\\').count() % 2 == 1;
     let rest = line[cursor..].char_indices().find(|(_, c)| {
-        let ends = c.is_whitespace() && !escaped;
+        // A line break ends a word even after a backslash: a word is on one line.
+        let ends = (c.is_whitespace() && !escaped) || *c == '\n';
         escaped = *c == '\\' && !escaped;
         ends
     });
@@ -491,6 +538,23 @@ mod tests {
         // A comma after a priority ends the clause, as after a name.
         let draft = parse("fix p1, now", known);
         assert_eq!((draft.title.as_str(), draft.priority), ("fix now", Some(1)));
+    }
+
+    #[test]
+    fn several_lines_are_a_title_and_a_body() {
+        // The first line with words is the title; the rest, indentation kept, the body. Tags count up
+        // to the title's line; in the body they are text (`#include`, "the p1 outage").
+        let draft = parse("#canvas\nfix the zoom >app\n\n  it flickers\n  @codex p2 #include\n", known);
+        assert_eq!(draft.title, "fix the zoom");
+        assert_eq!(draft.body.as_deref(), Some("  it flickers\n  @codex p2 #include"));
+        let tags = (draft.project.as_deref(), draft.repo.as_deref(), draft.agent.as_deref(), draft.priority);
+        assert_eq!(tags, (Some("canvas"), Some("app"), None, None));
+        assert_eq!(spans("fix\n#web", known), []);
+        // A backslash at a line's end keeps no line break in a word.
+        assert_eq!(words("run \\\n@claude"), ["run", "\\", "@claude"]);
+        // One line: no body; blank lines after it: none either.
+        assert_eq!(parse("fix it", known).body, None);
+        assert_eq!(parse("fix it\n \n", known).body, None);
     }
 
     #[test]
@@ -713,7 +777,9 @@ mod tests {
         let priority = draft.priority.map(|n| format!("p{n}"));
         let title = Some(draft.title.clone()).filter(|title| !title.is_empty());
         let one = [tag('#', &draft.project), tag('>', &draft.repo), tag('@', &draft.agent)].into_iter().flatten();
-        one.chain(skills).chain(priority).chain(title).collect::<Vec<_>>().join("\t")
+        let line = one.chain(skills).chain(priority).chain(title).collect::<Vec<_>>().join("\t");
+        // The body on the lines after.
+        draft.body.as_ref().map_or(line.clone(), |body| format!("{line}\n{body}"))
     }
 
     /// What must hold of any line, with names of any kind known. `Err`: what does not.
@@ -732,9 +798,10 @@ mod tests {
         for path in &draft.paths {
             let from = |word: &&str| path_shaped(word) && unescape(word).starts_with(path);
             check(typed.iter().any(from), format!("the path {path:?} is no word of the line"))?;
-            // And it stays in the title: nothing typed goes missing from what the agent reads.
+            // And it stays in the title, or the body after it: nothing typed goes missing from what the agent reads.
             let titled = |word: &str| path_shaped(word) && unescape(word).starts_with(path);
-            check(words(&draft.title).into_iter().any(titled), format!("the path {path:?} left the title"))?;
+            let read = words(&draft.title).into_iter().chain(draft.body.as_deref().map(words).unwrap_or_default());
+            check(read.into_iter().any(titled), format!("the path {path:?} left the title"))?;
         }
         let priority = |word: &&str| draft.priority.is_some_and(|n| word.to_lowercase().starts_with(&format!("p{n}")));
         check(draft.priority.is_none() || typed.iter().any(priority), "the priority is no word of the line".into())?;
@@ -756,8 +823,10 @@ mod tests {
         check(drafted.resolved.len() == drafted.paths.len(), "a path was read and not found".into())?;
         check(drafted.skills.len() <= draft_all(line).skills.len(), "a skill came from nowhere".into())?;
         let _ = path_words(line);
-        // Every name offered for the word being typed finishes it as that tag, wherever the cursor is.
-        for cursor in (0..=line.len()).filter(|at| line.is_char_boundary(*at)) {
+        // Every name offered for the word being typed finishes it as that tag, wherever the cursor is
+        // in the title's lines (the box offers none in the body, `Model::menu_key`).
+        let head = body_start(line, known).unwrap_or(line.len());
+        for cursor in (0..=line.len()).filter(|at| line.is_char_boundary(*at) && *at < head) {
             let Some((mark, start)) = completing(&line[..cursor]) else { continue };
             // A path the shell lists is its folder and a name.
             let folder = path_folder(&start);

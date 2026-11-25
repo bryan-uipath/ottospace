@@ -160,7 +160,7 @@ impl Model {
             return;
         }
         let (field, limit) = match &target {
-            Target::Compose if self.bar_draft().is_none() => (self.compose.as_mut(), crate::tasks::MAX_TITLE),
+            Target::Compose if self.bar_draft().is_none() => (self.compose.as_mut(), crate::tasks::MAX_PROMPT),
             Target::Chat(subject) if self.keeps_draft(subject) => {
                 (self.chat_mut(subject).map(|chat| &mut chat.draft), super::chat::MAX_DRAFT)
             }
@@ -397,7 +397,8 @@ mod tests {
         typed(&mut m, "x");
         assert_eq!(m.compose_line().map(String::as_str), Some("fix zoom"));
         finished(&mut m, Some("fix zoom\nin the canvas\n"), false);
-        assert_eq!(m.compose_line().map(String::as_str), Some("fix zoom in the canvas"));
+        // The box keeps lines: the editor's come back as they were, the last break dropped.
+        assert_eq!(m.compose_line().map(String::as_str), Some("fix zoom\nin the canvas"));
         assert_eq!(m.field().map(|(of, _)| of), Some("compose"));
         // Closed meanwhile: the clipboard.
         m.update(Action::EditorOpen);

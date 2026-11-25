@@ -32,8 +32,8 @@ use crate::settings::{Installed, closed_apps};
 use crate::sneak::{Sneak, Typed};
 use crate::talk::{self, Subject, Talk};
 use crate::tasks::{
-    self, Assign, Caller, Heading, MAX_TITLE, Moved, NOTICE_MS, Notice, Ref, RefKind, State, Task, TaskId, TaskRow,
-    TaskSection, Tasks,
+    self, Assign, Caller, Heading, MAX_PROMPT, MAX_TITLE, Moved, NOTICE_MS, Notice, Ref, RefKind, State, Task, TaskId,
+    TaskRow, TaskSection, Tasks,
 };
 use crate::workbook::{self, History, Workbook, WorkbookId, Workbooks};
 
@@ -327,7 +327,7 @@ struct Taken {
 
 /// `status` with its trailing ` · ` parts left off, last first, until `fits` says it fits; then
 /// the first, what ↵ does, cut after a word with `…`. Never inside a word.
-/// `↵ starts @claude in app · ⇧↵ later · Esc` → `↵ starts @claude in app · ⇧↵ later` → `↵ starts @claude…`.
+/// `↵ starts @claude in app · ⌘⇧↵ later · Esc` → `↵ starts @claude in app · ⌘⇧↵ later` → `↵ starts @claude…`.
 pub fn fit_status(status: &str, fits: impl Fn(&str) -> bool) -> String {
     let parts: Vec<&str> = status.split(" · ").collect();
     let words: Vec<&str> = parts[0].split(' ').collect();
@@ -6763,7 +6763,7 @@ impl Model {
                 }
             }
             Action::ComposeSubmit { open } => {
-                // ⇧↵ takes a row as ↵ does (`enter`). ⌘↵ always adds.
+                // ⌘⇧↵ takes a row as ↵ does (`enter`). ⌘↵ always adds.
                 match self.enter() {
                     _ if open => {}
                     Enter::Take(row) => return self.accept(row),
@@ -8314,7 +8314,8 @@ impl Model {
                         let default = self.default_agent();
                         let launch = agents::launch(task.agent.as_deref(), default, &self.models, task.title.clone());
                         // Its `$skill` tags, asked for in its first message.
-                        let launch = launch.map(|launch| agents::Launch { skills: task.skills.clone(), ..launch });
+                        let (skills, body) = (task.skills.clone(), task.body.clone());
+                        let launch = launch.map(|launch| agents::Launch { skills, body, ..launch });
                         // Where it works: the worktree its agent moved into, else its folder.
                         let dir = self.task_moved(*id).map(String::from).or_else(|| task.dir().cloned());
                         launch.map(|launch| (agents::Start::New(launch), dir))
@@ -8786,7 +8787,7 @@ impl Model {
             self.compose_talked = self.talk.as_ref().is_some_and(|talk| talk.open && talk.keys);
         }
         self.leave(effects);
-        self.compose = Some(Field::new(&text, MAX_TITLE));
+        self.compose = Some(Field::lines_of(&text, MAX_PROMPT));
         // Paths read for another line say nothing of this one.
         (self.known.paths, self.known.entries, self.known_line) = (Vec::new(), Vec::new(), None);
         (self.known_typing, self.known_place) = (None, None);
@@ -9039,17 +9040,26 @@ impl Model {
             let word = word.trim_end_matches(compose::clause_end);
             word.strip_prefix(mark).is_some_and(|rest| compose::taggable(mark, rest))
         };
-        for word in compose::spaced(line).into_iter().filter(|word| tag(&line[word.clone()])) {
+        // Only the title's tags: the body is text.
+        let (repo, pointed) =
+            (|name: &str| self.repo_named(name).is_some(), |name: &str| self.pointed(name, true).is_some());
+        let head = compose::read_body_start(line, repo, pointed, &self.known).unwrap_or(line.len());
+        let tags = compose::spaced(line).into_iter().filter(|word| word.start < head && tag(&line[word.clone()]));
+        for word in tags {
             text.push_str(&line[at..word.start]);
-            let space = line[word.end..].chars().next().filter(|c| c.is_whitespace());
+            let space = line[word.end..].chars().next().filter(|c| c.is_whitespace() && *c != '\n');
             at = word.end + space.map_or(0, char::len_utf8);
         }
         text.push_str(&line[at..]);
         if let Some(name) = name {
-            if !text.is_empty() && !text.ends_with(' ') {
-                text.push(' ');
+            // At the end of the title's line: in the body it would be read as text.
+            let end = compose::read_body_start(&text, repo, pointed, &self.known).map_or(text.len(), |at| at - 1);
+            let (mut head, body) = (text[..end].to_string(), text[end..].to_string());
+            if !head.is_empty() && !head.ends_with(' ') {
+                head.push(' ');
             }
-            text.push_str(&format!("{mark}{name} "));
+            head.push_str(&format!("{mark}{name} "));
+            text = head + &body;
         }
         field.fits(0..line.len(), &text).then_some(text)
     }
@@ -9084,7 +9094,7 @@ impl Model {
     }
 
     /// The one line under the box: what ↵ does with the line as it is, then the other keys. `None`:
-    /// the box is closed. `↵ starts @codex in app on main · ⇧↵ later · Esc`, `↵ takes >app · Esc
+    /// the box is closed. `↵ starts @codex in app on main · ⌘⇧↵ later · Esc`, `↵ takes >app · Esc
     /// closes the list`, `↵ files it for later · ⌘↵ starts it now · Esc`.
     pub fn compose_status(&self) -> Option<String> {
         let plan = self.compose_plan()?;
@@ -9141,7 +9151,7 @@ impl Model {
         // A workspace with something in it is about to be the task's: said, whatever else is.
         // Not "this workspace" while the box goes to another: its pinned line names that one.
         let takes = if self.compose_binds() && !self.compose_elsewhere() { BINDS_TOO } else { "" };
-        Some(format!("{first}↵ starts @{} {place}{takes} · ⇧↵ later · Esc", plan.agent))
+        Some(format!("{first}↵ starts @{} {place}{takes} · ⌘⇧↵ later · Esc", plan.agent))
     }
 
     /// The tags a line may hold, while the box is open and its sheet shows ("? tags", ⌘/). The
@@ -9172,6 +9182,12 @@ impl Model {
     /// The tag at the cursor of the new-task box, as the dropdown's state is kept for it.
     fn menu_key(&self) -> Option<(usize, char, String)> {
         let field = self.compose.as_ref()?;
+        // In the body no tag is read: nothing to finish there.
+        let (repo, pointed) =
+            (|name: &str| self.repo_named(name).is_some(), |name: &str| self.pointed(name, true).is_some());
+        if compose::read_body_start(field.text(), repo, pointed, &self.known).is_some_and(|at| field.cursor() >= at) {
+            return None;
+        }
         let before = &field.text()[..field.cursor()];
         let (mark, typed) = compose::completing(before)?;
         Some((compose::completion(before, "").0.start, mark, typed))
@@ -9422,12 +9438,16 @@ impl Model {
         if let Some(title) = title {
             draft.title = title;
         }
+        // The box's own lines: a first line too long for a title is cut, and asked whole in the body.
+        let own = known.is_none() && self.compose_line().map(String::as_str) == Some(line);
+        if own && !made_up {
+            compose::cut_title(&mut draft, MAX_TITLE);
+        }
         if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
             return None;
         }
         let path = draft.repo.as_deref().and_then(|name| self.repo_named(name));
         // The folder the user took for the box's own line.
-        let own = known.is_none() && self.compose_line().map(String::as_str) == Some(line);
         let folder = self.compose_taken().filter(|_| own).map(|taken| taken.place.clone());
         let id = self.file(draft.title, draft.priority.unwrap_or(3), State::Captured);
         // The line as typed, for the first message's bubble; not a title made up for it.
@@ -9436,6 +9456,7 @@ impl Model {
         }
         self.tasks.tag(id, draft.project, path);
         self.tasks.set_folder(id, folder);
+        self.tasks.set_body(id, draft.body.take());
         let Draft { agent, paths, resolved, skills, refs, .. } = draft;
         self.tasks.assign(id, Assign { agent, paths, resolved, skills });
         let pointed = refs.iter().filter_map(|name| self.pointed(name, known.is_none())).collect();
@@ -14113,7 +14134,7 @@ mod tests {
         };
         assert_eq!((launch.title.as_str(), launch.model.as_deref()), ("this pr pls", Some("claude-opus-5-5")));
         assert_eq!(launch.skills, ["xreview"]);
-        let asked = agents::prompt(&launch.title, None, &launch.skills);
+        let asked = agents::prompt(&launch.title, None, None, &launch.skills);
         assert_eq!(asked, "Task: this pr pls\n\nUse the skill `xreview`.");
     }
 
@@ -14362,7 +14383,7 @@ mod tests {
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
         assert_eq!(
             (m.joins(), m.compose_status().as_deref()),
-            (None, Some("↵ starts @claude in app · ⇧↵ later · Esc"))
+            (None, Some("↵ starts @claude in app · ⌘⇧↵ later · Esc"))
         );
         let effects = m.update(Action::ComposeEnter);
         assert!(matches!(effects[..], [Effect::StartAgent { .. }]), "{effects:?}");
@@ -14398,7 +14419,7 @@ mod tests {
         m.update(Action::OpenCompose { text: "fix zoom".into() });
         assert_eq!(
             m.compose_status().as_deref(),
-            Some("↵ starts @claude in your home folder, in this workspace · ⇧↵ later · Esc")
+            Some("↵ starts @claude in your home folder, in this workspace · ⌘⇧↵ later · Esc")
         );
         m.update(Action::ComposeEnter);
         // The workspace is the task's space: where it was on the row, with all its tabs. It is
@@ -14537,7 +14558,7 @@ mod tests {
         let mut m = workspace_of_one_task();
         let before = (pane_tabs(&m), m.tabs[m.active].id, m.layout.clone(), m.panes.clone(), row(&m));
         m.update(Action::OpenCompose { text: "second".into() });
-        let said = "↵ starts @claude in app, in this workspace · ⇧↵ later · Esc";
+        let said = "↵ starts @claude in app, in this workspace · ⌘⇧↵ later · Esc";
         assert_eq!(m.compose_status().as_deref(), Some(said));
         let effects = m.update(Action::ComposeEnter);
         // No space is made, no pane moves; the new one is in front, in the first one's folder.
@@ -14560,7 +14581,7 @@ mod tests {
         // Its own `>repo` wins.
         join(&mut m, "third >app-2");
         assert_eq!(m.tasks.get(3).and_then(|task| task.repo.as_deref()), Some("/code/app-2"));
-        // For later (⇧↵), or a client's: in no workspace, and the front one stays.
+        // For later (⌘⇧↵), or a client's: in no workspace, and the front one stays.
         m.update(Action::OpenCompose { text: "later".into() });
         m.update(Action::ComposeSubmit { open: false });
         let theirs = Action::TaskFromLine { line: "theirs".into(), known: Default::default(), open: true };
@@ -14783,7 +14804,7 @@ mod tests {
         m.update(Action::WorkbookNew { uid: "9f3a61c2d4e5b708".into() });
         term(&mut m);
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
-        let said = "↵ starts @claude in app, in this workspace · ⇧↵ later · Esc";
+        let said = "↵ starts @claude in app, in this workspace · ⌘⇧↵ later · Esc";
         assert_eq!(m.compose_status().as_deref(), Some(said));
         let effects = m.update(Action::ComposeEnter);
         let cwd = effects.iter().find_map(|effect| match effect {
@@ -14819,7 +14840,7 @@ mod tests {
         assert_eq!((m.space(), m.workbooks.list[0].task), (&Owner::Workbook { id: 1 }, None));
         // For later: no.
         m.update(Action::OpenCompose { text: "later".into() });
-        assert_eq!(m.compose_status().as_deref(), Some("↵ starts @claude in your home folder · ⇧↵ later · Esc"));
+        assert_eq!(m.compose_status().as_deref(), Some("↵ starts @claude in your home folder · ⌘⇧↵ later · Esc"));
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!(m.workbooks.list[0].task, None);
         // The user's ↵: bound, with nothing said, since it takes nothing.
@@ -15202,7 +15223,7 @@ mod tests {
         m.update(Action::OpenCompose { text: "first".into() });
         assert_eq!(
             m.compose_status().as_deref(),
-            Some("↵ starts @claude in app-2 on fix/login, in this workspace · ⇧↵ later · Esc")
+            Some("↵ starts @claude in app-2 on fix/login, in this workspace · ⌘⇧↵ later · Esc")
         );
         let cwd = |effects: &[Effect], id: TaskId| {
             effects.iter().find_map(|effect| match effect {
@@ -15336,7 +15357,7 @@ mod tests {
         }
         m.update(toggle);
         assert_eq!(m.compose_worktree(), choice(true, "fix-the-zoom"));
-        let said = "↵ starts @claude in a new worktree of app on fix-the-zoom, in this workspace · ⇧↵ later · Esc";
+        let said = "↵ starts @claude in a new worktree of app on fix-the-zoom, in this workspace · ⌘⇧↵ later · Esc";
         assert_eq!(m.compose_status().as_deref(), Some(said));
         let path = format!("{root}/app/fix-the-zoom");
         let asked = |branch: &str, path: &str| Effect::AddWorktree {
@@ -15428,7 +15449,7 @@ mod tests {
         // The line names one: offered.
         m.update(Action::FieldEdit { edit: Edit::Insert(" >zed".into()) });
         assert_eq!(m.compose_worktree().map(|choice| (choice.repo, choice.new)), Some(("zed".into(), false)));
-        // ⇧↵ (for later) makes none.
+        // ⌘⇧↵ (for later) makes none.
         m.update(Action::ComposeWorktree { new: Some(true) });
         let effects = m.update(Action::ComposeSubmit { open: false });
         assert!(!effects.iter().any(|e| matches!(e, Effect::AddWorktree { .. })));
@@ -15914,6 +15935,27 @@ mod tests {
         assert_eq!(m.list, None);
     }
 
+    /// Several lines in the box: the first is the title, the rest the body its agent is asked
+    /// after it; a first line longer than a title is cut, and asked whole.
+    #[test]
+    fn the_new_task_box_files_its_first_line_as_the_title_and_the_rest_as_its_body() {
+        let mut m = Model::default();
+        m.update(Action::OpenCompose { text: "fix the zoom".into() });
+        m.update(Action::FieldEdit { edit: Edit::Replace { range: None, text: "\n".into() } });
+        m.update(Action::FieldEdit { edit: Edit::Paste("  it flickers\n\n  on resize".into()) });
+        m.update(Action::ComposeSubmit { open: false });
+        let task = &m.tasks.list[0];
+        assert_eq!((task.title.as_str(), task.body.as_deref()), ("fix the zoom", Some("  it flickers\n\n  on resize")));
+        assert_eq!(task.line.as_deref(), Some("fix the zoom\n  it flickers\n\n  on resize"));
+        let long = "x".repeat(MAX_TITLE + 5);
+        m.update(Action::OpenCompose { text: format!("{long}\nmore") });
+        m.update(Action::ComposeSubmit { open: false });
+        let task = &m.tasks.list[1];
+        assert_eq!(task.title.chars().count(), MAX_TITLE);
+        assert!(task.title.ends_with('…'));
+        assert_eq!(task.body.as_deref(), Some(format!("{long}\nmore").as_str()));
+    }
+
     #[test]
     fn the_new_task_box_files_a_line_as_a_task() {
         let mut m = Model::default();
@@ -15973,10 +16015,10 @@ mod tests {
             (m.tasks.list[1].title.as_str(), m.tasks.list[1].repo.as_deref()),
             ("ask @ana about", Some("/code/app-2"))
         );
-        // The box holds no more than a title may: a longer task could not be read back.
-        m.update(Action::OpenCompose { text: "x".repeat(MAX_TITLE + 50) });
+        // The box holds no more than `MAX_PROMPT`; a first line longer than a title is cut for it.
+        m.update(Action::OpenCompose { text: "x".repeat(MAX_PROMPT + 50) });
         m.update(Action::FieldEdit { edit: Edit::Insert("yz".into()) });
-        assert_eq!(m.compose.as_ref().map(|line| line.text().chars().count()), Some(MAX_TITLE));
+        assert_eq!(m.compose.as_ref().map(|line| line.text().chars().count()), Some(MAX_PROMPT));
         m.update(Action::CloseCompose);
         m.update(Action::TaskFromLine { line: "x".repeat(MAX_TITLE + 1), known: Default::default(), open: false });
         assert_eq!(m.tasks.list.len(), 2);
@@ -16304,7 +16346,7 @@ mod tests {
         keys(&mut m, " folder");
         // ↵ will start the agent there; the path stays in the title as typed.
         assert_eq!(m.compose_plan().and_then(|plan| plan.dir).as_deref(), Some("~/notes/"));
-        let said = "↵ starts @claude in ~/notes/, in this workspace · ⇧↵ later · Esc";
+        let said = "↵ starts @claude in ~/notes/, in this workspace · ⌘⇧↵ later · Esc";
         assert_eq!(m.compose_status().as_deref(), Some(said));
         // ↵ at once, before the shell read the line again: the folder is where its listing was.
         m.update(Action::ComposeSubmit { open: false });
@@ -16370,7 +16412,7 @@ mod tests {
         });
         assert_eq!(line(&m), "read now /etc/hosts ");
         // No room for all of it: none goes in. No box: nothing happens.
-        let long = vec![format!("/{}", "x".repeat(MAX_TITLE))];
+        let long = vec![format!("/{}", "x".repeat(MAX_PROMPT))];
         m.update(Action::ComposeAttach { paths: long.clone(), home: None, unreadable: 0 });
         assert_eq!(line(&m), "read now /etc/hosts ");
         m.update(Action::CloseCompose);
@@ -16481,7 +16523,7 @@ mod tests {
 
         // A line with no room for the name: the row is not taken in part. Tab and ↵ say so and
         // leave the line; after Esc ↵ adds the task with what is typed.
-        let full = format!("{} #ca", "x".repeat(MAX_TITLE - 4));
+        let full = format!("{} #ca", "x".repeat(MAX_PROMPT - 4));
         m.update(Action::OpenCompose { text: full.clone() });
         assert_eq!(
             (offered(&m), m.dropdown().unwrap().selected),
@@ -16507,9 +16549,12 @@ mod tests {
         assert_eq!((m.tasks.list.len(), task.project.as_deref(), m.mode()), (before + 1, Some("ca"), Mode::Normal));
 
         // A file with no room is not put in in part either, and the box says so.
-        m.update(Action::OpenCompose { text: "x".repeat(MAX_TITLE - 4) });
+        m.update(Action::OpenCompose { text: "x".repeat(MAX_PROMPT - 4) });
         m.update(Action::ComposeAttach { paths: vec!["/etc/hosts".into()], home: None, unreadable: 0 });
-        assert_eq!((line(&m).len(), m.compose_note()), (MAX_TITLE - 4, Some("no room in the line: nothing was added")));
+        assert_eq!(
+            (line(&m).len(), m.compose_note()),
+            (MAX_PROMPT - 4, Some("no room in the line: nothing was added"))
+        );
     }
 
     #[test]
@@ -16656,7 +16701,7 @@ mod tests {
         assert!(m.welcome() && m.compose_host().is_none());
         m.update(Action::OpenCompose { text: "tidy up".into() });
         assert_eq!(m.compose_host(), Some(Host::Drawer));
-        // ⇧↵ files it for later: the box closes. Nothing is open but a task: no welcome.
+        // ⌘⇧↵ files it for later: the box closes. Nothing is open but a task: no welcome.
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!((m.tasks.list.len(), m.compose_host(), m.mode(), m.welcome()), (1, None, Mode::Normal, false));
         // ↵ adds and starts: its conversation opens, so the box goes.
@@ -16763,7 +16808,7 @@ mod tests {
         assert_eq!(line(&m), "see /tmp/a\\ #b fix\u{a0}");
         // A name the line has no room for: its list says so.
         m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
-        keys(&mut m, &"x".repeat(MAX_TITLE - 4));
+        m.update(Action::FieldEdit { edit: Edit::Insert("x".repeat(MAX_PROMPT - 4)) });
         m.update(Action::ComposePicker { mark: Some('@') });
         m.update(Action::ComposeMove { delta: 1 });
         let said = m.compose_status().unwrap_or_default();
@@ -16858,10 +16903,10 @@ mod tests {
 
     #[test]
     fn a_status_line_too_long_leaves_off_its_trailing_keys_never_part_of_a_word() {
-        let said = "↵ starts @claude in your home folder · ⇧↵ later · Esc";
+        let said = "↵ starts @claude in your home folder · ⌘⇧↵ later · Esc";
         let room = |n: usize| move |text: &str| text.chars().count() <= n;
         assert_eq!(fit_status(said, room(80)), said);
-        assert_eq!(fit_status(said, room(50)), "↵ starts @claude in your home folder · ⇧↵ later");
+        assert_eq!(fit_status(said, room(50)), "↵ starts @claude in your home folder · ⌘⇧↵ later");
         assert_eq!(fit_status(said, room(40)), "↵ starts @claude in your home folder");
         // Then what ↵ does, after a word; with room for no word, the shell cuts it.
         assert_eq!(fit_status(said, room(30)), "↵ starts @claude in your home…");
@@ -16881,7 +16926,7 @@ mod tests {
         assert_eq!((m.compose_status(), m.compose_hint()), (None, None), "closed");
         m.update(Action::OpenCompose { text: String::new() });
         // Empty: what ↵ will do once there is a title. No tags until asked for.
-        let said = "Type, then ↵ starts @claude in your home folder · ⇧↵ later · Esc";
+        let said = "Type, then ↵ starts @claude in your home folder · ⌘⇧↵ later · Esc";
         assert_eq!((m.compose_status().as_deref(), m.compose_hint()), (Some(said), None));
         // The sheet: "? tags" or ⌘/ (the key reference's key) while the line has the keyboard.
         m.update(Action::ComposeSheet);
@@ -16901,11 +16946,11 @@ mod tests {
         assert_eq!(m.compose_status().as_deref(), Some("↵ takes >app · Esc closes the list"));
         m.update(Action::ComposeComplete);
         assert_eq!(line(&m), "fix zoom >app ");
-        assert_eq!(m.compose_status().as_deref(), Some("↵ starts @claude in app · ⇧↵ later · Esc"));
+        assert_eq!(m.compose_status().as_deref(), Some("↵ starts @claude in app · ⌘⇧↵ later · Esc"));
         m.update(Action::FieldEdit { edit: Edit::Delete { to: Motion::Start } });
         keys(&mut m, "fix zoom");
         m.update(Action::ComposePick { mark: '@', name: Some("codex-gpt-6-astra".into()) });
-        let said = "↵ starts @codex-gpt-6-astra in your home folder · ⇧↵ later · Esc";
+        let said = "↵ starts @codex-gpt-6-astra in your home folder · ⌘⇧↵ later · Esc";
         assert_eq!(m.compose_status().as_deref(), Some(said));
         // A saved agent as the default: ↵ starts nothing, and the box says so.
         m.update(Action::ComposePick { mark: '@', name: None });
@@ -19067,6 +19112,7 @@ mod tests {
                 model: model.map(str::to_string),
                 title: title.into(),
                 skills: Vec::new(),
+                body: None,
             })
         };
         let asked = |task, start, cwd: Option<&str>| Effect::StartAgent {
@@ -19335,7 +19381,7 @@ mod tests {
         m.update(Action::ComposeTag { mark: '@' });
         assert_eq!(line(&m), ">app fix @");
         // No room for the mark whole: nothing goes in, and the box says so.
-        let full = "x".repeat(MAX_TITLE - 1);
+        let full = "x".repeat(MAX_PROMPT - 1);
         m.update(Action::CloseCompose);
         m.update(Action::OpenCompose { text: full.clone() });
         m.update(Action::FieldEdit { edit: Edit::Move { to: Motion::Left, select: false } });
@@ -19345,7 +19391,7 @@ mod tests {
 
     #[test]
     fn enter_with_rows_on_show_takes_one_and_never_files_a_half_typed_tag() {
-        // (line, what ↵ and ⇧↵ make of it: the line a row gives, or `None`: the task is added.)
+        // (line, what ↵ and ⌘⇧↵ make of it: the line a row gives, or `None`: the task is added.)
         let cases = [
             ("fix it >", Some("fix it >app ")),
             ("fix #", Some("fix #canvas ")),
@@ -19407,8 +19453,13 @@ mod tests {
         m.update(Action::OpenCompose { text: "fix zoom >app".into() });
         // Its agent, in the drawer, with the keyboard, in its repository. Its space opens, one
         // empty tab; nothing the user had changes.
-        let launch =
-            agents::Launch { runner: RunnerId::Claude, model: None, title: "fix zoom".into(), skills: Vec::new() };
+        let launch = agents::Launch {
+            runner: RunnerId::Claude,
+            model: None,
+            title: "fix zoom".into(),
+            skills: Vec::new(),
+            body: None,
+        };
         let start = agents::Start::New(launch);
         let agent = Effect::StartAgent {
             task: Subject::Task(1),

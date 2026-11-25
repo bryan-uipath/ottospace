@@ -35,26 +35,37 @@ pub fn tag_color(mark: char) -> u32 {
 
 impl Workspace {
     /// The box's keys. ↵ takes the dropdown's highlighted row, else adds the task and starts
-    /// its agent; ⇧↵ adds it for later; ⌘↵ adds and starts it; ⌥⌘N switches between this checkout
-    /// and a new worktree, where offered; Tab takes a row; ↑ ↓ (⌃P ⌃N) move over the rows; ⌃G edits the line in the user's editor; Esc closes the dropdown,
+    /// its agent; ⇧↵ or ⌥↵ starts a new line; ⌘⇧↵ adds it for later; ⌘↵ adds and starts it; ⌥⌘N switches between this checkout
+    /// and a new worktree, where offered; Tab takes a row; ↑ ↓ (⌃P ⌃N) move over a list's rows while one shows, else a
+    /// row of the text; ⌃G edits the line in the user's editor; Esc closes the dropdown,
     /// then the box; ⌘O picks files. The rest edit the line. ⌘ shortcuts the line does not use
     /// still reach their bindings; pane ones wait.
     pub fn compose_key(&mut self, event: &KeyDownEvent, window: &Window, cx: &mut Context<Self>) {
         let key = &event.keystroke;
         let m = key.modifiers;
         let plain = !m.shift && !m.alt && !m.platform;
+        // A list shows rows (the tag's dropdown, a picker's): ↑ ↓ are its rows; else the text's.
+        let rows = self.model.dropdown().is_some_and(|menu| !menu.rows.is_empty());
+        let listed = rows || self.model.picker_menu().is_some();
         let action = match key.key.as_str() {
             "enter" if event.is_held => return,
+            "enter" if m.platform && m.shift => Action::ComposeSubmit { open: false },
             "enter" if m.platform => Action::ComposeSubmit { open: true },
             // In the agent's list: the highlighted one becomes the default.
             "enter" if m.alt && self.model.picker_default().is_some() => Action::ComposeDefault,
-            "enter" if m.shift => Action::ComposeSubmit { open: false },
+            // In the bar's one-line title ⇧↵ files for later, as ⌘⇧↵ does.
+            "enter" if m.shift && self.model.bar_draft().is_some() => Action::ComposeSubmit { open: false },
+            // A line break, in the box.
+            "enter" if (m.shift || m.alt) && !m.control && self.model.bar_draft().is_none() => {
+                let edit = ottospace_core::edit::Edit::Replace { range: None, text: "\n".into() };
+                Action::FieldEdit { edit }
+            }
             "enter" => Action::ComposeEnter,
             "escape" => Action::ComposeEscape,
             "tab" if m.shift => Action::ComposePickerStep { delta: -1 },
             "tab" => Action::ComposeComplete,
-            "up" if plain && !m.control => Action::ComposeMove { delta: -1 },
-            "down" if plain && !m.control => Action::ComposeMove { delta: 1 },
+            "up" if plain && !m.control && listed => Action::ComposeMove { delta: -1 },
+            "down" if plain && !m.control && listed => Action::ComposeMove { delta: 1 },
             "p" if plain && m.control => Action::ComposeMove { delta: -1 },
             "n" if plain && m.control => Action::ComposeMove { delta: 1 },
             // The line in the user's editor.

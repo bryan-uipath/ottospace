@@ -184,6 +184,10 @@ impl Model {
             }
         }
         let boxed = pen && self.capture.as_ref().is_none_or(|bar| bar.boxed);
+        // The box's lines as the bar's title: one line, a title's length.
+        if !boxed && let Some(field) = self.compose.as_ref().filter(|field| field.text().contains('\n')) {
+            self.compose = Some(Field::new(&field.text().replace('\n', " "), MAX_TITLE));
+        }
         // A draft in the bar is no box of the drawer: its task goes where the user is, also once
         // filed. Nor a quick note: its pills are not the draft's.
         if !boxed && self.capture.as_ref().is_none_or(|bar| !bar.boxed) {

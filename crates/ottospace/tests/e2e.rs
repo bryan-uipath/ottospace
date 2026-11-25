@@ -2428,6 +2428,30 @@ fn list_mode_drives_the_bar_with_the_keyboard() {
     assert_eq!(otto.call(json!({"cmd": "split", "axis": "down"}))["mode"], "normal");
 }
 
+/// The new-task box takes several lines: ⇧↵ and ⌥↵ start one, it grows with them, ↑ goes a row
+/// up; ⌘⇧↵ files the task for later: the first line its title, the rest its body.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn the_new_task_box_takes_several_lines_the_first_its_title() {
+    let otto = Otto::launch("compose-lines");
+    let height = |reply: &Value| rect(&reply["field"]["bounds"])[3];
+    let one = otto.user_key("cmd-n f i x space z o o m");
+    assert_eq!(one["field"]["of"], "compose", "{}", one["field"]);
+    let two = otto.user_key("shift-enter i t space f l i c k e r s");
+    assert_eq!(two["state"]["compose"], "fix zoom\nit flickers");
+    assert!(height(&two) > height(&one) * 1.5, "grew: {} then {}", height(&one), height(&two));
+    let three = otto.user_key("alt-enter o n space r e s i z e");
+    assert_eq!(three["state"]["compose"], "fix zoom\nit flickers\non resize");
+    // ↑ is the text's, a row up, with no dropdown open.
+    let up = otto.user_key("up");
+    let (cursor, end) = (up["field"]["cursor"].as_u64().unwrap(), three["field"]["cursor"].as_u64().unwrap());
+    assert!(9 <= cursor && cursor < end, "a row up: {cursor} of {end}");
+    let filed = otto.user_key("cmd-shift-enter");
+    let task = &filed["state"]["tasks"]["list"][0];
+    assert_eq!((&task["title"], &task["body"]), (&json!("fix zoom"), &json!("it flickers\non resize")));
+    assert_eq!(filed["mode"], "normal", "for later: the box closed");
+}
+
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn the_new_task_box_files_a_line() {
@@ -4154,19 +4178,19 @@ fn the_text_field_moves_selects_and_undoes() {
     // The selection is replaced by what is typed next, and ↵ adds the task.
     key("cmd-a");
     key("t i d y");
-    // ⇧↵ files it for later: the box closes.
-    let reply = key("shift-enter");
+    // ⌘⇧↵ files it for later: the box closes.
+    let reply = key("cmd-shift-enter");
     assert_eq!(
         (reply["mode"].as_str(), reply["state"]["tasks"]["list"][0]["title"].as_str(), &reply["field"]),
         (Some("normal"), Some("tidy"), &Value::Null)
     );
 
-    // A line wider than the box scrolls: the caret stays inside it.
+    // A line wider than the box wraps: the box grows, the caret stays inside it.
     let long = "a long line of words that goes on and on ".repeat(4);
     otto.call(json!({"cmd": "compose", "text": long.trim()}));
     let drawn = otto.drawn();
     let (b, x) = (rect(&drawn["field"]["bounds"]), drawn["field"]["cursor_x"].as_f64().unwrap());
-    assert!(x > b[0] + b[2] - 20.0 && x <= b[0] + b[2], "the caret is at the right edge: {}", drawn["field"]);
+    assert!(b[3] > 40.0 && x > b[0] && x <= b[0] + b[2], "wrapped, the caret inside: {}", drawn["field"]);
     key("cmd-left");
     assert_eq!(otto.drawn()["field"]["cursor_x"].as_f64(), Some(b[0]));
 }
@@ -4400,7 +4424,7 @@ fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
     assert_eq!(reply["compose_plan"]["dir"], "~/notes/2026/");
     // The pane is in the workspace made for it (Home holds none): ↵ starts it there.
     // Once the folder's own rows are read: until then ↵ waits for the list.
-    let said = "↵ starts @claude in ~/notes/2026/, in this workspace · ⇧↵ later · Esc";
+    let said = "↵ starts @claude in ~/notes/2026/, in this workspace · ⌘⇧↵ later · Esc";
     otto.wait_for("↵ to start the agent there", |o| {
         (o.call(json!({"cmd": "state"}))["compose_status"] == said).then_some(())
     });
@@ -4408,8 +4432,8 @@ fn a_path_typed_a_letter_at_a_time_keeps_its_dropdown_still() {
     let reply = key("escape");
     assert_eq!((field(&reply).0.as_str(), &reply["compose_menu"]), ("plan my week ~/notes/2026/", &Value::Null));
     otto.wait_for("the line's tags", |o| o.call(json!({"cmd": "state"}))["compose_read"].as_bool().filter(|r| *r));
-    // ⇧↵ files it for later: no agent starts. The path stays in the title; the folder is the task's.
-    let reply = key("shift-enter");
+    // ⌘⇧↵ files it for later: no agent starts. The path stays in the title; the folder is the task's.
+    let reply = key("cmd-shift-enter");
     let task = &reply["state"]["tasks"]["list"][0];
     let folder = home.join("notes/2026").to_string_lossy().into_owned();
     assert_eq!((&task["title"], &task["folder"]), (&json!("plan my week ~/notes/2026/"), &json!(folder)));
@@ -4451,7 +4475,7 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     let reply = otto.call(json!({"cmd": "compose_drop", "paths": [file, folder]}));
     assert_eq!(field(&reply).0, format!("read {} {folder} ", file.replace(' ', "\\ ")));
     read();
-    let reply = key("shift-enter");
+    let reply = key("cmd-shift-enter");
     let task = &reply["state"]["tasks"]["list"][0];
     assert_eq!(
         (task["title"].as_str(), &task["paths"], &task["resolved"]),
@@ -4473,7 +4497,7 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     );
     assert_eq!(reply["compose_note"], "1 left out: its name is too long, or not one a line can hold");
     read();
-    let reply = key("shift-enter");
+    let reply = key("cmd-shift-enter");
     let task = &reply["state"]["tasks"]["list"][1];
     assert_eq!((&task["paths"], &task["resolved"]), (&json!([shot, outside]), &json!([shot, outside])));
 
@@ -4499,7 +4523,7 @@ fn files_dropped_on_the_new_task_box_and_what_is_pointed_at_go_into_the_line() {
     assert_eq!((field(&reply).0, reply["mode"].as_str()), (format!(r"compare ^Tab\ 1 ^{escaped} "), Some("compose")));
     assert_eq!(otto.mouse("move", below)["compose_pointing"], Value::Null, "no ⌥: nothing is outlined");
     // The task keeps what each pointed at, as it was.
-    let reply = key("shift-enter");
+    let reply = key("cmd-shift-enter");
     let task = &reply["state"]["tasks"]["list"][2];
     assert_eq!((reply["mode"].as_str(), task["title"].as_str()), (Some("normal"), Some("compare")));
     // The state has what tells the pane apart; the task's file keeps its name and id only.
@@ -4571,8 +4595,8 @@ fn the_boxs_pickers_show_the_choice_and_its_bottom_row_is_one_line() {
         let said = taken["compose_status"].as_str().unwrap_or_default().to_string();
         assert!(said.starts_with(&format!("↵ starts @{agent} in flow-app")), "{said}");
         assert_eq!(taken["compose_plan"]["agent"], json!(agent));
-        // ⇧↵, as the line says: for later, with that agent.
-        let filed = otto.user_key("shift-enter");
+        // ⌘⇧↵, as the line says: for later, with that agent.
+        let filed = otto.user_key("cmd-shift-enter");
         let tasks = filed["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
         assert_eq!(tasks.last().map(|task| task["agent"].clone()), Some(json!(agent)));
         // The quick note: its field, its project's picker and its button; no agent or repository.
@@ -4632,12 +4656,12 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     let plan = json!({"agent": "codex", "starts": true, "dir": null, "branch": null});
     assert_eq!(reply["compose_plan"], plan);
     // One line says what ↵ does; the tags only on demand.
-    assert_eq!(reply["compose_status"], json!("Type, then ↵ starts @codex in your home folder · ⇧↵ later · Esc"));
+    assert_eq!(reply["compose_status"], json!("Type, then ↵ starts @codex in your home folder · ⌘⇧↵ later · Esc"));
     assert_eq!(reply["compose_hint"], Value::Null);
-    // Typing goes into it; ⇧↵ files the task for later and the box closes. A task is open now:
+    // Typing goes into it; ⌘⇧↵ files the task for later and the box closes. A task is open now:
     // the drawer goes.
     key("cmd-a t i d y space # x");
-    let reply = key("shift-enter");
+    let reply = key("cmd-shift-enter");
     assert_eq!(reply["state"]["tasks"]["list"][0]["title"], "tidy");
     assert_eq!(
         (&reply["compose_host"], &reply["welcome"], &reply["mode"]),
@@ -4646,7 +4670,7 @@ fn with_nothing_open_the_drawer_offers_a_new_task() {
     // ⌘N opens it again, empty: what ↵ will do once it has words; ⌘/ shows the tags, again every key.
     let reply = key("cmd-n");
     assert_eq!(reply["compose_host"], "drawer");
-    assert_eq!(reply["compose_status"], "Type, then ↵ starts @claude in your home folder · ⇧↵ later · Esc");
+    assert_eq!(reply["compose_status"], "Type, then ↵ starts @claude in your home folder · ⌘⇧↵ later · Esc");
     let reply = otto.user_key("cmd-/");
     assert!(
         reply["compose_hint"].as_str().is_some_and(|hint| hint.starts_with("#project")),
@@ -6698,8 +6722,8 @@ fn the_boxs_pen_captures_a_pane_and_comes_back_to_the_box() {
     otto.user_drag(at(picture, 0.5, 0.5), at(picture, 0.7, 0.7));
     let esc = otto.user_key("escape");
     assert_eq!((&esc["mode"], materials(&esc), field(&esc).0.as_str()), (&json!("compose"), 1, "fix it"));
-    // ⇧↵, as the line says: for later, with its capture.
-    let filed = otto.user_key("shift-enter");
+    // ⌘⇧↵, as the line says: for later, with its capture.
+    let filed = otto.user_key("cmd-shift-enter");
     let tasks = filed["state"]["tasks"]["list"].as_array().cloned().unwrap_or_default();
     let task = tasks.iter().find(|task| task["title"] == "fix it").cloned().expect("filed");
     assert_eq!(task["materials"].as_array().map(Vec::len), Some(1), "{task}");
@@ -8356,7 +8380,7 @@ fn a_task_started_in_a_workspace_makes_it_the_tasks_in_place() {
         assert_eq!((&theirs["workbooks"][0]["task"], row(&theirs)), (&Value::Null, row(&before)));
         otto.user_key("cmd-n");
         otto.user_key("l a t e r");
-        let later = otto.user_key("shift-enter");
+        let later = otto.user_key("cmd-shift-enter");
         assert_eq!(
             (&later["workbooks"][0]["task"], row(&later), selected(&later)),
             (&Value::Null, row(&before), book.clone())
@@ -8573,7 +8597,7 @@ fn a_repos_click_makes_a_workspace_of_its_worktree_where_terminals_and_tasks_sta
     // A task started there: its agent in the default worktree.
     otto.user_key("cmd-n");
     let typed = otto.user_key("o n e");
-    assert_eq!(typed["compose_status"], "↵ starts @claude in app-2 on fix/zoom, in this workspace · ⇧↵ later · Esc");
+    assert_eq!(typed["compose_status"], "↵ starts @claude in app-2 on fix/zoom, in this workspace · ⌘⇧↵ later · Esc");
     otto.user_key("enter");
     let started = |dir: String| {
         let bin = bin.clone();
@@ -8656,7 +8680,7 @@ fn the_new_task_box_makes_a_new_worktree_and_starts_the_task_there() {
     assert_eq!(reply["compose_worktree"]["new"], false, "a client chose: {}", reply["compose_worktree"]);
     let chosen = otto.user_key("cmd-alt-n");
     assert_eq!(chosen["compose_worktree"]["new"], true);
-    let said = "↵ starts @claude in a new worktree of app on fix-the-zoom, in this workspace · ⇧↵ later · Esc";
+    let said = "↵ starts @claude in a new worktree of app on fix-the-zoom, in this workspace · ⌘⇧↵ later · Esc";
     assert_eq!(chosen["compose_status"], said);
 
     // ↵: the worktree is made, the agent starts there, the workspace's default follows it.
@@ -9994,7 +10018,7 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     let argv = otto.wait_for("the argv", |_| agent_argv(&bin, "claude"));
     let state = otto.call(json!({"cmd": "state"}));
     let session = state["state"]["tasks"]["list"][0]["session"]["id"].as_str().expect("a session").to_string();
-    let prompt = ottospace_core::agents::prompt("fix login", None, &[]);
+    let prompt = ottospace_core::agents::prompt("fix login", None, None, &[]);
     assert_eq!(without_mcp(&argv), [app.as_str(), "--session-id", &session, "--", &prompt]);
     // Its MCP server for the run: this program, `mcp`, the test's socket; only its tools allowed.
     let config = argv.iter().position(|a| a == "--mcp-config").map(|at| argv[at + 1].clone()).expect("an MCP config");
@@ -10049,7 +10073,7 @@ fn a_click_shows_a_task_and_its_start_runs_the_agent_in_the_drawer_and_the_works
     // A task tagged with a Codex model starts Codex with that model, in the home folder.
     otto.start_task(2);
     let argv = otto.wait_for("codex's argv", |_| agent_argv(&bin, "codex"));
-    let prompt = ottospace_core::agents::prompt("try codex", None, &[]);
+    let prompt = ottospace_core::agents::prompt("try codex", None, None, &[]);
     assert_eq!(without_mcp(&argv[1..]), ["--model", "gpt-6-astra", "--", &prompt]);
     assert!(argv.iter().any(|a| a.starts_with("mcp_servers.ottospace_task.command=")), "{argv:?}");
     assert_eq!(Some(&argv[0]), std::env::var("HOME").ok().as_ref(), "no repository: the home folder");
@@ -15370,7 +15394,8 @@ fn ctrl_g_edits_the_new_task_line_in_the_users_editor() {
     otto.wait_for("the editor again", |_| given().filter(|g| g == "fix zoom"));
     editor_quits(&ctl, Some("fix zoom\nin the canvas\n"), 0);
     let back = otto.wait_for("the editor's end", |o| Some(state(o)).filter(|s| s["editor"].is_null()));
-    assert_eq!(back["state"]["compose"], "fix zoom in the canvas");
+    // The box keeps lines: the editor's come back as they were, the last break dropped.
+    assert_eq!(back["state"]["compose"], "fix zoom\nin the canvas");
     assert_eq!(back["state"]["tasks"]["list"].as_array().map(Vec::len), Some(0), "nothing filed");
     assert_eq!(back["field"]["of"], "compose");
     assert!(drafts(&home).is_empty(), "{:?}", drafts(&home));

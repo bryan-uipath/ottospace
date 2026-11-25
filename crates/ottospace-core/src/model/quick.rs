@@ -113,7 +113,7 @@ impl Model {
         }
     }
 
-    /// ↵ or ⇧↵ (`open` false): the line filed as a task for later, nothing started. ⌘↵: started now,
+    /// ↵ or ⌘⇧↵ (`open` false): the line filed as a task for later, nothing started. ⌘↵: started now,
     /// in its own space, which is shown. Either way its pills are its note's (`Effect::NoteKept`).
     pub(super) fn quick_submit(&mut self, open: bool, effects: &mut Vec<Effect>) {
         if !open {

@@ -1,4 +1,4 @@
-# The new-task box: empty, being typed in, with a folder the agent will run in, and a bare mark.
+# The new-task box: empty, being typed in, with a folder the agent will run in, a bare mark, and several lines.
 {"env":{"OTTOSPACE_PATH_HOME":"{ROOT}/user"}}
 {"cmd":"split","kind":"empty"}
 {"cmd":"compose"}
@@ -18,3 +18,9 @@
 {"cmd":"key","keys":">","as":"user"}
 {"until":"compose_menu.rows.0"}
 {"shot":"bare-mark"}
+# Several lines: the title, then more (⇧↵), wrapped and grown.
+{"cmd":"key","keys":"escape escape","as":"user"}
+{"cmd":"compose","text":"fix the zoom flicker on resize in the canvas"}
+{"cmd":"key","keys":"shift-enter i t space f l i c k e r s space w h e n space t h e space w i n d o w space i s space d r a g g e d space b y space i t s space c o r n e r space a n d space t h e space p a n e s space r e d r a w","as":"user"}
+{"settle":300}
+{"shot":"lines"}

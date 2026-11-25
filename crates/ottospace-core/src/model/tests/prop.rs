@@ -782,6 +782,7 @@ impl Gen<'_> {
             resolved: self.names(DIRS, 2),
             skills: self.names(SKILLS, 2),
             line: None,
+            body: None,
             created: self.rng.coin().then(|| self.time()),
             session: self.rng.one_in(4).then(|| self.link()),
             refs: Vec::new(),
@@ -3331,7 +3332,8 @@ fn check(m: &Model) -> Result<(), String> {
     ensure!(m.picker_menu().is_none_or(|menu| m.compose_pickers().contains(&menu.mark)), "a list of no picker");
     if let Some((of, field)) = m.open_field() {
         let most = match of {
-            "compose" => MAX_TITLE,
+            "compose" if m.bar_draft().is_some() => MAX_TITLE,
+            "compose" => crate::tasks::MAX_PROMPT,
             "mark" | "workbook" | "tab" => marks::MAX_NAME,
             "worktree" => crate::repos::MAX_BRANCH,
             "note" => capture::MAX_NOTE,
@@ -3339,7 +3341,10 @@ fn check(m: &Model) -> Result<(), String> {
         };
         let text = field.text();
         ensure!(text.chars().count() <= most, "the {of} field holds {} characters", text.chars().count());
-        ensure!(!text.chars().any(char::is_control), "the {of} field holds a control character: {text:?}");
+        // A field of several lines (the box, a composer) keeps its line breaks; no other control.
+        let breaks = matches!(of, "talk" | "btw") || (of == "compose" && m.bar_draft().is_none());
+        let control = |c: &char| c.is_control() && !(breaks && *c == '\n');
+        ensure!(!text.chars().any(|c| control(&c)), "the {of} field holds a control character: {text:?}");
         let (cursor, selection) = (field.cursor(), field.selection());
         ensure!(
             text.get(selection.clone()) == Some(field.selected()),
@@ -4232,7 +4237,12 @@ impl Run {
         let filing = m.compose_line().filter(|_| submits && !takes && !answers && refused.is_none());
         // A draft with captures is filed under a name of its own when none was typed.
         let named = m.capture_title();
-        let filing = filing.map(|line| (line.clone(), m.draft(line)));
+        // The box cuts a long first line for the title (`compose::cut_title`).
+        let filing = filing.map(|line| {
+            let mut draft = m.draft(line);
+            crate::compose::cut_title(&mut draft, MAX_TITLE);
+            (line.clone(), draft)
+        });
         // A quick note files under its project, that of what was in front, unless its line names one.
         let quick_project = m.quick_project();
         // The default worktree of the workspace a task started now would join, and the box's folder.
@@ -5516,7 +5526,7 @@ impl Run {
                     filed.len() == 1 && filed[0].title == named && filed[0].title_generated && fixed,
                     "a draft with captures and no title filed {filed:?}"
                 );
-            } else if draft.title.is_empty() || draft.title.chars().count() > MAX_TITLE {
+            } else if draft.title.is_empty() {
                 ensure!(
                     filed.is_empty() && m.compose_line() == Some(&line),
                     "a line with no title filed a task, or closed the box"

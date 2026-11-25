@@ -12,6 +12,9 @@ pub const MAX_ID: TaskId = 1_000_000_000;
 /// The longest title, in characters. It keeps a task's file small enough to read back.
 pub const MAX_TITLE: usize = 500;
 
+/// The most characters the new-task box holds: a title and the lines after it.
+pub const MAX_PROMPT: usize = 20_000;
+
 /// Who sent a socket request, by the pass it carried. The shell matches the pass; the core never
 /// sees one (`docs/ai/agent-mode.md`, "Who is asking").
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -362,6 +365,9 @@ pub struct Task {
     /// The line it was filed from, as typed: the first message shows it, its tags as pills.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line: Option<String>,
+    /// The lines after its title's in the box, as typed: its agent is asked them after the title.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub body: Option<String>,
     /// When it was filed (milliseconds since 1970). `None`: filed before this was kept.
     #[serde(default)]
     pub created: Option<u64>,
@@ -651,6 +657,7 @@ impl Tasks {
             resolved,
             skills,
             line: None,
+            body: None,
             created: None,
             session: None,
             refs: Vec::new(),
@@ -665,6 +672,13 @@ impl Tasks {
             extra: Default::default(),
         });
         self.next_id
+    }
+
+    /// What its agent is asked after the title: the box's lines after the title's.
+    pub fn set_body(&mut self, id: TaskId, body: Option<String>) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.body = body;
+        }
     }
 
     /// The line the task was filed from, as typed (its tags in place).
@@ -1101,6 +1115,7 @@ mod tests {
             resolved: Vec::new(),
             skills: Vec::new(),
             line: None,
+            body: None,
             created: None,
             session: None,
             refs: Vec::new(),
