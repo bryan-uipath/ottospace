@@ -2021,8 +2021,8 @@ function markInput(value: unknown, at: string): MarkInput {
   throw wrong(`${at}.type`, "what a mark waits for", o.type);
 }
 
-function markKind(value: unknown, at: string): "terminal" | "app" | "tab" | "file" {
-  if (value === "terminal" || value === "app" || value === "tab" || value === "file") return value;
+function markKind(value: unknown, at: string): "terminal" | "app" | "tab" | "file" | "explorer" {
+  if (value === "terminal" || value === "app" || value === "tab" || value === "file" || value === "explorer") return value;
   throw wrong(at, "a mark's kind", value);
 }
 
@@ -2063,7 +2063,7 @@ function workbook(value: unknown, at: string): Workbook {
   const pane = (value: unknown, at: string): WorkbookPane => {
     const p = fields(value, at);
     const kind = p.kind;
-    if (kind !== "terminal" && kind !== "app" && kind !== "empty" && kind !== "file") {
+    if (kind !== "terminal" && kind !== "app" && kind !== "empty" && kind !== "file" && kind !== "explorer") {
       throw wrong(`${at}.kind`, "a pane's kind", kind);
     }
     const read: WorkbookPane = p.app === undefined ? { kind } : { kind, app: str(p.app, `${at}.app`) };

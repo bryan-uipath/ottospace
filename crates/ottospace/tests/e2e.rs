@@ -1443,7 +1443,7 @@ fn the_file_explorer_lists_a_checkout_opens_its_files_and_never_follows_a_link()
         v["paths"].as_array().unwrap().iter().filter_map(|p| p.as_str().map(String::from)).collect::<Vec<_>>()
     };
     // Folders first; the link listed; the ignored log hidden; `.git` never.
-    assert_eq!(paths(&first), ["src", "out", ".gitignore", "README.md"], "{first}");
+    assert_eq!(paths(&first), ["src", ".gitignore", "out", "README.md"], "{first}");
     // → opens `src`; ↓ to its file; ↵ opens it in a viewer beside, the keyboard stays.
     otto.user_key("right");
     let opened = otto.wait_for("src listed", |o| shape(o).filter(|(_, s)| s["rows"] == 5).map(|(_, s)| s));

@@ -35,12 +35,14 @@ pub enum Mark {
     Conflicted,
 }
 
-/// A folder's listing: being read, read (`cut`: more than `MAX_ENTRIES`), or not read.
+/// A folder's listing: being read, read (`cut`: more than `MAX_ENTRIES`), not read, or (the
+/// root's) waiting for Repos to list the checkout.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Listing {
     Reading,
     Read { entries: Vec<Entry>, cut: bool },
     Unread,
+    Unlisted,
 }
 
 /// One row as drawn: a path from the root (`src/main.rs`), its depth, what it is.
@@ -53,6 +55,8 @@ pub struct Row {
     pub link: bool,
     pub ignored: bool,
     pub mark: Option<Mark>,
+    /// A folder open whose listing stops at `MAX_ENTRIES`: it says so.
+    pub cut: bool,
 }
 
 impl Row {
@@ -103,6 +107,7 @@ impl Explorer {
                 link: entry.link,
                 ignored: entry.ignored,
                 mark,
+                cut: open && matches!(self.listings.get(&path), Some(Listing::Read { cut: true, .. })),
             });
             if open {
                 self.add_rows(&path, depth + 1, rows);
@@ -123,24 +128,29 @@ impl Explorer {
     }
 }
 
-/// Names compared as a person reads them: case aside, numbers by value (`2` before `10`).
+/// Names compared as a person reads them: case aside, numbers by value (`2` before `10`), of
+/// any length (by their digits' count, leading zeros aside, then the digits).
 pub fn natural(a: &str, b: &str) -> std::cmp::Ordering {
     let key = |s: &str| {
-        let mut parts: Vec<(String, u64)> = Vec::new();
+        let mut parts: Vec<(String, (usize, String))> = Vec::new();
         let mut text = String::new();
         let mut digits = String::new();
+        let number = |digits: &str| {
+            let value = digits.trim_start_matches('0');
+            (value.len(), value.to_string())
+        };
         for c in s.chars().flat_map(char::to_lowercase) {
             if c.is_ascii_digit() {
                 digits.push(c);
             } else {
                 if !digits.is_empty() {
-                    parts.push((std::mem::take(&mut text), digits.parse().unwrap_or(u64::MAX)));
+                    parts.push((std::mem::take(&mut text), number(&digits)));
                     digits.clear();
                 }
                 text.push(c);
             }
         }
-        parts.push((text, digits.parse().unwrap_or(0)));
+        parts.push((text, number(&digits)));
         parts
     };
     key(a).cmp(&key(b)).then_with(|| a.cmp(b))
@@ -177,6 +187,8 @@ mod tests {
         assert_eq!(names(&e), ["src", "A.md", "b.rs"]);
         e.open.insert("src".into());
         assert_eq!(names(&e), ["src", "src/f2.rs", "src/f10.rs", "A.md", "b.rs"]);
+        // A number past any integer still sorts after a small one (review).
+        assert_eq!(natural("f18446744073709551616", "f2"), std::cmp::Ordering::Greater);
         assert_eq!(e.rows()[1].depth, 1);
     }
 

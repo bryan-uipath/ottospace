@@ -26,7 +26,7 @@ const STATUS_BYTES: u64 = 4 << 20;
 const ROW: f32 = 22.;
 
 enum Job {
-    List { pane: PaneId, root: String, dir: String },
+    List { pane: PaneId, root: String, dir: String, roots: Vec<String> },
     Marks { pane: PaneId, root: String, roots: Vec<String> },
 }
 
@@ -35,9 +35,9 @@ enum Read {
     Marks { pane: PaneId, marks: Vec<(String, Mark)> },
 }
 
-/// What git lists of a checkout (tracked, and new ones it does not ignore), and each folder on the
-/// way: a name in neither is ignored. `None`: no git list (not a listed checkout, or cut).
-type Kept = Option<(HashSet<String>, HashSet<String>)>;
+/// What git ignores in a checkout, as it says it (`dir/` for a whole folder). `None`: not read
+/// (not a listed checkout, or git said too much).
+type Ignored = Option<HashSet<String>>;
 
 /// Reads each folder asked, in turn, on a thread of its own.
 pub struct Reader {
@@ -50,17 +50,18 @@ impl Reader {
         let (jobs, inbox) = channel::<Job>();
         let (done, reads) = channel();
         std::thread::spawn(move || {
-            // Each root's git list, read with its marks (once an explorer opens).
-            let mut kept: HashMap<String, Kept> = HashMap::new();
+            // Each root's ignored list: read before its first listing, read again with its marks.
+            let mut ignored: HashMap<String, Ignored> = HashMap::new();
             for job in inbox {
                 let read = match job {
                     Job::Marks { pane, root, roots } => {
-                        kept.insert(root.clone(), git_list(&root, &roots));
+                        ignored.insert(root.clone(), git_ignored(&root, &roots));
                         Read::Marks { pane, marks: marks(&root, &roots) }
                     }
-                    Job::List { pane, root, dir } => {
-                        let ignored = kept.get(&root).and_then(Option::as_ref);
-                        let listed = list(Path::new(&root), &dir, ignored);
+                    Job::List { pane, root, dir, roots } => {
+                        let kept = ignored.entry(root.clone()).or_insert_with(|| git_ignored(&root, &roots));
+                        // Only a checkout Repos lists: a restored pane or a stale ask reads nothing else.
+                        let listed = listed_top(&root, &roots).and_then(|top| list(&top, &dir, kept.as_ref()));
                         let cut = listed.as_ref().is_some_and(|(_, cut)| *cut);
                         Read::Listed { pane, dir, entries: listed.map(|(entries, _)| entries), cut }
                     }
@@ -75,77 +76,121 @@ impl Reader {
     }
 }
 
-/// The real folder `dir` (from the root) of `root`: each part one plain name, no part a link, and
-/// what it resolves to inside the root. `None`: it is not one.
-fn folder(root: &Path, dir: &str) -> Option<(PathBuf, PathBuf)> {
-    let top = root.canonicalize().ok()?;
-    let mut at = top.clone();
-    for part in dir.split('/').filter(|part| !part.is_empty()) {
-        if !listable(part) {
-            return None;
-        }
-        at.push(part);
-        // Never through a link: one swapped in is refused, not followed.
-        let meta = std::fs::symlink_metadata(&at).ok()?;
-        if meta.file_type().is_symlink() || !meta.is_dir() {
-            return None;
-        }
-    }
-    let real = at.canonicalize().ok()?;
-    (real.starts_with(&top) && Path::new(dir).components().all(|c| matches!(c, Component::Normal(_))))
-        .then_some((top, real))
+/// `root` resolved, if it is a checkout Repos lists (`status_bar::reads_changes`).
+fn listed_top(root: &str, roots: &[String]) -> Option<PathBuf> {
+    let top = Path::new(root).canonicalize().ok()?;
+    ottospace_core::status_bar::reads_changes(top.to_str()?, roots).then_some(top)
 }
 
-/// Folder `dir` of `root`, at most `MAX_ENTRIES` names (`true`: there were more). A link is
-/// listed as one, never followed; a name git ignores says so.
-fn list(root: &Path, dir: &str, kept: Option<&(HashSet<String>, HashSet<String>)>) -> Option<(Vec<Entry>, bool)> {
-    let (_, real) = folder(root, dir)?;
-    let mut entries = Vec::new();
-    let mut cut = false;
-    for item in std::fs::read_dir(real).ok()? {
-        let Ok(item) = item else { continue };
-        let Some(name) = item.file_name().to_str().map(str::to_string) else { continue };
-        if !listable(&name) {
-            continue;
+/// A folder opened by descriptor, never by its path again: each part from the root opened with
+/// `O_NOFOLLOW | O_DIRECTORY` under the one before, so a link swapped in at any moment is refused,
+/// never followed, and nothing outside the root is reached.
+struct Folder(std::os::fd::OwnedFd);
+
+impl Folder {
+    fn open(top: &Path, dir: &str) -> Option<Folder> {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        use std::os::unix::ffi::OsStrExt;
+        let flags = libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC;
+        let top = std::ffi::CString::new(top.as_os_str().as_bytes()).ok()?;
+        // SAFETY: a NUL-ended path; the descriptor is owned from here.
+        let fd = unsafe { libc::open(top.as_ptr(), flags) };
+        let mut at = (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })?;
+        if !Path::new(dir).components().all(|c| matches!(c, Component::Normal(_))) {
+            return None;
         }
-        if entries.len() == MAX_ENTRIES {
-            cut = true;
-            break;
+        for part in dir.split('/').filter(|part| !part.is_empty()) {
+            if !listable(part) {
+                return None;
+            }
+            let name = std::ffi::CString::new(part).ok()?;
+            // SAFETY: `at` is an open folder; `name` one plain part, NUL-ended.
+            let fd = unsafe { libc::openat(std::os::fd::AsRawFd::as_raw_fd(&at), name.as_ptr(), flags) };
+            at = (fd >= 0).then(|| unsafe { OwnedFd::from_raw_fd(fd) })?;
         }
-        // The entry's own type: a link is not followed to learn what it points at.
-        let Ok(kind) = item.file_type() else { continue };
-        let path = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
-        let ignored = kept.is_some_and(|(files, folders)| !files.contains(&path) && !folders.contains(&path));
-        entries.push(Entry { name, dir: kind.is_dir(), link: kind.is_symlink(), ignored });
+        Some(Folder(at))
     }
+
+    /// Its names and their own types (a link is not followed): at most `most`, `true` if more.
+    fn entries(self, most: usize) -> Option<(Vec<(String, bool, bool)>, bool)> {
+        use std::os::fd::IntoRawFd;
+        let fd = self.0.into_raw_fd();
+        // SAFETY: `fd` is an open folder, handed to the stream, which closes it.
+        let stream = unsafe { libc::fdopendir(fd) };
+        if stream.is_null() {
+            // SAFETY: not taken by the stream: closed here.
+            unsafe { libc::close(fd) };
+            return None;
+        }
+        let (mut names, mut cut) = (Vec::new(), false);
+        loop {
+            // SAFETY: `stream` is open until `closedir` below.
+            let entry = unsafe { libc::readdir(stream) };
+            if entry.is_null() {
+                break;
+            }
+            // SAFETY: `readdir` gave a valid entry; its name is NUL-ended.
+            let name = unsafe { std::ffi::CStr::from_ptr((*entry).d_name.as_ptr()) };
+            let Ok(name) = name.to_str() else { continue };
+            if !listable(name) {
+                continue;
+            }
+            if names.len() == most {
+                cut = true;
+                break;
+            }
+            let mut stat: libc::stat = unsafe { std::mem::zeroed() };
+            let c = std::ffi::CString::new(name).ok()?;
+            // SAFETY: the stream's own folder; the name inside it; the link itself, not followed.
+            let ok = unsafe { libc::fstatat(libc::dirfd(stream), c.as_ptr(), &mut stat, libc::AT_SYMLINK_NOFOLLOW) };
+            if ok != 0 {
+                continue;
+            }
+            let kind = stat.st_mode & libc::S_IFMT;
+            names.push((name.to_string(), kind == libc::S_IFDIR, kind == libc::S_IFLNK));
+        }
+        // SAFETY: opened above, closed once.
+        unsafe { libc::closedir(stream) };
+        Some((names, cut))
+    }
+}
+
+/// Folder `dir` of the resolved checkout `top`, at most `MAX_ENTRIES` names (`true`: there were
+/// more). A link is listed as one, never followed; a name git ignores (or under a folder it
+/// ignores) says so.
+fn list(top: &Path, dir: &str, ignored: Option<&HashSet<String>>) -> Option<(Vec<Entry>, bool)> {
+    let (names, cut) = Folder::open(top, dir)?.entries(MAX_ENTRIES)?;
+    let under_ignored = ignored.is_some_and(|ignored| {
+        let mut at = String::new();
+        dir.split('/').filter(|p| !p.is_empty()).any(|part| {
+            at.push_str(part);
+            at.push('/');
+            ignored.contains(&at)
+        })
+    });
+    let entries = names
+        .into_iter()
+        .map(|(name, folder, link)| {
+            let path = if dir.is_empty() { name.clone() } else { format!("{dir}/{name}") };
+            let says = |path: &str| ignored.is_some_and(|ignored| ignored.contains(path));
+            let ignored = under_ignored || says(&path) || (folder && says(&format!("{path}/")));
+            Entry { name, dir: folder, link, ignored }
+        })
+        .collect();
     Some((entries, cut))
 }
 
-/// What git lists of the checkout at `root`, and its folders; `None` past the cap or not a listed one.
-fn git_list(root: &str, roots: &[String]) -> Kept {
-    let (files, cut) = crate::city::checkout_files(
-        Path::new(root),
-        roots,
-        crate::goto::MOST_FILES,
-        crate::goto::MOST_BYTES,
-        false,
-        &[],
-        &|_| true,
-    )?;
-    if cut {
+/// What git ignores in the checkout at `root` (`git ls-files --others --ignored --directory`,
+/// hardened as the status bar's git), only where Repos lists it.
+fn git_ignored(root: &str, roots: &[String]) -> Ignored {
+    let top = listed_top(root, roots)?;
+    let mut ask = crate::child::git_read(&top);
+    ask.args(["ls-files", "-z", "--others", "--ignored", "--exclude-standard", "--directory"]);
+    let said = crate::child::run(ask, STATUS_TIME, STATUS_BYTES).ok()?;
+    if !said.ok || said.out.len() as u64 >= STATUS_BYTES {
         return None;
     }
-    let mut folders = HashSet::new();
-    for (path, _) in &files {
-        let mut at = path.as_str();
-        while let Some((parent, _)) = at.rsplit_once('/') {
-            if !folders.insert(parent.to_string()) {
-                break;
-            }
-            at = parent;
-        }
-    }
-    Some((files.into_iter().map(|(path, _)| path).collect(), folders))
+    Some(said.out.split('\0').filter(|path| !path.is_empty()).map(str::to_string).collect())
 }
 
 /// Git's marks of the checkout at `root`: `git status`, hardened (`child::git_read`), only where
@@ -189,7 +234,8 @@ fn parse_status(out: &str) -> Vec<(String, Mark)> {
 impl Workspace {
     /// `ListDir`: read folder `dir` of explorer `pane`.
     pub(crate) fn list_dir(&self, pane: PaneId, root: &str, dir: &str) {
-        let _ = self.explorer_reader.jobs.send(Job::List { pane, root: root.into(), dir: dir.into() });
+        let roots = self.model.checkout_roots();
+        let _ = self.explorer_reader.jobs.send(Job::List { pane, root: root.into(), dir: dir.into(), roots });
     }
 
     /// `ExplorerMarks`: git's list and marks of explorer `pane`'s checkout.
@@ -241,6 +287,7 @@ impl Workspace {
         let said = match explorer.listings.get("") {
             Some(Listing::Reading) => Some("Reading…"),
             Some(Listing::Unread) | None => Some("This folder could not be read"),
+            Some(Listing::Unlisted) => Some("Not a checkout Repos lists: add it to Repos to see its files"),
             Some(Listing::Read { entries, .. }) if entries.is_empty() => Some("Empty folder"),
             Some(Listing::Read { .. }) => None,
         };
@@ -323,6 +370,13 @@ impl Workspace {
                             .child(div().flex_none().w(px(10.)).text_color(rgb(theme::MUTED)).child(chevron))
                             .child(div().flex_none().w(px(14.)).text_color(rgb(theme::MUTED)).child(icon))
                             .child(crate::cut_text(row.name().to_string()).flex_1())
+                            .children(row.cut.then(|| {
+                                div()
+                                    .flex_none()
+                                    .text_xs()
+                                    .text_color(rgb(theme::MUTED))
+                                    .child(format!("first {MAX_ENTRIES}"))
+                            }))
                             .children(mark)
                             .child(this.controls.mark(control))
                             .on_click(cx.listener(move |this, _, window, cx| {
@@ -422,8 +476,8 @@ mod tests {
     #[test]
     fn a_folder_is_listed_inside_the_root_only_never_through_a_link() {
         let dir = Dir(std::env::temp_dir().join(format!("ottospace-explorer-{}", std::process::id())));
-        let root = dir.0.join("app");
-        std::fs::create_dir_all(root.join("src")).expect("folders");
+        std::fs::create_dir_all(dir.0.join("app/src")).expect("folders");
+        let root = dir.0.join("app").canonicalize().expect("the root");
         std::fs::write(root.join("src/main.rs"), "fn main() {}\n").expect("a file");
         std::fs::create_dir_all(dir.0.join("outside")).expect("a folder outside");
         std::fs::write(dir.0.join("outside/secret.txt"), "made-up").expect("a file outside");
@@ -440,6 +494,21 @@ mod tests {
         for bad in ["out", "..", "src/..", "../outside", "src/../../outside", "src/main.rs", ".git"] {
             assert_eq!(names(bad), None, "{bad}");
         }
+        // What git ignores, a file or a whole folder (and what is under it): said so; a link not.
+        std::fs::create_dir_all(root.join("target/debug")).expect("a folder");
+        std::fs::write(root.join("build.log"), "made-up").expect("a file");
+        let ignored: HashSet<String> = ["build.log".to_string(), "target/".to_string()].into();
+        let said = |dir: &str| {
+            let (entries, _) = list(&root, dir, Some(&ignored)).expect("listed");
+            let mut said: Vec<(String, bool)> = entries.into_iter().map(|e| (e.name, e.ignored)).collect();
+            said.sort();
+            said
+        };
+        assert_eq!(
+            said(""),
+            [("build.log".into(), true), ("out".into(), false), ("src".into(), false), ("target".into(), true)]
+        );
+        assert_eq!(said("target"), [("debug".to_string(), true)]);
     }
 
     #[test]

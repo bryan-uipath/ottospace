@@ -1082,6 +1082,14 @@ impl Model {
                     launch: true,
                 });
             }
+            // A checkout Repos still lists: its explorer again, bound to the mark.
+            Target::Pane(PaneRecord { kind: RecordKind::Explorer { root }, .. }) => {
+                let root = root.clone();
+                if self.repo_listed(&root) {
+                    let pane = self.open(Kind::Explorer { root }, axis, None, effects);
+                    self.marks.bind(id, pane);
+                }
+            }
             Target::Pane(_) => {}
             Target::Tab(record) => {
                 // A task's tab goes to its space, while the task is live; else to no space:

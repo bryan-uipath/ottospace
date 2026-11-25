@@ -2653,7 +2653,7 @@ impl Action {
             Action::SlotHosted { kind, .. } => kind.as_ref(),
             _ => None,
         };
-        matches!(kind, Some(Kind::File { path }) if !crate::viewer::sound(path))
+        matches!(kind, Some(Kind::File { path } | Kind::Explorer { root: path }) if !crate::viewer::sound(path))
     }
 
     /// Whether it is the bug report's own: it runs while the report covers the window.

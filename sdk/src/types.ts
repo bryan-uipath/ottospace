@@ -1413,7 +1413,7 @@ export type MarkInput =
 /** A pane of a workspace's saved tab. `app`: an app pane's app, by name. A terminal's `lines` and
  * `has_command` count the history it kept; the text is never in the state. */
 export interface WorkbookPane {
-  kind: "terminal" | "app" | "empty" | "file";
+  kind: "terminal" | "app" | "empty" | "file" | "explorer";
   app?: string;
   lines?: number;
   has_command?: boolean;
@@ -1493,7 +1493,7 @@ export interface Mark {
   name: string;
   /** The letter that jumps to it, or null. */
   key: string | null;
-  kind: "terminal" | "app" | "tab" | "file";
+  kind: "terminal" | "app" | "tab" | "file" | "explorer";
   /** Its pane or tab is open now: `pane` or `tab` (a tab's `id`) says which. */
   open: boolean;
   pane: PaneId | null;

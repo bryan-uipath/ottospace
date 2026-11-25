@@ -92,7 +92,9 @@ impl Model {
             "up" => go(at.map_or(0, |at| at.saturating_sub(1))),
             "right" => match &row {
                 Some(row) if row.dir && !row.open => return self.explorer_turn(id, &row.path, effects),
-                Some(row) if row.dir => go(at.map_or(0, |at| at + 1)).filter(|next| next.starts_with(&row.path)),
+                Some(row) if row.dir => {
+                    go(at.map_or(0, |at| at + 1)).filter(|next| next.starts_with(&format!("{}/", row.path)))
+                }
                 _ => None,
             },
             "left" => match &row {
@@ -161,6 +163,10 @@ impl Model {
     /// A folder opened (listed when it is first) or closed.
     fn explorer_turn(&mut self, pane: PaneId, path: &str, effects: &mut Vec<Effect>) {
         let Some(Kind::Explorer { root }) = self.pane(pane).map(|p| p.kind.clone()) else { return };
+        // Read only while Repos lists it (a restored one may name a checkout since taken off).
+        if !self.repo_listed(&root) {
+            return;
+        }
         let Some(explorer) = self.explorers.get_mut(&pane) else { return };
         if !explorer.open.remove(path) {
             explorer.open.insert(path.to_string());
@@ -227,12 +233,19 @@ impl Model {
             .collect();
         self.explorers.retain(|id, _| panes.iter().any(|(pane, _)| pane == id));
         for (id, root) in panes {
-            if !self.explorers.contains_key(&id) {
-                let mut explorer = Explorer::default();
-                explorer.listings.insert(String::new(), Listing::Reading);
-                self.explorers.insert(id, explorer);
-                effects.push(Effect::ListDir { pane: id, root: root.clone(), dir: String::new() });
-                effects.push(Effect::ExplorerMarks { pane: id, root });
+            // Listed only while Repos lists its checkout: restored before Repos is read, or of one
+            // taken off since, it waits, and is read once Repos lists it (again).
+            let listed = crate::viewer::sound(&root) && self.repo_listed(&root);
+            let explorer = self.explorers.entry(id).or_default();
+            let waits = explorer.listings.get("").is_none_or(|l| *l == Listing::Unlisted);
+            match (waits, listed) {
+                (true, true) => {
+                    explorer.listings.insert(String::new(), Listing::Reading);
+                    effects.push(Effect::ListDir { pane: id, root: root.clone(), dir: String::new() });
+                    effects.push(Effect::ExplorerMarks { pane: id, root });
+                }
+                (true, false) => drop(explorer.listings.insert(String::new(), Listing::Unlisted)),
+                (false, _) => {}
             }
         }
     }
@@ -344,6 +357,18 @@ mod tests {
         // Listed once only: a second answer for the root changes nothing.
         m.update(listed.sent_by(Origin::System));
         assert_eq!(names(&m, id).len(), 3);
+    }
+
+    /// Review: a restored explorer of a checkout Repos does not list waits, and is read once listed.
+    #[test]
+    fn an_explorer_of_an_unlisted_checkout_waits_until_repos_lists_it() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Explorer { root: ROOT.into() }, axis: Axis::Right, beside: None });
+        let id = m.focused.unwrap_or_default();
+        assert_eq!(m.explorer(id).and_then(|e| e.listings.get("")), Some(&Listing::Unlisted));
+        let repo = Repo { name: "app".into(), path: ROOT.into(), branch: Some("main".into()), worktrees: vec![] };
+        let asked = m.update(Action::SetRepos { repos: vec![repo] });
+        assert!(asked.contains(&Effect::ListDir { pane: id, root: ROOT.into(), dir: String::new() }));
     }
 
     #[test]
