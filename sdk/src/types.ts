@@ -150,6 +150,9 @@ export interface AgentDial {
   timed: boolean;
   /** Shown as the header's marker, by the user's choice or because its agent ended. */
   collapsed: boolean;
+  /** Sub-agent faces under the header's picture (at most 3, only while one runs), and how many more. */
+  faces: number;
+  faces_more: number;
 }
 
 export type PaneId = number;

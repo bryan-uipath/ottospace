@@ -302,6 +302,8 @@ function replyWith(overlay: unknown): Record<string, unknown> {
               lit: true,
               timed: true,
               collapsed: false,
+              faces: 0,
+              faces_more: 0,
             },
             working: { verb: "Pondering…", shimmer: false },
             btw: { offered: true, open: true, keys: false, asked: 2, answered: 1, synthetic: 0, failed: 0, waiting: true },

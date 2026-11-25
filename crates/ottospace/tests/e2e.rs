@@ -19433,6 +19433,50 @@ fn an_agents_running_subagents_show_under_its_icon() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// The header's faces: five sub-agents running, three faces under the picture and "+2" (the
+/// state's `faces`, `faces_more`; never their words); all ended, none.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn running_sub_agents_are_faces_under_the_picture_then_plus_n() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let call = |id: &str| {
+        let input = json!({"subagent_type": "Explore", "description": "made-up search", "prompt": "look"});
+        let call = json!({"type": "tool_use", "id": id, "name": "Agent", "input": input});
+        format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#)
+    };
+    let result = |id: &str| {
+        let r = json!({"type": "tool_result", "tool_use_id": id, "content": "done", "is_error": false});
+        format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{r}]}}}}"#)
+    };
+    let init =
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+    let ids = ["a1", "a2", "a3", "a4", "a5"];
+    let mut lines = vec![init];
+    lines.extend(ids.map(call));
+    lines.push(r#"{"_sleep":4}"#.into());
+    lines.extend(ids.map(result));
+    lines.push(r#"{"type":"result","subtype":"success","is_error":false}"#.into());
+    let fixtures = [("turn1.jsonl", lines.join("\n"))];
+    let (root, _, env) = native_setup("faces", &fixtures, &[]);
+    let otto = launch_env("faces", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "survey the parser >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let dial = |o: &Otto| state(o)["drawer"]["native"]["chats"]["1"]["dial"].clone();
+    otto.wait_for("five running", |o| Some(dial(o)).filter(|d| d["faces"] == 3 && d["faces_more"] == 2));
+    for at in 0..3 {
+        otto.control(&format!("talk:face:{at}"));
+    }
+    otto.control("talk:faces-more");
+    assert!(!state(&otto).to_string().contains("made-up search"), "no description in the state");
+    otto.wait_for("all ended", |o| Some(dial(o)).filter(|d| d["faces"] == 0 && d["faces_more"] == 0));
+    assert!(otto.control_opt("talk:face:0").is_none(), "no faces once none runs");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// An agent CLI the user runs in one of our terminals shows in the city of its checkout by its
 /// process alone: no `sessions` setting, no session file. A program named `claude` (`sleep` run
 /// under that name, as the session-wait tests' stand-in) in a pane of the checkout: an icon hovers in the workspace's empty tab; its pane

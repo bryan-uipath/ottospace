@@ -535,14 +535,25 @@ pub struct Transcript {
     /// Its shell calls that run, by id, their command lines: kept apart from the rows, which a
     /// long transcript drops (at most `MOST_SHELLS`, the newest).
     shells: Vec<(String, Text)>,
-    /// Its sub-agent calls that run (`Agent`, `Task`), by id: at most `MAX_SUBS`, the newest.
-    subs: Vec<String>,
+    /// Its sub-agent calls (`Agent`, `Task`), running or ended: at most `MAX_SUBS`, the newest.
+    subs: Vec<Face>,
     /// What its agent read and searched lately: the code city's brief effects.
     pub glances: Glances,
 }
 
-/// The most running sub-agent calls counted.
+/// The most sub-agent calls kept.
 const MAX_SUBS: usize = 64;
+
+/// A sub-agent its agent started, as the header's faces show it: `kind` its type (`Explore`),
+/// `about` its description in one line, when it started and ended. Untrusted: never in the state.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Face {
+    pub id: String,
+    pub kind: String,
+    pub about: String,
+    pub since: u64,
+    pub ended: Option<u64>,
+}
 
 /// The most running shell calls whose lines are kept.
 const MOST_SHELLS: usize = 8;
@@ -638,7 +649,25 @@ impl Transcript {
     /// How many sub-agents its agent runs now: its `Agent` or `Task` calls that still run (one
     /// whose end never came is over once its calls are: an interrupt, an exit).
     pub fn subagents(&self) -> usize {
-        self.subs.iter().filter(|id| self.activity.runs(id)).count()
+        self.subs.iter().filter(|face| self.activity.runs(&face.id)).count()
+    }
+
+    /// Its sub-agents for the header's faces: the running first, then the most recently active
+    /// (started or ended last). Empty while none runs: the faces show only then.
+    pub fn faces(&self) -> Vec<Face> {
+        if self.subagents() == 0 {
+            return Vec::new();
+        }
+        // Newest first, so calls of one batch (one time) keep that order through the stable sort.
+        let mut faces: Vec<Face> = self.subs.iter().rev().cloned().collect();
+        for face in &mut faces {
+            // One whose end never came is over once its calls are (an interrupt, an exit).
+            if face.ended.is_none() && !self.activity.runs(&face.id) {
+                face.ended = Some(face.since);
+            }
+        }
+        faces.sort_by_key(|face| (face.ended.is_some(), std::cmp::Reverse(face.ended.unwrap_or(face.since))));
+        faces
     }
 
     /// The command line of its newest shell call that still runs.
@@ -796,9 +825,13 @@ impl Transcript {
                 self.glances.start(&id, &tool, station, detail.text());
                 if matches!(tool.as_str(), "Agent" | "Task") && !sub {
                     if self.subs.len() == MAX_SUBS {
-                        self.subs.remove(0);
+                        // The oldest that no longer runs goes first: a long one outlives many short.
+                        let activity = &self.activity;
+                        let gone = self.subs.iter().position(|face| !activity.runs(&face.id)).unwrap_or(0);
+                        self.subs.remove(gone);
                     }
-                    self.subs.push(id.clone());
+                    let about = gist.as_ref().map(|gist| gist.line(None)).unwrap_or_default();
+                    self.subs.push(Face { id: id.clone(), kind: label.clone(), about, since: at, ended: None });
                 }
                 if station == Station::Shell {
                     if self.shells.len() == MOST_SHELLS {
@@ -816,7 +849,9 @@ impl Transcript {
                 self.activity.end(&id, failed, at);
                 self.glances.end(&id, output.as_ref().map(Text::text));
                 self.shells.retain(|(of, _)| *of != id);
-                self.subs.retain(|of| *of != id);
+                if let Some(face) = self.subs.iter_mut().find(|face| face.id == id) {
+                    face.ended = Some(at);
+                }
                 let call = self.items.iter_mut().rev().find_map(|item| match &mut item.entry {
                     Entry::Tool { id: of, state, gist, output, .. } if *of == id => Some((state, gist, output)),
                     _ => None,
@@ -1417,6 +1452,61 @@ mod tests {
         assert_eq!(summary["entries"][0]["summary"], serde_json::json!({"kind": "command", "lines": 1, "note": true}));
         assert_eq!(summary["entries"][1]["summary"]["kind"], "path");
         assert!(!summary.to_string().contains("secret"), "{summary}");
+    }
+
+    /// The faces: none while no sub-agent runs; the running first, newest first, then the ended,
+    /// the last to end first; each with its type and description.
+    #[test]
+    fn faces_put_running_sub_agents_first_then_the_most_recent() {
+        let mut t = Transcript::default();
+        let start = |t: &mut Transcript, id: &str, kind: &str, about: &str, at| {
+            let input = serde_json::json!({"description": about, "subagent_type": kind});
+            let gist = crate::gist::claude("Agent", &input);
+            let (id, tool, label, detail) = (id.into(), "Agent".into(), kind.into(), Text::default());
+            let station = Station::Agents;
+            t.fold(Event::ToolStart { id, sub: false, tool, station, label, detail, diff: None, gist }, at);
+        };
+        let end = |t: &mut Transcript, id: &str, at| {
+            t.fold(Event::ToolEnd { id: id.into(), failed: false, output: None }, at)
+        };
+        start(&mut t, "a", "Explore", "Find every caller", 1);
+        start(&mut t, "b", "tests", "Retry backoff tests", 2);
+        start(&mut t, "c", "review", "Review queue.ts", 3);
+        end(&mut t, "a", 4);
+        end(&mut t, "b", 5);
+        let ids = |t: &Transcript| t.faces().into_iter().map(|f| f.id).collect::<Vec<_>>();
+        assert_eq!(ids(&t), ["c", "b", "a"], "running first, then the last to end");
+        let c = &t.faces()[0];
+        assert_eq!((c.kind.as_str(), c.about.as_str(), c.ended), ("review", "Review queue.ts", None));
+        // A sub-agent's own call is no face.
+        t.fold(
+            Event::ToolStart {
+                id: "s".into(),
+                sub: true,
+                tool: "Agent".into(),
+                station: Station::Agents,
+                label: "x".into(),
+                detail: Text::default(),
+                diff: None,
+                gist: None,
+            },
+            6,
+        );
+        assert_eq!(t.faces().len(), 3);
+        end(&mut t, "c", 7);
+        assert!(t.faces().is_empty(), "none runs: no faces");
+        // One long sub-agent outlives `MAX_SUBS` short ones: it is still counted.
+        start(&mut t, "long", "Explore", "Long", 8);
+        for n in 0..MAX_SUBS as u64 {
+            start(&mut t, &format!("short{n}"), "Explore", "Short", 9 + n);
+            end(&mut t, &format!("short{n}"), 9 + n);
+        }
+        assert_eq!(t.subagents(), 1);
+        assert_eq!(t.faces()[0].id, "long");
+        // Started in one batch, at one time: the newest first.
+        start(&mut t, "x", "Explore", "X", 100);
+        start(&mut t, "y", "Explore", "Y", 100);
+        assert_eq!(ids(&t)[..3], ["y", "x", "long"]);
     }
 
     /// A subtask's start is its call's row when there is one, else a row of its own; its end,

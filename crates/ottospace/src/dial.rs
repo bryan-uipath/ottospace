@@ -28,6 +28,9 @@ const PICTURE: f32 = 42.;
 /// A light's side, and its use bar's height.
 const LIGHT: f32 = 20.;
 const BAR: f32 = 2.;
+/// The faces under the picture: how many, and a face's side.
+const FACES: usize = 3;
+const FACE: f32 = 16.;
 /// The context bar's height, on the header's bottom edge.
 const CONTEXT_BAR: f32 = 3.;
 /// The tool stations, in the lights' order, each with its glyph.
@@ -326,7 +329,63 @@ impl Workspace {
         });
         let row = div().flex().items_center().justify_between().gap(px(2.)).min_w_0().children(lights).children(number);
         let column = div().flex_1().min_w_0().flex().flex_col().gap(px(5.)).child(status).child(row);
-        Some(div().py_1().flex().items_center().gap_2().child(picture).child(column))
+        let row = div().flex().items_center().gap_2().child(picture).child(column);
+        Some(div().py_1().flex().flex_col().gap_1().child(row).children(self.faces_row(subject)))
+    }
+
+    /// Under the picture while sub-agents run: a face each, at most `FACES` (running first, then
+    /// the most recently active), then "+n". A face's hover: its type, task, state and time; the
+    /// "+n"'s lists the rest.
+    fn faces_row(&self, subject: &Subject) -> Option<Div> {
+        let faces = self.model.chat(subject)?.transcript.faces();
+        if faces.is_empty() {
+            return None;
+        }
+        let now = crate::now_ms();
+        let say = |face: &ottospace_core::transcript::Face| {
+            let (state, from) = match face.ended {
+                None => ("running", face.since),
+                Some(at) => ("done", at),
+            };
+            let time = ottospace_core::progress::duration(now.saturating_sub(from));
+            format!("{} · {} · {state} · {time}", face.kind, face.about)
+        };
+        let hue = theme::station(Station::Agents);
+        let shown = faces.iter().take(FACES).enumerate().map(|(at, face)| {
+            let running = face.ended.is_none();
+            let letter = face.kind.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+            let tip: gpui::SharedString = say(face).into();
+            div()
+                .id(("talk-face", at))
+                .relative()
+                .flex_none()
+                .size(px(FACE))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .border_1()
+                .border_color(colour(hue).opacity(if running { 1. } else { 0.4 }))
+                .text_size(px(9.))
+                .text_color(colour(hue).opacity(if running { 1. } else { 0.5 }))
+                .child(letter)
+                .child(self.controls.mark(format!("talk:face:{at}")))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+        });
+        let rest = faces.len().saturating_sub(FACES);
+        let more = (rest > 0).then(|| {
+            let tip: gpui::SharedString = faces.iter().skip(FACES).map(say).collect::<Vec<_>>().join("\n").into();
+            div()
+                .id("talk-faces-more")
+                .flex_none()
+                .px_1()
+                .text_xs()
+                .text_color(rgb(theme::MUTED))
+                .child(format!("+{rest}"))
+                .child(self.controls.mark("talk:faces-more".to_string()))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+        });
+        Some(div().flex().items_center().gap_1().children(shown).children(more))
     }
 
     /// The context bar: 3 points on the header's bottom edge, the share of the context used in
@@ -375,6 +434,11 @@ impl Workspace {
         };
         let mut value = serde_json::to_value(&dial).unwrap_or_default();
         value["collapsed"] = self.model.dial_collapsed(subject).into();
+        // The faces under the picture: how many shown and how many more; never their words. None collapsed.
+        let open = !self.model.dial_collapsed(subject);
+        let faces = self.model.chat(subject).filter(|_| open).map(|chat| chat.transcript.faces().len()).unwrap_or(0);
+        value["faces"] = faces.min(FACES).into();
+        value["faces_more"] = faces.saturating_sub(FACES).into();
         // To three places: an f32 widened would say 0.9200000166893004.
         value["context"] = dial.context.map(|used| (f64::from(used) * 1000.).round() / 1000.).into();
         value
