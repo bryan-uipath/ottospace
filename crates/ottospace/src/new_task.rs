@@ -381,7 +381,8 @@ impl Workspace {
             let x = off("compose-folder-clear".into(), None, Action::ComposeFolderClear);
             ui::chip(text, None).id("compose-folder").child(x).into_any_element()
         });
-        pills.into_iter().chain(folder).chain(self.snapshots(cx)).collect()
+        let images = self.image_chips(self.model.compose_images(), "compose-image", cx);
+        pills.into_iter().chain(folder).chain(self.snapshots(cx)).chain(images).collect()
     }
 
     /// The box's ✎ captures, a pill each: the part marked, cropped from its picture, where it is
@@ -464,6 +465,25 @@ impl Workspace {
             )
             .children(list)
             .into_any_element()
+    }
+
+    /// A chip per pasted image: its thumbnail, and × to take it off (`<mark>:<n>`, its ×'s label).
+    pub(crate) fn image_chips(
+        &self,
+        images: &[ottospace_core::tasks::Pasted],
+        mark: &str,
+        cx: &Context<Self>,
+    ) -> Vec<gpui::AnyElement> {
+        let dir = crate::config::images_dir();
+        let chip = |(n, image): (usize, &ottospace_core::tasks::Pasted)| {
+            // Checked as a send reads it (`image_file`); a GIF's every frame would be decoded: none.
+            let file = dir.as_ref().and_then(|dir| crate::conversation::image_file(dir, image));
+            let thumb = file.filter(|_| image.kind() != "gif").map(|file| gpui::img(file).size(px(16.)).rounded_sm());
+            let remove = Action::ImageRemove { id: image.id().into() };
+            let x = self.pill_off(format!("{mark}-off:{}", image.id()), Some(format!("{mark}:{n}")), remove, cx);
+            ui::chip(format!("Image {}", n + 1), None).children(thumb).child(x).into_any_element()
+        };
+        images.iter().enumerate().map(chip).collect()
     }
 
     /// A pill's ×: `action` on a click; `mark`, where it is drawn (`compose_rects`, sneak).

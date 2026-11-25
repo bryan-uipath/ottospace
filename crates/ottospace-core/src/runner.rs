@@ -135,6 +135,9 @@ pub struct Structured {
     /// A message sent while a turn runs reaches the agent in that turn. False: "send now" stops
     /// the turn first (`Action::TalkSendNow`).
     pub mid_turn: bool,
+    /// A message may carry images: Claude Code as base64 image blocks in its stream-json user
+    /// message, Codex as `localImage` paths in `turn/start`.
+    pub images: bool,
 }
 
 /// How far a structured mode is known to work.
@@ -231,6 +234,7 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         // Unconfirmed: 2.1.331's binary names a message queue (`priority` now / next / later,
         // `queued_command`), never probed here. Off until a probe pins it (docs/ai/agent-runners.md).
         mid_turn: false,
+        images: true,
     },
     // `sessions/<pid>.json` names the process; each record carries the `cwd` the agent is in.
     disk: Disk { held: true, cwd: true, cwd_moves: true, waits: true },
@@ -271,6 +275,8 @@ const CODEX: RunnerSpec = RunnerSpec {
         side_question: false,
         // `turn/steer` (`threadId`, `input`, `expectedTurnId`) in the app-server's protocol.
         mid_turn: true,
+        // Its `localImage` is a path read when the turn starts: off until the file is kept that long.
+        images: false,
     },
     // No process is recorded; `session_meta` carries `cwd`. A `turn_context`'s `cwd` is the
     // client's choice for the turn, never the agent's: ottospace sets none, so it never moves.

@@ -132,6 +132,8 @@ pub struct Launch {
     pub skills: Vec<String>,
     /// The lines after its title's: its first message asks them after the title (`prompt`).
     pub body: Option<String>,
+    /// Images pasted in the new-task box: with its first message, where it is drawn natively.
+    pub images: Vec<crate::tasks::Pasted>,
 }
 
 /// How a task's agent comes up in its conversation.
@@ -152,7 +154,7 @@ pub fn launch(tag: Option<&str>, default: &str, models: &Models, title: String) 
     let Agent { runner, model } = read(tag.unwrap_or(default), models);
     // A listed id came from the settings, which keep only names; checked again where it is used.
     let model = model.filter(|id| is_name(id));
-    runner.map(|runner| Launch { runner, model, title, skills: Vec::new(), body: None })
+    runner.map(|runner| Launch { runner, model, title, skills: Vec::new(), body: None, images: Vec::new() })
 }
 
 /// True if `id` is written as a UUID: `8f14e45f-ceea-467f-a8d3-0242ac130003`.
@@ -605,7 +607,14 @@ mod tests {
         assert_eq!(args(Some("ana")), None);
         assert_eq!(launch(None, "ana", &models, String::new()), None);
         // A session id that is no UUID, or a model that is no name, starts nothing.
-        let ask = Launch { runner: RunnerId::Claude, model: None, title: "x".into(), skills: Vec::new(), body: None };
+        let ask = Launch {
+            runner: RunnerId::Claude,
+            model: None,
+            title: "x".into(),
+            skills: Vec::new(),
+            body: None,
+            images: Vec::new(),
+        };
         for id in ["", "--resume", "8f14e45f-ceea-467f-a8d3-0242ac13000", "8f14e45f-ceea-467f-a8d3-0242ac13000g"] {
             assert_eq!(
                 (ask.command(id, None, true, None), resume(RunnerId::Claude, id, Vec::new())),

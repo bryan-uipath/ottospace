@@ -343,12 +343,76 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
     }
 }
 
+/// The largest pasted image, in bytes: what an agent's API takes in one image.
+const MAX_PASTED: u64 = 5 << 20;
+/// Its largest side, and most pixels: drawn as a thumbnail, it is decoded whole.
+const MAX_SIDE: u32 = 8000;
+const MAX_PIXELS: u64 = 25_000_000;
+/// Why a pasted image was not attached.
+const TOO_BIG: &str = "Only a PNG, JPEG, GIF or WebP image of at most 5 MB and 8000 pixels a side is attached";
+
 /// The largest image file drawn as a thumbnail.
 const MAX_THUMB: u64 = 8 << 20;
 /// The most events taken from one agent per tick.
 const BATCH: usize = 500;
 
 impl Workspace {
+    /// The pasted images' files, read as an agent takes them; one gone or no longer an image is
+    /// left out.
+    pub(crate) fn images_of(&self, pasted: &[ottospace_core::tasks::Pasted]) -> Vec<ottospace_agents::Image> {
+        let Some(dir) = crate::config::images_dir() else { return Vec::new() };
+        let path = |image| image_file(&dir, image);
+        pasted.iter().filter_map(|image| ottospace_agents::Image::load(&path(image)?).ok()).collect()
+    }
+
+    /// The image on the clipboard, for the message being written: saved under a name made here
+    /// (never one from the clipboard) in the private images folder, then offered to the core,
+    /// which takes it or says why not. False: no image there, or none could be kept.
+    pub(crate) fn paste_image(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        // Only the user's ⌘V: a client's writes no file (the core would refuse it after).
+        if self.input != Origin::User {
+            return false;
+        }
+        let Some(bytes) = self.clipboard.image(cx) else { return false };
+        let Some(dir) = crate::config::images_dir() else { return false };
+        // The folder is a real one, never a symlink to elsewhere.
+        if std::fs::symlink_metadata(&dir).is_ok_and(|meta| !meta.file_type().is_dir()) {
+            return false;
+        }
+        // Small enough to send and to draw: header-checked, nothing decoded here.
+        let fits = |media: ottospace_agents::Media| {
+            let small =
+                |(w, h): (u32, u32)| w > 0 && h > 0 && w.max(h) <= MAX_SIDE && w as u64 * h as u64 <= MAX_PIXELS;
+            bytes.len() as u64 <= MAX_PASTED && media.size(&bytes).is_some_and(small)
+        };
+        let kind = match ottospace_agents::Media::sniff(&bytes) {
+            Some(media) if fits(media) => media.mime().trim_start_matches("image/"),
+            _ => {
+                self.error = Some(TOO_BIG.into());
+                return true;
+            }
+        };
+        let id = crate::talk::new_uuid().map(|uuid| uuid.replace('-', "")[..16].to_string());
+        let Some(pasted) = id.and_then(|id| ottospace_core::tasks::Pasted::new(&id, kind)) else { return false };
+        if let Err(err) = crate::config::write_private(&dir, &pasted.file(), &bytes) {
+            self.error = Some(format!("The image could not be kept: {err}"));
+            return true;
+        }
+        let paste = Action::ImagePaste { id: pasted.id().into(), kind: pasted.kind().into() };
+        drop(self.dispatch(paste, self.input, window, cx));
+        true
+    }
+
+    /// Images nothing holds any more: their files go.
+    pub(crate) fn drop_images(&self, images: &[ottospace_core::tasks::Pasted]) {
+        let Some(dir) = crate::config::images_dir() else { return };
+        for image in images.iter().filter(|image| !self.model.holds_image(image)) {
+            if let Some(path) = image_file(&dir, image) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
+
     /// Starts a conversation's Claude Code in its structured mode: the argv from the agents
     /// crate's fixed table, through the login shell for its `PATH`, the prompt on stdin.
     /// Returns the new session's id, or why nothing started.
@@ -364,6 +428,11 @@ impl Workspace {
         // task's tab have none.
         let pass = subject.task().map(|_| crate::pass::Live::mint()).transpose()?;
         let server = pass.as_ref().and_then(crate::talk::mcp_server);
+        // The box's images, with the first message of a new session.
+        let images = match start {
+            Start::New(launch) => self.images_of(&launch.images),
+            Start::Resume { .. } => Vec::new(),
+        };
         let (runner, begin, session, model, prompt, added) = match start {
             Start::New(launch) => {
                 let id = crate::talk::new_uuid().ok_or("no random bytes for a session id")?;
@@ -414,7 +483,7 @@ impl Workspace {
         let name = runner.name();
         let driver = Driver::spawn(command, wire).map_err(|err| format!("{name}: {err}"))?;
         if let Some(text) = prompt {
-            driver.send(Input::Send { text, images: Vec::new() }).map_err(|err| format!("{name}: {err}"))?;
+            driver.send(Input::Send { text, images }).map_err(|err| format!("{name}: {err}"))?;
         }
         let model = model.unwrap_or_else(|| name.into());
         let given = session.clone().map(|id| (runner, id));
@@ -437,10 +506,10 @@ impl Workspace {
     /// A message, an answer or an interrupt the core asked for, to the agent.
     /// False: a message it could not write (no agent, or its pipe broke as it ended).
     pub(crate) fn native_input(&mut self, subject: &Subject, input: NativeInput) -> bool {
-        let sends = matches!(input, NativeInput::Send(_));
+        let sends = matches!(input, NativeInput::Send(..));
         let Some(native) = self.drawer.native.get_mut(subject) else { return !sends };
         let input = match input {
-            NativeInput::Send(text) => Input::Send { text, images: Vec::new() },
+            NativeInput::Send(text, images) => Input::Send { text, images },
             NativeInput::Interrupt => Input::Interrupt,
             NativeInput::Answer { ticket: n, allow, message } => {
                 let answer = if allow { Answer::Allow } else { Answer::Deny { message } };
@@ -2374,6 +2443,14 @@ impl Workspace {
                 )
             })
             .children(self.queue_rows(chat, cx))
+            // The images pasted for the message being written.
+            .when(!chat.images.is_empty(), |composer| {
+                composer.child(div().flex().flex_wrap().gap_1().children(self.image_chips(
+                    &chat.images,
+                    "talk-image",
+                    cx,
+                )))
+            })
             .child(
                 div()
                     .flex()
@@ -2498,6 +2575,8 @@ impl Workspace {
                     "draft_chars": chat.draft.text().chars().count(),
                     // Messages queued while the agent works: how many, never their words; and whether the user's stop holds them.
                     "queued": self.model.queue_of(&subject).len(),
+                    // Images pasted for the message being written: how many, never their names.
+                    "images": chat.images.len(),
                     "held": chat.held,
                     // The user's editor has its draft (⌃G).
                     "editing": self.model.edits(&subject),
@@ -2532,7 +2611,7 @@ impl Workspace {
 
 /// What the core asked to reach an agent.
 pub enum NativeInput {
-    Send(String),
+    Send(String, Vec<ottospace_agents::Image>),
     Answer { ticket: u64, allow: bool, message: Option<String> },
     Answers { ticket: u64, answers: Vec<ottospace_core::ask::Chosen> },
     Interrupt,
@@ -2614,6 +2693,41 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
         Said::Unknown { kind } if ottospace_agents::is_quiet(&kind) => return None,
         Said::Unknown { kind } => Event::Unknown { kind },
     })
+}
+
+/// The file of a pasted image in `dir`, checked again here: its name is one component ottospace
+/// makes (`Pasted::new`), the path's folder is `dir` itself, and it is a regular file there, not a
+/// symlink (never followed, to read or to remove). `None`: none such.
+pub(crate) fn image_file(dir: &Path, image: &ottospace_core::tasks::Pasted) -> Option<std::path::PathBuf> {
+    let image = ottospace_core::tasks::Pasted::new(image.id(), image.kind())?;
+    // The folder itself a folder, not a symlink to one elsewhere.
+    if !std::fs::symlink_metadata(dir).ok()?.file_type().is_dir() {
+        return None;
+    }
+    let path = dir.join(image.file());
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    (path.parent() == Some(dir) && meta.file_type().is_file()).then_some(path)
+}
+
+/// At start: the pasted images no task or queued message names (a draft's, before a quit or a
+/// crash) are removed. Only regular files named as ottospace names one; nothing else is touched.
+pub(crate) fn clean_images(tasks: &[ottospace_core::tasks::Task]) {
+    let Some(dir) = crate::config::images_dir() else { return };
+    let named: std::collections::BTreeSet<String> = tasks
+        .iter()
+        .flat_map(|task| task.images.iter().chain(task.queued.iter().flat_map(|queued| queued.images.iter())))
+        .map(|image| image.file())
+        .collect();
+    let Ok(entries) = std::fs::read_dir(&dir) else { return };
+    for entry in entries.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let ours = name.split_once('.').and_then(|(id, kind)| ottospace_core::tasks::Pasted::new(id, kind));
+        if let Some(image) = ours.filter(|image| !named.contains(&image.file())) {
+            if let Some(path) = image_file(&dir, &image) {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+    }
 }
 
 /// Reads a local image for a thumbnail, off the main thread: inside the repository once its
@@ -2810,6 +2924,29 @@ const TABLE_CHAR: f32 = 7.6;
 
 #[cfg(test)]
 mod tests {
+
+    /// A pasted image's file is only a regular file named as ottospace names one, in the folder
+    /// itself: a symlink planted there (to a file outside) is neither read nor removed through.
+    #[test]
+    fn an_image_file_is_never_a_symlink_or_outside_its_folder() {
+        struct Dir(std::path::PathBuf);
+        impl Drop for Dir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = Dir(std::env::temp_dir().join(format!("ottospace-images-{}", std::process::id())));
+        let (dir, outside) = (root.0.join("images"), root.0.join("secret.txt"));
+        std::fs::create_dir_all(&dir).expect("a folder");
+        std::fs::write(&outside, "made-up").expect("a file");
+        let image = |id: &str| ottospace_core::tasks::Pasted::new(id, "png").expect("a name");
+        std::fs::write(dir.join("00000000000000a1.png"), [0x89, b'P', b'N', b'G']).expect("an image");
+        std::os::unix::fs::symlink(&outside, dir.join("00000000000000a2.png")).expect("a symlink");
+        assert_eq!(super::image_file(&dir, &image("00000000000000a1")), Some(dir.join("00000000000000a1.png")));
+        assert_eq!(super::image_file(&dir, &image("00000000000000a2")), None, "a symlink");
+        assert_eq!(super::image_file(&dir, &image("00000000000000a3")), None, "none there");
+        assert!(outside.exists());
+    }
     use super::*;
 
     #[test]

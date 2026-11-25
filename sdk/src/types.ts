@@ -45,6 +45,8 @@ export interface NativeChat {
   draft_chars: number;
   /** Messages queued while the agent works: how many, never their words. */
   queued: number;
+  /** Images pasted for the message being written: how many, never their names. */
+  images: number;
   /** The user stopped the turn: the queue waits for their ↵. */
   held: boolean;
   /** The user's editor has the draft (⌃G): the composer takes no typing. */
@@ -450,6 +452,8 @@ export interface Task {
   body?: string;
   /** Messages queued in its conversation, kept over a restart: how many, never their words. Absent: none. */
   queued?: number;
+  /** Images pasted for it, kept until it is done: how many. Absent: none. */
+  images?: number;
   /** When it was filed, in milliseconds since 1970. Null: filed before this was kept. */
   created: number | null;
   /** The session it was adopted from, or null. */
@@ -2254,6 +2258,8 @@ export interface Snapshot {
   compose_plan: { agent: string; starts: boolean; dir: string | null; branch: string | null } | null;
   /** The one line under the box: what ↵ does with the line as it is, then the other keys (`↵ starts @codex in app on main · ⌘⇧↵ later · Esc`). Null while the box is closed. */
   compose_status: string | null;
+  /** Images pasted in the new-task box: how many, never their names. */
+  compose_images: number;
   /** The tag hint, while the box's tags' sheet shows ("? tags", ⌘/); null otherwise. */
   compose_hint: string | null;
   /** What the box's pickers show: the project (null: none), where ↵ starts the agent (`app · main`, a folder; null: the home folder), the agent, and whether it is `default_agent`. Null without pickers (the box closed, the quick note). */

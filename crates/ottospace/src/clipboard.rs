@@ -12,6 +12,8 @@ trait Board {
     fn read(&self, cx: &App) -> Option<String>;
     /// Files copied in Finder.
     fn files(&self) -> Vec<PathBuf>;
+    /// An image's bytes, as copied (a screenshot to the clipboard, an image copied in an app).
+    fn image(&self, cx: &App) -> Option<Vec<u8>>;
     /// The stand-in's text, for a test's state. The system's is never shown.
     fn test_text(&self) -> Option<&str>;
 }
@@ -32,14 +34,22 @@ impl Board for System {
         ottospace_mac::pasteboard::files()
     }
 
+    fn image(&self, cx: &App) -> Option<Vec<u8>> {
+        cx.read_from_clipboard()?.into_entries().find_map(|entry| match entry {
+            gpui::ClipboardEntry::Image(image) => Some(image.bytes),
+            gpui::ClipboardEntry::String(_) => None,
+        })
+    }
+
     fn test_text(&self) -> Option<&str> {
         None
     }
 }
 
-/// A test run's: the last text copied.
+/// A test run's: the last text copied, and the image `OTTOSPACE_CLIPBOARD_IMAGE` names (a made-up
+/// picture the test wrote), read only in a test run: never the user's clipboard.
 #[derive(Default)]
-struct Memory(Option<String>);
+struct Memory(Option<String>, Option<PathBuf>);
 
 impl Board for Memory {
     fn write(&mut self, text: String, _: &mut App) {
@@ -54,6 +64,10 @@ impl Board for Memory {
         Vec::new()
     }
 
+    fn image(&self, _: &App) -> Option<Vec<u8>> {
+        std::fs::read(self.1.as_ref()?).ok()
+    }
+
     fn test_text(&self) -> Option<&str> {
         self.0.as_deref()
     }
@@ -64,7 +78,8 @@ pub struct Clipboard(Box<dyn Board>);
 impl Clipboard {
     /// The system's, or with `test` a stand-in.
     pub fn new(test: bool) -> Self {
-        Self(if test { Box::new(Memory::default()) } else { Box::new(System) })
+        let image = || std::env::var_os("OTTOSPACE_CLIPBOARD_IMAGE").map(PathBuf::from);
+        Self(if test { Box::new(Memory(None, image())) } else { Box::new(System) })
     }
 
     pub fn copy(&mut self, text: String, cx: &mut App) {
@@ -74,6 +89,11 @@ impl Clipboard {
     /// The text to paste. `None`: no text, or empty.
     pub fn text(&self, cx: &App) -> Option<String> {
         self.0.read(cx).filter(|text| !text.is_empty())
+    }
+
+    /// An image on it, as bytes. `None`: none, or only text.
+    pub fn image(&self, cx: &App) -> Option<Vec<u8>> {
+        self.0.image(cx)
     }
 
     pub fn files(&self) -> Vec<PathBuf> {

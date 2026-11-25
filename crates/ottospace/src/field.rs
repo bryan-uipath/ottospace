@@ -135,6 +135,11 @@ impl Workspace {
         if self.paste_files(window, cx) {
             return true;
         }
+        // An image and no text (a screenshot copied): attached to the message being written.
+        let writing = self.model.field().is_some_and(|(of, _)| matches!(of, "compose" | "talk"));
+        if writing && self.clipboard.text(cx).is_none() && self.paste_image(window, cx) {
+            return true;
+        }
         if let Some(text) = self.clipboard.text(cx) {
             self.edit(Edit::Paste(text), window, cx);
         }

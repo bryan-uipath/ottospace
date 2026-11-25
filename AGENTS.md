@@ -144,6 +144,9 @@ Design note: `docs/ai/attention/plan.md`.
   An E2E run that names none lists none, and never starts an app. `OTTOSPACE_DOCK_APPS` (bundle
   paths, `:` between them) stands for the Dock's apps; a test run that names none has none, and
   never reads the user's Dock.
+- `OTTOSPACE_CLIPBOARD_IMAGE` (a made-up image file) is what the test run's stand-in clipboard
+  holds as an image (⌘V attaches it), read only under `OTTOSPACE_E2E`; a test run never reads the
+  user's clipboard. Pasted images are kept in `<home>/images` (a test names `OTTOSPACE_HOME`).
 - `OTTOSPACE_LISTEN_APPS` (a JSON file of made-up apps) stands for the apps the transcript's picker
   lists, read only under `OTTOSPACE_E2E`; a test run that names none lists none, never the user's.
 - `OTTOSPACE_GH` (a program) stands for `gh` in a test run: a stand-in script with fixture JSON. A test run

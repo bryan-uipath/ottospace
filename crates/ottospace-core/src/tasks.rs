@@ -373,6 +373,15 @@ pub struct Task {
     /// the state, the inbox); only its file has them (`file_json`).
     #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "count", deserialize_with = "texts")]
     pub queued: Vec<Queued>,
+    /// Images pasted in the new-task box for its first message: kept until it is cleaned away or
+    /// gone, then removed (`Model::settle_images`). The state has their count.
+    #[serde(
+        default,
+        skip_serializing_if = "Vec::is_empty",
+        serialize_with = "count",
+        deserialize_with = "valid_images"
+    )]
+    pub images: Vec<Pasted>,
     /// When it was filed (milliseconds since 1970). `None`: filed before this was kept.
     #[serde(default)]
     pub created: Option<u64>,
@@ -435,6 +444,9 @@ impl Task {
         let mut value = serde_json::to_value(self.for_file()).unwrap_or_default();
         if let Some(fields) = value.as_object_mut().filter(|_| !self.queued.is_empty()) {
             fields.insert("queued".into(), serde_json::to_value(&self.queued).unwrap_or_default());
+        }
+        if let Some(fields) = value.as_object_mut().filter(|_| !self.images.is_empty()) {
+            fields.insert("images".into(), serde_json::to_value(&self.images).unwrap_or_default());
         }
         value
     }
@@ -589,11 +601,81 @@ enum Undo {
 pub struct Queued {
     pub id: u64,
     pub text: String,
+    /// The images pasted with it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", deserialize_with = "valid_images")]
+    pub images: Vec<Pasted>,
 }
 
-/// Queued messages as their count: never their words (`Task::queued`).
-fn count<S: serde::Serializer>(queued: &[Queued], serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_u64(queued.len() as u64)
+/// An image the user pasted, as the shell saved it: `<id>.<kind>` in ottospace's private images
+/// folder. The core never sees its bytes. e.g. `{"id": "3f2a9c0e7b1d4e55", "kind": "png"}`.
+/// Only ever made by `Pasted::new` (read back too, `try_from`): its file name is one component of
+/// 16 hex digits, a dot and a known kind, never a path.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(try_from = "RawPasted")]
+pub struct Pasted {
+    id: String,
+    kind: String,
+}
+
+/// A `Pasted` as read, before it is checked.
+#[derive(Deserialize)]
+struct RawPasted {
+    id: String,
+    kind: String,
+}
+
+impl TryFrom<RawPasted> for Pasted {
+    type Error = &'static str;
+
+    fn try_from(raw: RawPasted) -> Result<Self, Self::Error> {
+        Pasted::new(&raw.id, &raw.kind).ok_or("not an image name ottospace makes")
+    }
+}
+
+impl Pasted {
+    /// The kinds an image may be, by what its first bytes say.
+    pub const KINDS: [&str; 4] = ["png", "jpeg", "gif", "webp"];
+
+    /// Only a name the shell makes (random bytes as 16 lowercase hex digits) and a known kind.
+    /// Anything else (`../x`, `/etc/x`, `a/b`, empty, longer, upper case): none.
+    pub fn new(id: &str, kind: &str) -> Option<Self> {
+        let hex = id.len() == 16 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        (hex && Self::KINDS.contains(&kind)).then(|| Self { id: id.into(), kind: kind.into() })
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    /// Its file's name in the images folder: one component, no separator.
+    pub fn file(&self) -> String {
+        format!("{}.{}", self.id, self.kind)
+    }
+}
+
+/// Pasted images read back from a file: each one that is not a name ottospace makes is left out,
+/// never the task or the message it is in.
+fn valid_images<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Pasted>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Kept {
+        Each(Vec<serde_json::Value>),
+        Count(serde::de::IgnoredAny),
+    }
+    Ok(match Kept::deserialize(deserializer)? {
+        Kept::Each(values) => values.into_iter().filter_map(|value| serde_json::from_value(value).ok()).collect(),
+        Kept::Count(_) => Vec::new(),
+    })
+}
+
+/// A list as its count: queued messages never by their words (`Task::queued`), pasted images
+/// never by their names (`Task::images`).
+fn count<S: serde::Serializer, T>(items: &[T], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u64(items.len() as u64)
 }
 
 /// Queued messages from a task's file: their words; a count (a state's copy) brings none back.
@@ -700,6 +782,7 @@ impl Tasks {
             line: None,
             body: None,
             queued: Vec::new(),
+            images: Vec::new(),
             created: None,
             session: None,
             refs: Vec::new(),
@@ -1166,6 +1249,7 @@ mod tests {
             line: None,
             body: None,
             queued: Vec::new(),
+            images: Vec::new(),
             created: None,
             session: None,
             refs: Vec::new(),
@@ -1273,5 +1357,24 @@ mod tests {
         let task = Task { folder: Some("../../etc".into()), ..tasks.get(id).cloned().unwrap() };
         tasks.restore(vec![task], 0);
         assert_eq!(tasks.get(id).map(|t| (t.folder.clone(), t.dir().cloned())), Some((None, None)));
+    }
+
+    /// An image name is only one ottospace makes: read back, a bad one is left out, never its task.
+    #[test]
+    fn an_image_name_is_never_a_path() {
+        for id in
+            ["../x", "/etc/x", "a/b", "", "0123456789abcdef0", "0123456789ABCDEF", "0123456789abcde\u{0}", "..\\..\\x"]
+        {
+            assert_eq!(Pasted::new(id, "png"), None, "{id:?}");
+        }
+        assert_eq!(Pasted::new("0123456789abcdef", "png/../x"), None);
+        assert_eq!(Pasted::new("0123456789abcdef", "tiff"), None);
+        let good = Pasted::new("0123456789abcdef", "png").unwrap_or_else(|| panic!());
+        assert_eq!(good.file(), "0123456789abcdef.png");
+        let json = serde_json::json!({"id": 7, "title": "look", "state": "captured", "priority": 3, "images": [
+            {"id": "../../etc/passwd", "kind": "png"}, {"id": "0123456789abcdef", "kind": "png"}, {"id": "0123456789abcdef", "kind": "/x"}
+        ], "queued": [{"id": 1, "text": "hi", "images": [{"id": "/etc/x", "kind": "png"}]}]});
+        let task: Task = serde_json::from_value(json).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!((task.images, task.queued[0].images.len()), (vec![good], 0));
     }
 }

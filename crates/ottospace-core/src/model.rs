@@ -312,6 +312,8 @@ struct KeptDraft {
     theirs: bool,
     /// It was the quick note box: its pills come back with it.
     quick: Option<quick::Quick>,
+    /// Its pasted images, back with it.
+    images: Vec<crate::tasks::Pasted>,
 }
 
 /// A folder the user took from a path's dropdown.
@@ -1868,6 +1870,17 @@ pub enum Action {
     AgentSendFailed {
         task: Subject,
         text: String,
+        images: Vec<crate::tasks::Pasted>,
+    },
+    /// The user pasted an image (`id`.`kind`, saved by the shell in its private images folder):
+    /// it joins the message being written, in the new-task box or the shown composer, where its
+    /// agent can take it. `ImageRemove`: its × on the chip.
+    ImagePaste {
+        id: String,
+        kind: String,
+    },
+    ImageRemove {
+        id: String,
     },
     /// Allow or Deny the shown conversation's first card. Allow only once a cut card was opened
     /// in full (`TalkExpand`). Deny carries the draft when the user wrote one for it
@@ -3009,6 +3022,8 @@ impl Action {
             | Action::CopyPath { .. }
             | Action::AgentEvents { .. }
             | Action::AgentSendFailed { .. }
+            | Action::ImagePaste { .. }
+            | Action::ImageRemove { .. }
             | Action::TalkSend
             | Action::TalkSendNow
             | Action::QueueRemove { .. }
@@ -3467,6 +3482,8 @@ impl Action {
             | Action::SetAgents { .. }
             | Action::AgentEvents { .. }
             | Action::AgentSendFailed { .. }
+            | Action::ImagePaste { .. }
+            | Action::ImageRemove { .. }
             | Action::TalkSend
             | Action::TalkSendNow
             | Action::QueueRemove { .. }
@@ -4016,6 +4033,17 @@ pub enum Effect {
         task: Subject,
         text: String,
     },
+    /// The same, with images pasted for it (`tasks::Pasted`): the shell reads each from its file.
+    AgentSendWith {
+        task: Subject,
+        text: String,
+        images: Vec<crate::tasks::Pasted>,
+    },
+    /// Images nothing holds any more (removed, sent from a conversation no task owns, or their
+    /// task done or gone): the shell removes their files.
+    ImagesDrop {
+        images: Vec<crate::tasks::Pasted>,
+    },
     /// The user's answer to the request the shell numbered `ticket`: this one request, or not.
     AgentAnswer {
         task: Subject,
@@ -4534,6 +4562,12 @@ pub struct Model {
     /// The next queued message's id (`tasks::Queued`): never used twice in a run.
     #[serde(skip)]
     queue_next: u64,
+    /// Images pasted in the new-task box, for the task it files (`Task::images`).
+    #[serde(skip)]
+    compose_images: Vec<crate::tasks::Pasted>,
+    /// Every pasted image something held at the last step (`settle_images`).
+    #[serde(skip)]
+    images_held: std::collections::BTreeSet<crate::tasks::Pasted>,
     /// The last side question's id (`btw`): never used twice, so a late answer finds no other.
     #[serde(skip)]
     btw_next: u64,
@@ -4792,6 +4826,8 @@ impl Default for Model {
             default_agent: None,
             chats: Vec::new(),
             queue_next: 1,
+            compose_images: Vec::new(),
+            images_held: std::collections::BTreeSet::new(),
             btw_next: 0,
             views: Vec::new(),
             dials: Vec::new(),
@@ -5389,6 +5425,8 @@ impl Model {
             // strong as typing into it, an answer grants a tool call.
             Action::TalkSend
             | Action::TalkSendNow
+            | Action::ImagePaste { .. }
+            | Action::ImageRemove { .. }
             | Action::QueueRemove { .. }
             | Action::QueueEdit { .. }
             | Action::QueueSendNow { .. }
@@ -5812,6 +5850,7 @@ impl Model {
         }
         self.settle_compose_to();
         self.settle_agent(origin);
+        self.settle_images(&mut effects);
         // However the list was left (Esc, a click on a pane), ⌘⌥← comes back to its row.
         if self.list.is_none() && listed.is_some() {
             self.list_kept = zones::KeptRow(listed);
@@ -6812,6 +6851,14 @@ impl Model {
                     Enter::Add => {}
                 }
                 let line = self.compose_line().cloned().unwrap_or_default();
+                // Images only where the agent the line now names takes them (another `@agent` since
+                // the paste): else said, and dropped.
+                if !self.compose_images.is_empty() && !self.box_takes_images() {
+                    self.compose_images.clear();
+                    if self.by_user {
+                        effects.push(Effect::Notice { text: chat::IMAGES_NOT_HERE.into() });
+                    }
+                }
                 // A draft with captures needs no title typed: key, circle, ↵.
                 let untitled = self.draft(&line).title.is_empty();
                 let named = self.capture_title().filter(|_| untitled);
@@ -7872,6 +7919,8 @@ impl Model {
             }
             action @ (Action::AgentEvents { .. }
             | Action::AgentSendFailed { .. }
+            | Action::ImagePaste { .. }
+            | Action::ImageRemove { .. }
             | Action::TalkSend
             | Action::TalkSendNow
             | Action::QueueRemove { .. }
@@ -8361,7 +8410,9 @@ impl Model {
                         let launch = agents::launch(task.agent.as_deref(), default, &self.models, task.title.clone());
                         // Its `$skill` tags, asked for in its first message.
                         let (skills, body) = (task.skills.clone(), task.body.clone());
-                        let launch = launch.map(|launch| agents::Launch { skills, body, ..launch });
+                        // The box's images go with the first message of a new session, never a resumed one.
+                        let images = task.images.clone();
+                        let launch = launch.map(|launch| agents::Launch { skills, body, images, ..launch });
                         // Where it works: the worktree its agent moved into, else its folder.
                         let dir = self.task_moved(*id).map(String::from).or_else(|| task.dir().cloned());
                         launch.map(|launch| (agents::Start::New(launch), dir))
@@ -8748,12 +8799,13 @@ impl Model {
             return;
         }
         let line = self.compose.take().filter(|line| !line.text().is_empty());
+        let images = std::mem::take(&mut self.compose_images);
         let (refs, folder, quick) =
             (std::mem::take(&mut self.compose_refs), self.compose_folder.take(), self.quick.take());
         // An empty line takes no kept line's place, nor a client's line the user's.
         let users = self.compose_kept.as_ref().is_some_and(|kept| !kept.theirs);
         if let Some(line) = line.filter(|_| !(users && self.compose_theirs)) {
-            self.compose_kept = Some(KeptDraft { line, refs, folder, theirs: self.compose_theirs, quick });
+            self.compose_kept = Some(KeptDraft { line, refs, folder, theirs: self.compose_theirs, quick, images });
         }
         self.compose_reset();
     }
@@ -8844,7 +8896,7 @@ impl Model {
             && let Some(kept) = self.compose_kept.take()
         {
             (self.compose, self.compose_refs, self.compose_folder) = (Some(kept.line), kept.refs, kept.folder);
-            (self.compose_theirs, self.quick) = (kept.theirs, kept.quick);
+            (self.compose_theirs, self.quick, self.compose_images) = (kept.theirs, kept.quick, kept.images);
         }
         // The user's box floats centred over the panes; with nothing open it stays the drawer's.
         self.compose_centred = self.by_user && self.overlays() && !self.welcome();
@@ -9503,6 +9555,13 @@ impl Model {
         self.tasks.tag(id, draft.project, path);
         self.tasks.set_folder(id, folder);
         self.tasks.set_body(id, draft.body.take());
+        // The box's images, with its first message: only the user's own filing of their line.
+        if own && self.by_user && !self.compose_theirs {
+            let images = std::mem::take(&mut self.compose_images);
+            if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == id) {
+                task.images = images;
+            }
+        }
         let Draft { agent, paths, resolved, skills, refs, .. } = draft;
         self.tasks.assign(id, Assign { agent, paths, resolved, skills });
         let pointed = refs.iter().filter_map(|name| self.pointed(name, known.is_none())).collect();
@@ -12112,6 +12171,8 @@ mod tests {
         Action::CopyPath { .. },
         Action::AgentEvents { .. },
         Action::AgentSendFailed { .. },
+        Action::ImagePaste { .. },
+        Action::ImageRemove { .. },
         Action::TalkSend,
         Action::TalkSendNow,
         Action::QueueRemove { .. },
@@ -12561,7 +12622,9 @@ mod tests {
             Action::QueueRemove { id: 1 },
             Action::QueueEdit { id: 1 },
             Action::QueueSendNow { id: 1 },
-            Action::AgentSendFailed { task: Subject::Task(1), text: "hi".into() },
+            Action::AgentSendFailed { task: Subject::Task(1), text: "hi".into(), images: Vec::new() },
+            Action::ImagePaste { id: "0123456789abcdef".into(), kind: "png".into() },
+            Action::ImageRemove { id: "0123456789abcdef".into() },
             Action::TalkAnswer { allow: false, ticket: 1 },
             Action::TalkExpand { ticket: 1 },
             Action::DecisionsOpen,
@@ -12679,6 +12742,8 @@ mod tests {
             action,
             Action::TalkSend
                 | Action::TalkSendNow
+                | Action::ImagePaste { .. }
+                | Action::ImageRemove { .. }
                 | Action::QueueRemove { .. }
                 | Action::QueueEdit { .. }
                 | Action::QueueSendNow { .. }
@@ -16017,6 +16082,28 @@ mod tests {
         assert_eq!(task.body.as_deref(), Some(format!("{long}\nmore").as_str()));
     }
 
+    /// An image pasted in the new-task box goes with its task's first message; one the box's agent
+    /// cannot take (a terminal view) is refused and said, its file dropped.
+    #[test]
+    fn the_new_task_box_takes_an_image_for_its_task() {
+        use crate::tasks::Pasted;
+        let mut m = Model::default();
+        m.conversation_view = crate::transcript::View::Native;
+        let image = Pasted::new("00000000000000a1", "png").unwrap_or_else(|| panic!());
+        m.update(Action::OpenCompose { text: "fix the zoom".into() });
+        m.update(Action::ImagePaste { id: image.id().into(), kind: "png".into() });
+        m.update(Action::ComposeSubmit { open: false });
+        assert_eq!(m.tasks.list[0].images, [image.clone()]);
+        let state = serde_json::json!(m.tasks.list[0]).to_string();
+        assert!(state.contains("\"images\":1") && !state.contains(image.id()), "{state}");
+        m.conversation_view = crate::transcript::View::Terminal;
+        m.update(Action::OpenCompose { text: "more".into() });
+        let other = Pasted::new("00000000000000a2", "png").unwrap_or_else(|| panic!());
+        let refused = m.update(Action::ImagePaste { id: other.id().into(), kind: "png".into() });
+        let said = Effect::Notice { text: chat::IMAGES_NOT_HERE.into() };
+        assert_eq!(refused, [said, Effect::ImagesDrop { images: vec![other] }]);
+    }
+
     #[test]
     fn the_new_task_box_files_a_line_as_a_task() {
         let mut m = Model::default();
@@ -19183,6 +19270,7 @@ mod tests {
                 title: title.into(),
                 skills: Vec::new(),
                 body: None,
+                images: Vec::new(),
             })
         };
         let asked = |task, start, cwd: Option<&str>| Effect::StartAgent {
@@ -19529,6 +19617,7 @@ mod tests {
             title: "fix zoom".into(),
             skills: Vec::new(),
             body: None,
+            images: Vec::new(),
         };
         let start = agents::Start::New(launch);
         let agent = Effect::StartAgent {
