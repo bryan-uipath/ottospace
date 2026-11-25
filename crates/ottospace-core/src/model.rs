@@ -1717,6 +1717,13 @@ pub enum Action {
         reuse: bool,
         at: Option<crate::viewer::Lines>,
     },
+    /// The change to the file at `path` (absolute) since the last commit, in a viewer beside
+    /// `beside` (default: the focused pane): the one `beside` opened before, reused, as `OpenFile`'s
+    /// `reuse`. The explorer's D on a changed file (`review`).
+    OpenDiff {
+        path: String,
+        beside: Option<PaneId>,
+    },
     /// A key while the focused viewer has the keyboard, named as `vim::Keys::press` takes it.
     ViewerKey {
         key: String,
@@ -2729,6 +2736,7 @@ impl Action {
                 | Action::EditSettings
                 | Action::OpenFile { .. }
                 | Action::CityOpen { .. }
+                | Action::OpenDiff { .. }
                 | Action::ProjectOpen { .. }
                 | Action::ViewerEdit { .. }
                 | Action::SelectTab { .. }
@@ -3174,6 +3182,7 @@ impl Action {
             | Action::OfferList { .. }
             | Action::OfferGone { .. }
             | Action::OpenFile { .. }
+            | Action::OpenDiff { .. }
             | Action::ProjectOpen { .. }
             | Action::ViewerKey { .. }
             | Action::ViewerScrolled { .. }
@@ -3261,6 +3270,7 @@ impl Action {
                 Some(Feature::OverlayPanels)
             }
             Action::CityCamera { .. } | Action::CityOpen { .. } => Some(Feature::CodeCity),
+            Action::OpenDiff { .. } => Some(Feature::Review),
             Action::DecisionsOpen
             | Action::DecisionsAsk { .. }
             | Action::DecisionsSkip { .. }
@@ -7916,6 +7926,7 @@ impl Model {
             Action::OpenFile { path, axis, beside, reuse, at } => {
                 self.open_file(path, axis, beside, reuse, at, effects)
             }
+            Action::OpenDiff { path, beside } => self.open_diff(path, beside, effects),
             Action::ViewerKey { key } => self.viewer_key(&key, effects),
             Action::ViewerScrolled { pane, top, most, page } => self.viewer_scrolled(pane, top, most, page),
             Action::ViewerRead { pane, path, read } => self.viewer_read(pane, &path, read),
@@ -12257,6 +12268,7 @@ mod tests {
         Action::StartFresh,
         Action::EditSettings,
         Action::OpenFile { .. },
+        Action::OpenDiff { .. },
         Action::ViewerKey { .. },
         Action::ViewerScrolled { .. },
         Action::ViewerRead { .. },
@@ -12708,6 +12720,7 @@ mod tests {
             Action::StartFresh,
             Action::EditSettings,
             Action::OpenFile { path: "/w/a.md".into(), axis: Axis::Right, beside: None, reuse: false, at: None },
+            Action::OpenDiff { path: "/w/a.md".into(), beside: None },
             Action::ViewerKey { key: "j".into() },
             Action::ViewerScrolled { pane: 1, top: 0, most: 0, page: 0 },
             Action::ViewerRead { pane: 1, path: "/w/a.md".into(), read: crate::viewer::Read::Missing },

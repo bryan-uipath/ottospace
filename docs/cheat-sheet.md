@@ -39,6 +39,7 @@ ottospace            # opens on the Repos list
 | Find an action by name | ⌘⇧P: type part of its name, ↵ runs it. Or the menu bar |
 | Zoom a picture in a viewer | ⌘= ⌘- or a pinch; ⌘0 fits it; zoomed, drag or scroll to move it. A GIF's Pause / Play in its foot |
 | Browse the checkout's files | ⌘⇧X: the File Explorer. Arrows and → / ← move and open folders, ↵ opens a file beside, letters jump to a name. Show ignored in its header. Right click a row for Reveal, Copy path, Terminal here |
+| See a changed file's diff (`review` flag) | D on it in the File Explorer (or Open diff in its right click): its change since the last commit beside; `]c` / `[c` next and previous hunk |
 | Find a file in the workspace | ⌘P: the checkout on show's files; type part of the name, ↵ opens it, ⌘↵ below |
 | Go to a workspace, checkout, task or file | ⌘P then ⌫ (at once from Home): type part of its name, ↵ goes there. Tab or `/` lists its files; ↵ opens one. `>` for commands |
 | Edit the settings | ⌘, (Open Settings): `settings.json` in your editor, in a tab of its own |

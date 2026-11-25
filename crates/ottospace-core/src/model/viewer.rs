@@ -28,13 +28,21 @@ impl Model {
     pub fn viewer_takes(&self, key: &str) -> bool {
         let view = self.keyboard_viewer().and_then(|id| self.viewer(id));
         view.is_some_and(|view| {
-            key == "ctrl-g" || view.pending.takes(key) || (key == "escape" && view.marked.is_some())
+            key == "ctrl-g"
+                || view.pending.takes(key)
+                || (key == "escape" && view.marked.is_some())
+                // A diff's hunk steps: `]c`, `[c`.
+                || (view.diff && (matches!(key, "]" | "[") || (key == "c" && view.bracket.is_some())))
         })
     }
 
     /// What is typed of a move in the focused viewer (`10`, `g`), for the status bar.
     pub fn viewer_pending(&self) -> Option<String> {
-        self.viewer(self.keyboard_viewer()?)?.pending.pending()
+        let view = self.viewer(self.keyboard_viewer()?)?;
+        match view.bracket {
+            Some(forward) => Some(if forward { "]" } else { "[" }.into()),
+            None => view.pending.pending(),
+        }
     }
 
     /// The viewer that `from` opened to be reused, in `from`'s tab.
@@ -112,7 +120,9 @@ impl Model {
             return;
         }
         if let Some(id) = from.filter(|_| reuse).and_then(|from| self.reusable(from)) {
-            let same = self.pane(id).is_some_and(|pane| pane.kind == Kind::File { path: path.clone() });
+            // A diff of the file is not the file: it shows the file instead.
+            let diff = self.viewers.get(&id).is_some_and(|view| view.diff);
+            let same = !diff && self.pane(id).is_some_and(|pane| pane.kind == Kind::File { path: path.clone() });
             if !same {
                 if let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == id) {
                     pane.kind = Kind::File { path: path.clone() };
@@ -133,16 +143,71 @@ impl Model {
         }
     }
 
-    /// A key in the focused viewer: a count, a move (`10j`, `3G`), or ⌃G.
+    /// `OpenDiff`: `path`'s change since the last commit in the viewer `beside` opened before,
+    /// else in a new one beside it, which takes the keyboard (its `]c` reads on).
+    pub(super) fn open_diff(&mut self, path: String, beside: Option<PaneId>, effects: &mut Vec<Effect>) {
+        if !viewer::sound(&path) {
+            if self.by_user {
+                effects.push(Effect::Notice { text: NOT_SOUND.into() });
+            }
+            return;
+        }
+        if beside.is_some_and(|id| self.pane(id).is_none()) {
+            return;
+        }
+        let from = beside.or(self.focused);
+        if let Some(from) = from {
+            self.show_tab_of(from, effects);
+        }
+        let id = match from.and_then(|from| self.reusable(from)) {
+            Some(id) => {
+                if self.pane(id).is_some_and(|pane| pane.kind != Kind::File { path: path.clone() }) {
+                    self.marks.forget_pane(id);
+                }
+                if let Some(pane) = self.panes.iter_mut().find(|pane| pane.id == id) {
+                    pane.kind = Kind::File { path: path.clone() };
+                }
+                id
+            }
+            None => self.open(Kind::File { path: path.clone() }, Axis::Right, from, effects),
+        };
+        // Its opener's next file comes here too.
+        self.viewers.insert(id, Viewer::diff(&path, from.filter(|from| *from != id)));
+        effects.push(Effect::ViewFile { pane: id });
+        self.focus(id, effects);
+    }
+
+    /// A key in the focused viewer: a count, a move (`10j`, `3G`), a diff's `]c` or `[c`, or ⌃G.
     pub(super) fn viewer_key(&mut self, key: &str, effects: &mut Vec<Effect>) {
         let Some(id) = self.keyboard_viewer() else { return };
         let Some(view) = self.viewers.get_mut(&id) else { return };
+        if view.diff {
+            match (view.bracket.take(), key) {
+                (None, "]" | "[") => {
+                    (view.bracket, view.pending) = (Some(key == "]"), vim::Keys::default());
+                    return;
+                }
+                // The next hunk below the top, or the last above it, at the top.
+                (Some(forward), "c") => {
+                    let at = match &view.read {
+                        Read::Diff { hunks, .. } => crate::review::step(hunks, view.top, forward),
+                        _ => None,
+                    };
+                    if let Some(at) =
+                        at.map(|at| view.most.map_or(at, |most| at.min(most))).filter(|at| *at != view.top)
+                    {
+                        view.top = at;
+                        effects.push(Effect::ViewerScroll { pane: id, top: at });
+                    }
+                    return;
+                }
+                // Any other key after `]`: dropped with it, and taken as itself.
+                _ => {}
+            }
+        }
         match view.pending.press(key) {
             Press::Move { motion, count } => {
-                let lines = match view.read {
-                    Read::Shown { lines } => lines.saturating_sub(1),
-                    _ => 0,
-                };
+                let lines = view.rows().saturating_sub(1);
                 let top = vim::moved(motion, count, view.top, view.most.unwrap_or(lines), view.page);
                 if top != view.top {
                     view.top = top;
@@ -166,7 +231,13 @@ impl Model {
     /// What the shell read of `path`, if viewer `pane` still shows it.
     pub(super) fn viewer_read(&mut self, pane: PaneId, path: &str, read: Read) {
         let shows = self.pane(pane).is_some_and(|open| open.kind == Kind::File { path: path.to_string() });
-        if let Some(view) = self.viewers.get_mut(&pane).filter(|_| shows) {
+        // A diff view takes a diff's reads, a file's view a file's; either, why there is none.
+        let fits = |view: &&mut Viewer| match read {
+            Read::Diff { .. } | Read::NoChange => view.diff,
+            Read::Shown { .. } | Read::Picture { .. } | Read::TooManyPixels { .. } | Read::Broken => !view.diff,
+            _ => true,
+        };
+        if let Some(view) = self.viewers.get_mut(&pane).filter(|view| shows && fits(view)) {
             if let Read::Shown { lines } = read {
                 view.marked = view.marked.and_then(|at| at.within(lines));
             }
@@ -243,7 +314,7 @@ impl Model {
         for (id, view) in &mut self.viewers {
             view.opener = view.opener.filter(|opener| panes.contains(opener));
             if keyboard != Some(*id) {
-                view.pending = vim::Keys::default();
+                (view.pending, view.bracket) = (vim::Keys::default(), None);
             }
         }
     }
@@ -523,5 +594,45 @@ mod tests {
         zoom(&mut m, ZoomStep::In);
         m.update(Action::ViewerPlay { pane: None, play: true });
         assert_eq!(m.viewer(doc).map(|v| (v.zoom, v.playing)), Some((None, None)));
+    }
+
+    /// A diff view (`review`) takes a diff's reads only, steps between hunks with `]c` and `[c`
+    /// (at the top; none past the ends; a key between drops the `]`), and the same viewer shows
+    /// the file again for an `OpenFile` of it.
+    #[test]
+    fn a_diff_view_steps_between_hunks_and_gives_way_to_the_file() {
+        const SRC: &str = "/w/app/src/main.rs";
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None });
+        let from = m.focused.unwrap_or_default();
+        let effects = m.update(Action::OpenDiff { path: SRC.into(), beside: Some(from) });
+        let id = m.focused.unwrap_or_default();
+        assert!(id != from && effects.contains(&Effect::ViewFile { pane: id }));
+        assert_eq!(m.viewer(id).map(|v| (v.diff, v.shows, v.opener)), Some((true, Shows::Code, Some(from))));
+        // A file's read is not a diff's: refused.
+        read(&mut m, id, SRC, 40);
+        assert_eq!(m.viewer(id).map(|v| v.read.clone()), Some(Read::Reading));
+        let diff = Read::Diff { rows: 60, hunks: vec![0, 20, 45], added: 9, removed: 4, cut: false };
+        m.update(Action::ViewerRead { pane: id, path: SRC.into(), read: diff }.sent_by(Origin::System));
+        m.update(Action::ViewerScrolled { pane: id, top: 0, most: 40, page: 20 }.sent_by(Origin::System));
+        let top = |m: &Model| m.viewer(id).map(|v| v.top);
+        assert!(m.viewer_takes("]") && !m.viewer_takes("c"));
+        assert_eq!(keys(&mut m, &["]"]), vec![]);
+        assert_eq!((m.viewer_pending().as_deref(), m.viewer_takes("c")), (Some("]"), true));
+        assert_eq!(keys(&mut m, &["c"]), vec![Effect::ViewerScroll { pane: id, top: 20 }]);
+        // The last hunk is past where the view can go: at its end, and no further.
+        keys(&mut m, &["]", "c"]);
+        assert_eq!(top(&m), Some(40));
+        assert_eq!(keys(&mut m, &["]", "c"]), vec![]);
+        keys(&mut m, &["[", "c"]);
+        assert_eq!(top(&m), Some(20));
+        // `]` then another key: the `]` is dropped, the key moves as itself.
+        keys(&mut m, &["]", "j"]);
+        assert_eq!((top(&m), m.viewer_pending()), (Some(21), None));
+        // A file's own view of it, from the same opener: the file, not the diff.
+        let effects = open(&mut m, SRC, Some(from), true);
+        assert_eq!((effects, m.viewer(id).map(|v| v.diff)), (vec![Effect::ViewFile { pane: id }], Some(false)));
+        m.update(Action::Focus { pane: id });
+        assert!(m.keyboard_viewer() == Some(id) && !m.viewer_takes("]"), "a file's view has no hunks");
     }
 }

@@ -1474,6 +1474,95 @@ fn the_file_explorer_lists_a_checkout_opens_its_files_and_never_follows_a_link()
     assert_eq!(copied["copied"], app.join("src").to_string_lossy().as_ref());
 }
 
+/// Review (`review`): D on a changed file in the explorer opens its diff since the last commit
+/// in the viewer beside, which takes the keyboard: two hunks, the unchanged run between them
+/// folded; `]c` and `[c` step between them. D on an unchanged file opens nothing. The state has
+/// the rows and hunks, never a line.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn d_in_the_explorer_opens_a_changed_files_diff_and_c_steps_its_hunks() {
+    let root = support::temp(&format!("ottospace-e2e-review-diff-{}", std::process::id()));
+    let app = root.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    git(&app, &["init", "-q", "-b", "main"]);
+    let lines: Vec<String> = (1..=60).map(|n| format!("made-up line {n}")).collect();
+    std::fs::write(app.join("src/lib.rs"), lines.join("\n") + "\n").unwrap();
+    std::fs::write(app.join("README.md"), "# Made up\n").unwrap();
+    git(&app, &["add", "."]);
+    git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "-m", "one"]);
+    // Two changes far apart: two hunks, the unchanged lines between them folded; the first one
+    // taller than the pane, so the second is below it.
+    let mut changed = lines.clone();
+    for line in &mut changed[2..32] {
+        *line = format!("{line} SECRET-ONE");
+    }
+    changed[49] = "made-up SECRET-TWO".into();
+    std::fs::write(app.join("src/lib.rs"), changed.join("\n") + "\n").unwrap();
+    let app = app.canonicalize().unwrap();
+    let settings = json!({"repos": [&app], "restore_layout": false}).to_string();
+    let home = user_folder("review-diff", &settings);
+    let otto = Otto::launch_with(
+        "review-diff",
+        &[
+            ("OTTOSPACE_HOME", home.to_str().unwrap()),
+            ("OTTOSPACE_FEATURES", "review"),
+            ("GIT_CONFIG_GLOBAL", "/dev/null"),
+            ("GIT_CONFIG_NOSYSTEM", "1"),
+        ],
+    );
+    let app_path = app.to_string_lossy().into_owned();
+    otto.wait_for("the checkout listed", |o| {
+        (o.call(json!({"cmd": "state"}))["state"]["repos"][0]["path"] == app_path.as_str()).then_some(())
+    });
+    otto.call(json!({"cmd": "open_repo", "path": app_path}));
+    otto.user_key("cmd-shift-x");
+    let explorer = |o: &Otto| {
+        let s = o.call(json!({"cmd": "state"}));
+        let id = s["state"]["panes"].as_array()?.iter().find(|p| p["kind"]["type"] == "explorer")?["id"].as_u64()?;
+        let shape = s["explorers"][id.to_string()].clone();
+        (shape["reading"] == 0 && shape["marked"].as_u64() > Some(0)).then_some((id, shape))
+    };
+    let (explorer_id, _) = otto.wait_for("the explorer read with git's marks", explorer);
+    // README.md (unchanged) after `src`: D there opens nothing.
+    let panes = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["panes"].as_array().map_or(0, Vec::len);
+    otto.user_key("down");
+    let before = panes(&otto);
+    otto.user_key("shift-d");
+    assert_eq!(panes(&otto), before, "an unchanged file has no diff");
+    // `src/lib.rs`: D opens its diff beside, focused.
+    otto.user_key("up right");
+    otto.wait_for("src listed", |o| explorer(o).filter(|(_, s)| s["rows"] == 3));
+    otto.user_key("down shift-d");
+    let path = app.join("src/lib.rs").to_string_lossy().into_owned();
+    let diff = otto.wait_for("the diff read", |o| {
+        let s = o.call(json!({"cmd": "state"}));
+        let pane =
+            s["state"]["panes"].as_array()?.iter().find(|p| p["kind"] == json!({"type": "file", "path": path}))?;
+        let id = pane["id"].as_u64()?;
+        let view = s["state"]["viewers"][id.to_string()].clone();
+        (view["read"]["status"] == "diff" && s["viewers"][id.to_string()]["body"] == "diff").then_some((id, s))
+    });
+    let (id, state) = diff;
+    let view = &state["state"]["viewers"][id.to_string()];
+    assert_eq!((&view["diff"], &state["state"]["focused"]), (&json!(true), &json!(id)), "{view}");
+    assert_eq!((&view["read"]["added"], &view["read"]["removed"]), (&json!(31), &json!(31)), "{view}");
+    let hunks: Vec<u64> = view["read"]["hunks"].as_array().unwrap().iter().filter_map(Value::as_u64).collect();
+    assert_eq!((hunks.len(), hunks[0]), (2, 0), "{view}");
+    assert_eq!(state["viewers"][id.to_string()]["hunks"], 2);
+    assert!(!state.to_string().contains("SECRET"), "no line of the diff in the state");
+    assert_ne!(explorer_id, id);
+    // ]c: the second hunk at the top (or as far as the view goes); [c: back to the first.
+    let top = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["viewers"][id.to_string()]["top"].as_u64();
+    let most = otto
+        .wait_for("laid out", |o| o.call(json!({"cmd": "state"}))["state"]["viewers"][id.to_string()]["most"].as_u64());
+    assert!(most > 0, "the diff is taller than the pane: {most}");
+    otto.user_key("] c");
+    assert_eq!(top(&otto), Some(hunks[1].min(most)));
+    assert!(top(&otto) > Some(0));
+    otto.user_key("[ c");
+    assert_eq!(top(&otto), Some(0));
+}
+
 /// The user's right click on a linked worktree's row: its menu, Delete worktree…, the question
 /// (⌘↵ deletes, ↵ alone does nothing, Esc or Keep it keeps), then git removes a clean one and keeps its branch; a dirty one stays, git's reason said.
 #[test]

@@ -217,6 +217,12 @@ pub enum Read {
     Binary,
     /// The file is there but could not be read (its permissions).
     Unreadable,
+    /// A diff view's change since the last commit (`review`): its rows (a hunk's start or a
+    /// line), the row each hunk starts at, the lines added and removed, and whether it was cut
+    /// (`review::MAX_ROWS`).
+    Diff { rows: u32, hunks: Vec<u32>, added: u32, removed: u32, cut: bool },
+    /// A diff view of a file with no change since the last commit, or none git could read.
+    NoChange,
 }
 
 /// A viewer pane's state, by pane. Its path is the pane's `Kind::File`.
@@ -246,6 +252,11 @@ pub struct Viewer {
     pub pan: [f32; 2],
     /// An animation plays (`true`) or stands on its first frame; `None`: as Reduce Motion says.
     pub playing: Option<bool>,
+    /// Shows the file's change since the last commit, not the file (`review`): `top` is a row.
+    pub diff: bool,
+    /// `]` or `[` typed, waiting for `c` (next or previous hunk): `true` for `]`.
+    #[serde(skip)]
+    pub bracket: Option<bool>,
 }
 
 /// A change of a picture's zoom.
@@ -284,6 +295,24 @@ pub fn zoomed(zoom: Option<f32>, fit: f32, step: ZoomStep) -> Option<f32> {
 impl Viewer {
     pub fn new(path: &str, top: u32, opener: Option<PaneId>) -> Self {
         Viewer { shows: shows(path), top, opener, ..Viewer::default() }
+    }
+
+    /// A diff view of `path`'s change (`review`): its source, never markdown drawn.
+    pub fn diff(path: &str, opener: Option<PaneId>) -> Self {
+        let shows = match shows(path) {
+            Shows::Markdown => Shows::Code,
+            other => other,
+        };
+        Viewer { shows, opener, diff: true, ..Viewer::default() }
+    }
+
+    /// The rows it can scroll through: a file's lines, a diff's rows.
+    pub fn rows(&self) -> u32 {
+        match &self.read {
+            Read::Shown { lines } => *lines,
+            Read::Diff { rows, .. } => *rows,
+            _ => 0,
+        }
     }
 
     /// A new view of `path` at `at`: a markdown file shows its source, so the lines can be marked.

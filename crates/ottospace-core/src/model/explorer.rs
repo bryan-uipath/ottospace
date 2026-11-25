@@ -108,6 +108,16 @@ impl Model {
                 }
                 return;
             }
+            // D on a changed file: its diff beside (`review`). Else a letter, as any.
+            "D" if self.features.on(crate::features::Feature::Review)
+                && row.as_ref().is_some_and(crate::explorer::diffable) =>
+            {
+                let (Some(row), Some(Kind::Explorer { root })) = (row, self.pane(id).map(|p| p.kind.clone())) else {
+                    return;
+                };
+                let path = format!("{}/{}", root.trim_end_matches('/'), row.path);
+                return self.act(Action::OpenDiff { path, beside: Some(id) }, effects);
+            }
             typed if typed.chars().count() == 1 && !typed.chars().any(char::is_control) => {
                 let fresh = now.saturating_sub(explorer.typed_at) > TYPED_MS;
                 if fresh {
@@ -214,6 +224,9 @@ impl Model {
         let full = format!("{}/{}", root.trim_end_matches('/'), row.path);
         match item {
             Item::Open => self.explorer_choose(pane, &row, Axis::Right, effects),
+            Item::OpenDiff if crate::explorer::diffable(&row) => {
+                self.act(Action::OpenDiff { path: full, beside: Some(pane) }, effects)
+            }
             Item::OpenBelow => self.explorer_choose(pane, &row, Axis::Down, effects),
             Item::Reveal if !row.link => effects.push(Effect::Reveal { path: full }),
             Item::CopyPath => effects.push(Effect::CopyText { text: full }),
@@ -302,6 +315,36 @@ mod tests {
         let mut other = Model::default();
         other.update(Action::ExplorerOpen { root: Some("/etc".into()), axis: Axis::Right });
         assert!(other.panes.is_empty(), "a folder Repos does not list");
+    }
+
+    /// D on a changed file (`review`): its diff in the viewer beside, which takes the keyboard;
+    /// on an unchanged one it is a letter typed, as without the flag. The row's menu offers it.
+    #[test]
+    fn d_on_a_changed_file_opens_its_diff_and_elsewhere_is_a_letter() {
+        let (mut m, id) = opened();
+        let marks = vec![("build.rs".to_string(), Mark::Modified)];
+        m.update(Action::ExplorerMarks { pane: id, marks }.sent_by(Origin::System));
+        key(&mut m, "down");
+        assert_eq!(m.explorer_selection(id), Some(("/code/app/build.rs".into(), false)));
+        let effects = key(&mut m, "D");
+        let viewer = m.focused.unwrap_or_default();
+        assert!(effects.contains(&Effect::ViewFile { pane: viewer }) && viewer != id, "{effects:?}");
+        let view = m.viewer(viewer).cloned().unwrap_or_default();
+        assert_eq!((view.diff, view.opener), (true, Some(id)));
+        // Unchanged: D is a letter typed (no name starts with it here), and no viewer opens.
+        m.update(Action::Focus { pane: id });
+        key(&mut m, "down");
+        let panes = m.panes.len();
+        key(&mut m, "D");
+        assert_eq!((m.panes.len(), m.focused), (panes, Some(id)));
+        // Off: a letter on a changed file too.
+        let (mut off, pane) = opened();
+        off.update(Action::SetFeatures { features: crate::features::Features::default() });
+        let marks = vec![("build.rs".to_string(), Mark::Modified)];
+        off.update(Action::ExplorerMarks { pane, marks }.sent_by(Origin::System));
+        key(&mut off, "down");
+        key(&mut off, "D");
+        assert_eq!(off.panes.len(), 2);
     }
 
     #[test]

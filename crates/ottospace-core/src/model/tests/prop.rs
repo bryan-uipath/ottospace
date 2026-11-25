@@ -61,7 +61,8 @@ const PICKED: &str = "PICKEDTITLE";
 const OFFERED: &str = "OFFEREDTITLE";
 const LISTEN_IDS: &[&str] = &["t1", "t2", ""];
 /// Keys in a viewer: counts, moves, ⌃G, and others.
-const VIEWER_KEYS: &[&str] = &["j", "k", "g", "G", "0", "1", "9", "escape", "ctrl-d", "ctrl-u", "space", "ctrl-g", "x"];
+const VIEWER_KEYS: &[&str] =
+    &["j", "k", "g", "G", "0", "1", "9", "escape", "ctrl-d", "ctrl-u", "space", "ctrl-g", "x", "]", "[", "c"];
 const CONTROLS: &[&str] = &["rail:apps", "pane:1", "close:1", "tab:1", "tab-close:1", "mark-remove:1", "c0", "c1"];
 
 /// Arguments for an action: from the model as it is half the time, else anything.
@@ -1820,6 +1821,7 @@ const MAKERS: &[Make] = &[
             .coin()
             .then(|| crate::viewer::Lines { first: g.rng.below(400) as u32, last: g.rng.below(400) as u32 }),
     },
+    |g| Action::OpenDiff { path: g.file_path(), beside: g.rng.coin().then(|| g.pane()) },
     |g| Action::ViewerKey { key: g.name(VIEWER_KEYS) },
     |g| {
         let (top, most, page) = (g.rng.below(300) as u32, g.rng.below(300) as u32, g.rng.below(60) as u32);
@@ -2489,6 +2491,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::WorktreeAdded { .. }
             | Action::EditSettings
             | Action::OpenFile { .. }
+            | Action::OpenDiff { .. }
             | Action::ViewerEdit { .. }
             | Action::ViewerKey { .. }
             | Action::TaskGo { .. }

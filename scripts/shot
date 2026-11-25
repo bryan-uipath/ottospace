@@ -27,6 +27,7 @@ below; a folder scripts/shots/<name>/ beside it is copied into the instance's ow
   {"sleep_ms":700}            wait (motion while recording)
   {"write":"home/settings.json","text":"{}"}   a file in the instance's own folder (its folders made), as an editor saves it
   {"tree":"repos/big","files":2000}   a made-up git repository there: nested folders, most files small
+  {"commit":"repos/app"}      a git repository there (made if none), all of it committed: what a diff is from
   {"record":"start"}          with --record: what the recording covers (default: all of it)
   {"controls":true}           print the named controls on screen (for writing scenarios)
   {"print":"repos_bar"}       print a part of the state (for writing scenarios)
@@ -135,6 +136,20 @@ def made_up_tree(at, count):
                 with open(path, "a") as f:
                     f.write("y\n")
         subprocess.run([*git, "commit", "-qam", f"change {c}"], check=True)
+
+
+def commit_all(root, rel):
+    """Everything in the repository at `root`/`rel` committed (`git init` first if it is none), as a
+    made-up author, reading no config of the user's."""
+    at = os.path.join(root, rel)
+    if os.path.commonpath([os.path.realpath(root), os.path.realpath(at)]) != os.path.realpath(root):
+        raise Failed(f"commit outside the instance: {rel}")
+    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    git = lambda *args: subprocess.run(["git", "-C", at, *args], check=True, env=env, capture_output=True)
+    if not os.path.isdir(os.path.join(at, ".git")):
+        git("init", "-q", "-b", "main")
+    git("add", "-A")
+    git("-c", "user.name=Made Up", "-c", "user.email=made@up", "commit", "-q", "--allow-empty", "-m", "made up")
 
 
 def made_up_repo(at, files, folders, deepest, empty=False):
@@ -556,6 +571,8 @@ def run_scenario(binary, scenario, out, record=False):
                 os.replace(path + ".new", path)
             elif "tree" in step:
                 made_up_tree(os.path.join(inst.root, step["tree"]), step["files"])
+            elif "commit" in step:
+                commit_all(inst.root, step["commit"])
             elif "record" in step:
                 if record and step["record"] == "start" and not recording:
                     recording = start_recording()

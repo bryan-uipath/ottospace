@@ -58,6 +58,8 @@ pub enum Item {
     /// An explorer's row: the file in the viewer beside, or below; shown in Finder; its full
     /// path copied; a terminal in the folder.
     Open,
+    /// A changed file's diff in the viewer beside (`review`).
+    OpenDiff,
     OpenBelow,
     Reveal,
     CopyPath,
@@ -94,6 +96,7 @@ impl Item {
             Item::FoldOut => "fold_out",
             Item::ExplorerHere => "explorer_here",
             Item::Open => "open",
+            Item::OpenDiff => "open_diff",
             Item::OpenBelow => "open_below",
             Item::Reveal => "reveal",
             Item::CopyPath => "copy_path",
@@ -124,6 +127,7 @@ impl Item {
             Item::FoldOut => "Fold out",
             Item::ExplorerHere => "Open in explorer",
             Item::Open => "Open",
+            Item::OpenDiff => "Open diff",
             Item::OpenBelow => "Open below",
             Item::Reveal => "Reveal in Finder",
             Item::CopyPath => "Copy path",
@@ -212,6 +216,10 @@ impl Model {
                 match row {
                     Some(row) if row.link => &[Item::CopyPath],
                     Some(row) if row.dir => &[Item::TerminalHere, Item::Reveal, Item::CopyPath],
+                    // A changed file (`review`): its diff too.
+                    Some(row) if self.features.on(Feature::Review) && crate::explorer::diffable(&row) => {
+                        &[Item::Open, Item::OpenDiff, Item::OpenBelow, Item::Reveal, Item::CopyPath]
+                    }
                     Some(_) => &[Item::Open, Item::OpenBelow, Item::Reveal, Item::CopyPath],
                     None => &[],
                 }

@@ -1383,12 +1383,14 @@ impl Model {
 
     /// Whether `action` from `origin` would open or put a pane in a closing workspace, or show
     /// another file in one: split from, fill or drop on a pane of it, or move one to its tab
-    /// (`Open`, `OpenFile`, ⌃G's editor, `DropPane`, `MovePane`; a client's `Fill`: the shell's
+    /// (`Open`, `OpenFile`, `OpenDiff`, ⌃G's editor, `DropPane`, `MovePane`; a client's `Fill`: the shell's
     /// gives a waiting pane its window). Nor drop or move one of its panes out: a drop swaps.
     /// Refused (`CLOSING_OPENS`): `keep_closing` puts its tab away again, not a new pane.
     pub(crate) fn opens_in_closing(&self, action: &Action, origin: Origin) -> bool {
         let pane = match action {
-            Action::Open { beside, .. } | Action::OpenFile { beside, .. } => beside.or(self.focused),
+            Action::Open { beside, .. } | Action::OpenFile { beside, .. } | Action::OpenDiff { beside, .. } => {
+                beside.or(self.focused)
+            }
             Action::ViewerEdit { pane } => pane.or(self.focused),
             Action::DropPane { source, target, .. } => return self.in_closing(*source) || self.in_closing(*target),
             Action::Fill { pane, .. } if origin == Origin::Socket => Some(*pane),
