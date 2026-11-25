@@ -609,9 +609,14 @@ impl Transcript {
 
     /// The user's message, sent at `at`: a turn runs from now.
     pub fn send(&mut self, text: &str, at: u64) {
-        self.settle();
-        self.push(Entry::User { text: Text::new(text) });
-        self.turn = Some(Turn { since: at, tool: None });
+        if self.turn.is_some() {
+            // Into the running turn: its reply streams on (`Hel`, the message, `Hello` is one) and its call stays.
+            self.aside(Entry::User { text: Text::new(text) });
+        } else {
+            self.settle();
+            self.push(Entry::User { text: Text::new(text) });
+            self.turn = Some(Turn { since: at, tool: None });
+        }
         self.activity.message(at);
     }
 
@@ -1091,6 +1096,20 @@ mod tests {
         let (tool, label) = ("Bash".into(), "git".into());
         let (detail, claim) = (text("command: git"), Text::default());
         Event::Permission { ticket, tool, label, detail, len: 12, cut, claim, questions: Vec::new() }
+    }
+
+    /// Found in review: a message sent into a turn mid-reply split it in two (`Hel`, `Hello`).
+    #[test]
+    fn a_message_mid_reply_leaves_the_reply_whole() {
+        let mut t = Transcript::default();
+        t.send("hi", 10);
+        t.fold(Event::TurnStarted, 11);
+        t.fold(Event::TextDelta { text: text("Hel") }, 12);
+        t.send("steer", 13);
+        t.fold(Event::TextDelta { text: text("lo") }, 14);
+        t.fold(Event::Text { text: text("Hello") }, 15);
+        assert_eq!(texts(&t), ["user:hi", "user:steer", "done:Hello"]);
+        assert_eq!(t.turn.as_ref().map(|turn| turn.since), Some(10), "the same turn");
     }
 
     #[test]

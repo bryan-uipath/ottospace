@@ -430,16 +430,14 @@ each held by code named here:
   conversation is idle (`Model::send_queued`); the user's Stop holds them until their ↵. ⌘↵
   (`TalkSendNow`) sends now: into the turn where `Structured::mid_turn` (Codex: `turn/steer`
   with `expectedTurnId`), else the turn is stopped and it goes first.
-- **Mid-turn messages, Claude Code (unconfirmed, so `mid_turn: false`).** The 2.1.331 binary
-  names a headless message queue: a stream-json user line may carry `priority`
-  (`now` / `next` / `later`), and queued ones reach the model as `queued_command` attachments
-  at a tool boundary. Never probed here (tests run no real CLI). To confirm by hand: run
-  `claude -p --input-format stream-json --output-format stream-json --verbose` in a scratch
-  folder, send `{"type":"user","message":{"role":"user","content":"count slowly to 30 with a
-  bash sleep 1 between numbers"}}`, then while it works send
-  `{"type":"user","priority":"next","message":{"role":"user","content":"stop at 5 and say MID"}}`;
-  if the same turn's reply shows MID before its `result`, the message reached it mid-turn: set
-  `mid_turn: true` and send that `priority` from the wire.
+- **Mid-turn messages, Claude Code (`mid_turn: true`).** Probe 2026-11-25 (2.1.332, `claude -p
+  --input-format stream-json`): a user line written while a `sleep 10` call ran reached the model
+  at the call's end, and one `result` closed both ("done BANANA"). With no call left (a long
+  text reply), the line ran as a turn of its own after the `result` (`init`, reply, `result`). No
+  `priority` needed. The wire (`claude.rs`) counts what runs: a `result` clears it, a turn's first
+  output sets it, so an interrupt reaches whichever turn runs.
+- **A session no task owns** keeps no queue: while its turn runs ↵ sends into the turn; where
+  it cannot (a card waits, the agent stops) the words stay in the box.
 - **Switch.** Chat → Terminal is refused while a turn runs or a card waits; Terminal → Chat at
   any time (the TUI is hung up on, as Stop). The core marks the switch and stops the agent; the
   shell kills the native group or hangs up on the TUI (SIGKILL after 3 s) and says

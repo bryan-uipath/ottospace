@@ -451,8 +451,8 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    to 8 rows, then scrolls, and ↑ ↓ move a row), Esc leaves; while a
    turn runs (or a card waits) ↵ queues the message: queued ones show above the composer (Send
    now, Edit, ×) and each goes on its own, in order, once the agent is done; a question it asks
-   comes first, and after your Stop they wait for your ↵. ⌘↵ sends now: into the turn where the
-   runner takes that, else (Claude Code, for now) the turn stops and it goes first. They are kept
+   comes first, and after your Stop they wait for your ↵. ⌘↵ sends now, into the turn (in a session no
+   task owns ↵ does too: it keeps no queue). They are kept
    with the task over a restart. ⌘V with an image on the clipboard (a screenshot copied) attaches
    it to the message being written, here or in the new-task box: a chip with its thumbnail and ×;
    at most 5; it goes to the agent with the message (Claude Code in Chat view; elsewhere the box

@@ -13940,11 +13940,11 @@ fn finish_fixtures() -> Vec<(&'static str, String)> {
 }
 
 /// While a turn runs ↵ queues: two messages wait (the state counts them, never their words) and
-/// go to the agent in order, each its own turn, once it is done. ⌘↵ mid-turn, for Claude Code
-/// (it takes nothing mid-turn here): the turn stops, then the message goes.
+/// go to the agent in order, each its own turn, once it is done. ⌘↵ mid-turn goes into the turn:
+/// Claude Code takes it (probe 2026-11-25), nothing is stopped.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn messages_queue_while_the_agent_works_and_send_now_stops_the_turn_first() {
+fn messages_queue_while_the_agent_works_and_send_now_steers_the_turn() {
     const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
     let text = |words: &str| {
         format!(
@@ -13957,8 +13957,6 @@ fn messages_queue_while_the_agent_works_and_send_now_stops_the_turn_first() {
     );
     let init =
         format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
-    let interrupted =
-        r#"{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming"}"#;
     let fixtures = [
         ("turn1.jsonl", [init, text("Planned."), done.into()].join("\n")),
         // A long turn: what is typed meanwhile waits.
@@ -13967,7 +13965,6 @@ fn messages_queue_while_the_agent_works_and_send_now_stops_the_turn_first() {
         ("turn4.jsonl", [text("Beta done."), done.into()].join("\n")),
         // A turn that runs until it is stopped.
         ("turn5.jsonl", working),
-        ("turn2-interrupted.jsonl", interrupted.into()),
         ("turn6.jsonl", [text("Now done."), done.into()].join("\n")),
     ];
     let fixtures: Vec<(&str, String)> = fixtures.into_iter().collect();
@@ -13997,14 +13994,12 @@ fn messages_queue_while_the_agent_works_and_send_now_stops_the_turn_first() {
     let sent = stdin();
     let (go, alpha, beta) = (sent.find("\"go\"").unwrap(), sent.find("alpha").unwrap(), sent.find("beta").unwrap());
     assert!(go < alpha && alpha < beta, "{sent}");
-    // ⌘↵ mid-turn: Claude Code takes nothing mid-turn here, so the turn stops, then it goes.
+    // ⌘↵ mid-turn: Claude Code takes it into the turn; nothing stops it.
     otto.user_key("g o 2 enter");
     otto.wait_for("the long turn", |o| (!chat(o)["transcript"]["turn"].is_null()).then_some(()));
     otto.user_key("n o w cmd-enter");
-    otto.wait_for("sent after the stop", |o| (stdin().contains("\"now\"") && idle(o)).then_some(()));
-    let sent = stdin();
-    let (stop, now) = (sent.find(r#""subtype":"interrupt""#).unwrap(), sent.find("\"now\"").unwrap());
-    assert!(stop < now, "{sent}");
+    otto.wait_for("sent into the turn", |o| (stdin().contains("\"now\"") && idle(o)).then_some(()));
+    assert!(!stdin().contains(r#""subtype":"interrupt""#), "{}", stdin());
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }

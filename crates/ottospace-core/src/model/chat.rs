@@ -473,22 +473,24 @@ impl Model {
         let Some(chat) = self.chat_mut(&subject) else { return };
         chat.held = false;
         let carded = !chat.transcript.cards.is_empty();
-        match chat.transcript.turn.is_some() {
-            true if !stops && !carded && !ending => {
-                chat.transcript.send(&text, now);
-                effects.push(sent(&subject, text, images));
+        let (running, owned) = (chat.transcript.turn.is_some(), subject.task().is_some());
+        if !carded && !ending && ((running && !stops) || !owned) {
+            chat.transcript.send(&text, now);
+            effects.push(sent(&subject, text, images));
+        } else if !owned {
+            // No task to queue it: back in the composer, never lost.
+            (chat.draft, chat.images) = (Field::lines_of(&text, MAX_DRAFT), images);
+            return self.chat_state(&subject);
+        } else {
+            let queued = self.queued(text, images);
+            if let Some(queue) = self.queue_mut(&subject) {
+                queue.insert(0, queued);
             }
-            running => {
-                let queued = self.queued(text, images);
-                if let Some(queue) = self.queue_mut(&subject) {
-                    queue.insert(0, queued);
+            if running && !carded && !ending {
+                if let Some(chat) = self.chat_mut(&subject) {
+                    chat.armed = false;
                 }
-                if running && !carded && !ending {
-                    if let Some(chat) = self.chat_mut(&subject) {
-                        chat.armed = false;
-                    }
-                    effects.push(Effect::AgentInterrupt { task: subject.clone() });
-                }
+                effects.push(Effect::AgentInterrupt { task: subject.clone() });
             }
         }
         self.send_queued(&subject, effects);
@@ -815,13 +817,15 @@ impl Model {
                     )
                 });
                 let front = chat.transcript.cards.front().map(|card| card.ticket);
+                let finished = events.iter().any(|event| matches!(event, Event::TurnFinished { .. }));
                 for event in events {
                     // An agent that exited in this batch asks nothing and starts no turn: nothing to answer or stop.
                     if chat.transcript.live || !matches!(event, Event::Permission { .. } | Event::TurnStarted) {
                         chat.transcript.fold(event, at);
                     }
                 }
-                chat.armed &= chat.transcript.turn.is_some();
+                // A turn that ended in this batch takes its Esc with it, also when the next starts.
+                chat.armed &= chat.transcript.turn.is_some() && !finished;
                 // A Deny's message is for the card it was written under: another one in front ends it.
                 chat.deny &= chat.transcript.cards.front().map(|card| card.ticket) == front;
                 if turns {
@@ -890,8 +894,12 @@ impl Model {
                     return self.send_queued(&subject, effects);
                 }
                 // A turn runs, a card waits, or messages wait already: this one waits behind them
-                // (a hold stays: only the empty ↵ lets them go). No task to keep it: as before, nothing.
-                let busy = chat.transcript.busy();
+                // (a hold stays: only the empty ↵ lets them go). No task to keep it: sent now.
+                let (busy, steers) =
+                    (chat.transcript.busy(), chat.transcript.turn.is_some() && chat.transcript.cards.is_empty());
+                if steers && subject.task().is_none() && !self.send_now_stops(&subject) {
+                    return self.chat_act(Action::TalkSendNow, effects);
+                }
                 if busy || !self.queue_of(&subject).is_empty() {
                     if self.enqueue(&subject, text, self.draft_images(&subject), effects) {
                         self.clear_draft(&subject);
@@ -1682,12 +1690,10 @@ mod tests {
         m.update(Action::QueueEdit { id: ids[1] });
         m.update(Action::QueueRemove { id: ids[0] });
         assert_eq!((queue(&m), m.chat(&one).map(|chat| chat.draft.text().to_string())), (vec![], Some("sixth".into())));
-        // ⌘↵ while a turn runs, Claude Code (no message mid-turn): the turn stops, the message goes first after it.
-        assert!(m.send_now_stops(&one));
-        assert_eq!(m.update(Action::TalkSendNow), [Effect::AgentInterrupt { task: one.clone() }]);
-        assert_eq!(queue(&m), ["sixth"]);
-        let stopped = vec![Event::TurnFinished { outcome: Outcome::Interrupted }];
-        assert_eq!(turn(&mut m, stopped), [Effect::AgentSend { task: one.clone(), text: "sixth".into() }]);
+        // ⌘↵ while a turn runs: Claude Code takes it into the turn, no stop.
+        assert!(!m.send_now_stops(&one));
+        assert_eq!(m.update(Action::TalkSendNow), [Effect::AgentSend { task: one.clone(), text: "sixth".into() }]);
+        assert!(queue(&m).is_empty());
     }
 
     /// Found in review: a card waiting keeps "send now" behind the question (no stop); a full queue
@@ -1788,12 +1794,11 @@ mod tests {
         );
     }
 
-    /// A runner that takes a message mid-turn gets "send now" in the turn; Claude Code's is off
-    /// until a probe pins its queue.
+    /// A runner that takes a message mid-turn gets "send now" in the turn: both do (probes).
     #[test]
     fn send_now_stops_only_where_the_runner_takes_nothing_mid_turn() {
         use crate::runner::RunnerId;
-        assert!(!RunnerId::Claude.spec().structured.mid_turn);
+        assert!(RunnerId::Claude.spec().structured.mid_turn);
         assert!(RunnerId::Codex.spec().structured.mid_turn);
     }
 

@@ -17922,6 +17922,67 @@ mod tests {
         assert!(matches!(&took[..], [Effect::StartAgent { start: agents::Start::Resume { .. }, .. }]), "{took:?}");
     }
 
+    /// The owner's case: ↵ while a session no task owns works did nothing (no task keeps a
+    /// queue). It goes into the turn now; where it cannot, it stays in the box.
+    #[test]
+    fn enter_mid_turn_in_a_session_no_task_owns_steers_it() {
+        use crate::transcript::Event;
+        let mut m = conversations();
+        let features = Features::all().with(Feature::TerminalTasks, false);
+        m.update(Action::SetFeatures { features }.sent_by(Origin::System));
+        let idle = of_session("claude", IDLE);
+        started(&mut m, Action::SessionOpen { runner: "claude".into(), id: IDLE.into() });
+        m.update(Action::AgentStarted { task: idle.clone(), session: None, at: 1 }.sent_by(Origin::System));
+        let send = |m: &mut Model, text: &str| {
+            m.update(Action::FieldEdit { edit: crate::edit::Edit::Replace { range: None, text: text.into() } });
+            m.update(Action::TalkSend)
+        };
+        assert_eq!(send(&mut m, "go"), [Effect::AgentSend { task: idle.clone(), text: "go".into() }]);
+        m.update(
+            Action::AgentEvents { task: idle.clone(), events: vec![Event::TurnStarted], at: 2 }.sent_by(Origin::System),
+        );
+        assert_eq!(send(&mut m, "steer"), [Effect::AgentSend { task: idle.clone(), text: "steer".into() }]);
+        assert_eq!(m.chat(&idle).map(|chat| chat.draft.text()), Some(""));
+        // One Esc on the first turn: the steer's own turn, started in the same batch, is not armed.
+        m.update(Action::TalkEscape);
+        let next = vec![Event::TurnFinished { outcome: crate::transcript::Outcome::Completed }, Event::TurnStarted];
+        m.update(Action::AgentEvents { task: idle.clone(), events: next, at: 2 }.sent_by(Origin::System));
+        assert_eq!(m.update(Action::TalkEscape), [], "one Esc only says so");
+        m.update(Action::TalkEscape);
+        // Written, then a card waits: nowhere to queue it, so it stays in the box, never lost.
+        m.update(Action::FieldEdit { edit: crate::edit::Edit::Replace { range: None, text: "later".into() } });
+        let card = Event::Permission {
+            ticket: 4,
+            tool: "Bash".into(),
+            label: "git".into(),
+            detail: crate::transcript::Text::new("command: git"),
+            len: 12,
+            cut: false,
+            claim: crate::transcript::Text::default(),
+            questions: Vec::new(),
+        };
+        m.update(Action::AgentEvents { task: idle.clone(), events: vec![card.clone()], at: 3 }.sent_by(Origin::System));
+        assert_eq!(m.update(Action::TalkSend), []);
+        assert_eq!(m.chat(&idle).map(|chat| chat.draft.text()), Some("later"));
+        // Found in review: a card with no turn, or a stop on its way, keeps it in the box too.
+        let finished = Event::TurnFinished { outcome: crate::transcript::Outcome::Completed };
+        m.update(
+            Action::AgentEvents { task: idle.clone(), events: vec![finished, card], at: 4 }.sent_by(Origin::System),
+        );
+        assert_eq!((m.update(Action::TalkSend), m.update(Action::TalkSendNow)), (vec![], vec![]));
+        assert_eq!(m.chat(&idle).map(|chat| chat.draft.text()), Some("later"));
+        m.update(
+            Action::AgentEvents { task: idle.clone(), events: vec![Event::PermissionClosed { ticket: 4 }], at: 5 }
+                .sent_by(Origin::System),
+        );
+        m.update(Action::TaskStop { id: idle.clone() });
+        assert!(
+            !m.update(Action::TalkSendNow).iter().any(|e| matches!(e, Effect::AgentSend { .. })),
+            "never to the one stopping"
+        );
+        assert_eq!(m.chat(&idle).map(|chat| chat.draft.text()), Some("later"));
+    }
+
     #[test]
     fn opening_a_session_goes_on_with_it_in_the_drawer_where_it_started() {
         let mut m = conversations();

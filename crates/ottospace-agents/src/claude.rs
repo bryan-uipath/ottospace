@@ -82,7 +82,7 @@ const DENIED: &str = "The user denied this tool call.";
 pub struct Claude {
     /// An interrupt was sent and its turn has not finished: that turn ends interrupted.
     interrupting: bool,
-    /// Messages sent whose `result` has not come: with none, there is nothing to interrupt.
+    /// Messages sent, or a turn running, with no `result` since: with none, nothing to interrupt.
     pending: usize,
     /// `TurnStarted` was said for the turn running now.
     announced: bool,
@@ -105,6 +105,8 @@ impl Claude {
         let emit = &mut out.events;
         // Claude names no turn start: the first of its output after a `result` is one.
         if matches!(kind, Some("stream_event" | "assistant")) && !std::mem::replace(&mut self.announced, true) {
+            // A message sent mid-turn may run as a turn of its own, after the `result`.
+            self.pending = self.pending.max(1);
             emit.push(Event::TurnStarted);
         }
         match kind {
@@ -187,7 +189,8 @@ impl Claude {
                 let window = window.filter_map(|(_, usage)| usage["contextWindow"].as_u64()).max();
                 let cost = record["total_cost_usd"].as_f64().filter(|usd| usd.is_finite() && *usd >= 0.0);
                 emit.push(Event::Usage { context: None, window, cost_micro_usd: cost.map(|usd| (usd * 1e6) as u64) });
-                self.pending = self.pending.saturating_sub(1);
+                // Messages sent mid-turn were folded in, or start a turn of their own (above).
+                self.pending = 0;
                 self.announced = false;
                 // The CLI says a turn was cut short: `terminal_reason: aborted_streaming` (seen
                 // after an interrupt). Our own interrupt counts only if the turn did not succeed:
@@ -764,6 +767,24 @@ mod tests {
         // The CLI's own word for a cut turn, as 2.1.323 sends it after an interrupt (seen in a probe).
         let cut = r#"{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming"}"#;
         assert_eq!(Claude::new().read(cut).events.last(), Some(&Event::TurnFinished { outcome: Outcome::Interrupted }));
+    }
+
+    /// A message sent mid-turn, as 2.1.332 answers it (probe 2026-11-25): folded into the turn
+    /// (one `result` for both), or a turn of its own after the `result`. Either way an interrupt
+    /// reaches the turn that runs and none is sent once all are over.
+    #[test]
+    fn a_message_mid_turn_folds_in_or_runs_after() {
+        let send = || Input::Send { text: "go".into(), images: vec![] };
+        let output = r#"{"type":"assistant","parent_tool_use_id":null,"message":{"content":[]}}"#;
+        let done = r#"{"type":"result","subtype":"success","is_error":false}"#;
+        let mut claude = Claude::new();
+        claude.write(send()).unwrap();
+        claude.read(output);
+        claude.write(send()).unwrap();
+        claude.read(done);
+        assert_eq!(claude.write(Input::Interrupt), Ok(vec![]), "folded in: nothing runs");
+        assert_eq!(claude.read(output).events, [Event::TurnStarted], "or the second message's own turn");
+        assert!(claude.write(Input::Interrupt).unwrap()[0].contains(r#""subtype":"interrupt""#));
     }
 
     /// The path that made the CLI ask is part of what is allowed: shown with the command.
