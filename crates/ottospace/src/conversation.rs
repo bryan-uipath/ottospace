@@ -2384,13 +2384,14 @@ impl Workspace {
     /// The messages queued while the agent works, above the composer: each on one line, with Send
     /// now, Edit (back to the composer) and ×; and a line that says when they go.
     fn queue_rows(&self, chat: &chat::Chat, cx: &mut Context<Self>) -> Option<Div> {
-        if chat.queue.is_empty() {
+        let queue = self.model.queue_of(&chat.subject);
+        if queue.is_empty() {
             return None;
         }
-        let n = chat.queue.len();
+        let n = queue.len();
         let when = match () {
             _ if !chat.transcript.cards.is_empty() => "after you answer",
-            _ if chat.held => "you stopped the turn: ↵ sends the next",
+            _ if chat.held => "waiting for you: ↵ on an empty box sends the next",
             _ if !chat.transcript.live => "once the agent runs again",
             _ => "each on its own, when the agent is done",
         };
@@ -2410,7 +2411,7 @@ impl Workspace {
                 cx.listener(move |this, _, window, cx| drop(this.dispatch(action.clone(), this.input, window, cx))),
             )
         };
-        let rows = chat.queue.iter().enumerate().map(|(at, text)| {
+        let rows = queue.iter().enumerate().map(|(at, text)| {
             // One line of it: the first, cut.
             let line = text.lines().next().unwrap_or_default().to_string();
             div()
@@ -2497,7 +2498,7 @@ impl Workspace {
                     "replies": blocks,
                     "draft_chars": chat.draft.text().chars().count(),
                     // Messages queued while the agent works: how many, never their words; and whether the user's stop holds them.
-                    "queued": chat.queue.len(),
+                    "queued": self.model.queue_of(&subject).len(),
                     "held": chat.held,
                     // The user's editor has its draft (⌃G).
                     "editing": self.model.edits(&subject),

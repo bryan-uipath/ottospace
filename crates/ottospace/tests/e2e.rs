@@ -13921,7 +13921,7 @@ fn messages_queue_while_the_agent_works_and_send_now_stops_the_turn_first() {
     assert!(go < alpha && alpha < beta, "{sent}");
     // ⌘↵ mid-turn: Claude Code takes nothing mid-turn here, so the turn stops, then it goes.
     otto.user_key("g o 2 enter");
-    otto.wait_for("the long turn", |o| chat(o)["transcript"]["turn"].is_object().then_some(()));
+    otto.wait_for("the long turn", |o| (!chat(o)["transcript"]["turn"].is_null()).then_some(()));
     otto.user_key("n o w cmd-enter");
     otto.wait_for("sent after the stop", |o| (stdin().contains("\"now\"") && idle(o)).then_some(()));
     let sent = stdin();

@@ -3335,15 +3335,11 @@ fn check(m: &Model) -> Result<(), String> {
     // A picker's list and the tag's dropdown never both; a list only of a picker the box shows.
     ensure!(m.picker_menu().is_none() || m.dropdown().is_none(), "a picker's list and the dropdown at once");
     ensure!(m.picker_menu().is_none_or(|menu| m.compose_pickers().contains(&menu.mark)), "a list of no picker");
-    // A queued message is never empty, and a task keeps its conversation's queue (over a restart).
-    for chat in &m.chats {
-        ensure!(chat.queue.iter().all(|text| !text.trim().is_empty()), "an empty message queued in {:?}", chat.subject);
-        let task = chat.subject.task().and_then(|id| m.tasks.get(id));
-        ensure!(
-            task.is_none_or(|task| task.queued == chat.queue),
-            "{:?}'s queue is not kept with its task",
-            chat.subject
-        );
+    // A queued message is never empty, and a queue stays small enough for its task's file.
+    for task in &m.tasks.list {
+        ensure!(task.queued.iter().all(|text| !text.trim().is_empty()), "an empty message queued in task {}", task.id);
+        let used: usize = task.queued.iter().map(|text| text.chars().count()).sum();
+        ensure!(used <= crate::model::chat::MAX_QUEUE, "task {} queues {used} characters", task.id);
     }
     if let Some((of, field)) = m.open_field() {
         let most = match of {
