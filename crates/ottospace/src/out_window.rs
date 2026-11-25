@@ -42,6 +42,7 @@ impl Workspace {
     pub(crate) fn sync_out_windows(&mut self, cx: &mut Context<Self>) {
         let out = self.model.tabs_out();
         self.out_frames.retain(|tab, _| out.iter().any(|(id, _)| id == tab));
+        self.out_geos.retain(|tab, _| out.iter().any(|(id, _)| id == tab));
         // Kept while out: a fill turned off still finds the frame to go back to.
         self.out_filled.retain(|tab, _| out.iter().any(|(id, _)| id == tab));
         for (tab, handle) in std::mem::take(&mut self.out_windows) {
