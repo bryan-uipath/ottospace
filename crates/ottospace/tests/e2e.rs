@@ -10440,6 +10440,10 @@ fn a_session_opened_before_the_section_closed_resumes_or_says_why_not() {
         (o.call(json!({"cmd": "state"}))["state"]["agents"] == json!([])).then_some(())
     });
     std::fs::remove_file(&file).unwrap();
+    // Its space on show keeps the sessions read (#482): a read after the removal, so none still lists it.
+    let reads = |o: &Otto| o.call(json!({"cmd": "state"}))["sessions_bar"]["reads"].as_u64().unwrap_or(0);
+    let before = reads(&otto);
+    otto.wait_for("a read after the removal", |o| (reads(o) > before + 1).then_some(()));
     otto.user_start();
     let note = otto.wait_for("the drawer to say why", |o| {
         let note = o.call(json!({"cmd": "state"}))["drawer"]["note"].clone();
