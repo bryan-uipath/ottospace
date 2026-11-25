@@ -19031,7 +19031,7 @@ fn a_live_layer_spins_the_city_and_counts_its_presents() {
 /// beam GPUI draws over it moves with a turn in the frame that asks, where the turn's picture has it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_live_layers_hovered_beam_turns_with_its_picture() {
+fn a_live_citys_hovered_beam_turns_with_its_picture() {
     let (otto, root, home) = city_shown("city-live-beam", "code_city,city_live_layer");
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
     let numbers = |v: &Value| v.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect::<Vec<_>>();
@@ -19127,7 +19127,7 @@ fn a_double_click_on_the_city_opens_a_file_or_a_folder() {
 /// picture: the names, placed by the picture's own camera, wait for the next one, not left behind.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_live_layers_names_wait_out_a_turn_not_left_behind() {
+fn a_live_citys_names_wait_out_a_turn_not_left_behind() {
     let (otto, root, home) = city_shown("city-live-names", "code_city,city_live_layer");
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
     let named = |c: &Value| c["names"].as_array().is_some_and(|n| !n.is_empty());
