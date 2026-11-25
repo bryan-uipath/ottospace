@@ -134,7 +134,9 @@ pub enum Event {
     /// shows (`gist::claude`).
     ToolStart {
         id: String,
-        sub: bool,
+        /// The sub-agent call it runs under (`parent_tool_use_id`); `Some("")`: a sub-agent's, its
+        /// parent unknown (a watched session's file).
+        parent: Option<String>,
         tool: String,
         station: Station,
         label: String,
@@ -421,10 +423,11 @@ pub enum Entry {
         text: Text,
         streaming: bool,
     },
-    /// `sub`: a call a sub-agent made. `gist`: what its row shows; `output`: a command's.
+    /// `parent`: the sub-agent call it ran under, if a sub-agent made it. `gist`: what its row
+    /// shows; `output`: a command's.
     Tool {
         id: String,
-        sub: bool,
+        parent: Option<String>,
         tool: String,
         label: String,
         detail: Text,
@@ -549,6 +552,8 @@ const MAX_SUBS: usize = 64;
 #[derive(Clone, Debug, PartialEq)]
 pub struct Face {
     pub id: String,
+    /// The sub-agent that started it; `None`: the agent itself.
+    pub parent: Option<String>,
     pub kind: String,
     pub about: String,
     pub since: u64,
@@ -649,17 +654,19 @@ impl Transcript {
     /// How many sub-agents its agent runs now: its `Agent` or `Task` calls that still run (one
     /// whose end never came is over once its calls are: an interrupt, an exit).
     pub fn subagents(&self) -> usize {
-        self.subs.iter().filter(|face| self.activity.runs(&face.id)).count()
+        self.subs.iter().filter(|face| face.parent.is_none() && self.activity.runs(&face.id)).count()
     }
 
-    /// Its sub-agents for the header's faces: the running first, then the most recently active
-    /// (started or ended last). Empty while none runs: the faces show only then.
-    pub fn faces(&self) -> Vec<Face> {
-        if self.subagents() == 0 {
+    /// The sub-agents `of` started (`None`: the agent's own) for the header's faces: the running
+    /// first, then the most recently active (started or ended last). Empty while none of them
+    /// runs: the faces show only then.
+    pub fn faces(&self, of: Option<&str>) -> Vec<Face> {
+        let mine = || self.subs.iter().filter(|face| face.parent.as_deref() == of);
+        if !mine().any(|face| self.activity.runs(&face.id)) {
             return Vec::new();
         }
         // Newest first, so calls of one batch (one time) keep that order through the stable sort.
-        let mut faces: Vec<Face> = self.subs.iter().rev().cloned().collect();
+        let mut faces: Vec<Face> = mine().rev().cloned().collect();
         for face in &mut faces {
             // One whose end never came is over once its calls are (an interrupt, an exit).
             if face.ended.is_none() && !self.activity.runs(&face.id) {
@@ -668,6 +675,34 @@ impl Transcript {
         }
         faces.sort_by_key(|face| (face.ended.is_some(), std::cmp::Reverse(face.ended.unwrap_or(face.since))));
         faces
+    }
+
+    /// How many sub-agents it keeps.
+    pub fn faces_kept(&self) -> usize {
+        self.subs.len()
+    }
+
+    /// A sub-agent it started, at any depth, by its call's id.
+    pub fn face(&self, id: &str) -> Option<&Face> {
+        self.subs.iter().find(|face| face.id == id)
+    }
+
+    /// What a sub-agent does now, in one line: its newest call's label, else whether it ended.
+    pub fn sub_status(&self, id: &str) -> Option<String> {
+        let face = self.face(id)?;
+        let last = self.items.iter().rev().find_map(|item| match &item.entry {
+            Entry::Tool { parent: Some(of), label, state, .. } if of == id => Some((label, *state)),
+            _ => None,
+        });
+        // As the chip's line: a label is the model's, cleaned and on one line.
+        let last = last.map(|(label, state)| (clean(label).replace('\n', " "), state));
+        let running = self.activity.runs(id);
+        Some(match last {
+            Some((label, Call::Running)) => format!("{} · {label}", face.kind),
+            Some((label, _)) if running => format!("{} · last {label}", face.kind),
+            _ if running => format!("{} · starting", face.kind),
+            _ => format!("{} · done", face.kind),
+        })
     }
 
     /// The command line of its newest shell call that still runs.
@@ -819,11 +854,14 @@ impl Transcript {
                 }
                 _ => self.push(Entry::Assistant { text, streaming: false }),
             },
-            Event::ToolStart { id, sub, tool, station, label, detail, diff, gist } => {
+            Event::ToolStart { id, parent, tool, station, label, detail, diff, gist } => {
                 self.settle();
                 self.activity.start(&id, station, &label, at);
                 self.glances.start(&id, &tool, station, detail.text());
-                if matches!(tool.as_str(), "Agent" | "Task") && !sub {
+                // A watched file's sub-agent start names no parent (`Some("")`): no face. One id is
+                // one face; a call its own parent has none (no loop to walk).
+                let known = self.subs.iter().any(|face| face.id == id);
+                if matches!(tool.as_str(), "Agent" | "Task") && parent.as_deref() != Some("") && !known {
                     if self.subs.len() == MAX_SUBS {
                         // The oldest that no longer runs goes first: a long one outlives many short.
                         let activity = &self.activity;
@@ -831,7 +869,8 @@ impl Transcript {
                         self.subs.remove(gone);
                     }
                     let about = gist.as_ref().map(|gist| gist.line(None)).unwrap_or_default();
-                    self.subs.push(Face { id: id.clone(), kind: label.clone(), about, since: at, ended: None });
+                    let (kind, mine) = (label.clone(), parent.clone().filter(|of| *of != id));
+                    self.subs.push(Face { id: id.clone(), parent: mine, kind, about, since: at, ended: None });
                 }
                 if station == Station::Shell {
                     if self.shells.len() == MOST_SHELLS {
@@ -843,7 +882,7 @@ impl Transcript {
                     turn.tool = Some(label.clone());
                 }
                 let state = Call::Running;
-                self.push(Entry::Tool { id, sub, tool, label, detail, state, diff, gist, output: None });
+                self.push(Entry::Tool { id, parent, tool, label, detail, state, diff, gist, output: None });
             }
             Event::ToolEnd { id, failed, output } => {
                 self.activity.end(&id, failed, at);
@@ -1076,11 +1115,11 @@ impl Shape {
         match entry {
             Entry::User { text } => Shape::User { bytes: text.len() },
             Entry::Assistant { text, streaming } => Shape::Assistant { bytes: text.len(), streaming: *streaming },
-            Entry::Tool { tool, label, state, sub, diff, gist, .. } => Shape::Tool {
+            Entry::Tool { tool, label, state, parent, diff, gist, .. } => Shape::Tool {
                 tool: tool.clone(),
                 label: label.clone(),
                 state: *state,
-                sub: *sub,
+                sub: parent.is_some(),
                 diff: diff.as_ref().map(Diff::shape),
                 summary: gist.as_ref().map(Gist::shape),
             },
@@ -1158,7 +1197,7 @@ mod tests {
         t.fold(Event::Text { text: text("Let me look.") }, 14);
         let tool = Event::ToolStart {
             id: "a".into(),
-            sub: false,
+            parent: None,
             tool: "Bash".into(),
             station: crate::activity::Station::Shell,
             label: "git".into(),
@@ -1184,7 +1223,7 @@ mod tests {
         t.send("go", 1);
         let tool = Event::ToolStart {
             id: "a".into(),
-            sub: true,
+            parent: Some("p".into()),
             tool: "Read".into(),
             station: crate::activity::Station::Files,
             label: "a.rs".into(),
@@ -1238,7 +1277,7 @@ mod tests {
         t.started(false);
         let bash = Event::ToolStart {
             id: "b".into(),
-            sub: false,
+            parent: None,
             tool: "Bash".into(),
             station: Station::Shell,
             label: "cat".into(),
@@ -1263,7 +1302,7 @@ mod tests {
     fn the_dial_counts_a_step_once_and_drops_calls_left_open() {
         let call = |id: &str| Event::ToolStart {
             id: id.into(),
-            sub: false,
+            parent: None,
             tool: "Bash".into(),
             station: Station::Shell,
             label: "ls".into(),
@@ -1394,7 +1433,7 @@ mod tests {
         let mut t = Transcript { watched: true, ..Transcript::default() };
         let start = |diff| Event::ToolStart {
             id: "e".into(),
-            sub: false,
+            parent: None,
             tool: "Edit".into(),
             station: crate::activity::Station::Files,
             label: "secret.rs".into(),
@@ -1426,7 +1465,7 @@ mod tests {
     fn a_command_row_keeps_its_output_and_the_state_only_its_shape() {
         let call = |id: &str, tool: &str, input: serde_json::Value| Event::ToolStart {
             id: id.into(),
-            sub: false,
+            parent: None,
             tool: tool.into(),
             station: Station::Shell,
             label: "x".into(),
@@ -1464,7 +1503,7 @@ mod tests {
             let gist = crate::gist::claude("Agent", &input);
             let (id, tool, label, detail) = (id.into(), "Agent".into(), kind.into(), Text::default());
             let station = Station::Agents;
-            t.fold(Event::ToolStart { id, sub: false, tool, station, label, detail, diff: None, gist }, at);
+            t.fold(Event::ToolStart { id, parent: None, tool, station, label, detail, diff: None, gist }, at);
         };
         let end = |t: &mut Transcript, id: &str, at| {
             t.fold(Event::ToolEnd { id: id.into(), failed: false, output: None }, at)
@@ -1474,15 +1513,15 @@ mod tests {
         start(&mut t, "c", "review", "Review queue.ts", 3);
         end(&mut t, "a", 4);
         end(&mut t, "b", 5);
-        let ids = |t: &Transcript| t.faces().into_iter().map(|f| f.id).collect::<Vec<_>>();
+        let ids = |t: &Transcript| t.faces(None).into_iter().map(|f| f.id).collect::<Vec<_>>();
         assert_eq!(ids(&t), ["c", "b", "a"], "running first, then the last to end");
-        let c = &t.faces()[0];
+        let c = &t.faces(None)[0];
         assert_eq!((c.kind.as_str(), c.about.as_str(), c.ended), ("review", "Review queue.ts", None));
-        // A sub-agent's own call is no face.
+        // A sub-agent's own sub-agent is its face, not the agent's.
         t.fold(
             Event::ToolStart {
                 id: "s".into(),
-                sub: true,
+                parent: Some("c".into()),
                 tool: "Agent".into(),
                 station: Station::Agents,
                 label: "x".into(),
@@ -1492,9 +1531,12 @@ mod tests {
             },
             6,
         );
-        assert_eq!(t.faces().len(), 3);
+        assert_eq!(t.faces(None).len(), 3);
+        let nested = t.faces(Some("c"));
+        assert_eq!((nested.len(), nested[0].parent.as_deref()), (1, Some("c")));
+        assert_eq!(t.subagents(), 1, "the agent's own only");
         end(&mut t, "c", 7);
-        assert!(t.faces().is_empty(), "none runs: no faces");
+        assert!(t.faces(None).is_empty(), "none runs: no faces");
         // One long sub-agent outlives `MAX_SUBS` short ones: it is still counted.
         start(&mut t, "long", "Explore", "Long", 8);
         for n in 0..MAX_SUBS as u64 {
@@ -1502,7 +1544,7 @@ mod tests {
             end(&mut t, &format!("short{n}"), 9 + n);
         }
         assert_eq!(t.subagents(), 1);
-        assert_eq!(t.faces()[0].id, "long");
+        assert_eq!(t.faces(None)[0].id, "long");
         // Started in one batch, at one time: the newest first.
         start(&mut t, "x", "Explore", "X", 100);
         start(&mut t, "y", "Explore", "Y", 100);
@@ -1518,7 +1560,7 @@ mod tests {
         t.fold(
             Event::ToolStart {
                 id: "a".into(),
-                sub: false,
+                parent: None,
                 tool: "Agent".into(),
                 station: Station::Agents,
                 label: "Explore".into(),
@@ -1552,7 +1594,7 @@ mod tests {
         b.fold(
             Event::ToolStart {
                 id: "s".into(),
-                sub: false,
+                parent: None,
                 tool: "Bash".into(),
                 station: Station::Shell,
                 label: "cargo build".into(),

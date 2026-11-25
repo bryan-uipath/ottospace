@@ -19,6 +19,7 @@ pub const USERS_ALONE: &str = "only the user sends to, answers or interrupts a c
 pub const RUNNERS_ALONE: &str = "only ottospace's own runner reports an agent's events";
 /// Why a client's collapse of a dial is refused: it is how the user keeps their drawer.
 pub const DIAL_USERS: &str = "only the user collapses or opens a conversation's dial";
+pub const DRILL_USERS: &str = "only the user opens a sub-agent's view or goes back";
 
 /// The most characters a composer draft holds.
 pub const MAX_DRAFT: usize = 100_000;
@@ -61,9 +62,36 @@ pub struct Chat {
     /// stopped the turn, or the queue was read back after a restart. The queue is the task's
     /// (`Task::queued`, `Model::queue_of`).
     pub held: bool,
+    /// The sub-agent whose own calls the drawer shows (its call's id), drilled into by the user.
+    pub drilled: Option<String>,
+    /// The list of the shown level's sub-agents is open ("+n").
+    pub switcher: bool,
 }
 
 impl Chat {
+    /// The sub-agent shown, while its call is still kept (one evicted shows the agent again).
+    pub fn drilled(&self) -> Option<&crate::transcript::Face> {
+        self.transcript.face(self.drilled.as_deref()?)
+    }
+
+    /// Up one level: the parent sub-agent if it is kept, else the agent; the list closes.
+    fn back(&mut self) {
+        let up = self.drilled().and_then(|face| face.parent.clone()).filter(|of| self.transcript.face(of).is_some());
+        (self.drilled, self.switcher) = (up, false);
+    }
+
+    /// How deep the drawer is: 0 the agent, 1 a sub-agent of it, 2 one of that one's, ….
+    pub fn depth(&self) -> usize {
+        let mut depth = 0;
+        let mut at = self.drilled();
+        // At most one step a kept sub-agent: a chain of parents never loops forever.
+        while let Some(face) = at.filter(|_| depth <= self.transcript.faces_kept()) {
+            depth += 1;
+            at = face.parent.as_deref().and_then(|of| self.transcript.face(of));
+        }
+        depth
+    }
+
     /// True if `ticket` is the card shown: an answer or Show all is for what the user saw.
     pub fn front_is(&self, ticket: u64) -> bool {
         self.transcript.cards.front().is_some_and(|card| card.ticket == ticket)
@@ -86,6 +114,10 @@ impl Chat {
         }
         if super::btw::is_key(key, mods) {
             return Key::Act(Action::BtwOpen);
+        }
+        // Esc leaves the list or a sub-agent's view before it declines a question.
+        if key == "escape" && (self.switcher || self.drilled().is_some()) {
+            return Key::Act(Action::TalkEscape);
         }
         let ticket = self.transcript.cards.front().map(|card| card.ticket).filter(|_| !self.deny);
         match (ticket, self.form()) {
@@ -111,6 +143,8 @@ impl Chat {
             asked,
             held,
             images,
+            drilled: None,
+            switcher: false,
         }
     }
 }
@@ -505,9 +539,9 @@ impl Model {
         {
             chat.transcript.fold(crate::transcript::Event::Exited { code: None, signal: None, details: false }, 0);
         }
-        // A btw is of its process: it ends with it.
+        // A btw is of its process: it ends with it; so does a sub-agent's view, and the list.
         if let Some(chat) = self.chat_mut(subject) {
-            (chat.deny, chat.armed, chat.btw) = (false, false, None);
+            (chat.deny, chat.armed, chat.btw, chat.drilled, chat.switcher) = (false, false, None, None, false);
         }
         let switching = self.switching.contains(subject);
         self.switching.retain(|of| of != subject);
@@ -826,6 +860,12 @@ impl Model {
                 }
                 // A turn that ended in this batch takes its Esc with it, also when the next starts.
                 chat.armed &= chat.transcript.turn.is_some() && !finished;
+                // Its agent gone: the agent's view again. The list closes once none of it runs.
+                if !chat.transcript.live {
+                    (chat.drilled, chat.switcher) = (None, false);
+                }
+                let level = chat.drilled().map(|face| face.id.clone());
+                chat.switcher &= !chat.transcript.faces(level.as_deref()).is_empty();
                 // A Deny's message is for the card it was written under: another one in front ends it.
                 chat.deny &= chat.transcript.cards.front().map(|card| card.ticket) == front;
                 if turns {
@@ -1016,6 +1056,13 @@ impl Model {
                 if std::mem::take(&mut chat.deny) {
                     return;
                 }
+                // The list first, then a sub-agent's view: Esc goes up a level.
+                if std::mem::take(&mut chat.switcher) {
+                    return;
+                }
+                if chat.drilled().is_some() {
+                    return chat.back();
+                }
                 if chat.transcript.turn.is_none() {
                     return self.talk_keys(false, effects);
                 }
@@ -1024,6 +1071,23 @@ impl Model {
                 if !chat.armed {
                     chat.held = true;
                     effects.push(Effect::AgentInterrupt { task: chat.subject.clone() });
+                }
+            }
+            Action::TalkDrill { id } => {
+                let Some(chat) = self.shown_chat_mut() else { return };
+                if chat.transcript.face(&id).is_some() {
+                    (chat.drilled, chat.switcher) = (Some(id), false);
+                }
+            }
+            Action::TalkBack => {
+                if let Some(chat) = self.shown_chat_mut() {
+                    chat.back();
+                }
+            }
+            Action::TalkFaces { open } => {
+                if let Some(chat) = self.shown_chat_mut() {
+                    let level = chat.drilled().map(|face| face.id.clone());
+                    chat.switcher = open && !chat.transcript.faces(level.as_deref()).is_empty();
                 }
             }
             Action::TalkInterrupt => {
@@ -1249,6 +1313,97 @@ mod tests {
         Event::Permission { ticket, tool, label, detail, len: 12, cut, claim: Text::default(), questions: Vec::new() }
     }
 
+    /// A face's click shows that sub-agent's own calls; its own sub-agents are faces there, and
+    /// their list opens; Esc goes up one level at a time. Only the user drills, and only into a
+    /// sub-agent the transcript has.
+    #[test]
+    fn the_user_drills_into_a_sub_agent_and_esc_goes_back_up() {
+        use crate::activity::Station;
+        let mut m = two_live();
+        let one = first(&m);
+        let start = |id: &str, parent: Option<&str>, tool: &str| Event::ToolStart {
+            id: id.into(),
+            parent: parent.map(String::from),
+            tool: tool.into(),
+            station: if tool == "Agent" { Station::Agents } else { Station::Shell },
+            label: "tests".into(),
+            detail: Text::default(),
+            diff: None,
+            gist: None,
+        };
+        let calls = vec![
+            Event::TurnStarted,
+            start("a", None, "Agent"),
+            start("n", Some("a"), "Agent"),
+            start("x", Some("a"), "Bash"),
+        ];
+        events(&mut m, &one, calls);
+        let depth = |m: &Model| m.chat(&one).map(super::Chat::depth);
+        let drill = |id: &str| Action::TalkDrill { id: id.into() };
+        for theirs in [drill("a"), Action::TalkBack, Action::TalkFaces { open: true }] {
+            assert_eq!(m.refusal(&theirs, Origin::Socket), Some(super::DRILL_USERS));
+        }
+        m.update(drill("zz"));
+        assert_eq!(depth(&m), Some(0), "no such sub-agent");
+        m.update(drill("a"));
+        assert_eq!(depth(&m), Some(1));
+        // Its own sub-agent is a face here; the list opens on it.
+        m.update(Action::TalkFaces { open: true });
+        assert!(m.chat(&one).is_some_and(|chat| chat.switcher));
+        m.update(drill("n"));
+        assert_eq!((depth(&m), m.chat(&one).map(|chat| chat.switcher)), (Some(2), Some(false)));
+        m.update(Action::TalkEscape);
+        assert_eq!(depth(&m), Some(1), "Esc: up one level");
+        m.update(Action::TalkFaces { open: true });
+        m.update(Action::TalkEscape);
+        assert_eq!(depth(&m), Some(1), "Esc closes the list first");
+        m.update(Action::TalkBack);
+        assert_eq!(depth(&m), Some(0));
+        // At the agent's level Esc is the turn's again: one Esc arms.
+        m.update(Action::TalkEscape);
+        assert!(m.chat(&one).is_some_and(|chat| chat.armed));
+    }
+
+    /// Found in review: Esc leaves a sub-agent's view before it declines a question; a call its
+    /// own parent (or a second start of one id) makes no loop; the list closes once none of its
+    /// sub-agents runs; the agent's exit shows the agent's view again.
+    #[test]
+    fn a_drill_never_loops_never_declines_a_question_and_ends_with_its_agent() {
+        use crate::activity::Station;
+        let mut m = two_live();
+        let one = first(&m);
+        let agent = |id: &str, parent: Option<&str>| Event::ToolStart {
+            id: id.into(),
+            parent: parent.map(String::from),
+            tool: "Agent".into(),
+            station: Station::Agents,
+            label: "tests".into(),
+            detail: Text::default(),
+            diff: None,
+            gist: None,
+        };
+        events(&mut m, &one, vec![Event::TurnStarted, agent("a", Some("a")), agent("a", None), agent("b", None)]);
+        m.update(Action::TalkDrill { id: "a".into() });
+        assert_eq!(m.chat(&one).map(super::Chat::depth), Some(1), "its own parent: no loop");
+        // A question waits: Esc goes back, nothing is answered.
+        events(&mut m, &one, vec![ask(5)]);
+        let none = crate::keys::Mods::default();
+        assert_eq!(m.chat(&one).map(|chat| chat.key("escape", none)), Some(Key::Act(Action::TalkEscape)));
+        assert_eq!(m.update(Action::TalkEscape), []);
+        assert_eq!(m.chat(&one).map(super::Chat::depth), Some(0));
+        // The list closes once none of it runs, and does not come back by itself.
+        m.update(Action::TalkFaces { open: true });
+        let end = |id: &str| Event::ToolEnd { id: id.into(), failed: false, output: None };
+        events(&mut m, &one, vec![end("a"), end("b")]);
+        assert!(m.chat(&one).is_some_and(|chat| !chat.switcher));
+        events(&mut m, &one, vec![agent("c", None)]);
+        assert!(m.chat(&one).is_some_and(|chat| !chat.switcher));
+        // Its agent ends: the agent's view.
+        m.update(Action::TalkDrill { id: "c".into() });
+        events(&mut m, &one, vec![Event::Exited { code: Some(0), signal: None, details: false }]);
+        assert_eq!(m.chat(&one).map(|chat| (chat.depth(), chat.switcher)), Some((0, false)));
+    }
+
     /// The dial follows its agent's calls and the user's message; it is open while the agent
     /// runs and collapsed once it ended, unless the user left it otherwise.
     #[test]
@@ -1258,7 +1413,7 @@ mod tests {
         let one = first(&m);
         let call = |id: &str, station| Event::ToolStart {
             id: id.into(),
-            sub: false,
+            parent: None,
             tool: "Bash".into(),
             station,
             label: "cargo test".into(),
@@ -1311,7 +1466,7 @@ mod tests {
         let label = format!("cargo\u{1b}[31m test {}", "x".repeat(100));
         let call = Event::ToolStart {
             id: "a".into(),
-            sub: false,
+            parent: None,
             tool: "Bash".into(),
             station: Station::Shell,
             label,
@@ -1357,7 +1512,7 @@ mod tests {
         assert_eq!(row(&m), (Some(5), None, true, true), "the turn's start");
         let call = |id: &str, label: &str| Event::ToolStart {
             id: id.into(),
-            sub: false,
+            parent: None,
             tool: "Bash".into(),
             station: Station::Shell,
             label: label.into(),

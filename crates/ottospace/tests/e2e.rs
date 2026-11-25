@@ -19543,6 +19543,71 @@ fn running_sub_agents_are_faces_under_the_picture_then_plus_n() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A face's click shows that sub-agent's own calls in the drawer (`dial.drilled`), Esc goes back;
+/// "+2" opens the list of them all and a row drills in the same way. A client's click drills into
+/// nothing.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_face_opens_its_sub_agents_own_calls_and_esc_goes_back() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let line = |parent: Option<&str>, call: Value| {
+        let parent = parent.map_or("null".to_string(), |p| format!("{p:?}"));
+        format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":{parent},"message":{{"content":[{call}]}}}}"#)
+    };
+    let agent = |id: &str| {
+        let input = json!({"subagent_type": "Explore", "description": "made-up search", "prompt": "look"});
+        line(None, json!({"type": "tool_use", "id": id, "name": "Agent", "input": input}))
+    };
+    let own = |id: &str| {
+        let input = json!({"command": "ls made-up"});
+        line(Some(id), json!({"type": "tool_use", "id": format!("{id}-ls"), "name": "Bash", "input": input}))
+    };
+    let result = |id: &str| {
+        let r = json!({"type": "tool_result", "tool_use_id": id, "content": "done", "is_error": false});
+        format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{r}]}}}}"#)
+    };
+    let init =
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+    let ids = ["a1", "a2", "a3", "a4", "a5"];
+    let mut lines = vec![init];
+    lines.extend(ids.map(agent));
+    lines.extend(ids.map(own));
+    lines.push(r#"{"_sleep":60}"#.into());
+    lines.extend(ids.map(result));
+    let fixtures = [("turn1.jsonl", lines.join("\n"))];
+    let (root, _, env) = native_setup("drill", &fixtures, &[]);
+    let otto = launch_env("drill", &env);
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "survey the parser >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    let dial = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"]["dial"].clone();
+    let rows = |o: &Otto| o.controls().iter().filter(|(id, _)| id.starts_with("chat-row:")).count();
+    otto.wait_for("five running, their calls", |o| {
+        (dial(o)["faces"] == 3 && dial(o)["faces_more"] == 2 && rows(o) == 10).then_some(())
+    });
+    // A client's click opens nothing; the user's shows that sub-agent's one call.
+    otto.click(at(otto.control("talk:face:0"), 0.5, 0.5), 1);
+    assert_eq!(dial(&otto)["drilled"], 0);
+    otto.user_click(at(otto.control("talk:face:0"), 0.5, 0.5));
+    let drilled = otto.wait_for("its own calls", |o| (rows(o) == 1).then(|| dial(o)));
+    assert_eq!(drilled["drilled"], 1, "{drilled}");
+    otto.control("talk:talk-back");
+    assert!(otto.control_opt("talk:talk-later").is_none(), "no actions in a sub-agent's view");
+    otto.user_key("escape");
+    otto.wait_for("back", |o| (dial(o)["drilled"] == 0 && rows(o) == 10).then_some(()));
+    // "+2": the list of all five; a row drills in as a face does.
+    otto.user_click(at(otto.control("talk:faces-more"), 0.5, 0.5));
+    assert_eq!(dial(&otto)["switcher"], true);
+    otto.user_click(at(otto.control("talk:switch:4"), 0.5, 0.5));
+    let via = dial(&otto);
+    assert_eq!((&via["drilled"], &via["switcher"]), (&json!(1), &json!(false)), "{via}");
+    otto.user_click(at(otto.control("talk:talk-back"), 0.5, 0.5));
+    assert_eq!(dial(&otto)["drilled"], 0);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// An agent CLI the user runs in one of our terminals shows in the city of its checkout by its
 /// process alone: no `sessions` setting, no session file. A program named `claude` (`sleep` run
 /// under that name, as the session-wait tests' stand-in) in a pane of the checkout: an icon hovers in the workspace's empty tab; its pane

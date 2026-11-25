@@ -545,7 +545,7 @@ mod tests {
 
     fn call(id: &str, station: Station, label: &str) -> Event {
         let (id, tool, label) = (id.into(), "Read".into(), label.into());
-        Event::ToolStart { id, sub: false, tool, station, label, detail: Text::default(), diff: None, gist: None }
+        Event::ToolStart { id, parent: None, tool, station, label, detail: Text::default(), diff: None, gist: None }
     }
 
     fn end(id: &str) -> Event {
@@ -819,7 +819,7 @@ mod tests {
         let mut m = task_in_app();
         let tool = |id: &str, tool: &str, station: Station, label: &str| Event::ToolStart {
             id: id.into(),
-            sub: false,
+            parent: None,
             tool: tool.into(),
             station,
             label: label.into(),
@@ -849,7 +849,7 @@ mod tests {
         let mut m = task_in_app();
         let bash = |id: &str, line: &str| Event::ToolStart {
             id: id.into(),
-            sub: false,
+            parent: None,
             tool: "Bash".into(),
             station: Station::Shell,
             label: line.split(' ').nth(3).unwrap_or("").into(),
@@ -932,7 +932,7 @@ mod tests {
         let mut m = task_in_app();
         let agent = |id: &str, sub: bool| Event::ToolStart {
             id: id.into(),
-            sub,
+            parent: sub.then(|| "p".into()),
             tool: "Agent".into(),
             station: Station::Agents,
             label: "Explore".into(),
@@ -959,7 +959,7 @@ mod tests {
         let mut m = task_in_app();
         let start = |id: &str, tool: &str, station: Station, detail: &str| Event::ToolStart {
             id: id.into(),
-            sub: false,
+            parent: None,
             tool: tool.into(),
             station,
             label: String::new(),

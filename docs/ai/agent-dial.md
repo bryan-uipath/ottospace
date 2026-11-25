@@ -58,26 +58,17 @@ station. Colours are theme tokens (`theme::station`).
 
 ## Drawing
 
-`crates/ottospace/src/dial.rs`: paths and quads in one canvas, built each paint. The app paints
-on a change, and on a 1 s tick only while a station is lit (`dial_moves`). The dial is
-centred, its lines under it; below 360 pt they are hidden.
+`crates/ottospace/src/dial.rs`: the header's lights row (canvas J6): the picture, the status
+sentence, a light per tool station with its use bar, the context's number; the context bar on
+the header's edge; the 18-point marker when collapsed. Nothing moves: the app paints on a
+change, and on a 1 s tick while a station is lit.
 
-## Motion
+## Sub-agents
 
-`ottospace-core::motion`, pure: the shell passes the ms since its last frame. `Motion` is the
-shown dial's moving parts, view state the shell keeps (`dial::DialMotion`), never the model's.
-
-- Each station's dot radius is a `Spring` (stiffness 180, damping 16: ratio 0.6, about 10%
-  overshoot) toward `dot(spot)`: 1.2 unused, 2.2 used, 3.5 lit, +0.7 for each further call
-  running there, to four. A higher target adds a kick of 28 pt/s. Steps of at most 4 ms; a gap
-  over 250 ms (a hidden window), or a number that is not one, lands on the target.
-- A lit dot pulses (1.2 s) when its times are known and You is not lit (a request may wait for
-  hours). The glyph turns (2.4 s a turn) while `Dial::thinking`: flat, its width the angle's
-  cosine, mirrored and dimmer from behind; after, it goes on to the front and stops.
-- `Motion::step` says whether another frame is wanted: something pulses, turns, or a spring is
-  not settled. Only then does the canvas ask for an animation frame. After rest the clock
-  starts at the change. The step is in `dial_section`: a dial collapsed or not drawn is not
-  stepped. Reduce motion: `Motion::rest`, never a frame.
-- The state: `dial.animating`, each station's `running`, `counts.dial_frames`.
-- The words: all eleven fit the open dial at every drawer width (the face is 180 by 120, the
-  drawer at least 320); the marker has none.
+Each `Agent`/`Task` call is a `transcript::Face` (its type, description, start and end, and the
+sub-agent that started it). `Transcript::faces(level)` gives a level's in order (running first,
+then the most recently active). Under the picture: up to three faces, then "+n", which opens the
+list of them all. A face's click (`TalkDrill`) shows that sub-agent's own calls (each call's
+`parent`, from `parent_tool_use_id`) in the same drawer; Back or Esc (`TalkBack`) goes up a
+level. Only the user drills. The state says how deep (`dial.drilled`) and whether the list is
+open (`dial.switcher`), never a description.

@@ -317,7 +317,7 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
             let (tool, station, label, diff, gist) =
                 (tool.clone(), *station, summary.clone(), diff.clone(), gist.clone());
             let detail = Text::default();
-            vec![Event::ToolStart { id: id.clone(), sub: false, tool, station, label, detail, diff, gist }]
+            vec![Event::ToolStart { id: id.clone(), parent: None, tool, station, label, detail, diff, gist }]
         }
         What::ToolEnd { id, failed, output, .. } => {
             vec![Event::ToolEnd { id: id.clone(), failed: *failed, output: output.clone() }]
@@ -327,7 +327,8 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
             let (tool, label, station) = ("Agent".to_string(), label.clone(), Station::Agents);
             vec![Event::ToolStart {
                 id: id.clone(),
-                sub: true,
+                // Its parent call is not in the file's line: a sub-agent's all the same.
+                parent: Some(String::new()),
                 tool,
                 station,
                 label,
@@ -896,7 +897,14 @@ impl Workspace {
         let dropped = (t.dropped > 0)
             .then(|| muted(format!("{} earlier entries are not kept here; the session's file has them.", t.dropped)));
         let context = chat.added.as_ref().map(|added| self.context_dot(subject, &key, added, cx));
-        let items = t.items().map(|item| self.chat_item(subject, &key, item, cx));
+        // A sub-agent's view: its own calls alone.
+        let drilled = chat.drilled().map(|face| face.id.clone());
+        let mine = |item: &&ottospace_core::transcript::Item| match (&drilled, &item.entry) {
+            (None, _) => true,
+            (Some(id), Entry::Tool { parent: Some(of), .. }) => of == id,
+            _ => false,
+        };
+        let items = t.items().filter(mine).map(|item| self.chat_item(subject, &key, item, cx));
         let list = div()
             .id(ElementId::Name(format!("chat-scroll:{key}").into()))
             .flex_1()
@@ -910,9 +918,9 @@ impl Workspace {
             .flex_col()
             .gap_2()
             .children(dropped)
-            .children(context)
+            .children(context.filter(|_| drilled.is_none()))
             .children(items)
-            .children(self.done_offer_line(subject, cx))
+            .children(drilled.is_none().then(|| self.done_offer_line(subject, cx)).flatten())
             .children((t.unread_lines() > 0).then(|| self.chat_unread(subject, t, cx)))
             .on_scroll_wheel(cx.listener({
                 let subject = subject.clone();
@@ -1178,7 +1186,7 @@ impl Workspace {
                     .children(streaming.then(|| div().text_xs().text_color(rgb(theme::MUTED)).child("…")));
                 self.with_copy(key, id, body, plain, text.text().to_string(), cx)
             }
-            Entry::Tool { sub, tool, label, detail, state, diff, gist, output, .. } => {
+            Entry::Tool { parent, tool, label, detail, state, diff, gist, output, .. } => {
                 let (glyph, color) = match state {
                     Call::Running => ("●", theme::PRIMARY),
                     Call::Done => ("✓", theme::PICK),
@@ -1237,7 +1245,7 @@ impl Workspace {
                     }
                 };
                 // A sub-agent's calls sit under the row that started it.
-                let row = if *sub { div().ml_4().child(row).into_any_element() } else { row };
+                let row = if parent.is_some() { div().ml_4().child(row).into_any_element() } else { row };
                 match diff {
                     Some(diff) => {
                         div().flex().flex_col().gap_1().child(row).child(self.diff_card(subject, key, id, diff, cx))
@@ -2650,7 +2658,7 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
         Said::TextDelta { text: t } => Event::TextDelta { text: text(&t) },
         Said::Text { text: t } => Event::Text { text: text(&t) },
         Said::ToolStart { id, parent, tool, station, label, detail, diff, gist } => {
-            Event::ToolStart { id, sub: parent.is_some(), tool, station, label, detail: text(&detail), diff, gist }
+            Event::ToolStart { id, parent, tool, station, label, detail: text(&detail), diff, gist }
         }
         Said::ToolEnd { id, failed, output } => {
             Event::ToolEnd { id, failed, output: Some(text(&output)).filter(|output| !output.is_empty()) }
