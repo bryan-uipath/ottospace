@@ -256,8 +256,9 @@ Design note: `docs/ai/attention/plan.md`.
     spin's `result`: `steps`, `done`, `frames`, each frame's time from the one before as `mean`, `p50`,
     `p95`, `p99`, `max`, `over_16`, `over_33` (ms), `repeats` (frames with no new picture since the
     frame before: no new image painted, or with `city_live_layer` no present on the live layer), a
-    step's picture from its place asking to it shown (painted, or presented) `wait_p50`, `wait_p95`,
-    `wait_p99`, `wait_max`, each picture's render `render_p50`, `render_p95`, `live`, `boxes`). `counts.city_reads`: the reads, a city on show or not;
+    new picture from made to painted `wait_p50`, `wait_p95`, `wait_max` (0 on the live layer), a step's
+    picture from its place asking to it shown (painted, or presented) `shown_p50`, `shown_p95`,
+    `shown_p99`, each picture's render `render_p50`, `render_p95`, `live`, `boxes`). `counts.city_reads`: the reads, a city on show or not;
     `counts.city_beam_frames`: the frames the hovered beam's fade asked for (none under Reduce Motion);
     `counts.city_fade_frames`: the frames a first picture's fade-in over the lattice asked for, and
     `counts.city_rise_frames` those its rise painted (none at rest, none under Reduce Motion);
