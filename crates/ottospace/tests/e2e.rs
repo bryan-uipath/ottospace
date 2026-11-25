@@ -18720,7 +18720,8 @@ fn typing_is_timed_from_key_to_painted_echo() {
     let otto = Otto::launch("typing");
     otto.call(json!({"cmd": "split"}));
     let state = |o: &Otto| o.call(json!({"cmd": "state"}));
-    let (panes, focused) = (state(&otto)["panes"].as_array().unwrap().len(), state(&otto)["focused"].clone());
+    let panes = |o: &Otto| state(o)["state"]["panes"].as_array().map_or(0, Vec::len);
+    let (before, focused) = (panes(&otto), state(&otto)["state"]["focused"].clone());
     otto.call(json!({"cmd": "typing_time"}));
     // Not asked meanwhile: a state's reply is the main thread's work too.
     std::thread::sleep(Duration::from_secs(16));
@@ -18736,7 +18737,7 @@ fn typing_is_timed_from_key_to_painted_echo() {
     }
     assert!(typed["total"]["p50"].as_f64().unwrap() > 0., "{typed}");
     // Its pane closed, the focus where it was.
-    assert_eq!((state(&otto)["panes"].as_array().unwrap().len(), state(&otto)["focused"].clone()), (panes, focused));
+    assert_eq!((panes(&otto), state(&otto)["state"]["focused"].clone()), (before, focused));
     // Esc stops one.
     otto.call(json!({"cmd": "typing_time"}));
     otto.wait_for("a run on", |o| state(o)["typing"]["running"].as_bool().filter(|r| *r).map(|_| ()));
@@ -18746,7 +18747,7 @@ fn typing_is_timed_from_key_to_painted_echo() {
         Some(state(o)["typing"]["result"].clone()).filter(|r| r["done"] == json!(false))
     });
     assert!(stopped["keys"].as_u64().unwrap() < 250, "{stopped}");
-    assert_eq!(state(&otto)["panes"].as_array().unwrap().len(), panes);
+    assert_eq!(panes(&otto), before);
 }
 
 /// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,
