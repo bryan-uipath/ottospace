@@ -1422,12 +1422,18 @@ impl Workspace {
     /// A press at `at` in `floor`'s city: on an agent's icon, what the core says a click there
     /// does (the user's own goes to its task).
     fn city_click(&mut self, floor: Floor, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
-        let icon = (self.city_drawn.borrow().places.get(&floor))
-            .and_then(|place| place.icons.iter().rev().find(|icon| icon.rect.contains(&at)).map(|icon| icon.task));
-        let Some(task) = icon else { return };
+        let icon = (self.city_drawn.borrow().places.get(&floor)).and_then(|place| {
+            place.icons.iter().rev().find(|icon| icon.rect.contains(&at)).map(|icon| (icon.task, icon.key.clone()))
+        });
+        let Some((task, key)) = icon else { return };
         cx.stop_propagation();
-        // A session's icon: which pane it runs in is not known, so the core says nothing.
-        let who = task.map_or(Who::Session { runner: "", id: "", title: None }, Who::Task);
+        // A session's icon is keyed `session:<runner>:<id>`; a pane's agent has none of these.
+        let session = key.strip_prefix("session:").and_then(|rest| rest.split_once(':'));
+        let who = match (task, session) {
+            (Some(task), _) => Who::Task(task),
+            (None, Some((runner, id))) => Who::Session { runner, id, title: None },
+            (None, None) => Who::Pane { pane: 0, runner: "" },
+        };
         if let Some(action) = self.model.city_agent_click(who, self.input) {
             self.dispatch(action, self.input, window, cx);
         }

@@ -984,12 +984,24 @@ impl Workspace {
     /// once it is idle (the user's click: the same as on its row).
     fn watch_banner(&self, subject: &Subject, cx: &mut Context<Self>) -> Div {
         let ready = self.model.take_over_ready(subject);
-        let tip = if ready { "Go on with this session here" } else { "Possible once it is idle in the other terminal" };
+        let tip = if ready {
+            "Track it as a task and go on with it here"
+        } else {
+            "Possible once it is idle in the other terminal"
+        };
         let subject = subject.clone();
         let take = self.talk_button("chat-take-over", "Take over", tip).when(!ready, |b| b.opacity(0.4)).on_click(
             cx.listener(move |this, _, window, cx| {
                 if this.model.take_over_ready(&subject) {
-                    this.dispatch(Action::TalkStart, this.input, window, cx);
+                    // A session no task has becomes one, gone on with here (as its card's Take over);
+                    // one that cannot be tracked now (hidden, not listed) is gone on with as before.
+                    let action = match &subject {
+                        Subject::Session { runner, id } if this.model.session_listed(runner, id) => {
+                            Action::SessionAdopt { runner: runner.clone(), id: id.clone() }
+                        }
+                        _ => Action::TalkStart,
+                    };
+                    this.dispatch(action, this.input, window, cx);
                 }
             }),
         );

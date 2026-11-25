@@ -174,10 +174,14 @@ fn tilde(dir: &str, home: Option<&str>) -> String {
 /// (`fix-login`, `fix-login/crates`). Else with the home folder as `~`. Longer than
 /// `DIR_CHARS`: its middle is `…`, e.g. `~/code/a-long…/crates/core`.
 pub fn short_dir(dir: &str, home: Option<&str>, worktree: Option<&str>) -> String {
-    use unicode_segmentation::UnicodeSegmentation;
     let name = |root: &'_ str| root.trim_end_matches('/').rsplit('/').next().unwrap_or_default().to_string();
     let inside = worktree.and_then(|root| Some(format!("{}{}", name(root), below(dir, root)?)));
-    let text = inside.filter(|text| !text.is_empty()).unwrap_or_else(|| tilde(dir, home));
+    cut_middle(inside.filter(|text| !text.is_empty()).unwrap_or_else(|| tilde(dir, home)))
+}
+
+/// `text` within `DIR_CHARS`: a longer one has `…` in its middle, its last folder kept.
+fn cut_middle(text: String) -> String {
+    use unicode_segmentation::UnicodeSegmentation;
     let letters: Vec<&str> = text.graphemes(true).collect();
     if letters.len() <= DIR_CHARS {
         return text;
@@ -185,6 +189,46 @@ pub fn short_dir(dir: &str, home: Option<&str>, worktree: Option<&str>) -> Strin
     let head = (DIR_CHARS - 1) / 2;
     let tail = letters.len() - (DIR_CHARS - 1 - head);
     format!("{}…{}", letters[..head].concat(), letters[tail..].concat())
+}
+
+/// Where a conversation happens, for the drawer's foot: its repository's name, the worktree
+/// (its branch, else its folder's name) when not the repository's own checkout, and the folder:
+/// below the checkout when deeper, the whole (`~`) only at a repository's own root or outside any.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Where {
+    pub repo: Option<String>,
+    pub worktree: Option<String>,
+    pub path: Option<String>,
+    /// Each part whole, one a line: the hover.
+    pub full: String,
+}
+
+/// A checkout listed in Repos, as `where_of` reads it: its name and folder.
+#[derive(Clone, Copy, Debug)]
+pub struct Checkout<'a> {
+    pub name: &'a str,
+    pub path: &'a str,
+}
+
+/// `dir` as `Where` says, in `repo` (and its `worktree`, if `dir` is in one), else in none.
+/// e.g. `app · ~/code/app`, `app · fix-login · crates/core`, `~/notes`.
+pub fn where_of(dir: &str, home: Option<&str>, repo: Option<Checkout>, worktree: Option<Checkout>) -> Where {
+    let root = worktree.or(repo).map(|checkout| checkout.path);
+    let deeper =
+        root.and_then(|root| below(dir, root)).map(|rest| rest.trim_start_matches('/')).filter(|r| !r.is_empty());
+    let path = match (repo, worktree) {
+        (None, _) => Some(tilde(dir, home)),
+        (Some(_), None) => Some(deeper.map_or_else(|| tilde(dir, home), str::to_string)),
+        (Some(_), Some(_)) => deeper.map(str::to_string),
+    };
+    // Cut in its middle as the drawer's folder is, its last folder kept; whole on hover.
+    let path = path.map(cut_middle);
+    let mut full = Vec::new();
+    full.extend(repo.map(|repo| format!("Repository: {} ({})", repo.name, tilde(repo.path, home))));
+    full.extend(worktree.map(|tree| format!("Worktree: {} ({})", tree.name, tilde(tree.path, home))));
+    full.push(format!("Folder: {}", tilde(dir, home)));
+    let (repo, worktree) = (repo.map(|r| r.name.to_string()), worktree.map(|w| w.name.to_string()));
+    Where { repo, worktree, path, full: full.join("\n") }
 }
 
 /// The drawer's agent line. `model`: the one the CLI reported, else the one it was started
@@ -302,5 +346,33 @@ mod tests {
     fn a_width_is_kept_within_bounds() {
         let asked = [0., 400., 5000., f32::NAN, f32::INFINITY, -1.];
         assert_eq!(asked.map(width), [MIN_WIDTH, 400., MAX_WIDTH, WIDTH, WIDTH, MIN_WIDTH]);
+    }
+
+    /// Where a conversation happens, the owner's three things when they differ: repository,
+    /// worktree, folder; one short line when they are one place.
+    #[test]
+    fn a_conversation_says_its_repository_worktree_and_folder_once_each() {
+        let home = Some("/Users/me");
+        let app = Checkout { name: "app", path: "/Users/me/code/app" };
+        let fix = Checkout { name: "fix-login", path: "/tmp/wt/app-fix" };
+        let short = |w: Where| (w.repo, w.worktree, w.path);
+        let s = |text: &str| Some(text.to_string());
+        // One place: the repository's name and its folder, once.
+        assert_eq!(short(where_of("/Users/me/code/app", home, Some(app), None)), (s("app"), None, s("~/code/app")));
+        // Deeper in it: only what is below.
+        assert_eq!(
+            short(where_of("/Users/me/code/app/crates/core", home, Some(app), None)),
+            (s("app"), None, s("crates/core"))
+        );
+        // A worktree elsewhere (a temp folder): its name; the folder only when deeper than its root.
+        assert_eq!(short(where_of("/tmp/wt/app-fix", home, Some(app), Some(fix))), (s("app"), s("fix-login"), None));
+        let deep = where_of("/tmp/wt/app-fix/src", home, Some(app), Some(fix));
+        assert_eq!(short(deep.clone()), (s("app"), s("fix-login"), s("src")));
+        assert_eq!(
+            deep.full,
+            "Repository: app (~/code/app)\nWorktree: fix-login (/tmp/wt/app-fix)\nFolder: /tmp/wt/app-fix/src"
+        );
+        // In no listed repository: its path alone.
+        assert_eq!(short(where_of("/Users/me/notes", home, None, None)), (None, None, s("~/notes")));
     }
 }

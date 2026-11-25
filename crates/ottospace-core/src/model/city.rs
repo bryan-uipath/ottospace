@@ -358,11 +358,20 @@ impl Model {
     }
 
     /// What a click on an agent's icon over a city does: the user's own goes to its task (as
-    /// its row does); a client's click, a task gone, or a session no task has (which pane it
-    /// runs in is not known), nothing.
+    /// its row does), or opens a session's conversation (as its row does); a client's click, a
+    /// task gone, or an agent known by its pane alone, nothing.
     pub fn city_agent_click(&self, who: Who, origin: Origin) -> Option<Action> {
-        let Who::Task(task) = who else { return None };
-        (origin == Origin::User && self.tasks.live(task).is_some()).then_some(Action::TaskGo { id: Some(task) })
+        if origin != Origin::User {
+            return None;
+        }
+        match who {
+            Who::Task(task) => self.tasks.live(task).is_some().then_some(Action::TaskGo { id: Some(task) }),
+            // A session no task has: its read-only conversation, as its row opens it.
+            Who::Session { runner, id, .. } => {
+                Some(Action::SessionOpen { runner: runner.to_string(), id: id.to_string() })
+            }
+            Who::Pane { .. } => None,
+        }
     }
 
     /// The checkout whose last camera a place starts from: its folder's.
@@ -1033,7 +1042,10 @@ src/main.rs:9:loop
         assert_eq!(m.city_agent_click(Who::Task(1), Origin::System), None);
         assert_eq!(m.city_agent_click(Who::Task(9), Origin::User), None, "no such task");
         let session = Who::Session { runner: "claude", id: "s1", title: None };
-        assert_eq!(m.city_agent_click(session, Origin::User), None, "a session's pane is not known");
+        let open = Action::SessionOpen { runner: "claude".into(), id: "s1".into() };
+        assert_eq!(m.city_agent_click(session, Origin::User), Some(open), "its conversation, as its row opens it");
+        assert_eq!(m.city_agent_click(session, Origin::Socket), None);
+        assert_eq!(m.city_agent_click(Who::Pane { pane: 1, runner: "claude" }, Origin::User), None);
     }
 
     /// The user's camera moves, stays in its clamps, survives switching tabs, and comes back

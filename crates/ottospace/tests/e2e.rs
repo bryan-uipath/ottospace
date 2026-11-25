@@ -15574,8 +15574,8 @@ fn a_watched_session_says_so_and_shows_its_edits_as_they_land() {
 }
 
 /// The owner's case (`overlay_panels`, `terminal_tasks`): a session another terminal runs, opened
-/// from its card. The sidebar closes as the row opens, yet the session is still read: what lands
-/// in its file shows, the status bar still counts it, and its tab is its checkout's.
+/// from its card, shows in the drawer where the user is: no tab. The sidebar closes as the row
+/// opens, yet the session is still read: what lands in its file shows, the status bar still counts it.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_watched_session_opened_from_an_overlay_goes_on_updating_and_counting() {
@@ -15606,8 +15606,11 @@ fn a_watched_session_opened_from_an_overlay_goes_on_updating_and_counting() {
     otto.wait_for("its card", |o| o.controls().iter().any(|(control, _)| *control == row).then_some(()));
     let working = |o: &Otto| o.call(json!({"cmd": "state"}))["status_bar"]["agents"]["in_terminal"].clone();
     assert_eq!(working(&otto), 1);
+    let tabs = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["tabs"].as_array().map(Vec::len);
+    let before = tabs(&otto);
     let opened = otto.user_click(at(otto.control(&row), 0.3, 0.3));
     assert!(opened["state"]["sidebar"].is_null(), "the overlay closed as the row opened");
+    assert_eq!(tabs(&otto), before, "in place: no tab of its own");
     let key = format!("claude:{id}");
     let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"][&key].clone();
     otto.wait_for("the watched transcript", |o| (chat(o)["transcript"]["watched"] == true).then_some(()));
@@ -15623,11 +15626,6 @@ fn a_watched_session_opened_from_an_overlay_goes_on_updating_and_counting() {
         chat(o)["transcript"]["entries"].as_array()?.iter().any(|e| e["tool"] == "Edit").then_some(())
     });
     assert_eq!(working(&otto), 1, "opened, still counted");
-    // Its tab is its checkout's: a terminal opened there starts in it.
-    let state = otto.call(json!({"cmd": "split"}));
-    let cwd = state["state"]["panes"].as_array().and_then(|panes| panes.iter().find_map(|p| p["cwd"].as_str()));
-    let cwd = cwd.and_then(|cwd| std::path::Path::new(cwd).canonicalize().ok());
-    assert_eq!(cwd, Some(repo.clone()), "{}", state["state"]["panes"]);
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
@@ -18752,7 +18750,7 @@ fn a_terminal_session_waiting_on_its_subagent_floats_in_the_city_and_lights_its_
     let home = user_folder("city-subs", &settings.to_string());
     let env = [
         ("OTTOSPACE_HOME", home.to_str().unwrap()),
-        ("OTTOSPACE_FEATURES", "code_city"),
+        ("OTTOSPACE_FEATURES", "code_city,terminal_tasks"),
         ("GIT_CONFIG_GLOBAL", "/dev/null"),
     ];
     let otto = Otto::launch_with("city-subs", &env);
@@ -18773,6 +18771,17 @@ fn a_terminal_session_waiting_on_its_subagent_floats_in_the_city_and_lights_its_
         (agents.len() == 1 && agents[0]["subagents"] == 1 && c["lit"].as_array()?.len() == 1).then_some(c)
     });
     assert!(floats["agents"][0]["task"].is_null(), "no task's: {floats}");
+    // The user's click on it opens its read-only conversation beside the city: no tab.
+    let tabs = |o: &Otto| o.call(json!({"cmd": "state"}))["state"]["tabs"].as_array().map(Vec::len);
+    let before = tabs(&otto);
+    otto.user_click(at(rect(&floats["agents"][0]["rect"]), 0.5, 0.5));
+    let key = format!("claude:{id}");
+    otto.wait_for("its conversation", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        (state["drawer"]["native"]["chats"][&key]["transcript"]["watched"] == true).then_some(())
+    });
+    assert_eq!(tabs(&otto), before);
+    assert!(!city(&otto)["picture"].is_null(), "the city still on show");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
