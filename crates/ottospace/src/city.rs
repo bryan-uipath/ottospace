@@ -1353,7 +1353,9 @@ impl Workspace {
             },
             // The hints as this frame laid them out.
             move |_, drawn: Shared, window, cx| {
-                paint(&drawn, floor, home.borrow().hints_at(floor), &floating, &glimpses, window, cx)
+                with_asked_camera(&drawn, floor, || {
+                    paint(&drawn, floor, home.borrow().hints_at(floor), &floating, &glimpses, window, cx)
+                })
             },
         );
         // A press on an agent's icon: the user's own goes to its task (`Model::city_agent_click`).
@@ -2053,6 +2055,28 @@ fn area(floor: Bounds<Pixels>, hints: Bounds<Pixels>) -> Bounds<Pixels> {
     let below = Bounds::from_corners(point(floor.left(), hints.bottom() + px(CLEAR)), floor.bottom_right());
     let tall = below.size.height > px(0.) && below.size.width <= below.size.height * 1.6;
     if hints.size.width > px(0.) && tall { below } else { floor }
+}
+
+/// A live picture is on its layer as soon as made, before GPUI's next frame: `paint` draws over
+/// it with the camera this frame asked for, which the layer shows at the same refresh. Put back
+/// after: the picture may be another place's too, and its hit tests are its own camera's.
+fn with_asked_camera(drawn: &Shared, floor: Floor, paint: impl FnOnce()) {
+    let swap = |drawn: &mut Drawn| {
+        let place = drawn.places.get(&floor)?;
+        let view = place.asked.as_ref()?.view();
+        let key = drawn.picture(place).filter(|made| made.live)?.key.clone();
+        let made = drawn.pictures.get_mut(&key)?;
+        let (fit, own) = (made.scene.fit?, made.scene.camera?);
+        made.scene.camera = Some(fit.camera(&view, own.aspect));
+        Some((key, own))
+    };
+    let swapped = swap(&mut drawn.borrow_mut());
+    paint();
+    if let Some((key, own)) = swapped {
+        if let Some(made) = drawn.borrow_mut().pictures.get_mut(&key) {
+            made.scene.camera = Some(own);
+        }
+    }
 }
 
 /// The picture made for this folder, as large as its area (a stale one stretched until the new
