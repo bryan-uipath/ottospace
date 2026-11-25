@@ -142,6 +142,10 @@ impl Model {
     /// A click on row `at` of explorer `pane`: selected; a folder turns, a file opens in the
     /// viewer beside (the same one for the next file).
     pub(super) fn explorer_click(&mut self, pane: PaneId, at: usize, effects: &mut Vec<Effect>) {
+        // A click lands only on a drawn pane: one on another tab would bring that tab up.
+        if !self.layout.as_ref().is_some_and(|layout| layout.leaves().contains(&pane)) {
+            return;
+        }
         let Some(explorer) = self.explorers.get_mut(&pane) else { return };
         let Some(row) = explorer.rows().get(at).cloned() else { return };
         explorer.selected = Some(row.path.clone());
