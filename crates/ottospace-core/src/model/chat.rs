@@ -29,7 +29,7 @@ pub const MAX_QUEUE: usize = 100_000;
 /// Why ↵ queued nothing: the queue is full; the message stays in the composer.
 pub const QUEUE_FULL: &str = "The queue is full: send or remove a queued message first. This one stays in the box";
 /// Why Edit took nothing back: the composer has no room for it beside what is written.
-pub const NO_ROOM: &str = "No room in the box for that message beside what is written: it stays queued";
+pub const NO_ROOM: &str = "No room in the box for that message (or its images) beside what is written: it stays queued";
 
 /// The most conversations whose transcript is kept: twice the sessions whose reads are kept.
 const KEPT: usize = crate::talk::KEPT * 2;
@@ -930,7 +930,7 @@ impl Model {
                         let Some(chat) = self.chat_mut(&subject) else { return };
                         let before = chat.draft.text().trim_end().to_string();
                         let joined = if before.is_empty() { text } else { format!("{before}\n{text}") };
-                        if joined.chars().count() > MAX_DRAFT {
+                        if joined.chars().count() > MAX_DRAFT || chat.images.len() + images.len() > MAX_IMAGES {
                             return effects.push(Effect::Notice { text: NO_ROOM.into() });
                         }
                         (chat.draft, chat.untrusted) = (Field::lines(MAX_DRAFT), true);
@@ -1100,12 +1100,7 @@ impl Model {
     fn paste_image(&mut self, id: &str, kind: &str, effects: &mut Vec<Effect>) {
         let Some(image) = Pasted::new(id, kind) else { return };
         let why = if self.composing() {
-            let agent = self.compose_plan().map(|plan| plan.agent).unwrap_or_default();
-            let runner = agents::read(&agent, &self.models).runner;
-            let takes = runner.is_some_and(|runner| {
-                let structured = &runner.spec().structured;
-                structured.images && structured.status == Status::Verified && self.conversation_view == View::Native
-            });
+            let takes = self.box_takes_images();
             match () {
                 _ if self.bar_draft().is_some() => Some(NO_IMAGES_BAR),
                 _ if !takes => Some(IMAGES_NOT_HERE),
@@ -1137,6 +1132,16 @@ impl Model {
         &self.compose_images
     }
 
+    /// The new-task box's agent, as its line has it now, takes images: it is drawn natively and
+    /// its runner takes them. Asked at the paste, and again when the box files.
+    pub(super) fn box_takes_images(&self) -> bool {
+        let agent = self.compose_plan().map(|plan| plan.agent).unwrap_or_default();
+        agents::read(&agent, &self.models).runner.is_some_and(|runner| {
+            let structured = &runner.spec().structured;
+            structured.images && structured.status == Status::Verified && self.conversation_view == View::Native
+        })
+    }
+
     /// True if something holds `image` now: a drop decided earlier in a step (before a failed
     /// send put it back) leaves its file.
     pub fn holds_image(&self, image: &Pasted) -> bool {
@@ -1149,11 +1154,13 @@ impl Model {
         if self.compose.is_none() {
             self.compose_images.clear();
         }
-        let tasks = self.tasks.list.iter().filter(|task| task.state != State::Done);
+        // A done task's may come back with it (undone): kept until it is cleaned away, or gone.
+        let tasks = self.tasks.list.iter().filter(|task| task.state != State::Cleaned);
         let queued = self.tasks.list.iter().flat_map(|task| task.queued.iter().flat_map(|q| q.images.iter()));
         let held: std::collections::BTreeSet<Pasted> = self
             .compose_images
             .iter()
+            .chain(self.compose_kept.iter().flat_map(|kept| kept.images.iter()))
             .chain(self.chats.iter().flat_map(|chat| chat.images.iter()))
             .chain(tasks.flat_map(|task| task.images.iter()))
             .chain(queued)

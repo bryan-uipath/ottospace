@@ -145,6 +145,44 @@ impl Media {
         }
     }
 
+    /// Its width and height, from its header alone (nothing decoded): `None` if they cannot be
+    /// read. e.g. a PNG's IHDR, a GIF's screen, a JPEG's first SOF, a WebP's VP8/VP8L/VP8X.
+    pub fn size(self, bytes: &[u8]) -> Option<(u32, u32)> {
+        let be16 = |at: usize| Some(u16::from_be_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]) as u32);
+        let le16 = |at: usize| Some(u16::from_le_bytes([*bytes.get(at)?, *bytes.get(at + 1)?]) as u32);
+        let le24 = |at: usize| Some(u32::from_le_bytes([*bytes.get(at)?, *bytes.get(at + 1)?, *bytes.get(at + 2)?, 0]));
+        let be32 = |at: usize| Some(u32::from_be_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+        match self {
+            Self::Png => Some((be32(16)?, be32(20)?)),
+            Self::Gif => Some((le16(6)?, le16(8)?)),
+            Self::Webp => match bytes.get(12..16)? {
+                b"VP8X" => Some((le24(24)? + 1, le24(27)? + 1)),
+                b"VP8 " => Some((le16(26)? & 0x3fff, le16(28)? & 0x3fff)),
+                b"VP8L" => {
+                    let bits = u32::from_le_bytes(bytes.get(21..25)?.try_into().ok()?);
+                    Some(((bits & 0x3fff) + 1, ((bits >> 14) & 0x3fff) + 1))
+                }
+                _ => None,
+            },
+            // The first start-of-frame marker (not a DHT, JPG or DAC one) holds the size.
+            Self::Jpeg => {
+                let mut at = 2;
+                while at + 9 < bytes.len() {
+                    if bytes[at] != 0xff {
+                        return None;
+                    }
+                    let marker = bytes[at + 1];
+                    let sof = (0xc0..=0xcf).contains(&marker) && !matches!(marker, 0xc4 | 0xc8 | 0xcc);
+                    if sof {
+                        return Some((be16(at + 7)?, be16(at + 5)?));
+                    }
+                    at += 2 + be16(at + 2)? as usize;
+                }
+                None
+            }
+        }
+    }
+
     pub fn mime(self) -> &'static str {
         match self {
             Self::Png => "image/png",
@@ -579,6 +617,17 @@ mod tests {
         let text = Untrusted::new("héllo", 2);
         assert_eq!(text.text(), "h");
         assert_eq!(format!("{:?}", Untrusted::new("secret", 100)), "Untrusted(6 bytes)");
+    }
+
+    #[test]
+    fn an_images_size_is_read_from_its_header() {
+        let mut png = vec![0x89, b'P', b'N', b'G', 13, 10, 26, 10, 0, 0, 0, 13, b'I', b'H', b'D', b'R'];
+        png.extend([0, 0, 0x0c, 0x80, 0, 0, 0x07, 0x08]);
+        assert_eq!(Media::Png.size(&png), Some((3200, 1800)));
+        assert_eq!(Media::Gif.size(b"GIF89a\x40\x01\xf0\x00"), Some((320, 240)));
+        let jpeg = [0xff, 0xd8, 0xff, 0xe0, 0, 4, 0, 0, 0xff, 0xc0, 0, 17, 8, 0x02, 0x58, 0x03, 0x20, 3];
+        assert_eq!(Media::Jpeg.size(&jpeg), Some((800, 600)));
+        assert_eq!(Media::Png.size(&png[..20]), None, "cut short");
     }
 
     #[test]

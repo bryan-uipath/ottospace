@@ -312,6 +312,8 @@ struct KeptDraft {
     theirs: bool,
     /// It was the quick note box: its pills come back with it.
     quick: Option<quick::Quick>,
+    /// Its pasted images, back with it.
+    images: Vec<crate::tasks::Pasted>,
 }
 
 /// A folder the user took from a path's dropdown.
@@ -6849,6 +6851,14 @@ impl Model {
                     Enter::Add => {}
                 }
                 let line = self.compose_line().cloned().unwrap_or_default();
+                // Images only where the agent the line now names takes them (another `@agent` since
+                // the paste): else said, and dropped.
+                if !self.compose_images.is_empty() && !self.box_takes_images() {
+                    self.compose_images.clear();
+                    if self.by_user {
+                        effects.push(Effect::Notice { text: chat::IMAGES_NOT_HERE.into() });
+                    }
+                }
                 // A draft with captures needs no title typed: key, circle, ↵.
                 let untitled = self.draft(&line).title.is_empty();
                 let named = self.capture_title().filter(|_| untitled);
@@ -8789,12 +8799,13 @@ impl Model {
             return;
         }
         let line = self.compose.take().filter(|line| !line.text().is_empty());
+        let images = std::mem::take(&mut self.compose_images);
         let (refs, folder, quick) =
             (std::mem::take(&mut self.compose_refs), self.compose_folder.take(), self.quick.take());
         // An empty line takes no kept line's place, nor a client's line the user's.
         let users = self.compose_kept.as_ref().is_some_and(|kept| !kept.theirs);
         if let Some(line) = line.filter(|_| !(users && self.compose_theirs)) {
-            self.compose_kept = Some(KeptDraft { line, refs, folder, theirs: self.compose_theirs, quick });
+            self.compose_kept = Some(KeptDraft { line, refs, folder, theirs: self.compose_theirs, quick, images });
         }
         self.compose_reset();
     }
@@ -8885,7 +8896,7 @@ impl Model {
             && let Some(kept) = self.compose_kept.take()
         {
             (self.compose, self.compose_refs, self.compose_folder) = (Some(kept.line), kept.refs, kept.folder);
-            (self.compose_theirs, self.quick) = (kept.theirs, kept.quick);
+            (self.compose_theirs, self.quick, self.compose_images) = (kept.theirs, kept.quick, kept.images);
         }
         // The user's box floats centred over the panes; with nothing open it stays the drawer's.
         self.compose_centred = self.by_user && self.overlays() && !self.welcome();
@@ -9544,8 +9555,8 @@ impl Model {
         self.tasks.tag(id, draft.project, path);
         self.tasks.set_folder(id, folder);
         self.tasks.set_body(id, draft.body.take());
-        // The box's images, with its first message.
-        if own {
+        // The box's images, with its first message: only the user's own filing of their line.
+        if own && self.by_user && !self.compose_theirs {
             let images = std::mem::take(&mut self.compose_images);
             if let Some(task) = self.tasks.list.iter_mut().find(|task| task.id == id) {
                 task.images = images;

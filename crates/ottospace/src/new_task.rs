@@ -467,7 +467,6 @@ impl Workspace {
             .into_any_element()
     }
 
-    /// A pill's ×: `action` on a click; `mark`, where it is drawn (`compose_rects`, sneak).
     /// A chip per pasted image: its thumbnail, and × to take it off (`<mark>:<n>`, its ×'s label).
     pub(crate) fn image_chips(
         &self,
@@ -477,7 +476,9 @@ impl Workspace {
     ) -> Vec<gpui::AnyElement> {
         let dir = crate::config::images_dir();
         let chip = |(n, image): (usize, &ottospace_core::tasks::Pasted)| {
-            let thumb = dir.as_ref().map(|dir| gpui::img(dir.join(image.file())).size(px(16.)).rounded_sm());
+            // Checked as a send reads it (`image_file`); a GIF's every frame would be decoded: none.
+            let file = dir.as_ref().and_then(|dir| crate::conversation::image_file(dir, image));
+            let thumb = file.filter(|_| image.kind() != "gif").map(|file| gpui::img(file).size(px(16.)).rounded_sm());
             let remove = Action::ImageRemove { id: image.id().into() };
             let x = self.pill_off(format!("{mark}-off:{}", image.id()), Some(format!("{mark}:{n}")), remove, cx);
             ui::chip(format!("Image {}", n + 1), None).children(thumb).child(x).into_any_element()
@@ -485,6 +486,7 @@ impl Workspace {
         images.iter().enumerate().map(chip).collect()
     }
 
+    /// A pill's ×: `action` on a click; `mark`, where it is drawn (`compose_rects`, sneak).
     fn pill_off(&self, id: String, mark: Option<String>, action: Action, cx: &Context<Self>) -> gpui::Stateful<Div> {
         div()
             .id(gpui::SharedString::from(id))

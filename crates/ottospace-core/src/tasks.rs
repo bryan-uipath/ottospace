@@ -373,12 +373,12 @@ pub struct Task {
     /// the state, the inbox); only its file has them (`file_json`).
     #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "count", deserialize_with = "texts")]
     pub queued: Vec<Queued>,
-    /// Images pasted for it (its first message's, and its conversation's since): kept while it is
-    /// not done, then removed (`Model::settle_images`). The state has their count.
+    /// Images pasted in the new-task box for its first message: kept until it is cleaned away or
+    /// gone, then removed (`Model::settle_images`). The state has their count.
     #[serde(
         default,
         skip_serializing_if = "Vec::is_empty",
-        serialize_with = "pasted_count",
+        serialize_with = "count",
         deserialize_with = "valid_images"
     )]
     pub images: Vec<Pasted>,
@@ -672,14 +672,10 @@ fn valid_images<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec
     })
 }
 
-/// Pasted images as their count (`Task::images`).
-fn pasted_count<S: serde::Serializer>(images: &[Pasted], serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_u64(images.len() as u64)
-}
-
-/// Queued messages as their count: never their words (`Task::queued`).
-fn count<S: serde::Serializer>(queued: &[Queued], serializer: S) -> Result<S::Ok, S::Error> {
-    serializer.serialize_u64(queued.len() as u64)
+/// A list as its count: queued messages never by their words (`Task::queued`), pasted images
+/// never by their names (`Task::images`).
+fn count<S: serde::Serializer, T>(items: &[T], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u64(items.len() as u64)
 }
 
 /// Queued messages from a task's file: their words; a count (a state's copy) brings none back.

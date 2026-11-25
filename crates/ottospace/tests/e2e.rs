@@ -13952,9 +13952,11 @@ fn a_pasted_image_goes_with_the_message_in_both_boxes() {
     ];
     let picture = support::temp(&format!("ottospace-e2e-picture-{}", std::process::id()));
     std::fs::create_dir_all(&picture).unwrap();
-    // A made-up PNG: its signature, then bytes that are no picture of anything.
+    // A made-up PNG: its signature and a header that says 64 by 64, then bytes of no picture.
     let png = picture.join("made-up.png");
-    std::fs::write(&png, [&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a][..], &[7u8; 64]].concat()).unwrap();
+    let header =
+        [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, b'I', b'H', b'D', b'R', 0, 0, 0, 64, 0, 0, 0, 64];
+    std::fs::write(&png, [&header[..], &[7u8; 64]].concat()).unwrap();
     let image = png.to_str().unwrap().to_string();
     let (root, record, env) = native_setup("pasted-image", &fixtures, &[("OTTOSPACE_CLIPBOARD_IMAGE", &image)]);
     let home = PathBuf::from(&env.iter().find(|(k, _)| k == "OTTOSPACE_HOME").unwrap().1);

@@ -1842,6 +1842,8 @@ impl Workspace {
         let unread = kept.unread;
         // A folder that could not be listed is left alone: writing could replace tasks it holds.
         let keeping = kept.error.is_none();
+        // A pasted image no kept task names (a draft's, before a quit) goes now.
+        conversation::clean_images(&kept.tasks);
         model.update(Action::RestoreTasks { tasks: kept.tasks, floor: kept.highest }.sent_by(Origin::System));
         // After the tasks: an agent's question whose task is there is not taken for an orphan.
         model.update(Action::RestoreFocus { kept: config::read_focus() }.sent_by(Origin::System));

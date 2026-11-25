@@ -275,7 +275,8 @@ const CODEX: RunnerSpec = RunnerSpec {
         side_question: false,
         // `turn/steer` (`threadId`, `input`, `expectedTurnId`) in the app-server's protocol.
         mid_turn: true,
-        images: true,
+        // Its `localImage` is a path read when the turn starts: off until the file is kept that long.
+        images: false,
     },
     // No process is recorded; `session_meta` carries `cwd`. A `turn_context`'s `cwd` is the
     // client's choice for the turn, never the agent's: ottospace sets none, so it never moves.
