@@ -152,6 +152,10 @@ pub const USERS_ALONE: &str = "only the user starts or stops a task's agent";
 /// names no runner; nothing is started for it.
 pub fn launch(tag: Option<&str>, default: &str, models: &Models, title: String) -> Option<Launch> {
     let Agent { runner, model } = read(tag.unwrap_or(default), models);
+    // A bare runner takes the default's model when the default is that runner's: `@claude` with
+    // `default_agent` `claude-opus-5-5` starts Opus, not the CLI's own default.
+    let fallback = read(default, models);
+    let model = model.or(fallback.model.filter(|_| fallback.runner == runner));
     // A listed id came from the settings, which keep only names; checked again where it is used.
     let model = model.filter(|id| is_name(id));
     runner.map(|runner| Launch { runner, model, title, skills: Vec::new(), body: None, images: Vec::new() })
@@ -808,6 +812,19 @@ mod tests {
         // A task's resumed with no server (a path that is not text): told again, in its system prompt.
         let alone = resume(RunnerId::Claude, uuid, run_args(RunnerId::Claude, true, None)).unwrap().args;
         assert_eq!(alone, ["--resume", uuid, "--append-system-prompt", &guidance(true, false)]);
+    }
+
+    #[test]
+    fn a_bare_runner_takes_the_default_agents_model() {
+        let models = Models::default();
+        let model = |tag: Option<&str>, default: &str| launch(tag, default, &models, String::new()).unwrap().model;
+        let opus = Some("claude-opus-5-5".to_string());
+        assert_eq!(model(Some("claude"), "claude-opus-5-5"), opus);
+        assert_eq!(model(None, "claude-opus-5-5"), opus);
+        // A model on the tag wins; another runner's default lends none.
+        assert_eq!(model(Some("claude-haiku-5-5"), "claude-opus-5-5").as_deref(), Some("claude-haiku-5-5"));
+        assert_eq!(model(Some("codex"), "claude-opus-5-5"), None);
+        assert_eq!(model(Some("claude"), "claude"), None);
     }
 
     /// The MCP server's instructions: the guidance with its tools, whole within the 512 characters
