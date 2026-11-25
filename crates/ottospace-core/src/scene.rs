@@ -7,8 +7,14 @@ use crate::atlas::Atlas;
 
 /// The plan is this much wider than deep, as the atlas cuts it.
 const WIDE: f32 = 1.6;
-/// The tallest building, in plan units (the plan is `WIDE` by 1).
+/// A tower of lines in the owner's city at its tallest, in plan units (the plan is `WIDE` by
+/// 1): the unit of a building's height.
 const TALLEST: f32 = 0.12;
+/// The owner's strata (in `TALLEST`s): the most levels a file stacks, each one commit; a level's
+/// height; a file with no commit's stub.
+pub(crate) const LEVELS: u32 = 120;
+const LEVEL: f32 = 1.6 / 60.;
+const STUB: f32 = 0.4 / 60.;
 /// The rise from a district to the one inside it, by depth, then `LIFT_MIN`: the owner's city's
 /// terraces (`TIER_LIFT`, in its units where a tower is at most 60), in ours.
 const LIFTS: [f32; 5] = [13., 8., 4.6, 2.6, 1.7];
@@ -210,11 +216,18 @@ impl Fit {
     }
 }
 
-/// A building's height, 0 to 1, from a file's size: the owner's city's `buildingHeight`
-/// (`2 + 6·log2(1 + lines/10)`, from 2 to 60), its lines guessed as bytes / 32.
-pub(crate) fn height(bytes: u64) -> f32 {
-    let lines = bytes as f32 / 32.;
-    (2. + 6. * (1. + lines / 10.).log2()).clamp(2., 60.) / 60.
+/// A file's height, 0 to 1, from the commits that touched it: a share of `LEVELS`, the most the
+/// owner's city stacks (its strata: one level a commit, `MAX_LEVELS`).
+pub(crate) fn height(commits: u32) -> f32 {
+    commits.min(LEVELS) as f32 / LEVELS as f32
+}
+
+/// How tall a place of `height` (0 to 1) stands, in `tallest`s: as the owner's city's strata,
+/// a level (1.6 of its units, where a tower of lines is at most 60) for each of `LEVELS`; with
+/// none, its stub (0.4).
+fn rise(height: Option<f32>) -> f32 {
+    let h = height.unwrap_or(0.).clamp(0., 1.);
+    if h > 0. { h * LEVELS as f32 * LEVEL } else { STUB }
 }
 
 /// The top of a district at `depth` (0: the ground), each lift `lift` times the terraces'.
@@ -501,7 +514,7 @@ pub fn layout(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, lower: f32) -> La
         let set = |side: f32| (side * SETBACK).min(street);
         let (sx, sz) = (set(lot.x1 - lot.x0), set(lot.z1 - lot.z0));
         let colour = lit.iter().find(|(id, _)| *id == place.id).map(|(_, colour)| *colour);
-        let top = floor + place.height.unwrap_or(0.).clamp(0., 1.).max(1. / 30.) * tallest;
+        let top = floor + rise(place.height) * tallest;
         let kind = colour.map_or(Kind::Building, Kind::Lit);
         buildings.push(Block {
             min: [lot.x0 + sx, floor, lot.z0 + sz],
@@ -716,11 +729,17 @@ fn clear_sight(blocks: &mut [Block], eye: [f32; 3], lit_floor: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::atlas::{atlas, repo};
+    use crate::atlas::{atlas, repo_with};
 
     fn city(files: &[(&str, u64)]) -> Atlas {
         let files: Vec<(String, u64)> = files.iter().map(|(p, b)| (p.to_string(), *b)).collect();
-        atlas(&repo(&files))
+        plan(&files)
+    }
+
+    /// The plan of `files`, each with its number of lines and a commit for each thousand of them.
+    fn plan(files: &[(String, u64)]) -> Atlas {
+        let commits = files.iter().map(|(path, n)| (path.clone(), (n / 1000).min(u32::MAX as u64) as u32)).collect();
+        atlas(&repo_with(files, &commits))
     }
 
     /// A repository with a tall file in front of a small one, as the camera sees them.
@@ -731,23 +750,24 @@ mod tests {
                 files.push((format!("d{d}/s{}/f{f}.rs", f % 4), 200 + ((d * 31 + f * 17) % 50) as u64 * 900));
             }
         }
-        atlas(&repo(&files))
+        plan(&files)
     }
 
+    /// As the owner's strata: a level a commit, up to 120; a file with none is a stub.
     #[test]
-    fn a_file_is_as_tall_as_the_owners_city_makes_it() {
-        assert_eq!(height(0), 2. / 60.);
-        // 3,200 bytes: 100 lines, 2 + 6·log2(11).
-        assert!((height(3_200) - (2. + 6. * 11f32.log2()) / 60.).abs() < 1e-6);
-        assert_eq!(height(u64::MAX), 1.);
+    fn a_file_is_as_tall_as_its_commits_stack_in_the_owners_city() {
+        assert_eq!((height(0), height(60), height(120), height(u32::MAX)), (0., 0.5, 1., 1.));
+        assert_eq!((rise(None), rise(Some(0.))), (0.4 / 60., 0.4 / 60.));
+        assert!((rise(Some(height(1))) - 1.6 / 60.).abs() < 1e-7);
+        assert!((rise(Some(height(120))) - 120. * 1.6 / 60.).abs() < 1e-5);
     }
 
     /// A city of few files has large lots: its buildings are towers on streets, not slabs. A
     /// large one keeps the owner's heights.
     #[test]
     fn a_city_of_few_files_stands_as_towers_on_streets() {
-        let files: Vec<(String, u64)> = (0..12).map(|i| (format!("d{}/f{i}.rs", i % 3), 9_000)).collect();
-        let s = scene(&atlas(&repo(&files)), &[], 1.6, &View::default());
+        let files: Vec<(String, u64)> = (0..12).map(|i| (format!("d{}/f{i}.rs", i % 3), 40_000)).collect();
+        let s = scene(&plan(&files), &[], 1.6, &View::default());
         let lot = (WIDE / 12.).sqrt();
         let buildings: Vec<&Block> = s.blocks.iter().filter(|b| b.kind == Kind::Building).collect();
         let tallest = buildings.iter().map(|b| b.max[1] - b.min[1]).fold(0., f32::max);
@@ -760,9 +780,9 @@ mod tests {
             }
         }
         let big: Vec<(String, u64)> = (0..5_000).map(|i| (format!("d{}/f{i}.rs", i % 7), u64::MAX)).collect();
-        let s = scene(&atlas(&repo(&big)), &[], 1.6, &View::default());
+        let s = scene(&plan(&big), &[], 1.6, &View::default());
         let tallest = s.blocks.iter().filter(|b| b.kind == Kind::Building).map(|b| b.max[1] - b.min[1]);
-        assert!((tallest.fold(0., f32::max) - TALLEST).abs() < 1e-6);
+        assert!((tallest.fold(0., f32::max) - TALLEST * LEVELS as f32 * LEVEL).abs() < 1e-5);
     }
 
     #[test]
@@ -800,7 +820,7 @@ mod tests {
                     (format!("d{}/e{}/f{}/g{i}.rs", h % 3, h % 5, h % 2), 100 + h % 60_000)
                 })
                 .collect();
-            trees.push(atlas(&repo(&files)));
+            trees.push(plan(&files));
         }
         for atlas in &trees {
             let s = scene(atlas, &[], 1.6, &View::default());
@@ -858,7 +878,7 @@ mod tests {
                 [(format!("{dir}/a.rs"), 1), (format!("{dir}/b.rs"), 1)]
             })
             .collect();
-        let atlas = atlas(&repo(&files));
+        let atlas = plan(&files);
         let s = scene(&atlas, &[], 1.6, &View::default());
         assert!(s.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).count() > 3);
         for b in &s.blocks {
@@ -981,7 +1001,7 @@ mod tests {
         let mut files: Vec<(String, u64)> = (0..9).map(|i| (format!("big/f{i}.rs"), 900)).collect();
         files.extend((0..4).map(|i| (format!("mid/f{i}.rs"), 900)));
         files.extend([("small/a.rs".to_string(), 900), ("small/b.rs".to_string(), 900), ("root.rs".to_string(), 9)]);
-        let atlas = atlas(&repo(&files));
+        let atlas = plan(&files);
         let s = scene(&atlas, &[], 1.6, &View::default());
         let delays = s.rise_delays();
         let of = |dir: &str| {

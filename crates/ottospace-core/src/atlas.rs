@@ -10,7 +10,7 @@
 //! most the few last children beside it; any new child that fits the ground leaves the plan
 //! outside its group as it was.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::layout::Rect;
 
@@ -179,10 +179,10 @@ pub fn atlas(root: &Node) -> Atlas {
     layout(root, true)
 }
 
-/// A file's weight: 1 up to 2 KB, doubling with the size, 64 from 128 KB. An edit that keeps
-/// the size class changes nothing.
-fn file_weight(bytes: u64) -> u64 {
-    bytes.div_ceil(2048).clamp(1, 64).next_power_of_two()
+/// A file's weight: its lines, as the owner's city sizes a file (area by lines, at least 1),
+/// rounded up a step as a group is (100 → 112), so an edit seldom changes it; at most `MOST`.
+fn file_weight(lines: u64) -> u64 {
+    step(lines.max(1)).min(MOST)
 }
 
 #[derive(Default)]
@@ -192,14 +192,14 @@ struct Folder<'a> {
 }
 
 impl Folder<'_> {
-    fn node(&self, path: &str, label: &str) -> Node {
+    fn node(&self, path: &str, label: &str, commits: &dyn Fn(&str) -> u32) -> Node {
         let join = |name: &str| if path.is_empty() { name.to_string() } else { format!("{path}/{name}") };
-        let folders = self.folders.iter().map(|(name, folder)| folder.node(&join(name), name));
+        let folders = self.folders.iter().map(|(name, folder)| folder.node(&join(name), name, commits));
         // A file and a folder may share a name in a list that is not git's: the file's id says so.
-        let file = |(name, bytes): (&&str, &u64)| {
+        let file = |(name, lines): (&&str, &u64)| {
             let id = if self.folders.contains_key(name) { join(name) + "/" } else { join(name) };
-            let height = Some(crate::scene::height(*bytes));
-            Node { id, label: name.to_string(), footprint: file_weight(*bytes), height, ..Node::default() }
+            let height = Some(crate::scene::height(commits(&join(name))));
+            Node { id, label: name.to_string(), footprint: file_weight(*lines), height, ..Node::default() }
         };
         let children = folders.chain(self.files.iter().map(file)).collect();
         Node { id: path.to_string(), label: label.to_string(), children, ..Node::default() }
@@ -207,18 +207,62 @@ impl Folder<'_> {
 }
 
 /// The source of the code city. `files`: each a path from the repository's root (parts between
-/// `/`) and its size in bytes; their order does not matter, and of two with one path the later
-/// counts. A folder's children are its folders by name, then its files by name, as a file
-/// explorer lists them. An id is the path.
+/// `/`) and its lines; their order does not matter, and of two with one path the later counts.
+/// A folder's children are its folders by name, then its files by name, as a file explorer lists
+/// them. An id is the path. No file has commits: each is as low as one with none.
 pub fn repo(files: &[(String, u64)]) -> Node {
+    repo_with(files, &HashMap::new())
+}
+
+/// `repo`, each file as tall as the commits that touched it (`commits`, by path; `scene::height`).
+pub fn repo_with(files: &[(String, u64)], commits: &HashMap<String, u32>) -> Node {
     let mut root = Folder::default();
-    for (path, bytes) in files {
+    for (path, lines) in files {
         let mut parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
         let Some(name) = parts.pop() else { continue };
         let folder = parts.into_iter().fold(&mut root, |folder, part| folder.folders.entry(part).or_default());
-        folder.files.insert(name, *bytes);
+        folder.files.insert(name, *lines);
     }
-    root.node("", "")
+    root.node("", "", &|id| commits.get(id).copied().unwrap_or(0))
+}
+
+/// The commits that touched each path, from `git log -z --name-only --format=%x01`: each commit
+/// a `\x01`, then a new line and the paths it changed, each ended by a NUL.
+pub fn touched(log: &str) -> HashMap<String, u32> {
+    let mut commits: HashMap<String, u32> = HashMap::new();
+    let mut first = false;
+    for said in log.split('\0') {
+        // The new line is git's, before a commit's first path only.
+        let path = if std::mem::take(&mut first) { said.strip_prefix('\n').unwrap_or(said) } else { said };
+        if said == "\x01" {
+            first = true;
+        } else if !path.is_empty() {
+            let count = commits.entry(path.to_string()).or_default();
+            *count = count.saturating_add(1);
+        }
+    }
+    commits
+}
+
+/// Lines added and removed by each path, from `git diff --numstat -z --no-renames`: each record
+/// `added\tremoved\tpath` and a NUL; a binary file's numbers are `-` (none).
+pub fn numstat(said: &str) -> HashMap<String, Option<(u64, u64)>> {
+    let record = |r: &str| {
+        let mut parts = r.splitn(3, '\t');
+        let (added, removed, path) = (parts.next()?, parts.next()?, parts.next()?);
+        Some((path.to_string(), added.parse().ok().zip(removed.parse().ok())))
+    };
+    said.split('\0').filter(|r| !r.is_empty()).filter_map(record).collect()
+}
+
+/// Each blob's size in bytes, from `git ls-tree -r -l -z`: each record `mode type object size`, a
+/// tab, the path and a NUL (a submodule's size is `-`: none).
+pub fn tree_sizes(said: &str) -> HashMap<String, u64> {
+    let record = |r: &str| {
+        let (meta, path) = r.split_once('\t')?;
+        Some((path.to_string(), meta.split_whitespace().nth(3)?.parse().ok()?))
+    };
+    said.split('\0').filter_map(record).collect()
 }
 
 #[cfg(test)]
@@ -226,7 +270,7 @@ mod tests {
     use super::*;
 
     fn files(of: &[(&str, u64)]) -> Vec<(String, u64)> {
-        of.iter().map(|(path, bytes)| (path.to_string(), *bytes)).collect()
+        of.iter().map(|(path, lines)| (path.to_string(), *lines)).collect()
     }
 
     fn city(of: &[(&str, u64)]) -> Atlas {
@@ -246,10 +290,10 @@ mod tests {
     }
 
     #[test]
-    fn a_files_weight_is_its_size_class_and_a_groups_is_rounded_up_a_step() {
-        let classes = [(0, 1), (2048, 1), (2049, 2), (4096, 2), (4097, 4), (100_000, 64), (u64::MAX, 64)];
-        for (bytes, weight) in classes {
-            assert_eq!(file_weight(bytes), weight, "{bytes}");
+    fn a_files_weight_is_its_lines_and_a_groups_is_rounded_up_a_step() {
+        let lines = [(0, 1), (1, 1), (7, 7), (9, 10), (100, 112), (112, 112), (113, 128), (1 << 20, MOST)];
+        for (lines, weight) in lines.into_iter().chain([(u64::MAX, MOST)]) {
+            assert_eq!(file_weight(lines), weight, "{lines}");
         }
         for (sum, weight) in [(0, 0), (1, 1), (7, 7), (8, 8), (9, 10), (100, 112), (112, 112), (113, 128)] {
             assert_eq!(step(sum), weight, "{sum}");
@@ -261,7 +305,7 @@ mod tests {
     #[test]
     fn folders_come_before_files_each_by_name_and_share_the_plan_by_weight() {
         // src weighs 2 + 1 + 1, the two files in the root 2 and 2: the first cut is in half.
-        let city = city(&[("b.md", 4000), ("src/main.rs", 4000), ("a.md", 4000), ("src/a.rs", 10), ("src/z.rs", 10)]);
+        let city = city(&[("b.md", 2), ("src/main.rs", 2), ("a.md", 2), ("src/a.rs", 1), ("src/z.rs", 1)]);
         let ids: Vec<(&str, &str, bool)> =
             city.places.iter().map(|p| (p.id.as_str(), p.label.as_str(), p.group)).collect();
         let expected = [
@@ -306,6 +350,38 @@ mod tests {
         assert_eq!((named(&city, "app/mod.rs"), named(&city, "other/top.rs")), (none.clone(), none));
     }
 
+    /// A file is as tall as the commits git says touched it; one it names no commit of is a stub.
+    #[test]
+    fn a_files_height_is_the_commits_that_touched_it() {
+        let log = "\x01\0\nsrc/a.rs\0b.md\0\x01\0\nsrc/a.rs\0\x01\0\x01\0\ngone.rs\0";
+        let commits = touched(log);
+        let want: HashMap<String, u32> = [("src/a.rs".into(), 2), ("b.md".into(), 1), ("gone.rs".into(), 1)].into();
+        assert_eq!(commits, want);
+        let plan = atlas(&repo_with(&files(&[("src/a.rs", 9), ("b.md", 9), ("c.md", 9)]), &commits));
+        let height = |id: &str| plan.places.iter().find(|p| p.id == id).and_then(|p| p.height);
+        let level = crate::scene::height;
+        assert_eq!((height("src/a.rs"), height("b.md"), height("c.md")), (Some(level(2)), Some(level(1)), Some(0.)));
+        // Heights move nothing.
+        let rects = |a: Atlas| a.places.into_iter().map(|p| p.rect).collect::<Vec<_>>();
+        assert_eq!(rects(plan), rects(city(&[("src/a.rs", 9), ("b.md", 9), ("c.md", 9)])));
+    }
+
+    /// git's count of a file's lines: what each path added and removed, none for a binary one.
+    #[test]
+    fn numstat_gives_each_paths_lines_added_and_removed() {
+        let said = numstat("12\t0\tsrc/a.rs\0-\t-\tlogo.png\0003\t1\ta b/c\td.md\0\0bad\0");
+        let want: HashMap<String, Option<(u64, u64)>> =
+            [("src/a.rs".into(), Some((12, 0))), ("logo.png".into(), None), ("a b/c\td.md".into(), Some((3, 1)))]
+                .into();
+        assert_eq!(said, want);
+    }
+
+    #[test]
+    fn ls_tree_gives_each_blobs_size() {
+        let said = "100644 blob 6d86ca5     639\tsrc/a b.rs\0160000 commit 24d8dc9       -\tvendor\0bad\0";
+        assert_eq!(tree_sizes(said), [("src/a b.rs".to_string(), 639)].into());
+    }
+
     #[test]
     fn the_order_given_and_odd_paths_do_not_matter() {
         let one = city(&[("a/b.rs", 1), ("a/c.rs", 9000), ("d.rs", 1)]);
@@ -319,23 +395,23 @@ mod tests {
     }
 
     #[test]
-    fn an_edit_within_a_size_class_moves_nothing_and_a_new_file_stays_in_its_folder() {
+    fn an_edit_within_a_step_moves_nothing_and_a_new_file_stays_in_its_folder() {
         let docs: Vec<String> = (1..=9).map(|i| format!("docs/{i}.md")).collect();
-        let mut before: Vec<(&str, u64)> = docs.iter().map(|path| (path.as_str(), 100)).collect();
-        before.extend([("src/x.rs", 30_000), ("src/y.rs", 30_000)]);
+        let mut before: Vec<(&str, u64)> = docs.iter().map(|path| (path.as_str(), 1)).collect();
+        before.extend([("src/x.rs", 100), ("src/y.rs", 100)]);
         let mut edited = before.clone();
-        edited[9].1 = 31_000;
-        // Only its height, drawn and never laid out, changes.
+        // 100 lines and 112 weigh the same.
+        edited[9].1 = 112;
         let rects = |atlas: Atlas| atlas.places.into_iter().map(|p| (p.id, p.rect)).collect::<Vec<_>>();
         assert_eq!(rects(city(&before)), rects(city(&edited)));
         // docs weighs 9, a step up 10: a tenth file fits, and nothing but it is new.
         let mut added = before.clone();
-        added.push(("docs/a.md", 100));
+        added.push(("docs/a.md", 1));
         let (was, mut is) = (city(&before), city(&added));
         is.places.retain(|place| place.id != "docs/a.md");
         assert_eq!(was, is);
         // An eleventh makes docs a step larger: src, after it, moves over. docs/1.md stays.
-        added.push(("docs/b.md", 100));
+        added.push(("docs/b.md", 1));
         let more = city(&added);
         assert_ne!(rect_of(&was, "src"), rect_of(&more, "src"));
         assert_eq!(rect_of(&was, "docs/1.md").x, rect_of(&more, "docs/1.md").x);
@@ -381,13 +457,13 @@ mod tests {
             folders.into_iter().chain([file.as_str()]).collect::<Vec<_>>().join("/")
         }
 
-        /// Sizes spread evenly over the classes: 1 byte to 512 KB.
-        fn bytes(rng: &mut Rng) -> u64 {
-            (1 << rng.below(20)) + rng.below(1000) as u64
+        /// Lines spread evenly over the powers of two: 1 to about 4,000.
+        fn lines(rng: &mut Rng) -> u64 {
+            (1 << rng.below(12)) + rng.below(100) as u64
         }
 
         fn files(rng: &mut Rng, most: usize) -> Vec<(String, u64)> {
-            let files: BTreeMap<String, u64> = (0..1 + rng.below(most)).map(|_| (path(rng), bytes(rng))).collect();
+            let files: BTreeMap<String, u64> = (0..1 + rng.below(most)).map(|_| (path(rng), lines(rng))).collect();
             files.into_iter().collect()
         }
 
@@ -400,9 +476,9 @@ mod tests {
 
         fn change(rng: &mut Rng) -> Change {
             match rng.below(3) {
-                0 => Change::Add(path(rng), bytes(rng)),
+                0 => Change::Add(path(rng), lines(rng)),
                 1 => Change::Remove(rng.below(1000)),
-                _ => Change::Resize(rng.below(1000), bytes(rng)),
+                _ => Change::Resize(rng.below(1000), lines(rng)),
             }
         }
 
@@ -411,16 +487,16 @@ mod tests {
             let mut after: BTreeMap<String, u64> = files.iter().cloned().collect();
             let at = |i: &usize| files[i % files.len()].0.clone();
             let path = match change {
-                Change::Add(path, bytes) => {
-                    after.insert(path.clone(), *bytes);
+                Change::Add(path, lines) => {
+                    after.insert(path.clone(), *lines);
                     path.clone()
                 }
                 Change::Remove(i) => {
                     after.remove(&at(i));
                     at(i)
                 }
-                Change::Resize(i, bytes) => {
-                    after.insert(at(i), *bytes);
+                Change::Resize(i, lines) => {
+                    after.insert(at(i), *lines);
                     at(i)
                 }
             };
@@ -645,7 +721,7 @@ mod tests {
                 let mut files: Vec<(String, u64)> = (0..count)
                     .map(|i| {
                         let folders: Vec<String> = (0..1 + rng.below(5)).map(|_| folder(&mut rng)).collect();
-                        (format!("{}/f{i}.rs", folders.join("/")), bytes(&mut rng))
+                        (format!("{}/f{i}.rs", folders.join("/")), lines(&mut rng))
                     })
                     .collect();
                 let timed = |files: &[(String, u64)]| {
@@ -675,19 +751,24 @@ mod tests {
         /// The numbers in the design note: `cargo test -p ottospace-core atlas -- --nocapture`.
         #[test]
         fn one_change_moves_a_small_share_of_the_city_and_far_less_than_exact_weights() {
-            let add = |rng: &mut Rng, _: &[(String, u64)]| Change::Add(path(rng) + "x", bytes(rng));
-            // An edit: a file a tenth larger.
-            let edit = |rng: &mut Rng, files: &[(String, u64)]| {
-                let at = rng.below(files.len());
-                Change::Resize(at, files[at].1 + files[at].1 / 10 + 1)
+            let add = |rng: &mut Rng, _: &[(String, u64)]| Change::Add(path(rng) + "x", lines(rng));
+            // An edit: `more` lines added to a file, or a tenth more.
+            let edit = |more: Option<u64>| {
+                move |rng: &mut Rng, files: &[(String, u64)]| {
+                    let at = rng.below(files.len());
+                    Change::Resize(at, files[at].1 + more.unwrap_or(files[at].1 / 10 + 1))
+                }
             };
             let (add_coarse, add_exact) = (moved(300, true, add), moved(300, false, add));
-            let (edit_coarse, edit_exact) = (moved(300, true, edit), moved(300, false, edit));
+            let (line, ten) = (moved(300, true, edit(Some(1))), moved(300, true, edit(Some(10))));
+            let (tenth, tenth_exact) = (moved(300, true, edit(None)), moved(300, false, edit(None)));
             println!("a new file moves {add_coarse:?} of the others (mean, share of changes that move none)");
             println!("  with exact group weights {add_exact:?}");
-            println!("an edit of a tenth moves {edit_coarse:?}; with exact group weights {edit_exact:?}");
-            assert!(add_coarse.0 < 0.2 && add_coarse.0 < add_exact.0 / 3., "{add_coarse:?} {add_exact:?}");
-            assert!(edit_coarse.1 > 0.8 && edit_coarse.0 < 0.05, "{edit_coarse:?}");
+            println!("a line added moves {line:?}; ten lines {ten:?}");
+            println!("a tenth more moves {tenth:?}; with exact group weights {tenth_exact:?}");
+            assert!(add_coarse.0 < 0.3 && add_coarse.0 < add_exact.0 / 3., "{add_coarse:?} {add_exact:?}");
+            assert!(line.1 > 0.8 && line.0 < 0.02, "{line:?}");
+            assert!(tenth.0 < tenth_exact.0 / 3., "{tenth:?} {tenth_exact:?}");
         }
     }
 }

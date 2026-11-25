@@ -19574,20 +19574,21 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
         // A real, empty repository with made-up files: seven it lists, one it ignores.
         let app = root.join("repos/app");
         git(&app, &["init", "-q"]);
+        // Each its lines (a building's lot).
         let files = [
-            ("src/auth.rs", 5000),
-            ("src/main.rs", 300),
-            ("src/ui/mod.rs", 9000),
-            ("docs/a.md", 100),
-            ("docs/b.md", 100),
-            ("README.md", 2500),
+            ("src/auth.rs", 4),
+            ("src/main.rs", 1),
+            ("src/ui/mod.rs", 8),
+            ("docs/a.md", 1),
+            ("docs/b.md", 1),
+            ("README.md", 2),
             (".gitignore", 0),
-            ("target/out.bin", 70_000),
+            ("target/out.bin", 70),
         ];
-        for (file, bytes) in files {
+        for (file, lines) in files {
             let path = app.join(file);
             std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-            let text = if file == ".gitignore" { "target\n".to_string() } else { "x".repeat(bytes) };
+            let text = if file == ".gitignore" { "target".to_string() } else { vec!["x"; lines].join("\n") };
             std::fs::write(path, text).unwrap();
         }
         // The agent reads src/auth.rs, and the read does not end.

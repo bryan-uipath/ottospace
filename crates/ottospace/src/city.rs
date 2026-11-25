@@ -63,6 +63,19 @@ const EASE: Duration = Duration::from_millis(200);
 const TIMEOUT: Duration = Duration::from_secs(60);
 const MOST_BYTES: u64 = 64 << 20;
 const MOST_FILES: usize = 600_000;
+/// A file is read for its lines no further than the most a file weighs (`atlas::MOST`), nor than
+/// this many bytes; a NUL in its first `BINARY` bytes makes it binary.
+const MOST_LINES: u64 = atlas::MOST;
+const MOST_READ: u64 = 4 << 20;
+const BINARY: usize = 8000;
+/// A city's commits: a year's, at most this many (the owner's city's cap), said in this much.
+const COMMITS: &str = "20000";
+const LOG_BYTES: u64 = 32 << 20;
+/// What git's count of a commit's lines may say: a `ls-tree -l` line is ~60 bytes and a name.
+const COUNT_BYTES: u64 = 2 * MOST_BYTES;
+const KEEP_LOG: Duration = Duration::from_secs(3600);
+/// git's empty tree (SHA-1): lines from it to a commit are the commit's lines.
+const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /// Cities kept, by folder: a task's tab shown again draws at once.
 const KEPT: usize = 8;
 /// Folders of this tier and outer are named on their front wall (2: a folder of the root and
@@ -160,12 +173,16 @@ impl Reader {
     pub fn new() -> Self {
         let wanted: Arc<std::sync::Mutex<HashSet<String>>> = Arc::default();
         let on_show = wanted.clone();
+        let mut kept: HashMap<String, Kept> = HashMap::new();
         let (jobs, reads) = latest_each(
             |job: &ReadJob| job.0.clone(),
             move |(dir, roots, exclude): &ReadJob| {
                 let started = Instant::now();
                 let gone = || on_show.lock().is_ok_and(|wanted| !wanted.contains(dir));
-                let atlas = read(Path::new(dir), roots, exclude, &gone);
+                if kept.len() >= KEPT && !kept.contains_key(dir) {
+                    kept.clear();
+                }
+                let atlas = read(Path::new(dir), roots, exclude, kept.entry(dir.clone()).or_default(), &gone);
                 // Stopped (its place closed): no answer, so a city held for it is kept.
                 (atlas.is_some() || !gone()).then(|| (atlas, started.elapsed().as_micros() as u64))
             },
@@ -223,15 +240,173 @@ fn exclude_for(dir: &Path, setting: &[(String, Vec<String>)]) -> Vec<String> {
     city_filter::entries_for(&setting, |key| here.is_some() && resolved(key) == here)
 }
 
+/// What a checkout's last read found, so the next (its agents moved on) reads only what changed:
+/// each file's lines by its size in bytes, and the commits by the commit checked out.
+#[derive(Default)]
+struct Kept {
+    lines: HashMap<String, (u64, u64)>,
+    committed: Option<(String, Arc<HashMap<String, (u64, u64)>>)>,
+    log: Option<(String, Arc<HashMap<String, u32>>, Instant)>,
+}
+
 /// The plan of the checkout at `dir` (`checkout_files`), less the folders `exclude` leaves out
 /// for it (`city_filter`): dropped before the count and the layout, an untracked one never
-/// listed by git. `None`: no city, or `gone` (its place closed) said to stop.
-fn read(dir: &Path, roots: &[String], exclude: &[(String, Vec<String>)], gone: &dyn Fn() -> bool) -> Option<Atlas> {
+/// listed by git. Each file sized by its lines, as tall as its commits; what `kept` has of the
+/// last read is not read again. `None`: no city, or `gone` (its place closed) said to stop.
+fn read(
+    dir: &Path,
+    roots: &[String],
+    exclude: &[(String, Vec<String>)],
+    kept: &mut Kept,
+    gone: &(dyn Fn() -> bool + Sync),
+) -> Option<Atlas> {
     let rule = city_filter::Exclude::new(&exclude_for(dir, exclude));
     let keep = |name: &str| !rule.excludes(name);
     let limits = (MOST_FILES, MOST_BYTES, TIMEOUT);
     let (files, _) = checkout_files(dir, roots, limits, true, &rule.git_patterns(), &keep, gone)?;
-    (!files.is_empty()).then(|| atlas::atlas(&atlas::repo(&files)))
+    // The list has its limit; the lines and the log another as long.
+    let late = Instant::now() + TIMEOUT;
+    let top = dir.canonicalize().ok().filter(|_| !files.is_empty())?;
+    let head = head(&top, late, gone);
+    // Kept for its commit, an hour at most: a commit a year old falls out of the year.
+    let kept_log = kept.log.as_ref().filter(|(was, _, at)| Some(was) == head.as_ref() && at.elapsed() < KEEP_LOG);
+    let kept_log = kept_log.map(|(_, commits, _)| commits.clone());
+    // The log runs beside the lines' count: two gits at once, the first picture sooner.
+    let (lined, log) = std::thread::scope(|scope| {
+        let log = kept_log.is_none().then(|| scope.spawn(|| commits(&top, head.as_deref(), late, gone)));
+        let lined = count_lines(&top, files, head.as_ref(), kept, late, gone);
+        (lined, log.and_then(|log| log.join().ok()))
+    });
+    // Its place closed while git ran: no answer.
+    let lined = lined.filter(|_| !gone())?;
+    let commits = match (kept_log, log) {
+        (Some(commits), _) => commits,
+        (None, log) => {
+            let (commits, whole) = log.unwrap_or_default();
+            let commits = Arc::new(commits);
+            kept.log = head.filter(|_| whole).map(|head| (head, commits.clone(), Instant::now()));
+            commits
+        }
+    };
+    Some(atlas::atlas(&atlas::repo_with(&lined, &commits)))
+}
+
+/// Each of `files` (path, bytes) with its lines: git's count of the commit checked out (`head`)
+/// where a file's size is its blob's, else read here, with what `kept` has of the last read.
+/// None past the read's limit, or once `gone` (the lines counted are kept for the next).
+fn count_lines(
+    top: &Path,
+    files: Vec<(String, u64)>,
+    head: Option<&String>,
+    kept: &mut Kept,
+    late: Instant,
+    gone: &dyn Fn() -> bool,
+) -> Option<Vec<(String, u64)>> {
+    // git counts the lines of what it tracks (quick: its own code, each blob once), with a limit
+    // of its own; a file it does not know, or whose size is not the commit's, is read here.
+    let known = kept.committed.as_ref().filter(|(was, _)| Some(was) == head).map(|(_, lines)| lines.clone());
+    let committed = known.or_else(|| {
+        let head = head?;
+        let lines = Arc::new(committed_lines(top, head, late, gone)?);
+        kept.committed = Some((head.clone(), lines.clone()));
+        Some(lines)
+    });
+    let mut lined = Vec::with_capacity(files.len());
+    let mut sized = HashMap::with_capacity(files.len());
+    for (name, bytes) in files {
+        // A slow disk, or its place closed: no city; the lines counted are kept for the next.
+        if Instant::now() > late || gone() {
+            kept.lines.extend(sized);
+            return None;
+        }
+        let at = committed.as_ref().and_then(|c| c.get(&name)).filter(|(size, _)| *size == bytes);
+        // git's count is of lines ended by a new line; the owner's city counts one more (`a\nb\n` is 3).
+        let by_git = at.map(|(_, lines)| if *lines > 0 { lines + 1 } else { 0 });
+        let count = by_git.unwrap_or_else(|| {
+            let known = kept.lines.get(&name).filter(|(was, _)| *was == bytes).map(|(_, lines)| *lines);
+            let count = known.unwrap_or_else(|| if bytes == 0 { 0 } else { lines(&top.join(&name)) });
+            sized.insert(name.clone(), (bytes, count));
+            count
+        });
+        lined.push((name, count));
+    }
+    kept.lines = sized;
+    Some(lined)
+}
+
+/// Each file of commit `head` at `top`: its size in bytes and its lines, as git counts
+/// them (`--numstat` from the empty tree, `ls-tree -l`); none for a file git calls binary (a NUL,
+/// or its attributes) or will not count. Nothing of the working tree is read (no filter runs).
+/// None if git fails (no commit yet, a SHA-256 repository) or is late.
+fn committed_lines(
+    top: &Path,
+    head: &str,
+    late: Instant,
+    gone: &dyn Fn() -> bool,
+) -> Option<HashMap<String, (u64, u64)>> {
+    let git = |args: &[&str]| {
+        let mut git = crate::child::git_read(top);
+        git.args(args).env("GIT_NO_LAZY_FETCH", "1");
+        let left = late.saturating_duration_since(Instant::now());
+        let said = crate::child::run_until(git, left, COUNT_BYTES, gone).ok()?;
+        said.ok.then_some(said.out)
+    };
+    let diff = ["diff", "--numstat", "-z", "--no-renames", "--relative", "--no-ext-diff", "--no-textconv"];
+    let counts = atlas::numstat(&git(&[&diff[..], &[EMPTY_TREE, head, "--", "."]].concat())?);
+    let sizes = atlas::tree_sizes(&git(&["ls-tree", "-r", "-l", "-z", head, "--", "."])?);
+    let both = counts.into_iter().filter_map(|(path, n)| Some((sizes.get(&path).copied()?, n?.0, path)));
+    Some(both.map(|(size, lines, path)| (path, (size, lines))).collect())
+}
+
+/// The commit checked out at `top`, if any: what the commits read last are good for.
+fn head(top: &Path, late: Instant, gone: &dyn Fn() -> bool) -> Option<String> {
+    let mut head = crate::child::git_read(top);
+    head.args(["rev-parse", "--verify", "-q", "HEAD"]);
+    let said = crate::child::run_until(head, late.saturating_duration_since(Instant::now()), 256, gone).ok()?;
+    Some(said.out.trim().to_string()).filter(|head| said.ok && !head.is_empty())
+}
+
+/// A file's lines as the owner's city counts them (`a\nb\n` is 3), read no further than
+/// `MOST_LINES` (or `MOST_READ` bytes). None if it is empty, cannot be read, or is binary (a NUL in
+/// its first 8,000 bytes, as git judges). A link is not followed.
+fn lines(path: &Path) -> u64 {
+    use std::io::{BufRead, BufReader, Read};
+    use std::os::unix::fs::OpenOptionsExt;
+    let open = std::fs::OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK).open(path);
+    let Ok(file) = open else { return 0 };
+    let mut file = BufReader::with_capacity(64 << 10, file.take(MOST_READ));
+    match file.fill_buf() {
+        Ok(head) if !head.is_empty() && !head[..head.len().min(BINARY)].contains(&0) => {}
+        _ => return 0,
+    }
+    // A line at a time through std's own search (`read_until`): quick in a build not optimised too.
+    let (mut lines, mut line) = (1, Vec::new());
+    while lines <= MOST_LINES && file.read_until(b'\n', &mut line).is_ok_and(|n| n > 0) {
+        lines += u64::from(line.last() == Some(&b'\n'));
+        line.clear();
+    }
+    lines
+}
+
+/// The commits of the past year (at most `COMMITS`) that touched each file of the checkout at
+/// `top`, from one `git log`, read-only and hardened as the file list. None if git fails or the
+/// read's limit (`late`) comes first: every building is then a stub. Paths are the checkout's
+/// own (a folder inside a larger repository: relative to it). Never fetches a missing object (a
+/// partial clone). With it, whether git said all (else its newest commits, cut at `LOG_BYTES`).
+fn commits(top: &Path, head: Option<&str>, late: Instant, gone: &dyn Fn() -> bool) -> (HashMap<String, u32>, bool) {
+    let Some(head) = head else { return (HashMap::new(), false) };
+    let mut log = crate::child::git_read(top);
+    log.args(["log", "--since=12.months", "-n", COMMITS, "--no-renames", "--root", "--relative", "--name-only"]);
+    log.args(["-z", "--format=%x01", "--no-show-signature", "--no-color", head, "--", "."]);
+    log.env("GIT_NO_LAZY_FETCH", "1");
+    match crate::child::run_until(log, late.saturating_duration_since(Instant::now()), LOG_BYTES, gone) {
+        Ok(said) if said.ok => (atlas::touched(&said.out), true),
+        // Cut at `LOG_BYTES`: its last path may be cut too (`src/a` of `src/abc`), so it is dropped.
+        Ok(said) if said.out.len() as u64 >= LOG_BYTES => {
+            (atlas::touched(&said.out[..said.out.rfind('\0').map_or(0, |at| at + 1)]), false)
+        }
+        _ => (HashMap::new(), false),
+    }
 }
 
 /// The files git lists in the checkout at `dir` (tracked, and new ones it does not ignore), each
@@ -2529,7 +2704,15 @@ fn agents(
         let above = point(hover.x, hover.y.min(clear.top() - px(ICON / 2. + 1.)));
         let under = point(hover.x, hover.y.max(clear.bottom() + px(ICON / 2. + 1.)));
         let to = match foot {
-            Some(f) => [1., 0.75, 0.5, 0.25].into_iter().find_map(|t: f32| fits(f + (end - f) * t + offset)),
+            // Down its beam while the hints cover it; last, on the beam just under them, if that is
+            // over its roof (a building the hints stand over).
+            Some(f) => {
+                let rise = f32::from(f.y - end.y);
+                let under = f32::from(f.y - clear.bottom() - px(ICON / 2. + 1.)) / rise;
+                let under = (rise > 0. && under > 0. && under < 1.).then_some(under);
+                let ts = [1., 0.75, 0.5, 0.25].into_iter().chain(under);
+                ts.into_iter().find_map(|t: f32| fits(f + (end - f) * t + offset))
+            }
             None => [hover, above, under].into_iter().find_map(|at| fits(at + offset)),
         };
         let Some(to) = to else { continue };
@@ -2783,16 +2966,17 @@ mod tests {
         let roots = [top.to_string_lossy().into_owned()];
         let ids = |exclude: &[&str]| {
             let exclude: Exclude = vec![("*".into(), exclude.iter().map(|e| e.to_string()).collect())];
-            read(&top, &roots, &exclude, &|| false)
-                .map(|atlas| atlas.places.into_iter().map(|p| p.id).collect::<Vec<_>>())
+            let read = read(&top, &roots, &exclude, &mut Kept::default(), &|| false);
+            read.map(|atlas| atlas.places.into_iter().map(|p| p.id).collect::<Vec<_>>())
         };
         assert_eq!(ids(&["notes/archive"]), Some(vec!["src".into(), "src/a.rs".into()]));
         // A key that is this checkout's path: its own entries too.
         let own: Exclude = vec![(top.to_string_lossy().into_owned(), vec!["src".into()])];
-        let left = read(&top, &roots, &own, &|| false).map(|a| a.places.into_iter().map(|p| p.id).collect::<Vec<_>>());
+        let left = read(&top, &roots, &own, &mut Kept::default(), &|| false);
+        let left = left.map(|a| a.places.into_iter().map(|p| p.id).collect::<Vec<_>>());
         assert!(left.is_some_and(|ids| !ids.iter().any(|id| id.starts_with("src"))));
         // Its place closed while it read: no plan.
-        assert!(read(&top, &roots, &[], &|| true).is_none());
+        assert!(read(&top, &roots, &[], &mut Kept::default(), &|| true).is_none());
         let all = ids(&["!node_modules"]).unwrap();
         assert!(
             all.contains(&"node_modules/m/i.js".to_string()) && all.contains(&"notes/archive/old.md".into()),
@@ -3147,6 +3331,43 @@ mod tests {
         assert_eq!(moved, 0.);
     }
 
+    /// git counts a commit's lines, with each file's size there; a file git calls binary has none.
+    #[test]
+    fn git_counts_the_lines_it_tracks() {
+        let scratch = crate::scratch::Scratch::dir(&format!("ottospace-city-git-lines-{}", std::process::id()));
+        let top = scratch.as_ref().join("repo");
+        std::fs::create_dir_all(top.join("src")).unwrap();
+        std::fs::write(top.join("src/a.rs"), "1\n2\n3\n").unwrap();
+        std::fs::write(top.join("b.bin"), b"\0\x01").unwrap();
+        std::fs::write(top.join("c.js"), "x\n").unwrap();
+        std::fs::write(top.join(".gitattributes"), "c.js -diff\n").unwrap();
+        let git = |args: &[&str]| {
+            let run = std::process::Command::new("git").arg("-C").arg(&top).args(args).status().unwrap();
+            assert!(run.success());
+        };
+        git(&["init", "-q"]);
+        git(&["add", "-f", "."]);
+        git(&["-c", "user.name=t", "-c", "user.email=t@t", "-c", "core.hooksPath=/dev/null", "commit", "-qm", "c"]);
+        let (late, no) = (Instant::now() + TIMEOUT, &|| false);
+        let committed = committed_lines(&top, &head(&top, late, no).unwrap(), late, no).unwrap();
+        assert_eq!(committed.get("src/a.rs"), Some(&(6, 3)));
+        assert_eq!((committed.get("b.bin"), committed.get("c.js")), (None, None), "binary to git: read");
+    }
+
+    /// Lines as the owner's city counts them; an empty, binary or missing file has none.
+    #[test]
+    fn a_files_lines_are_counted_as_the_owners_city_counts_them() {
+        let scratch = crate::scratch::Scratch::dir(&format!("ottospace-city-lines-{}", std::process::id()));
+        let at = |name: &str, bytes: &[u8]| {
+            let path = scratch.as_ref().join(name);
+            std::fs::write(&path, bytes).unwrap();
+            lines(&path)
+        };
+        assert_eq!((at("a", b"a\nb\n"), at("b", b"a\nb"), at("c", b"a"), at("d", b"")), (3, 2, 1, 0));
+        assert_eq!((at("e", b"a\0b\n"), lines(&scratch.as_ref().join("none"))), (0, 0));
+        assert_eq!(at("f", &b"x\n".repeat(70_000)), MOST_LINES + 1);
+    }
+
     /// How long a checkout's read takes, for the design note's costs. `CITY_BENCH`: folders,
     /// `:` between them. `cargo test -p ottospace --release -- --ignored a_read_is_timed --nocapture`.
     #[test]
@@ -3155,14 +3376,42 @@ mod tests {
         for dir in std::env::var("CITY_BENCH").unwrap_or_default().split(':').filter(|dir| !dir.is_empty()) {
             let top = Path::new(dir).canonicalize().unwrap();
             let roots = [top.to_string_lossy().into_owned()];
-            let started = Instant::now();
-            let places = read(&top, &roots, &[], &|| false).map(|atlas| atlas.places.len());
-            let took = started.elapsed();
+            let (started, mut kept) = (Instant::now(), Kept::default());
+            let places = read(&top, &roots, &[], &mut kept, &|| false).map(|atlas| atlas.places.len());
+            let all = started.elapsed().as_secs_f64() * 1000.;
             // Its tab closed as it read: how long until the read lets go.
             let at = Instant::now();
-            drop(read(&top, &roots, &[], &|| true));
+            drop(read(&top, &roots, &[], &mut Kept::default(), &|| true));
             println!("{dir}: a read whose place closed ends in {:.0} ms", at.elapsed().as_secs_f64() * 1e3);
-            println!("{dir}: {places:?} places in {:.1} ms", took.as_secs_f64() * 1000.);
+            // Read again, nothing changed: what is kept is not read again.
+            let started = Instant::now();
+            read(&top, &roots, &[], &mut kept, &|| false);
+            let again = started.elapsed().as_secs_f64() * 1000.;
+            // Its parts: the list (and a stat each), every file's lines, the log.
+            let ms = |since: Instant| since.elapsed().as_secs_f64() * 1000.;
+            let started = Instant::now();
+            let (files, _) =
+                checkout_files(&top, &roots, (MOST_FILES, MOST_BYTES, TIMEOUT), true, &[], &|_| true, &|| false)
+                    .unwrap();
+            let listed = ms(started);
+            let started = Instant::now();
+            let lines: u64 = files.iter().map(|(name, _)| lines(&top.join(name))).sum();
+            let counted = ms(started);
+            let started = Instant::now();
+            let (late, no) = (Instant::now() + TIMEOUT, &|| false);
+            let at = head(&top, late, no);
+            let by_git = at.as_deref().and_then(|at| committed_lines(&top, at, late, no)).unwrap_or_default();
+            let by_git = (by_git.values().map(|(_, lines)| lines).sum::<u64>(), ms(started));
+            let started = Instant::now();
+            let commits = commits(&top, at.as_deref(), Instant::now() + TIMEOUT, no).0.len();
+            let logged = ms(started);
+            println!(
+                "{} files, {places:?} places in {all:.1} ms (again {again:.1}): list {listed:.1}, {lines} lines \
+                 {counted:.1} (git: {} in {:.1}), commits of {commits} files {logged:.1}",
+                files.len(),
+                by_git.0,
+                by_git.1
+            );
         }
     }
 }

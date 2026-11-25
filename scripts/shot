@@ -112,16 +112,29 @@ def read_steps(name, root):
 
 def made_up_tree(at, count):
     """A git repository at `at` with `count` made-up files, the same every run: up to four folders
-    deep, unevenly; sizes as a repository's, most small (200 B) and a few large (about 50 KB)."""
+    deep, unevenly; sizes as a repository's, most small (5 lines) and a few large (about 1,250);
+    a history of 25 commits, most files in one, a few in all (each adds a line to what it touches)."""
     os.makedirs(at, exist_ok=True)
     subprocess.run(["git", "init", "-q", at], check=True)
+    paths = []
     for i in range(count):
         deep = ["", "core/", "core/model/", "ui/", "ui/views/panes/"][(i // 7) % 5]
         r = (i * 7919) % 1000
         path = os.path.join(at, f"m{i % 6}", deep, f"part{i % 4}", f"f{i}.rs")
         os.makedirs(os.path.dirname(path), exist_ok=True)
         with open(path, "w") as f:
-            f.write("x" * (200 + r * r * r // 20000))
+            f.write(("x" * 39 + "\n") * (5 + r * r * r // 800000))
+        paths.append((path, r))
+    git = ["git", "-C", at, "-c", "user.name=t", "-c", "user.email=t@t", "-c", "commit.gpgsign=false",
+           "-c", "core.hooksPath=/dev/null"]
+    subprocess.run([*git, "add", "-A"], check=True)
+    subprocess.run([*git, "commit", "-qm", "files"], check=True)
+    for c in range(2, 26):
+        for path, r in paths:
+            if r * c < 1000:
+                with open(path, "a") as f:
+                    f.write("y\n")
+        subprocess.run([*git, "commit", "-qam", f"change {c}"], check=True)
 
 
 def made_up_repo(at, files, folders, deepest, empty=False):
