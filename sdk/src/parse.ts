@@ -109,6 +109,9 @@ import type {
   CityGlimmer,
   CitySpin,
   CitySpun,
+  Typed,
+  TypingDist,
+  TypingState,
   CityHovered,
   CityName,
   CitySpots,
@@ -2582,6 +2585,36 @@ function citySpun(value: unknown, at: string): CitySpun {
   };
 }
 
+function typingState(value: unknown, at: string): TypingState {
+  const o = fields(value, at);
+  return { running: bool(o.running, `${at}.running`), result: orNull(typed)(o.result, `${at}.result`) };
+}
+
+function typingDist(value: unknown, at: string): TypingDist {
+  const o = fields(value, at);
+  const n = (key: string) => num(o[key], `${at}.${key}`);
+  return { n: n("n"), p50: n("p50"), p95: n("p95"), p99: n("p99"), max: n("max") };
+}
+
+function typed(value: unknown, at: string): Typed {
+  const o = fields(value, at);
+  const d = (key: string) => typingDist(o[key], `${at}.${key}`);
+  return {
+    keys: num(o.keys, `${at}.keys`),
+    missed: num(o.missed, `${at}.missed`),
+    key_write: d("key_write"),
+    write_echo: d("write_echo"),
+    echo_taken: d("echo_taken"),
+    taken_painted: d("taken_painted"),
+    app: d("app"),
+    total: d("total"),
+    full: bool(o.full, `${at}.full`),
+    busy: bool(o.busy, `${at}.busy`),
+    done: bool(o.done, `${at}.done`),
+    hz: num(o.hz, `${at}.hz`),
+  };
+}
+
 function cityGlimmer(value: unknown, at: string): CityGlimmer {
   const o = fields(value, at);
   return { flash: num(o.flash, `${at}.flash`), sweep: num(o.sweep, `${at}.sweep`), found: num(o.found, `${at}.found`) };
@@ -2767,6 +2800,8 @@ export function snapshot(value: unknown): Snapshot {
     home: orNull(home)(o.home, "home"),
     home_drawn: homeDrawn(o.home_drawn, "home_drawn"),
     city: orNull(cityDrawn)(o.city, "city"),
+    // Absent from an older build's reply.
+    typing: o.typing === undefined ? null : orNull(typingState)(o.typing, "typing"),
     closed_apps: list(str)(o.closed_apps, "closed_apps"),
     apps_bar: appsBar(o.apps_bar, "apps_bar"),
     apps: list(appEntry)(o.apps, "apps"),

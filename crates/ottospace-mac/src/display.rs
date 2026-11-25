@@ -12,6 +12,7 @@ unsafe extern "C" {
     fn CGDisplayCopyDisplayMode(display: u32) -> *mut c_void;
     fn CGDisplayModeGetWidth(mode: *mut c_void) -> usize;
     fn CGDisplayModeGetPixelWidth(mode: *mut c_void) -> usize;
+    fn CGDisplayModeGetRefreshRate(mode: *mut c_void) -> f64;
     fn CGDisplayModeRelease(mode: *mut c_void);
     fn CGDisplayRegisterReconfigurationCallback(
         callback: extern "C" fn(u32, u32, *mut c_void),
@@ -110,6 +111,18 @@ pub fn scale(display: u32) -> f64 {
     let (points, pixels) = unsafe { (CGDisplayModeGetWidth(mode), CGDisplayModeGetPixelWidth(mode)) };
     unsafe { CGDisplayModeRelease(mode) };
     if points == 0 { 1.0 } else { pixels as f64 / points as f64 }
+}
+
+/// How often `display` shows a new frame, in Hz: 75 on a 2560×1440 at 75 Hz. A built-in panel
+/// says 0; ProMotion's top rate is 120.
+pub fn refresh_hz(display: u32) -> f64 {
+    let mode = unsafe { CGDisplayCopyDisplayMode(display) };
+    if mode.is_null() {
+        return 0.;
+    }
+    let hz = unsafe { CGDisplayModeGetRefreshRate(mode) };
+    unsafe { CGDisplayModeRelease(mode) };
+    hz
 }
 
 /// The scale of the display a window parked for a pane of `want` is on (`parking_spot`).

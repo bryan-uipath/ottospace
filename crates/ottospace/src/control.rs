@@ -396,6 +396,16 @@ pub enum Request {
     /// as the user: the city on show turns once round, a step a frame; its numbers then in the
     /// state's `city.spin`. Refused outside a test run: only the user moves the city's camera.
     CitySpin,
+    /// For tests (`OTTOSPACE_E2E`): the Developer command "Time Typing in This Terminal", run as
+    /// the user: made-up keys into a throwaway `cat` in a new pane (`full`: a full-screen program;
+    /// `busy`: a pane printing without end beside it), each timed to the frame that paints its
+    /// echo; the numbers then in the state's `typing`. Refused outside a test run: it types.
+    TypingTime {
+        #[serde(default)]
+        full: bool,
+        #[serde(default)]
+        busy: bool,
+    },
     /// For tests (`test_refusal`): opens the accessibility inspector on a pane (default: the
     /// focused one) as the user, with `tree` as if read from its window at `0,0` (`window` its
     /// size). A test run hosts no window to read.
@@ -787,7 +797,8 @@ fn two() -> f32 {
 /// own, and end sneak mode or answer the quit question in their place. `capture_start`: a
 /// capture hands over a hosted app's picture and text, and outside a test only the user starts one.
 /// `bug_start`: a bug report pictures the window, and outside a test only the user starts one.
-/// `city_spin`: it would turn the user's city, which only their pointer moves.
+/// `city_spin`: it would turn the user's city, which only their pointer moves. `typing_time`: it
+/// opens panes and types keys into the window, as only the user's own command does.
 /// `repo_add`: it writes the user's settings, as only the user's own choice in the folder picker does.
 /// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
@@ -816,6 +827,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         }
         Request::CitySpin => {
             Some("city_spin is for tests (OTTOSPACE_E2E): only the user turns the city, with the Developer command")
+        }
+        Request::TypingTime { .. } => {
+            Some("typing_time is for tests (OTTOSPACE_E2E): only the user times typing, with the Developer command")
         }
         Request::BugStart => {
             Some("bug_start is for tests (OTTOSPACE_E2E): only the user reports a bug, with the bug button or its key")
@@ -1141,6 +1155,10 @@ mod tests {
         let spin = parse(r#"{"cmd":"city_spin"}"#);
         assert!(test_refusal(&spin, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&spin, true), None);
+        // Nor timed typing: it opens panes and types into the window.
+        let typing = parse(r#"{"cmd":"typing_time","full":true,"busy":true}"#);
+        assert!(test_refusal(&typing, false).expect("refused").contains("only the user"));
+        assert_eq!(test_refusal(&typing, true), None);
         // Nor the green button: it fills the display as the user.
         let zoom = parse(r#"{"cmd":"zoom_press"}"#);
         assert!(test_refusal(&zoom, false).expect("refused").contains("only the user"));

@@ -28,6 +28,7 @@ actions!(
         RenameTab,
         CopyState,
         CitySpin,
+        TypingTime,
         OpenSettings,
         EditSettings,
         OpenFolder,
@@ -115,6 +116,7 @@ pub fn action(command: Command) -> Box<dyn gpui::Action> {
         Command::InspectorRefresh => Box::new(InspectorRefresh),
         Command::CopyState => Box::new(CopyState),
         Command::CitySpin => Box::new(CitySpin),
+        Command::TypingTime => Box::new(TypingTime),
         Command::CalendarBack => Box::new(CalendarBack),
         Command::CalendarForward => Box::new(CalendarForward),
         Command::CalendarToday => Box::new(CalendarToday),
@@ -183,6 +185,11 @@ impl Workspace {
                 this.copy_text(state, None, ottospace_core::clip::Verb::Copied, cx);
             }))
             .on_action(cx.listener(|this, _: &CitySpin, window, cx| this.city_spin_start(this.input, window, cx)))
+            .on_action(
+                cx.listener(|this, _: &TypingTime, window, cx| {
+                    this.typing_start(this.input, (false, false), window, cx)
+                }),
+            )
             .on_action(cx.listener(|this, _: &OpenSettings, _, cx| {
                 this.error = open_in_user_folder(Some("settings.json")).err();
                 cx.notify();

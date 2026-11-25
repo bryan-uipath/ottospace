@@ -18711,6 +18711,45 @@ fn a_spin_turns_the_city_once_round_and_times_its_frames() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// The Developer command's timed typing types made-up keys into a throwaway `cat` in a new pane,
+/// times each from its key event to the frame that paints its echo (`typing`), then closes that
+/// pane and gives the focus back. Esc stops one.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn typing_is_timed_from_key_to_painted_echo() {
+    let otto = Otto::launch("typing");
+    otto.call(json!({"cmd": "split"}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let panes = |o: &Otto| state(o)["state"]["panes"].as_array().map_or(0, Vec::len);
+    let (before, focused) = (panes(&otto), state(&otto)["state"]["focused"].clone());
+    otto.call(json!({"cmd": "typing_time"}));
+    // Not asked meanwhile: a state's reply is the main thread's work too.
+    std::thread::sleep(Duration::from_secs(16));
+    let typed =
+        otto.wait_for("the run's numbers", |o| Some(state(o)["typing"]["result"].clone()).filter(|r| !r.is_null()));
+    assert_eq!(
+        (typed["done"].clone(), typed["keys"].clone(), typed["busy"].clone()),
+        (json!(true), json!(250), json!(false))
+    );
+    assert!(typed["missed"].as_u64().unwrap() <= 5, "{typed}");
+    for stage in ["key_write", "write_echo", "echo_taken", "taken_painted", "app", "total"] {
+        assert!(typed[stage]["n"].as_u64().unwrap() >= 245, "{stage}: {typed}");
+    }
+    assert!(typed["total"]["p50"].as_f64().unwrap() > 0., "{typed}");
+    // Its pane closed, the focus where it was.
+    assert_eq!((panes(&otto), state(&otto)["state"]["focused"].clone()), (before, focused));
+    // Esc stops one.
+    otto.call(json!({"cmd": "typing_time"}));
+    otto.wait_for("a run on", |o| state(o)["typing"]["running"].as_bool().filter(|r| *r).map(|_| ()));
+    std::thread::sleep(Duration::from_secs(2));
+    otto.user_key("escape");
+    let stopped = otto.wait_for("the run stopped", |o| {
+        Some(state(o)["typing"]["result"].clone()).filter(|r| r["done"] == json!(false))
+    });
+    assert!(stopped["keys"].as_u64().unwrap() < 250, "{stopped}");
+    assert_eq!(panes(&otto), before);
+}
+
 /// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,
 /// inside the picture, again after a zoom. The user's pointer on a folder's ground outlines its
 /// top face and hangs its label by its near edge or the pointer; on a building, a beam a share of

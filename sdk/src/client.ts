@@ -492,6 +492,14 @@ export class Client {
     return this.snapshot({ cmd: "city_spin" });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): the Developer command's timed typing, as the user: made-up keys
+   * into a throwaway `cat` in a new pane (`full`: a full-screen program; `busy`: a pane printing
+   * beside it); its numbers then in `typing`. Rejects outside a test run.
+   */
+  typingTime(args: { full?: boolean; busy?: boolean } = {}): Promise<Snapshot> {
+    return this.snapshot({ cmd: "typing_time", ...args });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): opens the accessibility inspector on a pane (default: the focused
    * one) with `tree` as if read from its window. Rejects outside a test run: only the user opens it.
    */

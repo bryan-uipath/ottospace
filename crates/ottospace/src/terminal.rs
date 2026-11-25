@@ -103,9 +103,52 @@ struct Shared {
     area: std::sync::Mutex<Option<[f32; 2]>>,
     /// The text the program last asked to put on the clipboard (OSC 52), for the core to hold.
     copy: std::sync::Mutex<Option<String>>,
+    /// Output batches parsed so far: a screen made after the `n`th shows at least that output.
+    seq: AtomicU64,
+    /// A timed key's way to the screen (`typing`), while one is timed: each stage stamped once.
+    timing: AtomicBool,
+    stamps: std::sync::Mutex<Stamps>,
+}
+
+/// When a timed key reached each stage: its key event, its bytes sent to the pty, its echo read
+/// and parsed (with that batch's `seq`), the main thread taking the output, and a frame painting it.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Stamps {
+    pub key: Option<Instant>,
+    pub write: Option<Instant>,
+    pub echo: Option<(Instant, u64)>,
+    pub taken: Option<Instant>,
+    pub painted: Option<Instant>,
 }
 
 impl Shared {
+    /// Stamps a stage of the key being timed, if one is: `stage` sets it once.
+    fn stamp(&self, stage: impl FnOnce(&mut Stamps)) {
+        if self.timing.load(Relaxed) {
+            stage(&mut self.stamps.lock().unwrap_or_else(|e| e.into_inner()));
+        }
+    }
+
+    /// New output parsed into the grid.
+    fn output(&self) {
+        let seq = self.seq.fetch_add(1, Release) + 1;
+        self.stamp(|s| {
+            if s.write.is_some() && s.echo.is_none() {
+                s.echo = Some((Instant::now(), seq));
+            }
+        });
+        self.set_dirty();
+    }
+
+    /// A frame painted the screen made at `seq`.
+    fn painted(&self, seq: u64) {
+        self.stamp(|s| {
+            if s.echo.is_some_and(|(_, echo)| seq >= echo) && s.painted.is_none() {
+                s.painted = Some(Instant::now());
+            }
+        });
+    }
+
     /// New output, or a scroll: the main loop takes it at its next run.
     fn set_dirty(&self) {
         self.dirty.store(true, Relaxed);
@@ -125,7 +168,7 @@ struct Listener(Arc<Shared>);
 impl EventListener for Listener {
     fn send_event(&self, event: Event) {
         match event {
-            Event::Wakeup => self.0.set_dirty(),
+            Event::Wakeup => self.0.output(),
             // Answers the terminal owes the program, e.g. a cursor position report.
             Event::PtyWrite(text) => {
                 if let Some(input) = self.0.input.get() {
@@ -240,6 +283,9 @@ pub struct Screen {
     rows: Vec<Vec<Span>>,
     /// Row, column and the shape the program asked for (DECSCUSR): block, underline or beam.
     cursor: Option<(usize, usize, CursorShape)>,
+    /// The output it shows (`Shared::seq`), and its terminal while a key is timed: painting it stamps.
+    seq: u64,
+    timed: Option<Arc<Shared>>,
 }
 
 pub struct Terminal {
@@ -304,6 +350,11 @@ impl Terminal {
         const EDIT: &str = "if [ -n \"$ZSH_VERSION\" ]; then setopt shwordsplit noglob; else set -f; fi; \
                             exec ${VISUAL:-${EDITOR:-vi}} \"$1\"";
         Self::script(EDIT, "ottospace-editor", vec![file.to_string()], vars, None)
+    }
+
+    /// Runs `program` with `args` directly, no shell: a timed run's throwaway `cat` (`typing`).
+    pub(crate) fn exec(program: &str, args: Vec<String>) -> io::Result<Self> {
+        Self::start(Some(tty::Shell::new(program.into(), args)), &[], None, None)
     }
 
     /// `$SHELL -lic <script> <name> <args…>`: the script is fixed text, the arguments its
@@ -465,6 +516,10 @@ impl Terminal {
         self.offered.take();
         self.touched.set(true);
         self.scroll(Scroll::Bottom);
+        // Before the send: the pty's thread may write and read the echo back before this one runs on.
+        self.shared.stamp(|s| {
+            s.write.get_or_insert_with(Instant::now);
+        });
         let _ = self.input.send(Msg::Input(bytes.into()));
     }
 
@@ -716,6 +771,13 @@ impl Terminal {
     /// True once since new output arrived. Also types a workbook's command once the prompt is there.
     pub fn take_dirty(&self) -> bool {
         let dirty = self.shared.dirty.swap(false, Relaxed);
+        if dirty {
+            self.shared.stamp(|s| {
+                if s.echo.is_some() {
+                    s.taken.get_or_insert_with(Instant::now);
+                }
+            });
+        }
         self.type_waiting(dirty);
         if dirty {
             self.check_selection();
@@ -809,7 +871,22 @@ impl Terminal {
     }
 
     pub fn screen(&self) -> Screen {
-        screen_of(&self.term.lock(), self.grid.rows)
+        // Read before the grid: the screen shows at least this much output.
+        let seq = self.shared.seq.load(Acquire);
+        let timed = self.shared.timing.load(Relaxed).then(|| self.shared.clone());
+        Screen { seq, timed, ..screen_of(&self.term.lock(), self.grid.rows) }
+    }
+
+    /// Times the next key, its event at `key`: each stage is stamped as it comes (`stamps`).
+    pub(crate) fn time_key(&self, key: Instant) {
+        *self.shared.stamps.lock().unwrap_or_else(|e| e.into_inner()) = Stamps { key: Some(key), ..Stamps::default() };
+        self.shared.timing.store(true, Relaxed);
+    }
+
+    /// The timed key's stamps so far; ends the timing.
+    pub(crate) fn stamps(&self) -> Stamps {
+        self.shared.timing.store(false, Relaxed);
+        *self.shared.stamps.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     /// Spans with a style, for a test run's state: `{"row":0,"text":"dim","fg":..}`.
@@ -894,7 +971,7 @@ fn screen_of<T: EventListener>(term: &Term<T>, rows: usize) -> Screen {
         .then(|| usize::try_from(at.line.0 + offset).ok().map(|row| (row, at.column.0, shape)))
         .flatten()
         .filter(|(row, ..)| *row < rows); // scrolled back past it
-    Screen { rows: lines, cursor }
+    Screen { rows: lines, cursor, seq: 0, timed: None }
 }
 
 impl Screen {
@@ -1390,6 +1467,9 @@ pub fn paint_scaled(
             window.paint_quad(fill(Bounds { origin: at, size }, color.opacity(alpha)));
         }
     });
+    if let Some(shared) = &screen.timed {
+        shared.painted(screen.seq);
+    }
     // Counted for a test run's state only: once a frame.
     if art > 0 && *TEST_RUN.get_or_init(|| std::env::var_os("OTTOSPACE_E2E").is_some()) {
         ART_CELLS.fetch_add(art, Relaxed);

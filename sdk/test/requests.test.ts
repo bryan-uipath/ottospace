@@ -109,6 +109,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.captureStart({ pane: 1 }),
   (c) => c.bugStart(),
   (c) => c.citySpin(),
+  (c) => c.typingTime({ full: true, busy: true }),
   (c) =>
     c.inspectorFixture({
       app: "Fixture",

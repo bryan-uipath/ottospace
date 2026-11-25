@@ -151,6 +151,7 @@ mod terminal;
 mod text_runs;
 mod toast;
 mod trace;
+mod typing;
 mod ui;
 mod viewer;
 mod week_focus;
@@ -1310,6 +1311,11 @@ struct Workspace {
     /// The developer's timed turn of a city in flight, and the last one's numbers.
     city_spin: Option<city::Spin>,
     city_spun: Option<city::Spun>,
+    /// The developer's timed typing in flight, the last run's numbers, and the program the
+    /// next terminal opened runs instead of a shell (`typing::Program`).
+    typing: Option<typing::Typing>,
+    typing_timed: Option<typing::Timed>,
+    typing_program: Option<typing::Program>,
     status_fit: Cell<ottospace_core::status_bar::Fit>,
     status_said: Option<(u64, Option<u64>, bool)>,
     pr_opens: u32,
@@ -1995,6 +2001,9 @@ impl Workspace {
             city_frames: Cell::new(0),
             city_spin: None,
             city_spun: None,
+            typing: None,
+            typing_timed: None,
+            typing_program: None,
             status_fit: Cell::default(),
             status_said: None,
             pr_opens: 0,
@@ -2346,6 +2355,8 @@ impl Workspace {
                             file.and_then(|file| Terminal::edit(&file.to_string_lossy(), &vars))
                         } else if let Some(path) = edits {
                             Terminal::edit(path, &vars)
+                        } else if let Some(program) = self.typing_program.take() {
+                            program.start()
                         } else {
                             Terminal::spawn(&vars, cwd, history)
                         };
@@ -3407,6 +3418,11 @@ impl Workspace {
                 // A test run only: the Developer command's spin, as the user's.
                 Request::CitySpin => {
                     self.with_origin(Origin::User, |this| this.city_spin_start(Origin::User, window, cx));
+                    None
+                }
+                // A test run only: the Developer command's timed typing, as the user's.
+                Request::TypingTime { full, busy } => {
+                    self.with_origin(Origin::User, |this| this.typing_start(Origin::User, (full, busy), window, cx));
                     None
                 }
                 Request::InspectorFixture { pane, app, tree } => match pane.or(self.model.focused) {
@@ -4647,6 +4663,9 @@ impl Workspace {
             // picture's size in pixels, where it and the lit buildings are, why there is none
             // (`failed`). Never a file's name.
             "city": std::env::var_os("OTTOSPACE_E2E").map(|_| self.city_snapshot()),
+            // A test run only: the developer's timed typing (`typing_time`): running, and the last
+            // run's times by stage (ms).
+            "typing": std::env::var_os("OTTOSPACE_E2E").map(|_| self.typing_snapshot()),
             // The pinned apps that are not running: `open_app` starts one. The Dock's and the
             // rest are in `apps_bar`: those are the user's to start.
             "closed_apps": self.pinned_closed().map(|app| app.name).collect::<Vec<_>>(),
@@ -9308,7 +9327,8 @@ impl Workspace {
                 if e.keystroke.key == "escape"
                     && (this.divider_escape(window, cx)
                         || this.city_escape(window, cx)
-                        || this.city_spin_escape(window, cx))
+                        || this.city_spin_escape(window, cx)
+                        || this.typing_escape(window, cx))
                 {
                     cx.stop_propagation();
                 }
@@ -10060,6 +10080,10 @@ fn main() {
         print!("{}", if stub { SKILL_STUB } else { SKILL_GUIDE });
         return;
     }
+    // Hidden: the made-up full-screen program a timed run types into (`typing`).
+    if args.get(1).is_some_and(|a| a == "typing-echo") {
+        typing::echo_main();
+    }
     // Brings back windows stranded off screen; no app need run.
     if args.get(1).is_some_and(|a| a == "rescue") {
         give_back::rescue_command();
@@ -10286,10 +10310,11 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 24] = [
+        const TESTS_ONLY: [&str; 25] = [
             "capture_start",
             "bug_start",
             "city_spin",
+            "typing_time",
             "repo_add",
             "inspector_fixture",
             "sneak_app_tree",

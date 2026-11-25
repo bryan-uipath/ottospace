@@ -521,7 +521,10 @@ Inspector](#accessibility-inspector), Copy State as JSON
 (the reply of `{"cmd":"state"}`, to the clipboard), Spin the City and Time Its Frames (with
 `code_city` on: the city on show turns once round, a step a frame, as a steady drag; a toast and
 the event log then give each frame's time, numbers only; Esc stops it; it runs under Reduce Motion
-too, as you asked for it), Open the Settings File and Open the ottospace
+too, as you asked for it), Time Typing in This Terminal (made-up keys into a throwaway `cat` in a
+new pane beside the focused one, never your shell, each timed from the key to the frame that
+draws its echo; the pane then closes, and a toast and the event log give the times by stage and the
+display's refresh, numbers only; Esc stops it), Open the Settings File and Open the ottospace
 Folder (in the Finder; a test run that named no folder has none), and Bring All Windows Back
 (see [Getting a window back](#getting-a-window-back)).
 
