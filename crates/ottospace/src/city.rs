@@ -307,7 +307,7 @@ struct Key {
     glass: bool,
     /// How far through its rise, in thousandths: 1000 standing.
     rise: u16,
-    /// The camera's view, as bits: yaw, pitch, zoom, pan.
+    /// The camera's view, as bits: yaw, pitch, zoom, pan, lift.
     view: [u32; 6],
     /// How far below the picture's middle the fitted city's is, as bits (`scene::LOWER`).
     lower: u32,
