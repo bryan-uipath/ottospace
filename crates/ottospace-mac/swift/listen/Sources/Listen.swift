@@ -58,10 +58,11 @@ private func chosen(_ name: String?) async -> Locale? {
 }
 
 /// `locale` reserved for this app: until it is, the system says its model is only `supported`,
-/// even with it on disk, and installs it for no one. Idempotent; at most 5 per app.
+/// even with it on disk, and installs it for no one. Idempotent (false: reserved already); it
+/// throws past the system's most per app (`maximumReservedLocales`, 5).
 @available(macOS 26, *)
-private func reserve(_ locale: Locale) async {
-    _ = try? await AssetInventory.reserve(locale: locale)
+private func reserve(_ locale: Locale) async throws {
+    _ = try await AssetInventory.reserve(locale: locale)
 }
 #endif
 
@@ -76,6 +77,8 @@ public func ottospace_listen_status(_ locale: UnsafePointer<CChar>?) -> Int32 {
         return blocking {
             guard SpeechTranscriber.isAvailable else { return 5 }
             guard let locale = await chosen(name) else { return 4 }
+            // Unreserved, a model on disk reads `supported`: a test run, which downloads none, would stop here.
+            try? await reserve(locale)
             let module = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
             switch await AssetInventory.status(forModules: [module]) {
             case .installed: return 2
@@ -105,7 +108,7 @@ public func ottospace_listen_install(
                 guard let locale = await chosen(name) else {
                     return say("this language is not supported") { done(context, false, $0) }
                 }
-                await reserve(locale)
+                try await reserve(locale)
                 let module = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
                 if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
                     try await request.downloadAndInstall()
@@ -173,10 +176,11 @@ final class Recogniser: @unchecked Sendable {
 
 /// A new recogniser for `locale` (or the system's), its results to `callback` with `context`, on a
 /// thread of its own: `kind` 0 a line (`text`, `start_ms`, `end_ms`, `final`), 1 an error (`text`),
-/// 2 finished. Null: no recogniser here, or its model is not installed.
-/// Null with `why` set when it cannot start. 1: no recogniser here (below macOS 26, or built
-/// without its SDK). 2: no supported language. 3, 4, 5: the model is supported but not installed,
-/// downloading, or unsupported. 6: no audio format the transcriber takes. 7: `sampleRate` is no format.
+/// 2 finished. Null with `why` set when it cannot start. 1: no recogniser here (below macOS 26, or
+/// built without its SDK). 2: no supported language. 3, 4, 5: the model is supported but not
+/// installed, downloading, or unsupported. 6: no audio format the transcriber takes. 7:
+/// `sampleRate` is no format. 8: this Mac cannot run the transcriber. 9: the language could not be
+/// reserved (the system's most per app).
 @_cdecl("ottospace_listen_new")
 public func ottospace_listen_new(
     _ locale: UnsafePointer<CChar>?, _ sampleRate: Double, _ callback: ListenCallback,
@@ -188,8 +192,9 @@ public func ottospace_listen_new(
         let name = named(locale)
         let raw = UInt(bitPattern: context)
         let (made, failed): (Recogniser?, Int32) = blocking {
+            guard SpeechTranscriber.isAvailable else { return (nil, 8) }
             guard let locale = await chosen(name) else { return (nil, 2) }
-            await reserve(locale)
+            do { try await reserve(locale) } catch { return (nil, 9) }
             let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
             switch await AssetInventory.status(forModules: [transcriber]) {
             case .installed: break

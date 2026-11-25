@@ -124,6 +124,10 @@ pub enum NotStarted {
     NoFormat,
     /// The sample rate given is no audio format.
     BadRate,
+    /// This Mac cannot run the transcriber (a virtual machine, for one).
+    Unavailable,
+    /// Its language could not be reserved: the system's most per app.
+    NotReserved,
     /// A code this side does not know.
     Other(i32),
 }
@@ -138,6 +142,8 @@ impl NotStarted {
             5 => Self::ModelUnsupported,
             6 => Self::NoFormat,
             7 => Self::BadRate,
+            8 => Self::Unavailable,
+            9 => Self::NotReserved,
             other => Self::Other(other),
         }
     }
@@ -152,6 +158,8 @@ impl NotStarted {
             Self::ModelUnsupported => "model_unsupported".into(),
             Self::NoFormat => "no_format".into(),
             Self::BadRate => "bad_rate".into(),
+            Self::Unavailable => "unavailable".into(),
+            Self::NotReserved => "not_reserved".into(),
             Self::Other(code) => format!("code_{code}"),
         }
     }
@@ -161,12 +169,14 @@ impl std::fmt::Display for NotStarted {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Absent => write!(f, "this build has no speech recogniser"),
-            Self::NoLanguage => write!(f, "no language of the system's has a speech model"),
+            Self::NoLanguage => write!(f, "no supported speech language was found"),
             Self::NotInstalled => write!(f, "the speech model is not installed"),
             Self::Downloading => write!(f, "the speech model is still downloading"),
             Self::ModelUnsupported => write!(f, "the speech model is not supported"),
             Self::NoFormat => write!(f, "the speech model takes no audio format"),
             Self::BadRate => write!(f, "the sound's rate is no audio format"),
+            Self::Unavailable => write!(f, "this Mac cannot run Apple's speech recogniser"),
+            Self::NotReserved => write!(f, "the speech language could not be reserved"),
             Self::Other(code) => write!(f, "step {code}"),
         }
     }
