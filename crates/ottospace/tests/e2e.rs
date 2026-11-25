@@ -19465,8 +19465,7 @@ fn running_sub_agents_are_faces_under_the_picture_then_plus_n() {
     otto.start_task(1);
     let state = |o: &Otto| o.call(json!({"cmd": "state"}));
     let dial = |o: &Otto| state(o)["drawer"]["native"]["chats"]["1"]["dial"].clone();
-    let five = otto.wait_for("five running", |o| Some(dial(o)).filter(|d| d["faces"] == 3));
-    assert_eq!(five["faces_more"], 2, "{five}");
+    otto.wait_for("five running", |o| Some(dial(o)).filter(|d| d["faces"] == 3 && d["faces_more"] == 2));
     for at in 0..3 {
         otto.control(&format!("talk:face:{at}"));
     }

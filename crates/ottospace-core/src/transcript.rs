@@ -658,7 +658,8 @@ impl Transcript {
         if self.subagents() == 0 {
             return Vec::new();
         }
-        let mut faces: Vec<Face> = self.subs.clone();
+        // Newest first, so calls of one batch (one time) keep that order through the stable sort.
+        let mut faces: Vec<Face> = self.subs.iter().rev().cloned().collect();
         for face in &mut faces {
             // One whose end never came is over once its calls are (an interrupt, an exit).
             if face.ended.is_none() && !self.activity.runs(&face.id) {
@@ -824,7 +825,10 @@ impl Transcript {
                 self.glances.start(&id, &tool, station, detail.text());
                 if matches!(tool.as_str(), "Agent" | "Task") && !sub {
                     if self.subs.len() == MAX_SUBS {
-                        self.subs.remove(0);
+                        // The oldest that no longer runs goes first: a long one outlives many short.
+                        let activity = &self.activity;
+                        let gone = self.subs.iter().position(|face| !activity.runs(&face.id)).unwrap_or(0);
+                        self.subs.remove(gone);
                     }
                     let about = gist.as_ref().map(|gist| gist.line(None)).unwrap_or_default();
                     self.subs.push(Face { id: id.clone(), kind: label.clone(), about, since: at, ended: None });
@@ -1491,6 +1495,18 @@ mod tests {
         assert_eq!(t.faces().len(), 3);
         end(&mut t, "c", 7);
         assert!(t.faces().is_empty(), "none runs: no faces");
+        // One long sub-agent outlives `MAX_SUBS` short ones: it is still counted.
+        start(&mut t, "long", "Explore", "Long", 8);
+        for n in 0..MAX_SUBS as u64 {
+            start(&mut t, &format!("short{n}"), "Explore", "Short", 9 + n);
+            end(&mut t, &format!("short{n}"), 9 + n);
+        }
+        assert_eq!(t.subagents(), 1);
+        assert_eq!(t.faces()[0].id, "long");
+        // Started in one batch, at one time: the newest first.
+        start(&mut t, "x", "Explore", "X", 100);
+        start(&mut t, "y", "Explore", "Y", 100);
+        assert_eq!(ids(&t)[..3], ["y", "x", "long"]);
     }
 
     /// A subtask's start is its call's row when there is one, else a row of its own; its end,

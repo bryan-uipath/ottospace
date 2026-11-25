@@ -1,10 +1,10 @@
 # The conversation header's sub-agent faces: five `Agent` calls run on (made-up), three faces
-# under the picture, then "+2" (`dial.faces`, `dial.faces_more`).
+# under the picture, then "+2". Waits on the Agents light (`stations.7`): the base has no `faces`.
 {"cmd":"split","kind":"empty"}
 {"cmd":"task_new","line":"tidy the parser"}
 {"cmd":"section","section":"tasks"}
 {"click":"task:1","at":[0.3,0.3]}
 {"click":"talk:talk-start"}
-{"until":"drawer.native.chats.1.dial.faces","is":3}
+{"until":"drawer.native.chats.1.dial.stations.7.running","is":5}
 {"settle":800}
 {"shot":"faces"}

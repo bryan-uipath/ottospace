@@ -434,8 +434,9 @@ impl Workspace {
         };
         let mut value = serde_json::to_value(&dial).unwrap_or_default();
         value["collapsed"] = self.model.dial_collapsed(subject).into();
-        // The faces under the picture: how many shown and how many more; never their words.
-        let faces = self.model.chat(subject).map(|chat| chat.transcript.faces().len()).unwrap_or(0);
+        // The faces under the picture: how many shown and how many more; never their words. None collapsed.
+        let open = !self.model.dial_collapsed(subject);
+        let faces = self.model.chat(subject).filter(|_| open).map(|chat| chat.transcript.faces().len()).unwrap_or(0);
         value["faces"] = faces.min(FACES).into();
         value["faces_more"] = faces.saturating_sub(FACES).into();
         // To three places: an f32 widened would say 0.9200000166893004.
