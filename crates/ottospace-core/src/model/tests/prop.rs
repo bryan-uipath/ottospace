@@ -7465,6 +7465,25 @@ fn random_actions_keep_the_model_sound_for_long() {
 // Regressions: failures the run above found, shrunk as `sequence` printed them, then tidied by
 // hand (a helper for a long action, `.into()` for the user's). Each says what was wrong.
 
+/// A capture started over the new-task box with one long line: the bar's title kept the box's
+/// field, 20,000 characters, not a title's 500 (only a box of several lines was made one).
+#[test]
+fn a_capture_over_a_long_line_cuts_it_to_a_title() {
+    let long = "x".repeat(3504);
+    replay(&[
+        Action::OpenCompose { text: long }.sent_by(Origin::User),
+        Action::CaptureStart {
+            pane: None,
+            draft: "u2".into(),
+            word: "w0rdw0rdw0rd".into(),
+            facts: Vec::new(),
+            images: true,
+        }
+        .sent_by(Origin::User),
+    ])
+    .unwrap();
+}
+
 /// A terminal session opened in place (`terminal_tasks`), then the user's Resume: it went on in
 /// a tab of its own, so a TalkStart changed the tab on show. Gone on with, it stays in place.
 #[test]
