@@ -1,0 +1,5 @@
+# cargo audit (.github/workflows/deps.yml): advisories ignored, each dated, as deny.toml's.
+[advisories]
+# 2026-11-25: url 2.5.8 (Url::origin() overflows on nested blob: URLs), via gpui_http_client; the
+# fix, 2.5.9 (2026-11-20), passes the cooldown on 2026-11-27: drop this and bump url then.
+ignore = ["RUSTSEC-2026-0592"]
