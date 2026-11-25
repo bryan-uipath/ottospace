@@ -580,7 +580,7 @@ type PaintJob = (Floor, Key, Arc<Atlas>);
 pub struct Painter {
     /// Rung for each picture made: the main thread takes it at once (`Bell::rung`), not at the
     /// loop's next tick, so a turn's picture is painted on the next frame.
-    pub(crate) bell: Arc<Bell>,
+    pub(crate) bell: Arc<ottospace_mac::wake::Bell>,
     jobs: Sender<PaintJob>,
     made: Receiver<(PaintJob, Option<Result<Made, String>>)>,
     gpu: Locked<Option<Result<Gpu, String>>>,
@@ -616,7 +616,7 @@ impl Painter {
         // frames and a camera's moves lay one out once (two places of one checkout, two sizes).
         let mut last: Layouts = Vec::new();
         let mut details = Details::new();
-        let bell = Arc::new(Bell::default());
+        let bell = Arc::new(ottospace_mac::wake::Bell::default());
         let ring = bell.clone();
         let (jobs, made) = latest_each(
             |job: &PaintJob| job.0,
@@ -656,37 +656,6 @@ impl Painter {
             let gpu = self.gpu.clone();
             std::thread::spawn(move || drop(lock_gpu(&gpu).get_or_insert_with(open_gpu)));
         }
-    }
-}
-
-/// A signal from the picture's thread to the main thread: rung, and awaited (`rung`).
-#[derive(Default)]
-pub(crate) struct Bell {
-    rung: std::sync::atomic::AtomicBool,
-    waiter: std::sync::Mutex<Option<std::task::Waker>>,
-}
-
-impl Bell {
-    fn ring(&self) {
-        self.rung.store(true, std::sync::atomic::Ordering::SeqCst);
-        if let Some(waker) = self.waiter.lock().ok().and_then(|mut waiter| waiter.take()) {
-            waker.wake();
-        }
-    }
-
-    /// Ready once rung since the last time it was.
-    pub(crate) fn rung(&self) -> impl std::future::Future<Output = ()> + '_ {
-        std::future::poll_fn(move |cx| {
-            // The waker first, then the flag: a ring between the two is seen by the flag.
-            if let Ok(mut waiter) = self.waiter.lock() {
-                *waiter = Some(cx.waker().clone());
-            }
-            if self.rung.swap(false, std::sync::atomic::Ordering::SeqCst) {
-                std::task::Poll::Ready(())
-            } else {
-                std::task::Poll::Pending
-            }
-        })
     }
 }
 

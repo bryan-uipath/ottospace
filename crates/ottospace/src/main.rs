@@ -1599,6 +1599,28 @@ impl Workspace {
             }
         })
         .detach();
+        // A terminal's output: taken and its frame asked for at once, not at the tick's next run
+        // (up to a frame later, out of step with the display: a key's echo waited for it).
+        // Only the output: what else follows it (an exit, a copy asked for) is the tick's.
+        cx.spawn(async move |this, cx| {
+            loop {
+                ottospace_mac::wake::DRAW.rung().await;
+                if this.update(cx, |this, cx| this.take_output(cx)).is_err() {
+                    return;
+                }
+                // A flood rings again at once: other work on this thread runs between.
+                let mut yielded = false;
+                std::future::poll_fn(|cx| {
+                    if std::mem::replace(&mut yielded, true) {
+                        return std::task::Poll::Ready(());
+                    }
+                    cx.waker().wake_by_ref();
+                    std::task::Poll::Pending
+                })
+                .await;
+            }
+        })
+        .detach();
         // The tick: answer control calls, redraw on new output, keep windows matched to panes;
         // every ~500ms, also look for new and closed windows of hosted apps. Each frame while
         // something moves or waits, or just happened; else asleep until woken, or the next slow
@@ -5417,7 +5439,7 @@ impl Workspace {
             if let Some(bounds) = self.cells.get(id) {
                 terminal.fit(bounds.get().size, self.cell);
             }
-            redraw |= terminal.take_dirty();
+            redraw |= terminal.take_shown();
             if let Some(text) = terminal.take_copy_ask() {
                 asks.push((*id, text));
             }
@@ -5446,6 +5468,24 @@ impl Workspace {
             self.dispatch(Action::Close { pane: Some(id) }, Origin::System, window, cx);
         }
         if redraw {
+            self.output = true;
+            cx.notify();
+        }
+    }
+
+    /// New output of a terminal on show (a pane's, the drawer agent's, the editor's): a frame asked
+    /// for; a hidden tab's draws nothing. Not while one is asked for already: that frame reads every
+    /// grid as it is then.
+    fn take_output(&mut self, cx: &mut Context<Self>) {
+        if self.output {
+            self.terminals.values().for_each(Terminal::frame_asked);
+            return;
+        }
+        let panes = self.terminals.values().map(|t| t.take_shown());
+        let drawer = self.drawer.agents.values().map(|a| a.terminal.take_shown());
+        let editor = self.drawer.editor.iter().map(|e| e.terminal.take_shown());
+        // Every one taken (no short cut): each is drawn by the one frame.
+        if panes.chain(drawer).chain(editor).fold(false, |any, dirty| any | dirty) {
             self.output = true;
             cx.notify();
         }
@@ -9738,6 +9778,7 @@ impl Workspace {
 impl Render for Workspace {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         self.renders += 1;
+        terminal::frame_begun();
         // The cell on this display's pixel grid: again once the window moves to another scale.
         self.cell = terminal::cell_size(window);
         self.scale = window.scale_factor();

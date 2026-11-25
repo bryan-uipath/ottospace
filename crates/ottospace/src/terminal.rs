@@ -149,10 +149,10 @@ impl Shared {
         });
     }
 
-    /// New output, or a scroll: the main loop takes it at its next run.
+    /// New output, or a scroll: taken at once, and drawn on the display's next frame (`wake::draw`).
     fn set_dirty(&self) {
         self.dirty.store(true, Relaxed);
-        ottospace_mac::wake::post();
+        ottospace_mac::wake::draw();
     }
 
     fn set_exited(&self) {
@@ -310,6 +310,17 @@ pub struct Terminal {
     touched: std::cell::Cell<bool>,
     /// The selection's text as last made: output that changes it clears the selection.
     kept: std::cell::RefCell<Option<String>>,
+    /// The frame (`FRAMES`) whose render last drew it.
+    drawn_at: std::cell::Cell<u64>,
+}
+
+/// Renders of the workspace begun (`frame_begun`). A terminal drawn in this one or the last is on
+/// show: its output asks for a frame. One not drawn since (a tab not on show) does not.
+static FRAMES: AtomicU64 = AtomicU64::new(0);
+
+/// A render of the workspace begins.
+pub fn frame_begun() {
+    FRAMES.fetch_add(1, Relaxed);
 }
 
 /// A command waiting for the shell's prompt, and when the terminal's output last came.
@@ -429,6 +440,7 @@ impl Terminal {
             opened,
             touched,
             kept,
+            drawn_at: FRAMES.load(Relaxed).into(),
         })
     }
 
@@ -772,17 +784,27 @@ impl Terminal {
     pub fn take_dirty(&self) -> bool {
         let dirty = self.shared.dirty.swap(false, Relaxed);
         if dirty {
-            self.shared.stamp(|s| {
-                if s.echo.is_some() {
-                    s.taken.get_or_insert_with(Instant::now);
-                }
-            });
+            self.frame_asked();
         }
         self.type_waiting(dirty);
         if dirty {
             self.check_selection();
         }
         dirty
+    }
+
+    /// New output that is on show (drawn in the last frame or this one): taken, as `take_dirty`.
+    pub fn take_shown(&self) -> bool {
+        self.take_dirty() && self.drawn_at.get() + 1 >= FRAMES.load(Relaxed)
+    }
+
+    /// A frame is asked for, which draws its output as it is then: a timed key's echo is taken.
+    pub(crate) fn frame_asked(&self) {
+        self.shared.stamp(|s| {
+            if s.echo.is_some() {
+                s.taken.get_or_insert_with(Instant::now);
+            }
+        });
     }
 
     /// Its program got (`on`) or lost the focus: `CSI I` or `CSI O`, if it asked (DECSET 1004).
@@ -874,6 +896,7 @@ impl Terminal {
         // Read before the grid: the screen shows at least this much output.
         let seq = self.shared.seq.load(Acquire);
         let timed = self.shared.timing.load(Relaxed).then(|| self.shared.clone());
+        self.drawn_at.set(FRAMES.load(Relaxed));
         Screen { seq, timed, ..screen_of(&self.term.lock(), self.grid.rows) }
     }
 

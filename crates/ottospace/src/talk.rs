@@ -325,7 +325,7 @@ impl Workspace {
             if shown == Some(subject) {
                 agent.terminal.fit(self.drawer.body.get().size, self.cell);
             }
-            redraw |= agent.terminal.take_dirty();
+            redraw |= agent.terminal.take_shown();
             if agent.terminal.exited() && !agent.told {
                 agent.told = true;
                 agent.pass = None;
