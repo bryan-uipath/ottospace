@@ -7295,8 +7295,12 @@ fn event_code(event: &Said) -> String {
         Said::TextDelta { text: t } => format!("Said::TextDelta {{ text: {} }}", text(t)),
         Said::Text { text: t } => format!("Said::Text {{ text: {} }}", text(t)),
         Said::ToolStart { id, parent, tool, station, label, detail, diff, gist } => format!(
-            "Said::ToolStart {{ id: {id:?}.into(), parent: {parent:?}.map(String::from), tool: {tool:?}.into(), \
+            "Said::ToolStart {{ id: {id:?}.into(), parent: {}, tool: {tool:?}.into(), \
              station: crate::activity::Station::{station:?}, label: {label:?}.into(), detail: {}, diff: {}, gist: {} }}",
+            match parent {
+                Some(of) => format!("Some({of:?}.into())"),
+                None => "None".into(),
+            },
             text(detail),
             match diff {
                 Some(_) =>

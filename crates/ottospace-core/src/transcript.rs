@@ -677,6 +677,11 @@ impl Transcript {
         faces
     }
 
+    /// How many sub-agents it keeps.
+    pub fn faces_kept(&self) -> usize {
+        self.subs.len()
+    }
+
     /// A sub-agent it started, at any depth, by its call's id.
     pub fn face(&self, id: &str) -> Option<&Face> {
         self.subs.iter().find(|face| face.id == id)
@@ -689,6 +694,8 @@ impl Transcript {
             Entry::Tool { parent: Some(of), label, state, .. } if of == id => Some((label, *state)),
             _ => None,
         });
+        // As the chip's line: a label is the model's, cleaned and on one line.
+        let last = last.map(|(label, state)| (clean(label).replace('\n', " "), state));
         let running = self.activity.runs(id);
         Some(match last {
             Some((label, Call::Running)) => format!("{} · {label}", face.kind),
@@ -851,8 +858,10 @@ impl Transcript {
                 self.settle();
                 self.activity.start(&id, station, &label, at);
                 self.glances.start(&id, &tool, station, detail.text());
-                // A watched file's sub-agent start names no parent (`Some("")`): no face.
-                if matches!(tool.as_str(), "Agent" | "Task") && parent.as_deref() != Some("") {
+                // A watched file's sub-agent start names no parent (`Some("")`): no face. One id is
+                // one face; a call its own parent has none (no loop to walk).
+                let known = self.subs.iter().any(|face| face.id == id);
+                if matches!(tool.as_str(), "Agent" | "Task") && parent.as_deref() != Some("") && !known {
                     if self.subs.len() == MAX_SUBS {
                         // The oldest that no longer runs goes first: a long one outlives many short.
                         let activity = &self.activity;
@@ -860,8 +869,8 @@ impl Transcript {
                         self.subs.remove(gone);
                     }
                     let about = gist.as_ref().map(|gist| gist.line(None)).unwrap_or_default();
-                    let (id, kind) = (id.clone(), label.clone());
-                    self.subs.push(Face { id, parent: parent.clone(), kind, about, since: at, ended: None });
+                    let (kind, mine) = (label.clone(), parent.clone().filter(|of| *of != id));
+                    self.subs.push(Face { id: id.clone(), parent: mine, kind, about, since: at, ended: None });
                 }
                 if station == Station::Shell {
                     if self.shells.len() == MOST_SHELLS {

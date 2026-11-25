@@ -33,6 +33,7 @@ const BAR: f32 = 2.;
 const FACES: usize = 3;
 const FACE: f32 = 16.;
 const SWITCHER: f32 = 300.;
+const SWITCHER_TALL: f32 = 260.;
 /// The context bar's height, on the header's bottom edge.
 const CONTEXT_BAR: f32 = 3.;
 /// The tool stations, in the lights' order, each with its glyph.
@@ -86,8 +87,6 @@ pub(crate) fn calm() -> bool {
     }
 }
 
-/// The context's number at the lights' end: shown from 70%, "compacts soon" from 90%; below,
-/// on the bar's hover only.
 /// A sub-agent's face: its type's first letter in a ring of the Agents colour, dimmer once done.
 pub(crate) fn face_mark(face: &Face, side: f32) -> Div {
     let hue = colour(theme::station(Station::Agents));
@@ -108,6 +107,8 @@ pub(crate) fn face_mark(face: &Face, side: f32) -> Div {
         .child(letter)
 }
 
+/// The context's number at the lights' end: shown from 70%, "compacts soon" from 90%; below,
+/// on the bar's hover only.
 fn context_words(dial: &Dial) -> Option<String> {
     let used = (dial.context? * 100.).round() as u32;
     match dial.level {
@@ -401,9 +402,7 @@ impl Workspace {
                 .child(format!("+{rest}"))
                 .child(self.controls.mark("talk:faces-more".to_string()))
                 .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    drop(this.dispatch(Action::TalkFaces { open }, this.input, window, cx))
-                }))
+                .on_click(Self::in_drawer(Action::TalkFaces { open }, cx))
         });
         // The list of them all, over what is under it: nothing in the header moves.
         let list = chat.switcher.then(|| {
@@ -425,20 +424,10 @@ impl Workspace {
                     .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(Self::drill(face.id.clone(), cx))
             });
-            let foot = div().px_2().py_1().text_xs().text_color(rgb(theme::MUTED)).child("Esc closes");
-            let list = div()
-                .absolute()
-                .top_full()
-                .left_0()
-                .mt_1()
-                .w(px(SWITCHER))
-                .py_1()
-                .rounded_md()
-                .border_1()
-                .border_color(rgb(theme::BORDER_STRONG))
-                .bg(rgb(theme::RAISED))
-                .children(rows)
-                .child(foot);
+            // Over what is under it, which gets no hover or click through it; long, it scrolls.
+            let rows = div().id("talk-switch-rows").max_h(px(SWITCHER_TALL)).overflow_y_scroll().py_1().children(rows);
+            let list = crate::dialog::floating(SWITCHER).absolute().top_full().left_0().mt_1().occlude();
+            let list = list.child(rows).child(crate::dialog::hint("esc closes"));
             gpui::deferred(list)
         });
         Some(div().relative().flex().items_center().gap_1().children(shown).children(more).children(list))
@@ -446,8 +435,17 @@ impl Workspace {
 
     /// A click that shows sub-agent `id`'s own calls, as whoever clicked.
     fn drill(id: String, cx: &mut Context<Self>) -> impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static {
+        Self::in_drawer(Action::TalkDrill { id }, cx)
+    }
+
+    /// A click that gives the drawer the keyboard (so Esc goes back from there), then `action`.
+    pub(crate) fn in_drawer(
+        action: Action,
+        cx: &mut Context<Self>,
+    ) -> impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static {
         cx.listener(move |this: &mut Self, _: &gpui::ClickEvent, window, cx| {
-            drop(this.dispatch(Action::TalkDrill { id: id.clone() }, this.input, window, cx))
+            this.dispatch(Action::TalkKeys { on: true }, this.input, window, cx);
+            drop(this.dispatch(action.clone(), this.input, window, cx))
         })
     }
 

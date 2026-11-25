@@ -416,6 +416,23 @@ impl Workspace {
             },
             ("talk", "talk-close", _) => Action::TalkToggle,
             ("talk", "talk-wide", _) => Action::TalkWide,
+            // The sub-agents' faces, their list and the way back: what a click on each does.
+            ("talk", "talk-back", _) => Action::TalkBack,
+            ("talk", "faces-more", _) => {
+                let open = self.model.talk.as_ref().and_then(|talk| self.model.chat(&talk.task));
+                Action::TalkFaces { open: !open.is_some_and(|chat| chat.switcher) }
+            }
+            ("talk", name, _) if name.starts_with("face:") || name.starts_with("switch:") => {
+                let chat = self.model.talk.as_ref().and_then(|talk| self.model.chat(&talk.task));
+                let at = name.split(':').nth(1).and_then(|at| at.parse::<usize>().ok());
+                let level = chat.and_then(|chat| chat.drilled()).map(|face| face.id.clone());
+                let face =
+                    chat.zip(at).and_then(|(chat, at)| chat.transcript.faces(level.as_deref()).into_iter().nth(at));
+                match face {
+                    Some(face) => Action::TalkDrill { id: face.id },
+                    None => return true,
+                }
+            }
             // The native conversation's buttons: the core says who may.
             ("talk", "chat-allow" | "chat-deny" | "chat-show-all", _) => {
                 let shown = self.model.shown_chat().and_then(|chat| chat.transcript.cards.front());
@@ -887,7 +904,7 @@ impl Workspace {
             .talk_action("talk-back", &format!("‹ {}", parent.as_deref().unwrap_or(title)), "Back up one level (esc)")
             .max_w(px(200.))
             .overflow_hidden()
-            .on_click(cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkBack, this.input, window, cx))));
+            .on_click(Self::in_drawer(Action::TalkBack, cx));
         let muted = |text: String| div().flex_none().text_color(rgb(theme::MUTED)).child(text);
         let kind = div().id("talk-title").flex_1().min_w_0().text_sm().truncate().child(face.kind.clone());
         let title_row = div()
