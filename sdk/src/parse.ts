@@ -1828,7 +1828,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
   if (value === "multi_monitor") return value;
-  if (value === "overlay_panels" || value === "decisions" || value === "code_city") return value;
+  if (value === "overlay_panels" || value === "decisions" || value === "code_city" || value === "city_live_layer") return value;
   if (value === "session_waits" || value === "projects" || value === "terminal_tasks" || value === "zoom_out" || value === "decision_sources") return value;
   throw wrong(at, "a feature", value);
 }
@@ -2610,6 +2610,12 @@ function citySpun(value: unknown, at: string): CitySpun {
     wait_p50: n("wait_p50"),
     wait_p95: n("wait_p95"),
     wait_max: n("wait_max"),
+    shown_p50: n("shown_p50"),
+    shown_p95: n("shown_p95"),
+    shown_p99: n("shown_p99"),
+    render_p50: n("render_p50"),
+    render_p95: n("render_p95"),
+    live: bool(o.live, `${at}.live`),
     boxes: n("boxes"),
   };
 }

@@ -231,7 +231,20 @@ impl Model {
             At::Tab(id) => self.tabs.iter().position(|tab| tab.id == id).is_some_and(|i| self.tree_at(i).is_none()),
             At::Pane(id) => self.is_empty_pane(id),
         };
-        if !self.features.on(Feature::CodeCity) || !empty {
+        if !empty {
+            return None;
+        }
+        self.city_of(at)
+    }
+
+    /// The city of pane `pane`'s folder, as an empty place would draw it, whatever the pane holds:
+    /// for a test run's city under a terminal (`city_under`, `city_live_layer`).
+    pub fn city_under(&self, pane: crate::PaneId) -> Option<City<'_>> {
+        self.city_of(At::Pane(pane))
+    }
+
+    fn city_of(&self, at: At) -> Option<City<'_>> {
+        if !self.features.on(Feature::CodeCity) {
             return None;
         }
         let dir = self.empty_folder(at)?;
@@ -1123,6 +1136,19 @@ src/main.rs:9:loop
         m.update(Action::SpaceOpen { space: Owner::Task { id: 1 } });
         go(&mut m, CameraStep::Let);
         assert!(!m.camera_moving(at));
+    }
+
+    /// A terminal pane draws no city, but its folder's city can stand under it (a test run's
+    /// `city_under`): the same folder the empty tab drew.
+    #[test]
+    fn a_terminal_pane_has_its_folders_city_under_it() {
+        let mut m = task_in_app();
+        let at = m.empty_places()[0];
+        let dir = m.city_at(at).map(|city| city.dir.to_string());
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        let pane = m.focused.unwrap();
+        assert!(m.city_at(At::Pane(pane)).is_none());
+        assert_eq!(m.city_under(pane).map(|city| city.dir.to_string()), dir);
     }
 
     /// A spin is a full turn, in motion all the way (half-size pictures, as a drag), and leaves

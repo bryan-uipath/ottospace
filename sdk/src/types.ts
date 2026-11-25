@@ -181,6 +181,7 @@ export type Feature =
   | "overlay_panels"
   | "decisions"
   | "code_city"
+  | "city_live_layer"
   | "session_waits"
   | "projects"
   | "terminal_tasks"
@@ -2042,9 +2043,19 @@ export interface CitySpun {
   over_33: number;
   /** Frames that showed the picture the frame before showed. */
   repeats: number;
+  /** A new picture from made to painted (ms); 0 on the live layer, presented as made. */
   wait_p50: number;
   wait_p95: number;
   wait_max: number;
+  /** A step's picture from its place asking to it shown: painted, or presented on the live layer. */
+  shown_p50: number;
+  shown_p95: number;
+  shown_p99: number;
+  /** Each picture's render on its thread (ms). */
+  render_p50: number;
+  render_p95: number;
+  /** Drawn on the live layer (`city_live_layer`), not painted as an image. */
+  live: boolean;
   boxes: number;
 }
 

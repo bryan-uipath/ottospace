@@ -500,6 +500,13 @@ export class Client {
     return this.snapshot({ cmd: "typing_time", ...args });
   }
   /**
+   * For tests (`OTTOSPACE_E2E`): `pane`'s folder's city drawn under it (a terminal), its
+   * background at `opacity` over it; no pane ends it. Rejects outside a test run.
+   */
+  cityUnder(args: { pane?: number | null; opacity?: number } = {}): Promise<Snapshot> {
+    return this.snapshot({ cmd: "city_under", ...args });
+  }
+  /**
    * For tests (`OTTOSPACE_E2E`): opens the accessibility inspector on a pane (default: the focused
    * one) with `tree` as if read from its window. Rejects outside a test run: only the user opens it.
    */

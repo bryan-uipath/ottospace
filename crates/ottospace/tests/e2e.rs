@@ -18949,29 +18949,8 @@ fn the_users_pointer_moves_the_citys_camera() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_spin_turns_the_city_once_round_and_times_its_frames() {
-    let root = support::temp(&format!("ottospace-e2e-city-spin-{}", std::process::id()));
-    let app = root.join("repos/app");
-    std::fs::create_dir_all(&app).unwrap();
-    git(&app, &["init", "-q"]);
-    for (file, bytes) in [("src/main.rs", 900), ("src/lib.rs", 4000), ("docs/a.md", 300), ("README.md", 2000)] {
-        std::fs::create_dir_all(app.join(file).parent().unwrap()).unwrap();
-        std::fs::write(app.join(file), "x".repeat(bytes)).unwrap();
-    }
-    let app = app.canonicalize().unwrap();
-    let home = user_folder("city-spin", &json!({"repos": [app], "restore_layout": false}).to_string());
-    let env = [
-        ("OTTOSPACE_HOME", home.to_str().unwrap()),
-        ("OTTOSPACE_FEATURES", "code_city"),
-        ("GIT_CONFIG_GLOBAL", "/dev/null"),
-    ];
-    let otto = Otto::launch_with("city-spin", &env);
-    otto.call(json!({"cmd": "open_repo", "path": app}));
-    otto.call(json!({"cmd": "close"}));
+    let (otto, root, home, before, spun) = city_spun("city-spin", "code_city");
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
-    otto.wait_for("a city", |o| Some(city(o)).filter(|c| !c["picture"].is_null()));
-    let before = city(&otto)["view"].clone();
-    otto.call(json!({"cmd": "city_spin"}));
-    let spun = otto.wait_for("the spin", |o| Some(city(o)["spin"]["result"].clone()).filter(|r| !r.is_null()));
     assert_eq!((spun["done"].clone(), spun["steps"].clone()), (json!(true), json!(240)), "{spun}");
     assert!(spun["frames"].as_u64().unwrap() >= 200 && spun["p50"].as_f64().unwrap() > 0., "{spun}");
     assert_eq!((city(&otto)["view"].clone(), city(&otto)["grabbed"].clone()), (before.clone(), json!(false)));
@@ -19026,6 +19005,50 @@ fn typing_is_timed_from_key_to_painted_echo() {
     });
     assert!(stopped["keys"].as_u64().unwrap() < 250, "{stopped}");
     assert_eq!(panes(&otto), before);
+}
+
+/// A made-up repository's city under `features`, spun once round: the app, its folders (the
+/// caller removes them), the camera before the spin and the spin's result.
+fn city_spun(name: &str, features: &str) -> (Otto, PathBuf, PathBuf, Value, Value) {
+    let root = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
+    let app = root.join("repos/app");
+    std::fs::create_dir_all(&app).unwrap();
+    git(&app, &["init", "-q"]);
+    for (file, bytes) in [("src/main.rs", 900), ("src/lib.rs", 4000), ("docs/a.md", 300), ("README.md", 2000)] {
+        std::fs::create_dir_all(app.join(file).parent().unwrap()).unwrap();
+        std::fs::write(app.join(file), "x".repeat(bytes)).unwrap();
+    }
+    let app = app.canonicalize().unwrap();
+    let home = user_folder(name, &json!({"repos": [app], "restore_layout": false}).to_string());
+    let env = [
+        ("OTTOSPACE_HOME", home.to_str().unwrap()),
+        ("OTTOSPACE_FEATURES", features),
+        ("GIT_CONFIG_GLOBAL", "/dev/null"),
+    ];
+    let otto = Otto::launch_with(name, &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    otto.wait_for("a city", |o| Some(city(o)).filter(|c| !c["picture"].is_null()));
+    let before = city(&otto)["view"].clone();
+    otto.call(json!({"cmd": "city_spin"}));
+    let spun = otto.wait_for("the spin", |o| Some(city(o)["spin"]["result"].clone()).filter(|r| !r.is_null()));
+    (otto, root, home, before, spun)
+}
+
+/// With `city_live_layer` the city is drawn on a layer of its own under the window: a spin counts
+/// that layer's presents, as `live`, and puts the camera back.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_live_layer_spins_the_city_and_counts_its_presents() {
+    let (otto, root, home, before, spun) = city_spun("city-live", "code_city,city_live_layer");
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    assert_eq!((spun["done"].clone(), spun["live"].clone()), (json!(true), json!(true)), "{spun}");
+    assert!(spun["frames"].as_u64().unwrap() >= 200 && spun["render_p50"].as_f64().unwrap() > 0., "{spun}");
+    assert_eq!(city(&otto)["view"], before);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,

@@ -140,8 +140,13 @@ fn colour(kind: Kind) -> ([f32; 3], [f32; 3]) {
     }
 }
 
+/// A live layer gave no drawable this time (`render_into`): not a failure of the picture.
+pub(crate) const NO_DRAWABLE: &str = "no drawable";
+
 /// The device kept between pictures.
 pub struct Gpu {
+    /// Kept for surfaces of live layers (`live_surface`).
+    instance: wgpu::Instance,
     device: wgpu::Device,
     queue: wgpu::Queue,
     pipeline: wgpu::RenderPipeline,
@@ -282,7 +287,7 @@ impl Gpu {
             layout: &layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
         });
-        Ok(Self { device, queue, pipeline, glass, uniform, group, kept: Default::default() })
+        Ok(Self { instance, device, queue, pipeline, glass, uniform, group, kept: Default::default() })
     }
 
     /// One draw of a one-box city at 16×16, its picture dropped: the first picture shown pays no
@@ -300,6 +305,52 @@ impl Gpu {
         self.render_boxes(scene, &Boxes::new(scene, glass), width, height, rise)
     }
 
+    /// A surface over a live layer's `CAMetalLayer` (`ottospace_mac::live_layer`), to draw to
+    /// with `render_into`.
+    ///
+    /// # Safety
+    /// `layer` is a `CAMetalLayer` that outlives the surface.
+    pub unsafe fn live_surface(&self, layer: *mut std::ffi::c_void) -> Result<wgpu::Surface<'static>, String> {
+        // SAFETY: the caller's layer, kept alive by its view while the surface lives.
+        unsafe { self.instance.create_surface_unsafe(wgpu::SurfaceTargetUnsafe::CoreAnimationLayer(layer)) }
+            .map_err(|e| format!("surface: {e}"))
+    }
+
+    /// `surface` set up for pictures `width` × `height`: presented a display refresh each (FIFO).
+    pub fn configure(&self, surface: &wgpu::Surface<'static>, width: u32, height: u32) {
+        let config = wgpu::SurfaceConfiguration {
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+            format: FORMAT,
+            width: width.max(1),
+            height: height.max(1),
+            present_mode: wgpu::PresentMode::Fifo,
+            desired_maximum_frame_latency: 2,
+            alpha_mode: wgpu::CompositeAlphaMode::Opaque,
+            view_formats: vec![],
+            color_space: wgpu::SurfaceColorSpace::Auto,
+        };
+        surface.configure(&self.device, &config);
+    }
+
+    /// `render_boxes`, drawn straight into `surface`'s next drawable and presented: no read back.
+    pub fn render_into(
+        &self,
+        surface: &wgpu::Surface<'static>,
+        scene: &Scene,
+        boxes: &Boxes,
+        rise: f32,
+    ) -> Result<Picture, String> {
+        let frame = match surface.get_current_texture() {
+            wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
+            other => return Err(format!("{NO_DRAWABLE}: {other:?}")),
+        };
+        let (width, height) = (frame.texture.width(), frame.texture.height());
+        let view = frame.texture.create_view(&Default::default());
+        let picture = self.checked(|| self.draw(scene, boxes, width, height, rise, Some(&view)))?;
+        self.queue.present(frame);
+        Ok(picture)
+    }
+
     /// `render`, of `scene`'s boxes as made already (`Boxes::new`): a camera move's picture.
     pub fn render_boxes(
         &self,
@@ -309,14 +360,16 @@ impl Gpu {
         height: u32,
         rise: f32,
     ) -> Result<Picture, String> {
-        if boxes.base.len() != scene.blocks.len() {
-            return Err("boxes of another scene".into());
-        }
+        self.checked(|| self.draw(scene, boxes, width, height, rise, None))
+    }
+
+    /// `draw` with the GPU's errors caught: a picture fails instead of wgpu panicking.
+    fn checked(&self, draw: impl FnOnce() -> Result<Picture, String>) -> Result<Picture, String> {
         // An error of the GPU's (out of memory, a lost device) fails the picture; uncaught, wgpu
         // panics.
         let memory = self.device.push_error_scope(wgpu::ErrorFilter::OutOfMemory);
         let valid = self.device.push_error_scope(wgpu::ErrorFilter::Validation);
-        let picture = self.draw(scene, boxes, width, height, rise);
+        let picture = draw();
         let errors = [pollster::block_on(valid.pop()), pollster::block_on(memory.pop())];
         let picture = match errors.into_iter().flatten().next() {
             Some(error) => Err(format!("render: {error}")),
@@ -329,7 +382,19 @@ impl Gpu {
         picture
     }
 
-    fn draw(&self, scene: &Scene, boxes: &Boxes, width: u32, height: u32, rise: f32) -> Result<Picture, String> {
+    /// The picture, resolved into `into` (a live layer's drawable) or read back.
+    fn draw(
+        &self,
+        scene: &Scene,
+        boxes: &Boxes,
+        width: u32,
+        height: u32,
+        rise: f32,
+        into: Option<&wgpu::TextureView>,
+    ) -> Result<Picture, String> {
+        if boxes.base.len() != scene.blocks.len() {
+            return Err("boxes of another scene".into());
+        }
         let prepared = std::time::Instant::now();
         let camera = scene.camera.ok_or("no camera")?;
         let limit = self.device.limits().max_texture_dimension_2d;
@@ -401,7 +466,7 @@ impl Gpu {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &t.samples,
                     depth_slice: None,
-                    resolve_target: Some(&t.into),
+                    resolve_target: Some(into.unwrap_or(&t.into)),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1. }),
                         store: wgpu::StoreOp::Discard,
@@ -422,6 +487,16 @@ impl Gpu {
             pass.draw(0..36, 0..solid_count);
             pass.set_pipeline(&self.glass);
             pass.draw(0..36, solid_count..solid_count + clear.len() as u32);
+        }
+        if into.is_some() {
+            // Straight to the layer: no read back; presented by the caller.
+            drop(kept);
+            let prep_us = prepared.elapsed().as_micros() as u64;
+            let started = std::time::Instant::now();
+            self.queue.submit([encoder.finish()]);
+            let gpu_us = started.elapsed().as_micros() as u64;
+            let picture = Picture { width, height, bgra: Vec::new(), gpu_us, copy_us: 0, prep_us, boxes_us, alloc_us };
+            return Ok(picture);
         }
         encoder.copy_texture_to_buffer(
             t.resolved.as_image_copy(),

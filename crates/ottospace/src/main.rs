@@ -1329,6 +1329,8 @@ struct Workspace {
     typing: Option<typing::Typing>,
     typing_timed: Option<typing::Timed>,
     typing_program: Option<typing::Program>,
+    /// A test run's city under a terminal pane (`city_under`), and that pane's background opacity.
+    city_under: Option<(PaneId, f32)>,
     status_fit: Cell<ottospace_core::status_bar::Fit>,
     status_said: Option<(u64, Option<u64>, bool)>,
     pr_opens: u32,
@@ -2056,6 +2058,7 @@ impl Workspace {
             typing: None,
             typing_timed: None,
             typing_program: None,
+            city_under: None,
             status_fit: Cell::default(),
             status_said: None,
             pr_opens: 0,
@@ -3482,6 +3485,12 @@ impl Workspace {
                 // A test run only (refused above otherwise): the user's bug key, pressed by the test.
                 Request::BugStart => {
                     failure = self.with_origin(Origin::User, |this| this.bug_start(Origin::User, window, cx)).err();
+                    None
+                }
+                // A test run only: a terminal's folder's city under it, its background see-through.
+                Request::CityUnder { pane, opacity } => {
+                    self.city_under = pane.map(|pane| (pane, opacity.clamp(0., 1.)));
+                    cx.notify();
                     None
                 }
                 // A test run only: the Developer command's spin, as the user's.
@@ -7991,6 +8000,18 @@ impl Workspace {
                 move |bounds, _, window, _| terminal::paint(&screen, bounds, cell, has_keys, &underline, window),
             )
             .size_full();
+            // A test run's city under this terminal (`city_under`): its folder's city, then the
+            // pane's background at the opacity asked, then the text.
+            let under = self.city_under.filter(|(pane, _)| *pane == id).map(|(_, opacity)| {
+                let at = ottospace_core::model::city::At::Pane(id);
+                let city = self.render_city(home::Floor::Pane(id), at, div().into_any_element(), cx);
+                let scrim = div().absolute().size_full().bg(gpui::Hsla::from(rgb(theme::BACKGROUND)).opacity(opacity));
+                div().absolute().size_full().child(city).child(scrim)
+            });
+            let grid = match under {
+                Some(under) => div().relative().size_full().child(under).child(grid).into_any_element(),
+                None => grid.into_any_element(),
+            };
             // A copy's cells pulse in the focus colour, over the text.
             let flash =
                 self.clip_lights(id).filter(|(lit, glow)| !lit.cells.is_empty() && *glow > 0.).map(|(lit, glow)| {
@@ -9958,11 +9979,15 @@ impl Render for Workspace {
         // the buttons and the agent chip's badge.
         let centre = f32::from(window.viewport_size().width) - left;
         let room = centre - (TRAFFIC_LIGHTS - left).max(0.) - 140. - self.chip_reserve();
+        // The city's live layers under this window (`city_live_layer`): the background is painted
+        // round them, so they show through; while opaque, as one fill.
+        let around = self.city_background(window);
         div()
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(theme::BACKGROUND))
+            .when(around.is_none(), |root| root.bg(rgb(theme::BACKGROUND)))
+            .children(around)
             .text_color(rgb(theme::TEXT))
             .track_focus(&self.focus)
             .capture_any_mouse_down(cx.listener(Self::overlay_press))
@@ -10421,11 +10446,12 @@ mod tests {
     /// them (see `AGENTS.md`).
     #[test]
     fn the_agent_guide_covers_every_request() {
-        const TESTS_ONLY: [&str; 25] = [
+        const TESTS_ONLY: [&str; 26] = [
             "capture_start",
             "bug_start",
             "city_spin",
             "typing_time",
+            "city_under",
             "repo_add",
             "inspector_fixture",
             "sneak_app_tree",

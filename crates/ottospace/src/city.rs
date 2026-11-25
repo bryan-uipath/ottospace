@@ -319,6 +319,8 @@ struct Key {
     /// step); 0 at rest. Under Reduce Motion (`calm`) a level changes at once.
     detail_at: u64,
     calm: bool,
+    /// Drawn straight to its place's live layer (`city_live_layer`), not read back as an image.
+    live: bool,
 }
 
 impl Key {
@@ -337,13 +339,17 @@ impl Key {
     /// What its layout depends on (`scene::Layout`): not its camera, rise or motion. A camera
     /// move lays nothing out again.
     fn laid(&self) -> Key {
-        Key { rise: 1000, view: [0; 5], moving: false, detail_at: 0, calm: false, ..self.clone() }
+        Key { rise: 1000, view: [0; 5], moving: false, detail_at: 0, calm: false, live: false, ..self.clone() }
     }
 
     /// Rendered at half size while it moves or rises: a quarter of the GPU's work, the copy out
     /// and the upload, stretched for a moment; standing, at full size.
     fn render_size(&self) -> (u32, u32) {
         let (w, h) = self.size;
+        // A live layer draws nothing to copy: full size always.
+        if self.live {
+            return (w, h);
+        }
         if self.moving || self.rise < 1000 { ((w / 2).max(1), (h / 2).max(1)) } else { (w, h) }
     }
 }
@@ -379,6 +385,10 @@ struct Made {
     /// (`Drawn::waits`).
     made_at: Instant,
     painted: bool,
+    /// When its place asked for it: its wait to be shown is timed from then (`Drawn::waits`).
+    asked_at: Instant,
+    /// Presented on its place's live layer: there is no image to paint.
+    live: bool,
     /// Its levels of detail (`lod`): the ladder, and whether a level still changes (or waits to),
     /// so more pictures are asked for until it settles.
     tree: Arc<lod::Tree>,
@@ -565,14 +575,38 @@ pub struct Drawn {
     glimmer_frames: u64,
     /// Pictures no place shows: GPUI keeps each in the window's atlas until it is dropped.
     retired: Vec<Arc<RenderImage>>,
-    /// While a spin runs: its place, and each new picture's wait there from made to painted, in ms.
-    waits: Option<(Floor, Vec<f32>)>,
+    /// While a spin runs: its place, and each new picture's wait there from made to painted and
+    /// from asked to painted, in ms.
+    waits: Option<(Floor, Vec<(f32, f32)>)>,
+    /// Each place's live layer (`city_live_layer`), and the windows made transparent over one.
+    live_views: HashMap<Floor, ottospace_mac::live_layer::LiveLayer>,
+    transparent: HashSet<WindowId>,
+    /// The picture last presented on each place's live layer.
+    presented: HashMap<Floor, Key>,
+    /// Where this frame placed a live layer showing a picture of its own: the only rectangles the
+    /// main window's background leaves open (`background_around`). Emptied each frame.
+    live_shown: HashMap<Floor, Bounds<Pixels>>,
 }
 
 pub type Shared = Rc<RefCell<Drawn>>;
 
 /// A picture asked for by a place.
-type PaintJob = (Floor, Key, Arc<Atlas>);
+type PaintJob = (Floor, Key, Arc<Atlas>, Instant);
+
+/// Each place's live layer as the main thread placed it: its `CAMetalLayer`, held, and its size in
+/// pixels. The picture's thread draws to it (`city_live_layer`).
+pub(crate) type LiveTargets =
+    Arc<std::sync::Mutex<HashMap<Floor, (ottospace_mac::live_layer::MetalLayer, (u32, u32))>>>;
+
+/// What the pictures of the place spinning (`spinning`) did: its layer's presents, each one's wait
+/// from asked to presented and each picture's render (ms).
+#[derive(Default)]
+pub(crate) struct LiveStats {
+    presents: std::sync::atomic::AtomicU64,
+    spinning: std::sync::Mutex<Option<Floor>>,
+    shown: std::sync::Mutex<Vec<f32>>,
+    render: std::sync::Mutex<Vec<f32>>,
+}
 
 /// Renders pictures on a thread of its own, the newest each place asked for only (a camera or a
 /// size that moved on is skipped: `latest_each`). The GPU is opened at the first, or before it
@@ -583,6 +617,9 @@ pub struct Painter {
     pub(crate) bell: Arc<ottospace_mac::wake::Bell>,
     jobs: Sender<PaintJob>,
     made: Receiver<(PaintJob, Option<Result<Made, String>>)>,
+    /// The live layers placed, and what their pictures did.
+    pub(crate) live: LiveTargets,
+    pub(crate) stats: Arc<LiveStats>,
     gpu: Locked<Option<Result<Gpu, String>>>,
     /// The GPU's early opening was started (`warm`): once, never waited on.
     warming: Arc<std::sync::atomic::AtomicBool>,
@@ -618,16 +655,50 @@ impl Painter {
         let mut details = Details::new();
         let bell = Arc::new(ottospace_mac::wake::Bell::default());
         let ring = bell.clone();
+        let (live, stats) = (LiveTargets::default(), Arc::new(LiveStats::default()));
+        let (targets, counted) = (live.clone(), stats.clone());
+        // Each place's surface over its live layer, made on this thread: its layer and size.
+        let mut surfaces: HashMap<Floor, (usize, (u32, u32), wgpu::Surface<'static>)> = HashMap::new();
         let (jobs, made) = latest_each(
             |job: &PaintJob| job.0,
-            move |(floor, key, plan): &PaintJob| {
+            move |(floor, key, plan, asked): &PaintJob| {
                 let mut gpu = lock_gpu(&held);
                 let opened = gpu.get_or_insert_with(open_gpu);
                 // A panic in the GPU's code fails this picture, and the GPU is opened again next time.
                 let picture = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     opened.as_ref().map_err(Clone::clone).and_then(|gpu| {
                         let detail = details.remove(&(*floor, key.plan));
-                        let made = make(gpu, key, plan, &mut last, detail);
+                        let target = (targets.lock().ok())
+                            .and_then(|t| {
+                                // A surface whose layer is gone or replaced goes: each holds its layer.
+                                surfaces
+                                    .retain(|of, (at, ..)| t.get(of).is_some_and(|(l, _)| l.as_ptr() as usize == *at));
+                                t.get(floor).cloned()
+                            })
+                            .filter(|_| key.live);
+                        let surface = match &target {
+                            Some((layer, size)) => {
+                                if !surfaces.contains_key(floor) {
+                                    // SAFETY: `target` holds the layer until the surface holds it.
+                                    let made = unsafe { gpu.live_surface(layer.as_ptr()) }?;
+                                    surfaces.insert(*floor, (layer.as_ptr() as usize, (0, 0), made));
+                                }
+                                let entry = surfaces.get_mut(floor).ok_or("no surface")?;
+                                let size = *size;
+                                if entry.1 != size {
+                                    gpu.configure(&entry.2, size.0, size.1);
+                                    entry.1 = size;
+                                }
+                                Some(&entry.2)
+                            }
+                            None => None,
+                        };
+                        let spun = counted.spinning.lock().is_ok_and(|of| *of == Some(*floor));
+                        let made = make(gpu, key, plan, &mut last, detail, surface, *asked, spun.then_some(&*counted));
+                        // A layer that gave no drawable (resized, lost) gets a new surface next time.
+                        if made.is_err() && target.is_some() {
+                            surfaces.remove(floor);
+                        }
                         made.map(|(made, detail)| {
                             details.retain(|(of, _), _| of != floor);
                             details.insert((*floor, key.plan), detail);
@@ -636,7 +707,8 @@ impl Painter {
                     })
                 }));
                 picture.unwrap_or_else(|_| {
-                    *gpu = None;
+                    // The next GPU makes its own surfaces.
+                    (*gpu, surfaces) = (None, HashMap::new());
                     Err("the render panicked".into())
                 })
             },
@@ -645,7 +717,7 @@ impl Painter {
                 ring.ring();
             },
         );
-        Self { bell, jobs, made, gpu, warming: Arc::default() }
+        Self { bell, jobs, made, live, stats, gpu, warming: Arc::default() }
     }
 
     /// Opens the GPU on a thread of its own, if not yet: a city on show asks before its first
@@ -674,12 +746,16 @@ const KEPT_LAYOUTS: usize = 4;
 pub(crate) const WHEELING: Duration = Duration::from_millis(150);
 
 /// The scene of `plan` and its picture, on the picture's thread.
+#[allow(clippy::too_many_arguments)] // A picture's inputs, its target and what it reports to.
 fn make(
     gpu: &Gpu,
     key: &Key,
     plan: &Arc<Atlas>,
     last: &mut Layouts,
     detail: Option<lod::Detail>,
+    live: Option<&wgpu::Surface<'static>>,
+    asked_at: Instant,
+    stats: Option<&LiveStats>,
 ) -> Result<(Made, lod::Detail), String> {
     let started = Instant::now();
     let (w, h) = key.size;
@@ -716,9 +792,27 @@ fn make(
     }
     let scene_us = started.elapsed().as_micros() as u64;
     let (rw, rh) = key.render_size();
-    let Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us } =
-        gpu.render_boxes(&scene, &boxes, rw, rh, f32::from(key.rise) / 1000.)?;
+    let rise = f32::from(key.rise) / 1000.;
+    let picture = match live {
+        Some(surface) => gpu.render_into(surface, &scene, &boxes, rise)?,
+        None => gpu.render_boxes(&scene, &boxes, rw, rh, rise)?,
+    };
+    let Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us } = picture;
+    // The place spinning: its presents, waits and renders.
+    if let Some(stats) = stats {
+        if live.is_some() {
+            stats.presents.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            if let Ok(mut shown) = stats.shown.lock() {
+                shown.push(asked_at.elapsed().as_secs_f32() * 1e3);
+            }
+        }
+        if let Ok(mut render) = stats.render.lock() {
+            render.push(started.elapsed().as_secs_f32() * 1e3);
+        }
+    }
     let made_at = Instant::now();
+    // A live layer's picture is on its layer already: a pixel stands in for the image.
+    let (width, height, bgra) = if live.is_some() { (1, 1, vec![0; 4]) } else { (width, height, bgra) };
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
     let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
     // Where a picture's time goes, for the bench (`scripts/bench`'s city motion): numbers only.
@@ -776,6 +870,8 @@ fn make(
         used,
         made_at: used,
         painted: false,
+        asked_at,
+        live: live.is_some(),
         tree,
         settling,
     };
@@ -904,8 +1000,8 @@ impl Workspace {
         let exclude: Exclude = crate::config::live().city_exclude.clone().unwrap_or_default().into_iter().collect();
         let mut on_show: HashMap<String, Asked> = HashMap::new();
         let mut floors = HashSet::new();
-        for at in self.model.empty_places() {
-            let Some(city) = self.model.city_at(at) else { continue };
+        for at in self.city_places() {
+            let Some(city) = self.city_for(at) else { continue };
             let floor = self.floor_of(at);
             floors.insert(floor);
             // Read only for a place a frame laid out large enough for a city; a place not laid
@@ -936,7 +1032,7 @@ impl Workspace {
         let hints = self.home.clone();
         let mut drawn = self.city_drawn.borrow_mut();
         let made: Vec<(PaintJob, Option<Result<Made, String>>)> = self.city_painter.made.try_iter().collect();
-        for ((floor, key, _), picture) in made {
+        for ((floor, key, ..), picture) in made {
             drawn.sent.remove(&key);
             redraw = true;
             // Skipped: a newer picture of that place was asked for.
@@ -950,6 +1046,9 @@ impl Workspace {
             drawn.renders += 1;
             match picture {
                 Ok(made) => {
+                    if key.live {
+                        drawn.presented.insert(floor, key.clone());
+                    }
                     if let Some(old) = drawn.pictures.insert(key, made) {
                         drawn.retired.push(old.image);
                     }
@@ -974,12 +1073,25 @@ impl Workspace {
                         (place.rise, place.rise_off, place.newest) = (None, true, None);
                     }
                 }
+                // No drawable from a live layer (covered, resized): asked again, not failed.
+                Err(why) if key.live && why.starts_with(crate::city_gpu::NO_DRAWABLE) => {}
                 // The standing picture failed: the place says why, and none of its frames is asked again.
                 Err(why) => drop(drawn.failed.insert(key, why)),
             }
         }
         // Places gone are forgotten; a picture or failure no place asks for or shows is dropped.
         drawn.places.retain(|floor, _| floors.contains(floor));
+        // A live layer of a place gone (its tab switched away, a pane over it) goes with it, and
+        // the window is drawn again without its rectangle.
+        let views = drawn.live_views.len();
+        drawn.live_views.retain(|floor, _| floors.contains(floor));
+        redraw |= drawn.live_views.len() != views;
+        let Drawn { live_views, presented, live_shown, .. } = &mut *drawn;
+        presented.retain(|floor, _| live_views.contains_key(floor));
+        live_shown.retain(|floor, _| live_views.contains_key(floor));
+        if let Ok(mut targets) = self.city_painter.live.lock() {
+            targets.retain(|floor, _| live_views.contains_key(floor));
+        }
         // A place whose standing picture is made needs no older one (two panes split to one size
         // share a picture made for the other: the first's full-size one is not kept). Not in a
         // rise: its frame shows until the next comes.
@@ -1031,7 +1143,7 @@ impl Workspace {
     /// files or the size changed; one of a folder, lit files and size already made, for another
     /// place, is painted at once.
     pub(crate) fn render_city(&self, floor: Floor, at: At, lattice: AnyElement, cx: &mut Context<Self>) -> AnyElement {
-        let Some(mut city) = self.model.city_at(at) else { return lattice };
+        let Some(mut city) = self.city_for(at) else { return lattice };
         let view = self.eased_view(at, city.view);
         let easing = self.city_ease.get().is_some_and(|(of, ..)| of == at);
         // Its camera moving: the user's drag of it that has moved, a reset easing back, or a
@@ -1098,6 +1210,10 @@ impl Workspace {
         drop(badges);
         let surface = floor.surface(&self.model);
         let (dir, drawn, jobs) = (city.dir.to_string(), self.city_drawn.clone(), self.city_painter.jobs.clone());
+        // Drawn on a live layer of its own: in the main window only (a folded-out one's, not built).
+        let (live_on, main) =
+            (self.model.features.on(ottospace_core::features::Feature::CityLiveLayer), self.main_window);
+        let targets = self.city_painter.live.clone();
         let (home, hints) = (self.home.clone(), self.home.clone());
         let shows = {
             let drawn = drawn.borrow();
@@ -1130,6 +1246,54 @@ impl Workspace {
                     window.refresh();
                 }
                 (place.bounds, place.small, place.measured, place.scale) = (bounds, small, true, scale);
+                // Its live layer under GPUI's view, on its rectangle; the window transparent there.
+                let id = window.window_handle().window_id();
+                let in_main = window.window_handle() == main;
+                let live = live_on && in_main && !small && plan.is_some();
+                held.live_shown.remove(&floor);
+                // The flag turned off: its layer goes, and with no other the window is opaque again.
+                if !live_on && held.live_views.remove(&floor).is_some() {
+                    held.presented.remove(&floor);
+                    if let Ok(mut targets) = targets.lock() {
+                        targets.remove(&floor);
+                    }
+                }
+                if !live_on && held.live_views.is_empty() && held.transparent.remove(&id) {
+                    window.set_background_appearance(gpui::WindowBackgroundAppearance::Opaque);
+                }
+                if live && !held.live_views.contains_key(&floor) {
+                    // SAFETY: this window's own view, alive while it draws.
+                    let made = crate::ns_view(window)
+                        .and_then(|view| unsafe { ottospace_mac::live_layer::LiveLayer::below(view) });
+                    if let Some(layer) = made {
+                        held.live_views.insert(floor, layer);
+                    }
+                }
+                if live && held.transparent.insert(id) {
+                    window.set_background_appearance(gpui::WindowBackgroundAppearance::Transparent);
+                }
+                let live = live && held.live_views.contains_key(&floor);
+                if let Some(layer) = held.live_views.get(&floor) {
+                    let r = rect(bounds).map(f64::from);
+                    // Shown once a picture of its folder is made: the lattice until then. Its
+                    // rectangle opens only while the picture shown is a live one and the layer
+                    // holds a present: never onto an empty layer.
+                    let open = (held.places.get(&floor).and_then(|place| held.picture(place)))
+                        .is_some_and(|made| made.live)
+                        && held.presented.contains_key(&floor);
+                    if live && shows {
+                        layer.place(r, f64::from(scale));
+                    } else {
+                        layer.hide()
+                    }
+                    if let Ok(mut targets) = targets.lock() {
+                        targets.insert(floor, (layer.metal_layer(), (size(w), size(h))));
+                    }
+                    if live && shows && open {
+                        held.live_shown.insert(floor, bounds);
+                    }
+                }
+                let place = held.places.entry(floor).or_default();
                 place.since.get_or_insert_with(Instant::now);
                 let view = [view.yaw, view.pitch, view.zoom, view.pan[0], view.pan[1]].map(f32::to_bits);
                 // `developer.city_frame`: where the fitted city's middle sits, a share of the height.
@@ -1148,6 +1312,7 @@ impl Workspace {
                     moving,
                     detail_at,
                     calm: crate::dial::calm(),
+                    live,
                 });
                 key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
                 // Another folder in the same place (the main window's tab switched): its own first
@@ -1174,8 +1339,12 @@ impl Workspace {
                 // Each picture asked for once: not made, not on its way, not failed. A camera
                 // that moved on leaves the picture of where it was to be skipped (`latest_each`).
                 if let (Some(key), Some(plan)) = (key, plan) {
-                    let new = !held.pictures.contains_key(&key) && !held.failed.contains_key(&key.standing());
-                    if new && held.sent.insert(key.clone()) && jobs.send((floor, key, plan)).is_err() {
+                    // A live picture made already but not the one this place's layer holds (made for
+                    // another place, or before its layer was made again): presented again.
+                    let stale = key.live && held.presented.get(&floor) != Some(&key);
+                    let new =
+                        (!held.pictures.contains_key(&key) || stale) && !held.failed.contains_key(&key.standing());
+                    if new && held.sent.insert(key.clone()) && jobs.send((floor, key, plan, Instant::now())).is_err() {
                         held.sent.clear();
                     }
                 }
@@ -1485,8 +1654,8 @@ impl Workspace {
     /// For the state of a test run: the city of the first empty place on show that draws one
     /// (the main window's tab, else its empty panes by id, else a folded-out tab); null with none.
     pub(crate) fn city_snapshot(&self) -> serde_json::Value {
-        let mut floors: Vec<(Floor, At)> = (self.model.empty_places().into_iter())
-            .filter(|at| self.model.city_at(*at).is_some_and(|city| self.city.held.contains_key(city.dir)))
+        let mut floors: Vec<(Floor, At)> = (self.city_places().into_iter())
+            .filter(|at| self.city_for(*at).is_some_and(|city| self.city.held.contains_key(city.dir)))
             .map(|at| (self.floor_of(at), at))
             .collect();
         floors.sort_by_key(|(floor, _)| match floor {
@@ -1563,6 +1732,10 @@ pub(crate) struct Spin {
     frames: Vec<f32>,
     repeats: usize,
     shown: Option<Key>,
+    /// Its city on a live layer: a frame shows a new picture when the layer presented one since
+    /// the frame before (`LiveStats::presents`), else when GPUI painted a new image.
+    live: bool,
+    presents: u64,
 }
 
 /// A spin's numbers, as the toast, the event log and a test run's state give them: no name or path.
@@ -1580,10 +1753,21 @@ pub(crate) struct Spun {
     pub(crate) over_33: usize,
     /// Frames that showed the same picture as the frame before, while the camera turned.
     pub(crate) repeats: usize,
-    /// A new picture's wait from made to painted (ms): median, p95 and the longest.
+    /// A new picture's wait from made to painted (ms): median, p95 and the longest. None on a live
+    /// layer: presented as made.
     pub(crate) wait_p50: f32,
     pub(crate) wait_p95: f32,
     pub(crate) wait_max: f32,
+    /// A new picture's wait from its place asking (the step's frame) to it being shown: painted
+    /// by GPUI, or presented on the live layer (ms): median, p95 and p99.
+    pub(crate) shown_p50: f32,
+    pub(crate) shown_p95: f32,
+    pub(crate) shown_p99: f32,
+    /// Each picture's render on its thread (ms): median and p95.
+    pub(crate) render_p50: f32,
+    pub(crate) render_p95: f32,
+    /// Drawn on a live layer (`city_live_layer`), not painted as an image.
+    pub(crate) live: bool,
     pub(crate) boxes: usize,
 }
 
@@ -1595,7 +1779,7 @@ impl Workspace {
             return;
         }
         // In the main window: its frames time the spin.
-        let places = self.model.empty_places().into_iter().map(|at| (self.floor_of(at), at));
+        let places = self.city_places().into_iter().map(|at| (self.floor_of(at), at));
         let first = places.filter(|(floor, _)| !matches!(floor, Floor::Out(_))).find(|(floor, _)| {
             let drawn = self.city_drawn.borrow();
             drawn.places.get(floor).is_some_and(|place| drawn.picture(place).is_some())
@@ -1606,7 +1790,33 @@ impl Workspace {
         };
         self.dispatch(Action::CityCamera { at, step: CameraStep::Grab }, origin, window, cx);
         self.city_drawn.borrow_mut().waits = Some((floor, Vec::new()));
-        let spin = Spin { floor, at, step: 0, asked: false, last: None, frames: Vec::new(), repeats: 0, shown: None };
+        // On its live layer: the picture shown was presented there.
+        let live = {
+            let drawn = self.city_drawn.borrow();
+            drawn.places.get(&floor).and_then(|place| drawn.picture(place)).is_some_and(|made| made.live)
+        };
+        let stats = &self.city_painter.stats;
+        for list in [&stats.shown, &stats.render] {
+            if let Ok(mut list) = list.lock() {
+                list.clear();
+            }
+        }
+        if let Ok(mut spinning) = stats.spinning.lock() {
+            *spinning = Some(floor);
+        }
+        let presents = stats.presents.load(std::sync::atomic::Ordering::Relaxed);
+        let spin = Spin {
+            floor,
+            at,
+            step: 0,
+            asked: false,
+            last: None,
+            frames: Vec::new(),
+            repeats: 0,
+            shown: None,
+            live,
+            presents,
+        };
         self.city_spin = Some(spin);
         cx.notify();
     }
@@ -1634,13 +1844,15 @@ impl Workspace {
         }
         spin.last = Some(now);
         let shown = self.city_drawn.borrow().places.get(&spin.floor).and_then(|place| place.shown.clone());
+        let presents = self.city_painter.stats.presents.load(std::sync::atomic::Ordering::Relaxed);
         // The frame before showed what the one before it did: the turn stood still on screen.
-        if spin.step > 1 && shown.is_some() && shown == spin.shown {
+        let same = if spin.live { presents == spin.presents } else { shown.is_some() && shown == spin.shown };
+        if spin.step > 1 && same {
             spin.repeats += 1;
         }
-        spin.shown = shown;
+        (spin.shown, spin.presents) = (shown, presents);
         // Its city covered (a pane opened over it) or gone: stopped, not done.
-        if self.model.city_at(spin.at).is_none() {
+        if self.city_for(spin.at).is_none() {
             return self.city_spin_end(spin, false, window, cx);
         }
         if spin.step == SPIN_STEPS {
@@ -1659,8 +1871,21 @@ impl Workspace {
         self.dispatch(Action::CityCamera { at: spin.at, step: CameraStep::Cancel }, Origin::User, window, cx);
         let mut frames = spin.frames;
         frames.sort_by(f32::total_cmp);
-        let mut waits = self.city_drawn.borrow_mut().waits.take().map(|(_, waits)| waits).unwrap_or_default();
+        let painted = self.city_drawn.borrow_mut().waits.take().map(|(_, waits)| waits).unwrap_or_default();
+        let stats = &self.city_painter.stats;
+        if let Ok(mut spinning) = stats.spinning.lock() {
+            *spinning = None;
+        }
+        let taken =
+            |list: &std::sync::Mutex<Vec<f32>>| list.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default();
+        let (mut waits, mut shown): (Vec<f32>, Vec<f32>) = painted.into_iter().unzip();
+        if spin.live {
+            shown = taken(&stats.shown);
+        }
         waits.sort_by(f32::total_cmp);
+        shown.sort_by(f32::total_cmp);
+        let mut render = taken(&stats.render);
+        render.sort_by(f32::total_cmp);
         let boxes = {
             let drawn = self.city_drawn.borrow();
             drawn
@@ -1685,6 +1910,12 @@ impl Workspace {
             wait_p50: rank(&waits, 50),
             wait_p95: rank(&waits, 95),
             wait_max: waits.last().copied().unwrap_or(0.),
+            shown_p50: rank(&shown, 50),
+            shown_p95: rank(&shown, 95),
+            shown_p99: rank(&shown, 99),
+            render_p50: rank(&render, 50),
+            render_p95: rank(&render, 95),
+            live: spin.live,
             boxes,
         };
         let text = format!(
@@ -1709,6 +1940,75 @@ impl Workspace {
         let Some(spin) = self.city_spin.take_if(|_| self.input == Origin::User) else { return false };
         self.city_spin_end(spin, false, window, cx);
         true
+    }
+}
+
+/// The window's background, painted everywhere but the rectangles this frame's live layers show
+/// in (`Drawn::live_shown`, read as it paints: after every place placed its layer), behind the
+/// rest of its content: a live layer shows through them, and nothing else does.
+fn background_around(drawn: Shared) -> AnyElement {
+    canvas(
+        |_, _, _| (),
+        move |bounds, _, window, _| {
+            let holes: Vec<Bounds<Pixels>> = drawn.borrow().live_shown.values().copied().collect();
+            let colour = Hsla::from(rgb(theme::BACKGROUND));
+            // Bands between the holes' top and bottom edges; in each, the spans no hole covers.
+            let mut ys: Vec<Pixels> = holes.iter().flat_map(|h| [h.top(), h.bottom()]).collect();
+            ys.extend([bounds.top(), bounds.bottom()]);
+            ys.sort_by(|a, b| f32::from(*a).total_cmp(&f32::from(*b)));
+            ys.dedup();
+            for band in ys.windows(2) {
+                let (top, bottom) = (band[0].max(bounds.top()), band[1].min(bounds.bottom()));
+                if bottom <= top {
+                    continue;
+                }
+                let mut covered: Vec<(Pixels, Pixels)> = (holes.iter())
+                    .filter(|h| h.top() <= top && h.bottom() >= bottom)
+                    .map(|h| (h.left(), h.right()))
+                    .collect();
+                covered.sort_by(|a, b| f32::from(a.0).total_cmp(&f32::from(b.0)));
+                let mut x = bounds.left();
+                for (left, right) in covered.into_iter().chain([(bounds.right(), bounds.right())]) {
+                    if left > x {
+                        window.paint_quad(fill(Bounds::from_corners(point(x, top), point(left, bottom)), colour));
+                    }
+                    x = x.max(right);
+                }
+            }
+        },
+    )
+    .absolute()
+    .size_full()
+    .into_any_element()
+}
+
+impl Workspace {
+    /// The places that draw a city: the empty ones, and in a test run the pane a city stands
+    /// under (`city_under`).
+    pub(crate) fn city_places(&self) -> Vec<At> {
+        let mut places = self.model.empty_places();
+        places.extend(self.city_under.map(|(pane, _)| At::Pane(pane)).filter(|at| !places.contains(at)));
+        places
+    }
+
+    /// The city `at` draws: an empty place's, or the one under a test run's pane.
+    pub(crate) fn city_for(&self, at: At) -> Option<ottospace_core::model::city::City<'_>> {
+        let under = |pane| self.city_under.filter(|(of, _)| *of == pane).and_then(|_| self.model.city_under(pane));
+        self.model.city_at(at).or_else(|| match at {
+            At::Pane(pane) => under(pane),
+            At::Tab(_) => None,
+        })
+    }
+
+    /// The main window's background while a live layer made it transparent (`city_live_layer`):
+    /// painted round the rectangles this frame's places open (`Drawn::live_shown`). None while
+    /// opaque: the root fills as ever.
+    pub(crate) fn city_background(&self, window: &Window) -> Option<AnyElement> {
+        let mut drawn = self.city_drawn.borrow_mut();
+        // Opened again by this frame's places, as they place their layers.
+        drawn.live_shown.clear();
+        let transparent = drawn.transparent.contains(&window.window_handle().window_id());
+        transparent.then(|| background_around(self.city_drawn.clone()))
     }
 }
 
@@ -1801,9 +2101,15 @@ fn paint(
     let shown = made.key.clone();
     // Its first paint: a picture shown again (kept, a tab come back) is no new one.
     let new = !made.painted;
+    let live_made = made.live;
     let wait = made.made_at.elapsed().as_secs_f32() * 1e3;
+    // From its place asking to its first paint: the wait a turn's step has to be seen.
+    let asked = made.asked_at.elapsed().as_secs_f32() * 1e3;
     let painted = Instant::now();
-    let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
+    // A live layer's picture is under the window, seen through its transparent rectangle.
+    if !made.live {
+        let _ = window.paint_image(bounds, Corners::default(), made.image.clone(), 0, false);
+    }
     let us = painted.elapsed().as_micros() as u64;
     crate::trace::record("city_paint", serde_json::json!({ "us": us, "new": new, "wait_us": (wait * 1e3) as u64 }));
 
@@ -1941,8 +2247,9 @@ fn paint(
         window.request_animation_frame();
     }
     drawn.paints += 1;
-    if let Some((_, waits)) = drawn.waits.as_mut().filter(|(of, _)| new && *of == floor) {
-        waits.push(wait);
+    // A live layer's pictures are timed where they are presented (`LiveStats`).
+    if let Some((_, waits)) = drawn.waits.as_mut().filter(|(of, _)| new && !live_made && *of == floor) {
+        waits.push((wait, asked));
     }
     drawn.beam_frames += u64::from(fades);
     drawn.fade_frames += u64::from(fading_in);
@@ -2579,6 +2886,7 @@ mod tests {
             moving: false,
             detail_at: 0,
             calm: false,
+            live: false,
         };
         // The one-off stages apart: layout, folder colours, boxes (as `make` does them once).
         let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
@@ -2600,7 +2908,7 @@ mod tests {
         set(&mut key, view);
         let skip = crate::trace::jsonl().lines().count();
         let at_rest = Instant::now();
-        let (first, mut detail) = make(gpu, &key, plan, &mut last, None).unwrap();
+        let (first, mut detail) = make(gpu, &key, plan, &mut last, None, None, Instant::now(), None).unwrap();
         let rest_ms = ms(at_rest);
         let blocks = first.scene.blocks.len();
         let districts = first.scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).count();
@@ -2654,7 +2962,7 @@ mod tests {
             view = view.orbited(1.5, 0.);
             set(&mut key, view);
             let started = Instant::now();
-            let (made, next) = make(gpu, &key, plan, &mut last, Some(detail)).unwrap();
+            let (made, next) = make(gpu, &key, plan, &mut last, Some(detail), None, Instant::now(), None).unwrap();
             detail = next;
             let total = ms(started);
             // Boxes shown or hidden by a level of detail since the last picture: none in a turn.
@@ -2691,7 +2999,7 @@ mod tests {
         for _ in 0..60 {
             view = view.orbited(1.5, 0.);
             set(&mut key, view);
-            detail = make(gpu, &key, plan, &mut last, Some(detail)).unwrap().1;
+            detail = make(gpu, &key, plan, &mut last, Some(detail), None, Instant::now(), None).unwrap().1;
         }
         let trace = crate::trace::jsonl();
         let opaque: Vec<f64> = (trace.lines().skip(skip))
@@ -2755,6 +3063,7 @@ mod tests {
             moving: false,
             detail_at: 0,
             calm: false,
+            live: false,
         };
         let mut last = Layouts::new();
         let mut detail = None;
@@ -2764,7 +3073,7 @@ mod tests {
         for frame in 0..200 {
             view.zoom = 0.985f32.powi(frame);
             key.view = [view.yaw, view.pitch, view.zoom, view.pan[0], view.pan[1]].map(f32::to_bits);
-            let (made, next) = make(&gpu, &key, &plan, &mut last, detail.take()).unwrap();
+            let (made, next) = make(&gpu, &key, &plan, &mut last, detail.take(), None, Instant::now(), None).unwrap();
             detail = Some(next);
             let rects: Vec<[f32; 4]> =
                 made.scene.blocks.iter().map(|b| [b.min[0], b.min[2], b.max[0], b.max[2]]).collect();

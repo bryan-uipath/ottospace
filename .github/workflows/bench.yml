@@ -68,6 +68,7 @@ jobs:
         env:
           EVENT: ${{ github.event_name }}
           LARGE: ${{ contains(github.event.pull_request.labels.*.name, 'pr-bench-large') }}
+          RELEASE: ${{ contains(github.event.pull_request.labels.*.name, 'pr-bench-release') }}
         run: |
           if [ "$EVENT" = pull_request ]; then
             base="$(git rev-parse HEAD^1)"
@@ -81,6 +82,8 @@ jobs:
           # A hosted runner's launches vary 3x (345 to 1090 ms): more of them than the default 10 and 5.
           # The label pr-bench-large adds the code city's spins of 50,000 to 600,000 files.
           if [ "$LARGE" = true ]; then set -- "$@" --city-large; fi
+          # The label pr-bench-release builds both sides in release, as the app ships.
+          if [ "$RELEASE" = true ]; then set -- "$@" --release; fi
           scripts/bench "$@" --runs 20 --cold-runs 10 --out "$RUNNER_TEMP/bench" || status=$?
           { echo "## Bench"; echo; cat "$RUNNER_TEMP/bench/bench.md" 2>/dev/null || echo "No results: see the log."; } \
             >> "$GITHUB_STEP_SUMMARY"

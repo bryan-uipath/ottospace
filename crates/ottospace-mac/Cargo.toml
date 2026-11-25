@@ -15,11 +15,13 @@ objc2-core-foundation = { version = "0.3", features = ["CFString", "CFLocale", "
 objc2-application-services = { version = "0.3", features = ["HIServices", "AXUIElement", "AXError", "AXValue", "AXValueConstants"] }
 # macos_14_0: one-off screenshots (corner radius measurement).
 screencapturekit = { version = "11", features = ["macos_14_0"] }
-objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "block2", "NSRunningApplication", "NSResponder", "NSEvent", "NSScreen", "NSView", "NSWindow", "NSApplication", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "NSGraphics", "NSWorkspace", "NSAccessibility", "NSPasteboard", "NSPasteboardItem", "objc2-core-graphics", "NSBezierPath", "NSColor", "NSFont", "NSStringDrawing", "NSAttributedString", "NSControl", "NSButton", "NSCell", "NSSound", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSMenu", "NSMenuItem", "objc2-core-foundation"] }
+objc2-app-kit = { version = "0.3", default-features = false, features = ["std", "libc", "block2", "NSRunningApplication", "NSResponder", "NSEvent", "NSScreen", "NSView", "NSWindow", "NSApplication", "NSImage", "NSImageRep", "NSBitmapImageRep", "NSGraphicsContext", "NSGraphics", "NSWorkspace", "NSAccessibility", "NSPasteboard", "NSPasteboardItem", "objc2-core-graphics", "NSBezierPath", "NSColor", "NSFont", "NSStringDrawing", "NSAttributedString", "NSControl", "NSButton", "NSCell", "NSSound", "NSStatusBar", "NSStatusItem", "NSStatusBarButton", "NSMenu", "NSMenuItem", "objc2-core-foundation", "objc2-quartz-core"] }
 # ⌘⌘'s event monitor takes a block.
 block2 = "0.6"
 # The Dock icon is handed to AppKit as NSData.
 objc2 = "0.6"
+# The code city's live layer (`live_layer`): a Metal layer under GPUI's view. Already in the lock (wgpu-hal).
+objc2-quartz-core = { version = "0.3", default-features = false, features = ["std", "CALayer", "CAMetalLayer", "objc2-core-foundation"] }
 objc2-foundation = { version = "0.3", default-features = false, features = ["std", "NSArray", "NSData", "NSDictionary", "NSEnumerator", "NSError", "NSGeometry", "NSPropertyList", "NSString", "NSURL"] }
 # App icons are drawn to a CGImage, then encoded as PNG. CGEvent: a test run's wheel and held-key
 # events, made and never posted, and the pointer's place; CGEventSource: when the last scroll, click or key came.

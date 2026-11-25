@@ -115,6 +115,7 @@ THRESHOLDS = [
 # Past these, whatever the base: the app's own share of a key's latency (p99, ms) stays under one
 # 120 Hz frame (`ottospace_core::typing::APP_BUDGET_MS`).
 CEILINGS = [("typing_app_p99_ms", 8.3), ("typing_busy_app_p99_ms", 8.3), ("typing_full_app_p99_ms", 8.3)]
+LIVE_REPEATS = 12
 LIMITS = ("startup median +20% and +50 ms; RSS +25% and +10 MB; idle CPU above 2% of a core and +1 point; "
           "code city +25% and +100 ms (20,000 files: +150 ms); "
           "a spin of 9,500 files: a new picture's wait p50 +25% and +3 ms, repeated frames above 24 and +24; "
@@ -448,15 +449,23 @@ SPINS = [(9500, 900, 8)]
 LARGE = [(50000, 6800, 9), (60000, 8160, 9), (200000, 27200, 9), (600000, 81600, 9)]
 
 
-def city_spin(binary, scratch, files, folders, deepest):
+def city_spin(binary, scratch, files, folders, deepest, live=False):
     """The Developer command's spin of a made-up repository (`shot.made_up_repo`) at CI's window:
     the app's own numbers (`city.spin.result`) and, from the trace, each stage's median and p95.
     None: a build with no spin, or no city (too many files)."""
     tree = os.path.realpath(os.path.join(scratch, f"repo-{files}"))
     if not os.path.isdir(tree):
         shot.made_up_repo(tree, files, folders, deepest, empty=files > 10000)
-    env = {"OTTOSPACE_FEATURES": "code_city", "GIT_CONFIG_GLOBAL": "/dev/null", "OTTOSPACE_E2E_WINDOW": "1024x674"}
-    inst = launch(binary, env)
+    # `live`: drawn on its live layer (`city_live_layer`); a build with no such flag draws none.
+    features = "code_city,city_live_layer" if live else "code_city"
+    env = {"OTTOSPACE_FEATURES": features, "GIT_CONFIG_GLOBAL": "/dev/null", "OTTOSPACE_E2E_WINDOW": "1024x674"}
+    try:
+        inst = launch(binary, env)
+    except Failed:
+        # A build that knows no such flag refuses to start: no live path to spin.
+        if live:
+            return None
+        raise
     last = lambda: max([e.get("ms", 0) for e in trace_events(inst)] or [0])
     try:
         inst.ok({"cmd": "repo_add", "path": tree})
@@ -612,14 +621,17 @@ def bench(sides, args, scratch):
     }
     say(f"code city spun ({MOTION_RUNS} runs a side) ...")
     sizes = SPINS + (LARGE if args.city_large else [])
-    spins = {name: {size[0]: [] for size in sizes} for name in names}
+    # Each side spun on both paths: the picture painted by GPUI (off) and its live layer (on).
+    spins = {name: {(size[0], live): [] for size in sizes for live in (False, True)} for name in names}
     for i in range(MOTION_RUNS):
         for name in order_of(names, i):
             for size in sizes:
-                # A size a side drew no city for once (past its limit) is not tried again.
-                if i and spins[name][size[0]] and spins[name][size[0]][-1] is None:
-                    continue
-                spins[name][size[0]].append(city_spin(sides[name], scratch, *size))
+                for live in (False, True):
+                    # A size or path a side drew no city for once (past its limit, no flag) is not tried again.
+                    done = spins[name][(size[0], live)]
+                    if i and done and done[-1] is None:
+                        continue
+                    done.append(city_spin(sides[name], scratch, *size, live=live))
     say("typing ...")
     typed = {name: {kind: typing(sides[name], full, busy) for kind, full, busy in TYPING} for name in names}
     result = {}
@@ -628,9 +640,10 @@ def bench(sides, args, scratch):
         result[name] = {**startup_stats(raw[name]), **{k: v if v is None else round(v, 2) for k, v in long_run(sides[name]).items()}}
         result[name].update({f"city_{files}_ms": stats(runs) for files, runs in cities[name].items()})
         result[name]["motion"] = motion[name]
-        spun = {files: [r for r in rs if r] for files, rs in spins[name].items()}
-        result[name]["spin"] = {files: median_of(rs) if rs else None for files, rs in spun.items()}
-        if spun.get(9500):
+        spun = {key: [r for r in rs if r] for key, rs in spins[name].items()}
+        result[name]["spin"] = {files: median_of(rs) if rs else None for (files, live), rs in spun.items() if not live}
+        result[name]["spin_live"] = {files: median_of(rs) if rs else None for (files, live), rs in spun.items() if live}
+        if spun.get((9500, False)):
             result[name]["spin_9500_p99_ms"] = result[name]["spin"][9500]["p99"]
             result[name]["spin_9500_over_33"] = result[name]["spin"][9500]["over_33"]
             result[name]["spin_9500_repeats"] = result[name]["spin"][9500]["repeats"]
@@ -641,6 +654,9 @@ def bench(sides, args, scratch):
                 pre = "typing" if kind == "idle" else f"typing_{kind}"
                 result[name][f"{pre}_total_p99_ms"] = t["total"]["p99"]
                 result[name][f"{pre}_app_p99_ms"] = t["app"]["p99"]
+        if spun.get((9500, True)):
+            result[name]["spin_live_9500_repeats"] = result[name]["spin_live"][9500]["repeats"]
+        result[name]["release"] = args.release
     return result, sorted(held)
 
 
@@ -709,6 +725,11 @@ def regressions(before, after, held):
     keys = [k for k, *_ in THRESHOLDS if k in held or (not k.startswith("startup_") and k in past(before, after))]
     found = [f"{k}: {value(before, k):.1f} → {value(after, k):.1f}" for k in keys]
     found += [f"{k}: {after[k]:.1f} ms, past {limit} ms" for k, limit in CEILINGS if (after.get(k) or 0) > limit]
+    # The live layer in a release build: a new picture each display refresh, a turn's frames
+    # repeating none but a few (a debug build's picture thread is too slow to hold it).
+    live = after.get("spin_live_9500_repeats")
+    if after.get("release") and live is not None and live > LIVE_REPEATS:
+        found.append(f"spin_live_9500_repeats: {live:.0f} (at most {LIVE_REPEATS} in a release build)")
     # A spin the base made and this side did not (no city, a failed spin): never a pass by absence.
     if "spin_9500_p99_ms" in before and "spin_9500_p99_ms" not in after:
         found.append("spin_9500: the base spun, this side did not")
@@ -740,18 +761,23 @@ def spin_table(result):
     """The spins, each side and size: the app's frames, then each stage per picture."""
     f = lambda v, d=1: "—" if v is None else f"{v:.{d}f}"
     lines = ["", f"Code city spun once round (240 steps, a step a frame), at 1024×674, the median of {MOTION_RUNS} runs a side "
-             "(frame: from one frame to the next; repeated: frames that showed the picture the frame before did; wait: a new "
-             "picture from made to painted; CPU frame: render to paint on the main thread; upload: a new picture into GPUI's atlas):", "",
-             "| side | files | frames | mean | p50 | p95 | p99 | max | over 16.7 | over 33 | repeated | wait p50 / p95 / max | CPU frame p50 / p95 | pictures | boxes / textures / GPU (p95) / copy out (p95) / image (ms) | upload p50 / p95 |",
-             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
-    for name, side in result.items():
-        for files, m in (side.get("spin") or {}).items():
+             "on both paths: the picture painted by GPUI as an image, and the city's live layer (`city_live_layer`) "
+             "(frame: from one frame to the next; repeated: frames with no new picture since the frame before (a new image "
+             "painted, or a present on the layer); wait: a new picture from made to painted (the image path's); shown: a step's "
+             "picture from its place asking to it shown (painted, or presented); render: each picture on its thread; CPU frame: render to paint on the main thread; upload: a new picture into GPUI's atlas):", "",
+             "| side, path | files | frames | mean | p50 | p95 | p99 | max | over 16.7 | over 33 | repeated | wait p50 / p95 / max | shown p50 / p95 / p99 | render p50 / p95 | CPU frame p50 / p95 | pictures | boxes / textures / GPU (p95) / copy out (p95) / image (ms) | upload p50 / p95 |",
+             "|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|---|"]
+    rows = [(f"{name}, {path}", files, m) for name, side in result.items()
+            for path, key in (("image", "spin"), ("live layer", "spin_live")) for files, m in (side.get(key) or {}).items()]
+    for name, files, m in rows:
             if m is None:
-                lines.append(f"| {name} | {files:,} | no city or no spin |" + " |" * 13)
+                lines.append(f"| {name} | {files:,} | no city or no spin |" + " |" * 15)
                 continue
             lines.append(
                 f"| {name} | {files:,} | {f(m['frames'], 0)} | {f(m['mean'])} | {f(m['p50'])} | {f(m['p95'])} | {f(m['p99'])} | {f(m['max'])} | "
                 f"{f(m['over_16'], 0)} | {f(m['over_33'], 0)} | {f(m['repeats'], 0)} | {f(m['wait_p50'])} / {f(m['wait_p95'])} / {f(m['wait_max'])} | "
+                f"{f(m.get('shown_p50'))} / {f(m.get('shown_p95'))} / {f(m.get('shown_p99'))} | "
+                f"{f(m.get('render_p50'))} / {f(m.get('render_p95'))} | "
                 f"{f(m.get('cpu_frame_ms'))} / {f(m.get('cpu_frame_p95'))} | {f(m.get('pictures'), 0)} | "
                 f"{f(m.get('boxes_ms'))} / {f(m.get('alloc_ms'))} / {f(m.get('gpu_ms'))} ({f(m.get('gpu_p95'))}) / {f(m.get('copy_ms'))} ({f(m.get('copy_p95'))}) / {f(m.get('image_ms'))} | "
                 f"{f(m.get('upload_ms'))} / {f(m.get('upload_p95'))} |")

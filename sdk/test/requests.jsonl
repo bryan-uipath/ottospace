@@ -70,6 +70,7 @@
 {"cmd":"bug_start"}
 {"cmd":"city_spin"}
 {"cmd":"typing_time","full":true,"busy":true}
+{"cmd":"city_under","pane":1,"opacity":0.85}
 {"cmd":"inspector_fixture","app":"Fixture","tree":{"root":{"role":"AXWindow","children":[{"role":"AXButton","actions":["AXPress"]}]},"count":2,"truncated":{"depth":false,"nodes":false,"timeout":false}}}
 {"cmd":"task_brief","id":1}
 {"cmd":"ax_tree","pane":1,"depth":20,"nodes":500}
