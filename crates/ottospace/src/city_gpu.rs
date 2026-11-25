@@ -170,9 +170,15 @@ struct Kept {
 struct Targets {
     size: (u32, u32),
     samples: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    /// Made at the first picture read back: a live layer's resolve into its drawable need none.
+    back: Option<Back>,
+}
+
+/// The resolved colour and its read buffer (rows padded to 256 bytes): 63 MB at 4K.
+struct Back {
     resolved: wgpu::Texture,
     into: wgpu::TextureView,
-    depth: wgpu::TextureView,
     read: wgpu::Buffer,
     row: u32,
 }
@@ -409,6 +415,9 @@ impl Gpu {
         if kept.targets.as_ref().is_none_or(|t| t.size != (width, height)) {
             kept.targets = Some(targets(device, size));
         }
+        if let Some(t) = kept.targets.as_mut().filter(|t| into.is_none() && t.back.is_none()) {
+            t.back = Some(back(device, size));
+        }
         let mut alloc_us = allocating.elapsed().as_micros() as u64;
 
         // The frame: the camera, the eye, the fog (from a bit before the target to far past it,
@@ -456,7 +465,7 @@ impl Gpu {
         }
         alloc_us += allocating.elapsed().as_micros() as u64;
         let (Some(t), Some(instances)) = (&kept.targets, &kept.instances) else { return Err("no targets".into()) };
-        let (row, read) = (t.row, t.read.clone());
+        let resolve = into.or(t.back.as_ref().map(|b| &b.into)).ok_or("no target to resolve into")?;
         self.queue.write_buffer(instances, 0, &bytes_of);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
@@ -466,7 +475,7 @@ impl Gpu {
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &t.samples,
                     depth_slice: None,
-                    resolve_target: Some(into.unwrap_or(&t.into)),
+                    resolve_target: Some(resolve),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color { r, g, b, a: 1. }),
                         store: wgpu::StoreOp::Discard,
@@ -498,8 +507,10 @@ impl Gpu {
             let picture = Picture { width, height, bgra: Vec::new(), gpu_us, copy_us: 0, prep_us, boxes_us, alloc_us };
             return Ok(picture);
         }
+        let Some(Back { resolved, read, row, .. }) = &t.back else { return Err("no read back".into()) };
+        let (row, read) = (*row, read.clone());
         encoder.copy_texture_to_buffer(
-            t.resolved.as_image_copy(),
+            resolved.as_image_copy(),
             wgpu::TexelCopyBufferInfo {
                 buffer: &read,
                 layout: wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(row), rows_per_image: None },
@@ -531,23 +542,21 @@ impl Gpu {
     }
 }
 
-/// A picture's targets: multisampled colour and depth, the resolved colour, and its read buffer
-/// (rows padded to 256 bytes).
+/// A picture's targets: multisampled colour and depth.
 fn targets(device: &wgpu::Device, size: wgpu::Extent3d) -> Targets {
-    let texture = |format, samples, usage| {
-        device.create_texture(&wgpu::TextureDescriptor {
-            label: None,
-            size,
-            mip_level_count: 1,
-            sample_count: samples,
-            dimension: wgpu::TextureDimension::D2,
-            format,
-            usage,
-            view_formats: &[],
-        })
-    };
     let target = wgpu::TextureUsages::RENDER_ATTACHMENT;
-    let resolved = texture(FORMAT, 1, target | wgpu::TextureUsages::COPY_SRC);
+    Targets {
+        size: (size.width, size.height),
+        samples: texture(device, size, FORMAT, SAMPLES, target).create_view(&Default::default()),
+        depth: texture(device, size, DEPTH, SAMPLES, target).create_view(&Default::default()),
+        back: None,
+    }
+}
+
+/// A picture's resolved colour and its read buffer, for a picture read back.
+fn back(device: &wgpu::Device, size: wgpu::Extent3d) -> Back {
+    let usage = wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC;
+    let resolved = texture(device, size, FORMAT, 1, usage);
     let row = (size.width * 4).div_ceil(wgpu::COPY_BYTES_PER_ROW_ALIGNMENT) * wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
     let read = device.create_buffer(&wgpu::BufferDescriptor {
         label: None,
@@ -555,15 +564,26 @@ fn targets(device: &wgpu::Device, size: wgpu::Extent3d) -> Targets {
         usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
         mapped_at_creation: false,
     });
-    Targets {
-        size: (size.width, size.height),
-        samples: texture(FORMAT, SAMPLES, target).create_view(&Default::default()),
-        into: resolved.create_view(&Default::default()),
-        depth: texture(DEPTH, SAMPLES, target).create_view(&Default::default()),
-        resolved,
-        read,
-        row,
-    }
+    Back { into: resolved.create_view(&Default::default()), resolved, read, row }
+}
+
+fn texture(
+    device: &wgpu::Device,
+    size: wgpu::Extent3d,
+    format: wgpu::TextureFormat,
+    samples: u32,
+    usage: wgpu::TextureUsages,
+) -> wgpu::Texture {
+    device.create_texture(&wgpu::TextureDescriptor {
+        label: None,
+        size,
+        mip_level_count: 1,
+        sample_count: samples,
+        dimension: wgpu::TextureDimension::D2,
+        format,
+        usage,
+        view_formats: &[],
+    })
 }
 
 fn instance(block: &Block, delay: f32, tint: Option<(u32, u32)>, alpha: f32) -> [f32; 16] {
@@ -724,6 +744,25 @@ pub(crate) mod tests {
         drop(gpu.render_boxes(&other, &boxes, 160, 100, 1.).unwrap());
         let kept = gpu.render_boxes(&scene, &boxes, 320, 200, 1.).unwrap();
         assert!(kept.bgra == fresh.bgra, "the kept picture differs");
+    }
+
+    /// A picture drawn straight into a target (a live layer's drawable) makes no read back: at 4K
+    /// its texture and buffer are 63 MB. The next picture read back makes them, and matches.
+    #[test]
+    fn a_picture_drawn_into_a_target_makes_no_read_back() {
+        let Ok(gpu) = Gpu::new() else { return eprintln!("no GPU: skipped") };
+        let files: Vec<(String, u64)> = (0..300).map(|i| (format!("d{}/f{i}.rs", i % 5), 300 + i * 97)).collect();
+        let plan = atlas::atlas(&atlas::repo(&files));
+        let scene = ottospace_core::scene::scene(&plan, &[], 1.6, &View::default());
+        let boxes = Boxes::new(&scene, true);
+        let size = wgpu::Extent3d { width: 320, height: 200, depth_or_array_layers: 1 };
+        let drawable = texture(&gpu.device, size, FORMAT, 1, wgpu::TextureUsages::RENDER_ATTACHMENT);
+        let view = drawable.create_view(&Default::default());
+        gpu.checked(|| gpu.draw(&scene, &boxes, 320, 200, 1., Some(&view))).unwrap();
+        assert!(gpu.kept.borrow().targets.as_ref().is_some_and(|t| t.back.is_none()), "a read back was made");
+        let read = gpu.render_boxes(&scene, &boxes, 320, 200, 1.).unwrap();
+        assert!(gpu.kept.borrow().targets.as_ref().is_some_and(|t| t.back.is_some()));
+        assert!(read.bgra == gpu.render(&scene, 320, 200, 1., true).unwrap().bgra, "the picture differs");
     }
 
     /// A 32-bit BMP, top row first: enough to look at a picture.
