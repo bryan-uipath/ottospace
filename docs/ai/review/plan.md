@@ -118,7 +118,17 @@ Every action has an `Origin`: only the user opens a PR in the browser or sends n
 Slices 1 to 3 need nothing of #481/#485. The changes layer is independent of strata: they share
 the city's colour path, not its reader.
 
-## Questions for the owner (each with my pick)
+## Decided (the owner, 2026-11-25)
+
+1. The PR under review is checked out: a worktree. No fetch, no `gh pr diff`.
+2. Inline first; side by side later.
+3. Comments stay local, handed to the agent. Nothing posted to GitHub.
+4. Unchanged buildings dim to glass during review.
+5. The list by folder, tests beside their code; commit order later, on the strata reader.
+6. The diff from the merge base; a commit-by-commit step later.
+
+The questions as asked, with the picks the owner took:
+
 
 1. **Someone else's PR, not checked out?** Pick: not yet. Review a checkout (a worktree
    makes one in a second, Repos' +). Fetching or `gh pr diff` widens the network rule.
