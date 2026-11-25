@@ -17943,6 +17943,12 @@ mod tests {
         );
         assert_eq!(send(&mut m, "steer"), [Effect::AgentSend { task: idle.clone(), text: "steer".into() }]);
         assert_eq!(m.chat(&idle).map(|chat| chat.draft.text()), Some(""));
+        // One Esc on the first turn: the steer's own turn, started in the same batch, is not armed.
+        m.update(Action::TalkEscape);
+        let next = vec![Event::TurnFinished { outcome: crate::transcript::Outcome::Completed }, Event::TurnStarted];
+        m.update(Action::AgentEvents { task: idle.clone(), events: next, at: 2 }.sent_by(Origin::System));
+        assert_eq!(m.update(Action::TalkEscape), [], "one Esc only says so");
+        m.update(Action::TalkEscape);
         // Written, then a card waits: nowhere to queue it, so it stays in the box, never lost.
         m.update(Action::FieldEdit { edit: crate::edit::Edit::Replace { range: None, text: "later".into() } });
         let card = Event::Permission {
@@ -17955,8 +17961,25 @@ mod tests {
             claim: crate::transcript::Text::default(),
             questions: Vec::new(),
         };
-        m.update(Action::AgentEvents { task: idle.clone(), events: vec![card], at: 3 }.sent_by(Origin::System));
+        m.update(Action::AgentEvents { task: idle.clone(), events: vec![card.clone()], at: 3 }.sent_by(Origin::System));
         assert_eq!(m.update(Action::TalkSend), []);
+        assert_eq!(m.chat(&idle).map(|chat| chat.draft.text()), Some("later"));
+        // Found in review: a card with no turn, or a stop on its way, keeps it in the box too.
+        let finished = Event::TurnFinished { outcome: crate::transcript::Outcome::Completed };
+        m.update(
+            Action::AgentEvents { task: idle.clone(), events: vec![finished, card], at: 4 }.sent_by(Origin::System),
+        );
+        assert_eq!((m.update(Action::TalkSend), m.update(Action::TalkSendNow)), (vec![], vec![]));
+        assert_eq!(m.chat(&idle).map(|chat| chat.draft.text()), Some("later"));
+        m.update(
+            Action::AgentEvents { task: idle.clone(), events: vec![Event::PermissionClosed { ticket: 4 }], at: 5 }
+                .sent_by(Origin::System),
+        );
+        m.update(Action::TaskStop { id: idle.clone() });
+        assert!(
+            !m.update(Action::TalkSendNow).iter().any(|e| matches!(e, Effect::AgentSend { .. })),
+            "never to the one stopping"
+        );
         assert_eq!(m.chat(&idle).map(|chat| chat.draft.text()), Some("later"));
     }
 

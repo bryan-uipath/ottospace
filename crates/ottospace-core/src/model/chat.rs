@@ -474,7 +474,7 @@ impl Model {
         chat.held = false;
         let carded = !chat.transcript.cards.is_empty();
         let (running, owned) = (chat.transcript.turn.is_some(), subject.task().is_some());
-        if (running && !stops && !carded && !ending) || (!running && !owned) {
+        if !carded && !ending && ((running && !stops) || !owned) {
             chat.transcript.send(&text, now);
             effects.push(sent(&subject, text, images));
         } else if !owned {
@@ -817,13 +817,15 @@ impl Model {
                     )
                 });
                 let front = chat.transcript.cards.front().map(|card| card.ticket);
+                let finished = events.iter().any(|event| matches!(event, Event::TurnFinished { .. }));
                 for event in events {
                     // An agent that exited in this batch asks nothing and starts no turn: nothing to answer or stop.
                     if chat.transcript.live || !matches!(event, Event::Permission { .. } | Event::TurnStarted) {
                         chat.transcript.fold(event, at);
                     }
                 }
-                chat.armed &= chat.transcript.turn.is_some();
+                // A turn that ended in this batch takes its Esc with it, also when the next starts.
+                chat.armed &= chat.transcript.turn.is_some() && !finished;
                 // A Deny's message is for the card it was written under: another one in front ends it.
                 chat.deny &= chat.transcript.cards.front().map(|card| card.ticket) == front;
                 if turns {
@@ -893,11 +895,10 @@ impl Model {
                 }
                 // A turn runs, a card waits, or messages wait already: this one waits behind them
                 // (a hold stays: only the empty ↵ lets them go). No task to keep it: sent now.
-                let busy = chat.transcript.busy();
-                if busy && subject.task().is_none() {
-                    let images = self.draft_images(&subject);
-                    self.clear_draft(&subject);
-                    return self.send_now(text, images, effects);
+                let (busy, steers) =
+                    (chat.transcript.busy(), chat.transcript.turn.is_some() && chat.transcript.cards.is_empty());
+                if steers && subject.task().is_none() && !self.send_now_stops(&subject) {
+                    return self.chat_act(Action::TalkSendNow, effects);
                 }
                 if busy || !self.queue_of(&subject).is_empty() {
                     if self.enqueue(&subject, text, self.draft_images(&subject), effects) {

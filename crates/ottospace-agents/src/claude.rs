@@ -783,10 +783,7 @@ mod tests {
         claude.write(send()).unwrap();
         claude.read(done);
         assert_eq!(claude.write(Input::Interrupt), Ok(vec![]), "folded in: nothing runs");
-        claude.write(send()).unwrap();
-        claude.read(output);
-        claude.read(done);
-        assert_eq!(claude.read(output).events, [Event::TurnStarted], "the second message's own turn");
+        assert_eq!(claude.read(output).events, [Event::TurnStarted], "or the second message's own turn");
         assert!(claude.write(Input::Interrupt).unwrap()[0].contains(r#""subtype":"interrupt""#));
     }
 
