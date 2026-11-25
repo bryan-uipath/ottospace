@@ -140,7 +140,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⇧R | Collapse the drawer into its rail, or open it again (with no chat: the transcript). The agent and the transcript go on, and the rail always shows. Also the → at the right end of the drawer's header (its key in the tooltip). Collapsed, a click on a rail item, ⌘⌥] / ⌘⌥[ or the [agent chip](#the-agent-chip) opens it too; open, a click on the item it shows collapses it, as on the left rail. It opens what it collapsed: the transcript, or the new-task box. Only yours: a socket client's is refused, and so are its ⌘N, the + buttons and `compose` while you collapsed the drawer |
 | ⌘⌥R | With the `overlay_panels` [flag](#features) on: pull the drawer out over the panes, to an edge of them that still shows, or back to its width; eased (a cut under Reduce Motion); no pane moves. Also the drawer's \|← beside its → (\|→ while pulled out), and Pull the Drawer Out or Back in the palette. Kept for every task (`layout.json`'s `drawer.wide`). Only yours: a socket client's is refused |
 | ⌘⇧L | Collapse the sidebar into the left rail, or open it again on the section open last. Also the ← at the right end of the sidebar's header (its key in the tooltip). Collapsed, a click on a section's icon opens it; a click on the open section's icon collapses it again |
-| ⌘⇧A | Collapse the conversation's [dial](#the-agent-dial) to its marker beside the badge, or open it again (a click on either does the same). Kept per task |
+| ⌘⇧A | Collapse the conversation's [lights](#the-agents-lights) to their marker beside the title, or open them again (a click on the picture or the marker does the same). Kept per task |
 | ⌘⇧N | With the `overlay_panels` [flag](#features) on: a quick note. The box, centred over the panes, with a pill for each thing it will point at: `Meeting · <title>` (the one on the calendar now), `Transcript · 10:42` (the one being written, and how far in), the workspace or task in front. The pills are inside its field, under the line. × on a pill leaves it out; nothing without a pill is kept. Its edge has one picker, the project's: that of the task in front (or the task in front of the workspace) as it opened; Tab or a click opens its list, × or "no project" leaves the note untagged, a `#project` typed wins. It has no agent or repository picker. ↵ files it as a task for later, nothing starts; ⌘↵ starts it now in its own space and goes there; Esc closes. Agents read what it was filed with by `note`; the title is never in the state. Only yours |
 | ⌘J | Next task: the space and chat of the first task that needs you. With the `decisions` [flag](#features) on, what needs you next: [Decisions](#decisions) while a card waits, else the next task |
 | ⌃⌥⌘Space | Capture, from any app: the pane in use (a hosted app you are in, else the focused pane) is frozen as a picture to draw on, and a draft opens in the drawer on the right, with the new-task line as its title. A live app is parked first; "↩ back to …" in the bar returns to it. On the picture: drag circles, ⇧-drag draws a box, ⌥-drag a freehand line, a click places a note to type (↵ keeps it). ⌘Z and ⇧⌘Z go over the steps; a click on a shape's line selects it and ⌫ removes it. ↵ goes to the title, Esc leaves the picture; a click on another pane captures that one too. In the title ↵ adds the task and starts its agent, ⌘⇧↵ adds it for later; × or Esc cancels, after a question if anything was captured. The workspace stays in use beside the drawer, and ⌘N goes to the draft's title. See [Capture](#capture) |
@@ -332,7 +332,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    started. Before the agent starts: where it would start (a session gone on with: where it
    started). A folder that is gone (a worktree removed) starts no agent: a toast says
    so. It stays once the agent ended. Under the header of a native conversation, its
-   [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
+   [dial](#the-agents-lights). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **Done, Later.** At the header's right: **Later**, then a green **✓ Done**, once the agent
    idles. While a turn runs there is no Done: Stop in its place (or Esc Esc) stops that turn,
@@ -591,7 +591,7 @@ A conversation you closed is one click away. While the selected space has a conv
 task's, or a session's) and the drawer is closed, a chip sits at the right end of the tab row;
 a space with one tab has no tab row, so it sits on the top row, left of the split buttons.
 
-- It shows the task's badge, the [dial](#the-agent-dial)'s marker for a native conversation
+- It shows the task's badge, the [dial](#the-agents-lights)'s marker for a native conversation
   (the context ring, a dot while a call runs, a red one for a failure) and one line of what the
   agent does: `Working · cargo test`, `Needs you · git push`, `Needs you` (its turn is over:
   your word next), `Idle`, `Ended`, `Failed`.
@@ -605,42 +605,31 @@ a space with one tab has no tab row, so it sits on the top row, left of the spli
 - Only your own click opens the conversation: a socket client's click on the chip or on the
   selected space does not. The state reply has it as `agent_chip`.
 
-## The agent dial
+## The agent's lights
 
-A native conversation has a dial under its header: where its agent's calls go, at a glance.
+A native conversation's header has a row of lights (design: canvas J6): where its agent's calls
+go, at a glance.
 
-- **Centre**: the agent's kind (✳ Claude Code), coloured by its state: running, needs you, idle,
-  ended, or an error (a failed turn, an end you did not ask for) until your next message. It
-  turns about its upright axis while the model thinks (it has the turn and no call runs).
-- **Ring**: the context used (tokens in the context over the window); amber from 70%, red from 90%.
-- **Stations**, clockwise from the top: You, Model, Files, Shell, Network, MCP, Agents,
-  Skills, Memory, Hooks, Tools (any other tool). Files is the agent's file tools only (Read,
-  Write, Edit, Grep, Glob, `apply_patch`, …). Shell means the agent ran a command, any command
-  (`ls`, `curl`, `git push`): ottospace does not guess what a command did. Network is the agent's
-  web tools (WebFetch, WebSearch, Codex's web search). MCP is every MCP tool call, whatever its
-  server: ottospace does not guess from a server's name. A spoke is heavier for more use, the older uses
-  counting less (half after ten minutes). A station is lit while a call there runs (Model while
-  the model has the turn, You while a request waits), with two arcs for its time: the inner fills
-  in a minute, the outer in ten. A red dot: a call there failed since your last message.
-  Each has its name beside it, brighter while lit. A lit station's dot pulses (not while a
-  request waits for you), and is larger for
-  each further call running there at once (up to four): it springs to its size, with a kick
-  when a call starts, and settles back when one ends.
-- **Timer**: under the centre's picture, the running call's time, or the model's (`0:14`).
-- The dial is centred; under it, when the drawer is wide enough: what it does now
-  (`Shell · cargo test`), or the last thing and when; turns and how long.
-- Hover a station for its name and counts, the ring for the context used and the tokens.
-- A click on it (or ⌘⇧A, or Toggle Agent Dial) collapses it to an 18-point marker beside the
-  badge (the ring, a white dot while a call runs, a red one for a failure); a click on the marker
-  opens it. It is open while the agent runs and collapsed once it ended, unless you left it the
-  other way: that is kept per task, with the layout.
-- A watched session's dial steps a message at a time, with no time arcs: its dots spring to
-  their sizes, nothing pulses or turns. With Reduce motion on, nothing moves: a lit station is its
-  colour and its larger size.
-- It is drawn frame by frame only while something in it moves; at rest, collapsed or not on
-  screen, never.
+- **Picture**: the task's badge (a session's: its runner's glyph, coloured by its state).
+- **Status**: one sentence, what it does now (`Shell · cargo test`) and for how long, or the
+  last thing and when; hover it for turns and time.
+- **Lights**, one for each tool station, stretched to the header's right edge: Files ▤, Shell ❯,
+  Network ◍, MCP ⌁, Apps ▣, Agents ⁂, Skills ✦, Memory ◈, Hooks ↪. Grey until used; then the
+  station's colour, brighter and filled while a call there runs, with a bar under it for its use
+  (older uses count less: half after ten minutes). A red dot: a call there failed since your last
+  message. Hover a light for its name and counts. Files is the agent's file tools only; Shell
+  means any command (ottospace does not guess what it did); Network its web tools; MCP every MCP
+  call, whatever its server.
+- **Context**: the number at the lights' end from 70% (amber), with "compacts soon" from 90%
+  (red); below, on the context bar's hover only. The context bar is the header's bottom edge,
+  3 points, filled to the share used; its hover says the tokens.
+- A click on the picture (or ⌘⇧A, or Toggle Agent Dial) collapses the row to an 18-point marker
+  beside the title (a ring for the context, a white dot while a call runs, a red one for a
+  failure); a click on the marker opens it. It is open while the agent runs and collapsed once
+  it ended, unless you left it the other way: that is kept per task, with the layout.
+- Nothing in it moves: it is drawn again on a change, and each second while its agent runs.
 - The state reply has its stations, counts, what is lit (and how many calls run there), the
-  context used, `collapsed` and `animating`, never a command, path or label. Design: [docs/ai/agent-dial.md](ai/agent-dial.md).
+  context used and `collapsed`, never a command, path or label. Design: [docs/ai/agent-dial.md](ai/agent-dial.md).
 
 ## Accessibility inspector
 

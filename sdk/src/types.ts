@@ -150,8 +150,6 @@ export interface AgentDial {
   timed: boolean;
   /** Shown as the header's marker, by the user's choice or because its agent ended. */
   collapsed: boolean;
-  /** Its last frame drawn asked for another: a dot pulses or settles, the glyph turns. False at rest, collapsed or not shown. */
-  animating: boolean;
 }
 
 export type PaneId = number;

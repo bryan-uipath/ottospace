@@ -18,7 +18,7 @@ temp folder, `/bin/sh` terminals, no apps, no repositories or sessions of the us
   rss_idle_mb, footprint_idle_mb    resident size and phys_footprint, 5 s after start.
   rss_8_terms_mb, footprint_8_terms_mb   after 8 terminals, each with 5000 lines of scrollback.
   cpu_idle_pct         the process's CPU over 30 s with nothing moving (100 = one core).
-  frames_idle, dial_frames_idle     frames drawn and dial frames over those 30 s: 0 at rest.
+  frames_idle          frames drawn over those 30 s: 0 at rest.
   wakeups_idle_per_s   the process's wakeups a second over those 30 s.
   ticks_idle           runs of the app's tick over those 30 s (`counts.ticks`): a second of each
                        frame after the first request, then about one a second.
@@ -170,7 +170,6 @@ def cpu_over(inst, seconds):
         "cpu_pct": 100 * (u1["cpu_s"] - u0["cpu_s"]) / wall,
         "wakeups_per_s": (u1["wakeups"] - u0["wakeups"]) / wall,
         "frames": s1["frame"]["number"] - s0["frame"]["number"],
-        "dial_frames": s1["counts"]["dial_frames"] - s0["counts"]["dial_frames"],
         # Runs of the app's tick: none counted by a build before `counts.ticks`.
         "ticks": s1["counts"]["ticks"] - s0["counts"]["ticks"] if "ticks" in s0["counts"] else None,
     }
@@ -291,7 +290,7 @@ def long_run(binary):
         out["rss_idle_mb"], out["footprint_idle_mb"] = u["rss_mb"], u["footprint_mb"]
         idle = cpu_over(inst, IDLE_S)
         out["cpu_idle_pct"], out["wakeups_idle_per_s"] = idle["cpu_pct"], idle["wakeups_per_s"]
-        out["frames_idle"], out["dial_frames_idle"] = idle["frames"], idle["dial_frames"]
+        out["frames_idle"] = idle["frames"]
         out["ticks_idle"] = idle["ticks"]
         panes = []
         for _ in range(TERMS):
@@ -674,7 +673,6 @@ ROWS = [
     ("cpu_idle_pct", f"CPU, idle {IDLE_S} s (%)"),
     ("wakeups_idle_per_s", "  wakeups a second, idle"),
     ("frames_idle", f"  frames drawn, idle {IDLE_S} s"),
-    ("dial_frames_idle", f"  dial frames, idle {IDLE_S} s"),
     ("ticks_idle", f"  tick runs, idle {IDLE_S} s"),
     ("cpu_stream_pct", f"CPU, a terminal streaming {STREAM_S} s (%)"),
     ("cpu_hidden_stream_pct", "  its tab not on show: CPU (%)"),

@@ -1,5 +1,9 @@
 # The agent dial
 
+> Since canvas J6 (slice 2) the open dial is drawn as the header's lights (`dial.rs`,
+> `docs/reference.md`, "The agent's lights"); the model below is unchanged. The motion
+> (springs, pulse, turning glyph, `counts.dial_frames`) is gone with the dial's face.
+
 The MEDIUM (96 pt, in a face of 180 by 120 with its stations' words) and SMALL (18 pt) sizes of the "Agent activity (radial)" mock, as a section
 of each native conversation under its header. LARGE (a pane) is not built.
 

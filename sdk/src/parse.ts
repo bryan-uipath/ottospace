@@ -1554,7 +1554,6 @@ function agentDial(value: unknown, at: string): AgentDial {
     lit: bool(o.lit, `${at}.lit`),
     timed: bool(o.timed, `${at}.timed`),
     collapsed: bool(o.collapsed, `${at}.collapsed`),
-    animating: bool(o.animating, `${at}.animating`),
   };
 }
 

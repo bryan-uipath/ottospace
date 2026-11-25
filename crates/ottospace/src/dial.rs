@@ -1,50 +1,47 @@
-//! The agent dial over a native conversation: what the core's `activity::Dial` says, drawn. The
-//! dial (its stations' words around it) and its lines under the header, or the 18-point marker beside the badge when
-//! collapsed. Paths are built each paint (a few dozen segments); the app draws again on a change,
-//! on a slow tick while a station is lit, and frame by frame only while
-//! something in the open dial moves (`motion::Motion`). See `docs/ai/agent-dial.md`.
+//! The agent's lights over a native conversation: what the core's `activity::Dial` says, drawn
+//! in the drawer's header (canvas J6): the picture, one status sentence, a light per tool
+//! station with a bar for its use, the context's number; and the context bar on the header's
+//! bottom edge. Collapsed (⌘⇧A), an 18-point marker beside the badge instead. Nothing moves: the
+//! app draws again on a change and on a slow tick while a station is lit.
 
 use std::f32::consts::{PI, TAU};
-use std::time::Instant;
 
 use gpui::{
-    AnyView, Bounds, Context, Div, Hsla, PathBuilder, Pixels, Point, Stateful, Transformation, Window, canvas, div,
-    fill, point, prelude::*, px, rgb, size, svg,
+    AnyView, Bounds, Context, Div, Hsla, PathBuilder, Pixels, Point, Stateful, Window, canvas, div, fill, point,
+    prelude::*, px, relative, rgb, size,
 };
-use ottospace_core::activity::{self, Dial, Pulse, Station};
-use ottospace_core::motion::{self, Motion};
+use ottospace_core::activity::{Dial, Level, Pulse, Station};
 use ottospace_core::talk::Subject;
 use ottospace_core::{Action, theme};
 
 use crate::{Tooltip, Workspace};
 
-/// The dial's face with its stations' words around it, and the marker's side.
-const FACE: (f32, f32) = (180., 120.);
+/// The marker's side.
 const MARK: f32 = 18.;
-/// A station's word: how far out it starts, the room it has, its text size.
-const WORDS: f32 = 50.;
-const WORD: (f32, f32) = (40., 11.);
-const WORD_TEXT: f32 = 9.;
 /// The agent chip: its height, and the most its line takes.
 const CHIP: f32 = 24.;
 const CHIP_LINE: f32 = 220.;
 /// Between the chip and the row's end.
 const CHIP_EDGE: f32 = 8.;
-/// Radii in the dial: the centre, the context ring, where the spokes start and end, the stations.
-const CENTRE: f32 = 12.;
-const RING: f32 = 17.;
-const SPOKE: (f32, f32) = (21., 34.);
-const STATIONS: f32 = 38.;
-/// The timer under the centre's picture: how far the picture rises for it, its box, its text size.
-const LIFT: f32 = 4.;
-const TIMER: (f32, f32) = (30., 9.);
-const TIMER_TEXT: f32 = 7.5;
-
-/// A station's angle: clockwise from the top.
-fn angle(station: Station) -> f32 {
-    let at = Station::DIAL.iter().position(|s| *s == station).unwrap_or(0);
-    at as f32 * TAU / Station::DIAL.len() as f32
-}
+/// The picture's side: as tall as the status line and the lights beside it.
+const PICTURE: f32 = 42.;
+/// A light's side, and its use bar's height.
+const LIGHT: f32 = 20.;
+const BAR: f32 = 2.;
+/// The context bar's height, on the header's bottom edge.
+const CONTEXT_BAR: f32 = 3.;
+/// The tool stations, in the lights' order, each with its glyph.
+const LIGHTS: [(Station, &str); 9] = [
+    (Station::Files, "▤"),
+    (Station::Shell, "❯"),
+    (Station::Network, "◍"),
+    (Station::Mcp, "⌁"),
+    (Station::Apps, "▣"),
+    (Station::Agents, "⁂"),
+    (Station::Skills, "✦"),
+    (Station::Memory, "◈"),
+    (Station::Hooks, "↪"),
+];
 
 fn at(centre: Point<Pixels>, r: f32, angle: f32) -> Point<Pixels> {
     centre + point(px(r * angle.sin()), px(-r * angle.cos()))
@@ -76,47 +73,6 @@ pub(crate) fn disc(window: &mut Window, centre: Point<Pixels>, r: f32, colour: H
     window.paint_quad(fill(bounds, colour).corner_radii(px(r)));
 }
 
-/// Where a station's word goes in the face, and how it is set: outside its dot, away from
-/// the centre, so it meets neither the ring nor a neighbour's.
-fn word(station: Station) -> (f32, f32, f32) {
-    let (sin, cos) = angle(station).sin_cos();
-    let r = WORDS + 4. * cos.abs();
-    let (x, y) = (FACE.0 / 2. + r * sin, FACE.1 / 2. - r * cos);
-    // Over or under the centre: centred. Else it starts, or ends, at its place.
-    let (left, set) = match sin {
-        _ if sin.abs() < 0.2 => (x - WORD.0 / 2., 0.5),
-        _ if sin > 0. => (x, 0.),
-        _ => (x - WORD.0, 1.),
-    };
-    (left, (y - WORD.1 / 2.).clamp(0., FACE.1 - WORD.1), set)
-}
-
-/// The shown dial's motion, kept between frames: view state, never the model's.
-#[derive(Default)]
-pub(crate) struct DialMotion {
-    /// Whose dial, its parts, and when they were last stepped.
-    shown: Option<(Subject, Motion, Instant)>,
-    /// The frame being drawn asked for another: something moves.
-    pub(crate) moving: bool,
-    /// How many frames asked for another (the state's `counts.dial_frames`, test runs).
-    pub(crate) frames: u64,
-}
-
-impl DialMotion {
-    /// The parts of `subject`'s dial now. Another conversation's starts at rest.
-    fn step(&mut self, subject: &Subject, dial: &Dial, calm: bool) -> Motion {
-        let now = Instant::now();
-        let (mut parts, then) = match self.shown.take() {
-            Some((shown, parts, then)) if shown == *subject => (parts, then),
-            _ => (Motion::rest(dial), now),
-        };
-        self.moving = parts.step(dial, now.duration_since(then).as_secs_f32() * 1000., calm);
-        self.frames += u64::from(self.moving);
-        self.shown = Some((subject.clone(), parts, now));
-        parts
-    }
-}
-
 /// No motion: the system's Reduce Motion. A test run's is `OTTOSPACE_REDUCE_MOTION`, never the machine's.
 pub(crate) fn calm() -> bool {
     match std::env::var_os("OTTOSPACE_E2E") {
@@ -125,56 +81,15 @@ pub(crate) fn calm() -> bool {
     }
 }
 
-/// Paints the dial in `bounds`, its dots as `parts` has them. `calm`: no pulse,
-/// states only (Reduce motion).
-fn paint_dial(dial: &Dial, parts: &Motion, bounds: Bounds<Pixels>, calm: bool, window: &mut Window) {
-    let c = bounds.center();
-    let at_rest = !dial.lit && dial.pulse != Pulse::NeedsYou;
-    // Spokes: heavier for more use, decayed. Quieter at rest.
-    for spot in dial.stations.iter().filter(|spot| spot.calls > 0) {
-        let a = angle(spot.station);
-        let mut path = PathBuilder::stroke(px(0.75 + 2.25 * spot.weight));
-        path.move_to(at(c, SPOKE.0, a));
-        path.line_to(at(c, SPOKE.1, a));
-        let alpha = (0.15 + 0.55 * spot.weight) * if at_rest { 0.6 } else { 1. };
-        stroke(window, path, colour(theme::station(spot.station)).opacity(alpha));
+/// The context's number at the lights' end: shown from 70%, "compacts soon" from 90%; below,
+/// on the bar's hover only.
+fn context_words(dial: &Dial) -> Option<String> {
+    let used = (dial.context? * 100.).round() as u32;
+    match dial.level {
+        Level::Red => Some(format!("{used}% · compacts soon")),
+        Level::Amber => Some(format!("{used}%")),
+        Level::Calm => None,
     }
-    // Stations: a faint dot if unused; lit ones bright, with their time as arcs.
-    // Each dot's radius is its spring's: larger for more calls at once, settling on a change.
-    for (spot, dot) in dial.stations.iter().zip(&parts.dots) {
-        let (a, hue) = (angle(spot.station), colour(theme::station(spot.station)));
-        let (p, r) = (at(c, STATIONS, a), dot.at.max(0.5));
-        match (spot.lit, spot.calls) {
-            (true, _) => {
-                // A call in progress blinks and swells, with a halo that widens as it fades.
-                let beat = (!calm && motion::pulsing(spot, dial)).then(|| parts.pulse());
-                if let Some(beat) = beat {
-                    disc(window, p, r + 1.5 + 3. * beat, hue.opacity(0.28 * (1. - beat)));
-                }
-                let beat = beat.unwrap_or(0.);
-                disc(window, p, r + motion::PULSE_GROW * beat, hue.opacity(1. - 0.3 * beat));
-                if let Some(ms) = spot.for_ms {
-                    let inner = (ms as f32 / activity::INNER_MS as f32).min(1.);
-                    let outer = (ms as f32 / activity::OUTER_MS as f32).min(1.);
-                    stroke(window, arc(1.2, p, r + 2., 0., TAU * inner.max(0.02)), hue.opacity(0.9));
-                    stroke(window, arc(1., p, r + 4., 0., TAU * outer.max(0.02)), hue.opacity(0.5));
-                }
-            }
-            (false, 0) => disc(window, p, r, colour(theme::BORDER_STRONG)),
-            (false, _) => disc(window, p, r, hue.opacity(if at_rest { 0.55 } else { 0.8 })),
-        }
-        if spot.failing > 0 {
-            disc(window, at(c, STATIONS + 6.5, a), 1.8, colour(theme::ERROR));
-        }
-    }
-    // The context ring: a track, then the part used, from the top.
-    stroke(window, arc(2.5, c, RING, 0., TAU), colour(theme::BORDER));
-    if let Some(used) = dial.context.filter(|used| *used > 0.) {
-        stroke(window, arc(2.5, c, RING, 0., TAU * used), colour(theme::level(dial.level)));
-    }
-    // The centre: the agent, in its state's colour.
-    disc(window, c, CENTRE, colour(theme::BACKGROUND));
-    disc(window, c, CENTRE, colour(theme::pulse(dial.pulse)).opacity(0.16));
 }
 
 /// Paints the marker: the context ring, a dot for a station in use, a red one for a failure.
@@ -212,23 +127,6 @@ impl Workspace {
             .text_size(px(text))
             .text_color(rgb(theme::pulse(dial.pulse)))
             .child(glyph)
-    }
-
-    /// The centre of the open dial: the runner's picture in the state's colour, turned by
-    /// `angle` about its upright axis (flat: narrower, mirrored and dimmer from behind). Raised
-    /// over a running timer.
-    fn icon(&self, subject: &Subject, dial: &Dial, angle: f32) -> Div {
-        let lift = if dial.lines.timer.is_some() { LIFT } else { 0. };
-        let Some(runner) = self.model.runner_of(subject) else {
-            return self.glyph(subject, dial, 13.).top(px(-lift)).bottom(px(lift));
-        };
-        let (width, light) = motion::facing(angle);
-        // Never quite no width: a line, edge on.
-        let width = width.abs().max(0.12).copysign(width);
-        let tone = colour(theme::pulse(dial.pulse)).opacity(light);
-        let icon = svg().path(runner.spec().icon).size(px(14.)).text_color(tone);
-        let icon = icon.when(angle != 0., |icon| icon.with_transformation(Transformation::scale(size(width, 1.))));
-        div().absolute().inset_0().top(px(-lift)).bottom(px(lift)).flex().items_center().justify_center().child(icon)
     }
 
     /// The marker as drawn: the ring, the dots, the runner's glyph in the state's colour.
@@ -342,136 +240,128 @@ impl Workspace {
         )
     }
 
-    /// The dial, centred, and its lines under it, between the header and the transcript, `width` points wide. None
-    /// while collapsed: it costs no height then.
-    pub(crate) fn dial_section(&self, subject: &Subject, width: f32, cx: &mut Context<Self>) -> Option<Stateful<Div>> {
+    /// The header's third row while the lights are open: the picture (the task's badge, else the
+    /// runner's glyph) and, beside it, the status sentence over the lights, which stretch to the
+    /// right edge with the context's number at their end. A light is its station's colour once
+    /// used (dimmer when not lit), filled while a call runs there, with a bar under it for its
+    /// use; a red dot for a failure since the user's last message.
+    pub(crate) fn talk_lights(&self, subject: &Subject, cx: &mut Context<Self>) -> Option<Div> {
         let dial = self.dial_of(subject).filter(|_| !self.model.dial_collapsed(subject))?;
-        let calm = calm();
-        // Stepped once a frame drawn, here: a dial not on screen is not stepped and asks for none.
-        let (parts, moving) = {
-            let mut kept = self.dial_motion.borrow_mut();
-            (kept.step(subject, &dial, calm), kept.moving)
+        let picture = match subject.task().and_then(|id| self.task_badge(id, PICTURE)) {
+            Some(badge) => badge,
+            None => div()
+                .relative()
+                .size(px(PICTURE))
+                .rounded(px(PICTURE / 4.))
+                .bg(rgb(theme::SELECTED))
+                .child(self.glyph(subject, &dial, 18.)),
         };
-        let drawn = dial.clone();
-        let paint = move |bounds: Bounds<Pixels>, _: (), window: &mut Window, _: &mut gpui::App| {
-            paint_dial(&drawn, &parts, bounds, calm, window);
-            // The next frame, only while something moves.
-            if moving {
-                window.request_animation_frame();
-            }
-        };
-        let paint = canvas(|_, _, _| {}, paint);
-        let half = (FACE.0 / 2., FACE.1 / 2.);
-        // Each station's word, lit with it; fainter for one not used yet.
-        let words = dial.stations.iter().map(|spot| {
-            let (left, top, set) = word(spot.station);
-            let tone = colour(if spot.lit { theme::TEXT } else { theme::MUTED });
-            let word = div().absolute().left(px(left)).top(px(top)).w(px(WORD.0)).h(px(WORD.1)).flex().items_center();
-            let word = match set {
-                0. => word.justify_start(),
-                1. => word.justify_end(),
-                _ => word.justify_center(),
-            };
-            word.text_size(px(WORD_TEXT))
-                .line_height(px(WORD.1))
-                .text_color(tone.opacity(if spot.lit || spot.calls > 0 { 1. } else { 0.6 }))
-                .child(spot.station.name())
-        });
-        // Hovers: each station names itself and its counts; the centre, the tokens.
-        let spots = dial.stations.iter().map(|spot| {
-            let p = (half.0 + STATIONS * angle(spot.station).sin(), half.1 - STATIONS * angle(spot.station).cos());
-            let tip: gpui::SharedString = spot.tip().into();
-            let name = format!("dial-station:{}", spot.station.name().to_lowercase());
-            div()
-                .id(gpui::ElementId::Name(name.into()))
-                .absolute()
-                .left(px(p.0 - 7.))
-                .top(px(p.1 - 7.))
-                .size(px(14.))
-                .rounded_full()
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
-        });
-        let ring = dial.ring.clone().map(|tip| {
-            let tip: gpui::SharedString = tip.into();
-            div()
-                .id("dial-ring")
-                .absolute()
-                .left(px(half.0 - RING - 3.))
-                .top(px(half.1 - RING - 3.))
-                .size(px((RING + 3.) * 2.))
-                .rounded_full()
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
-        });
-        // The running time under the picture, monospaced: its digits move nothing.
-        let timer = dial.lines.timer.clone().map(|timer| {
-            div()
-                .absolute()
-                .left(px(half.0 - TIMER.0 / 2.))
-                .top(px(half.1 + LIFT - 1.))
-                .w(px(TIMER.0))
-                .h(px(TIMER.1))
-                .flex()
-                .justify_center()
-                .font_family(crate::terminal::font_family())
-                .text_size(px(TIMER_TEXT))
-                .line_height(px(TIMER.1))
-                .text_color(rgb(theme::MUTED))
-                .child(timer)
-        });
-        let face = div()
-            .id("dial")
-            .relative()
+        let picture = picture
+            .id("talk-picture")
             .flex_none()
-            .w(px(FACE.0))
-            .h(px(FACE.1))
             .cursor_pointer()
-            .child(paint.absolute().size_full())
-            .child(self.icon(subject, &dial, parts.angle))
-            .children(timer)
-            .children(words)
             .child(self.controls.mark("talk:dial".to_string()))
-            .children(ring)
-            .children(spots)
             .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(
                 cx.listener(|this, _, window, cx| drop(this.dispatch(Action::DialToggle, this.input, window, cx))),
             );
-        // Narrow: the dial alone.
-        let lines = (width >= activity::LINES_MIN_WIDTH).then(|| {
-            let line = |text: Option<String>, colour: u32| {
-                text.map(|text| {
-                    let text = div().min_w_0().truncate().text_xs().text_color(rgb(colour)).child(text);
-                    div().flex().justify_center().child(text)
-                })
-            };
-            div()
-                .id("dial-lines")
-                .min_w_0()
-                .flex()
-                .flex_col()
-                .gap_0p5()
-                .children(line(dial.lines.now.clone(), theme::TEXT))
-                .children(line(dial.lines.turns.clone(), theme::MUTED))
+        let tip: gpui::SharedString = [dial.lines.now.clone(), dial.lines.turns.clone()]
+            .into_iter()
+            .flatten()
+            .collect::<Vec<_>>()
+            .join("\n")
+            .into();
+        let now = dial.lines.now.clone().unwrap_or_default();
+        let timer = dial.lines.timer.clone().map(|timer| format!(" · {timer}"));
+        let status = div()
+            .id("talk-status")
+            .flex()
+            .min_w_0()
+            .text_xs()
+            .line_height(px(17.))
+            .child(div().min_w_0().truncate().text_color(rgb(theme::TEXT)).child(now))
+            .children(timer.map(|timer| div().flex_none().text_color(rgb(theme::MUTED)).child(timer)))
+            .when(!tip.is_empty(), |d| d.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))));
+        let lights = LIGHTS.iter().filter_map(|(station, glyph)| {
+            let spot = dial.spot(*station)?;
+            let hue = theme::station(*station);
+            let used = spot.calls > 0;
+            let ink =
+                if used { colour(hue).opacity(if spot.lit { 1. } else { 0.6 }) } else { colour(theme::BORDER_STRONG) };
+            let bar = div()
+                .absolute()
+                .bottom_0()
+                .left(px(3.))
+                .h(px(BAR))
+                .w(px((LIGHT - 6.) * spot.weight.clamp(0., 1.)))
+                .rounded_full()
+                .bg(colour(hue).opacity(0.7));
+            let failed = (spot.failing > 0)
+                .then(|| div().absolute().top_0().right_0().size(px(4.)).rounded_full().bg(rgb(theme::ERROR)));
+            let tip: gpui::SharedString = spot.tip().into();
+            let name = format!("light:{}", station.name().to_lowercase());
+            Some(
+                div()
+                    .id(gpui::ElementId::Name(name.clone().into()))
+                    .relative()
+                    .flex_none()
+                    .size(px(LIGHT))
+                    .rounded(px(5.))
+                    .flex()
+                    .justify_center()
+                    .pt(px(3.))
+                    .text_size(px(11.))
+                    .line_height(px(11.))
+                    .text_color(ink)
+                    .when(spot.lit, |d| d.bg(rgb(theme::SELECTED)))
+                    .child(*glyph)
+                    .when(used, |d| d.child(bar))
+                    .children(failed)
+                    .child(self.controls.mark(format!("talk:{name}")))
+                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
+            )
+        });
+        let number = context_words(&dial).map(|words| {
+            div().min_w_0().truncate().pl_1().text_xs().text_color(rgb(theme::level(dial.level))).child(words)
+        });
+        let row = div().flex().items_center().justify_between().gap(px(2.)).min_w_0().children(lights).children(number);
+        let column = div().flex_1().min_w_0().flex().flex_col().gap(px(5.)).child(status).child(row);
+        Some(div().py_1().flex().items_center().gap_2().child(picture).child(column))
+    }
+
+    /// The context bar: 3 points on the header's bottom edge, the share of the context used in
+    /// its level's colour; its hover says the tokens. None before the runner says a context.
+    /// Tokens with no window yet (`8k tokens`): the track and its hover, no fill.
+    pub(crate) fn context_bar(&self, subject: &Subject) -> Option<Stateful<Div>> {
+        let dial = self.dial_of(subject)?;
+        let tip: gpui::SharedString = match (&dial.ring, dial.context) {
+            (Some(ring), _) => ring.clone().into(),
+            (None, Some(used)) => format!("Context {}%", (used * 100.).round()).into(),
+            (None, None) => return None,
+        };
+        let fill = dial.context.map(|used| {
+            div().h_full().w(relative(used.clamp(0., 1.))).bg(rgb(match dial.level {
+                Level::Calm => theme::BORDER_STRONG,
+                level => theme::level(level),
+            }))
         });
         Some(
             div()
-                .id("dial-section")
-                .flex_none()
-                .px_3()
-                .py_1()
-                .flex()
-                .flex_col()
-                .gap_1()
-                .border_b_1()
-                .border_color(rgb(theme::BORDER))
-                .child(div().flex().justify_center().child(face))
-                .children(lines),
+                .id("talk-context")
+                .absolute()
+                .left_0()
+                .right_0()
+                .bottom(px(-1.))
+                .h(px(CONTEXT_BAR))
+                .bg(rgb(theme::BORDER))
+                .children(fill)
+                .child(self.controls.mark("talk:context".to_string()))
+                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
         )
     }
 
-    /// True if the shown dial changes with time alone: a station lit, its timer running. The
-    /// app draws it again on a slow tick then, and never at rest.
-    pub(crate) fn dial_moves(&self) -> bool {
+    /// True while the open conversation's lights show a station lit: its timer needs a tick.
+    pub(crate) fn lights_lit(&self) -> bool {
         let Some(subject) = self.model.talk.as_ref().filter(|talk| talk.open).map(|talk| &talk.task) else {
             return false;
         };
@@ -485,9 +375,6 @@ impl Workspace {
         };
         let mut value = serde_json::to_value(&dial).unwrap_or_default();
         value["collapsed"] = self.model.dial_collapsed(subject).into();
-        // Its last frame drawn asked for another: a dot pulses or settles, the glyph turns.
-        let kept = self.dial_motion.borrow();
-        value["animating"] = (kept.moving && kept.shown.as_ref().is_some_and(|shown| shown.0 == *subject)).into();
         // To three places: an f32 widened would say 0.9200000166893004.
         value["context"] = dial.context.map(|used| (f64::from(used) * 1000.).round() / 1000.).into();
         value

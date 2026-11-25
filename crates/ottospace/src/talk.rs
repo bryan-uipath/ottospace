@@ -620,15 +620,17 @@ impl Workspace {
 
     /// An action of the header's controls row: the secondary button, one style for all.
     pub(crate) fn talk_action(&self, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
-        ui::button(name, ui::Button::Secondary(label.to_string().into()), ui::State::Rest)
-            .child(self.controls.mark(format!("talk:{name}")))
-            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        self.marked("talk", name, ui::Button::Secondary(label.to_string().into()), tip)
     }
 
     /// `talk_button`, its control `<of>:<name>`: the Decisions card's are `decision:…`.
     pub(crate) fn button_of(&self, of: &str, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
-        ui::button(name, ui::Button::Ghost(ui::Face::Label(label.to_string().into())), ui::State::Rest)
+        self.marked(of, name, ui::Button::Ghost(ui::Face::Label(label.to_string().into())), tip)
+    }
+
+    /// A button of `kind`, its control `<of>:<name>`, its tip on hover.
+    fn marked(&self, of: &str, name: &'static str, kind: ui::Button, tip: &'static str) -> Stateful<Div> {
+        ui::button(name, kind, ui::State::Rest)
             .child(self.controls.mark(format!("{of}:{name}")))
             .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
             // The press must not reach the drawer, which takes the keyboard on a press.
@@ -782,7 +784,12 @@ impl Workspace {
                     }),
                 ))
             }
-            _ if runs && terminal && !self.model.is_ending(subject) => {
+            // Not beside Done: idle in a terminal, Done takes the slot.
+            _ if runs
+                && terminal
+                && !self.model.is_ending(subject)
+                && !self.model.finish(subject).is_some_and(|b| b.done) =>
+            {
                 let id = subject.clone();
                 Some(self.talk_action("talk-stop", "Stop", "End this conversation's agent").on_click(cx.listener(
                     move |this, _, window, cx| {
@@ -802,15 +809,20 @@ impl Workspace {
             true => title.clone().into(),
             false => format!("{title}\n{facts}").into(),
         };
+        // The lights' row has the picture; without it, the badge leads the title.
+        // Not over the brief or the editor: they take the conversation's place.
+        let covered = self.model.editor_shown() || (self.model.brief.is_some() && self.model.brief == subject.task());
+        let lights = (!covered).then(|| self.talk_lights(subject, cx)).flatten();
+        let badge = match shown.and_then(|task| self.task_badge(task.id, 18.)) {
+            Some(badge) => badge,
+            None => home::dot(color),
+        };
         let title_row = div()
             .h(px(28.))
             .flex()
             .items_center()
             .gap_2()
-            .child(match shown.and_then(|task| self.task_badge(task.id, 18.)) {
-                Some(badge) => badge,
-                None => home::dot(color),
-            })
+            .when(lights.is_none(), |row| row.child(badge))
             .children(self.dial_marker(subject, cx))
             .child(
                 div()
@@ -846,9 +858,12 @@ impl Workspace {
             .flex_col()
             .border_b_1()
             .border_color(rgb(theme::BORDER))
+            .relative()
             .child(title_row)
             .children(self.talk_where(subject))
-            .child(controls);
+            .children(lights)
+            .child(controls)
+            .children((!covered).then(|| self.context_bar(subject)).flatten());
         Some(header.id("drawer-head"))
     }
 
@@ -940,7 +955,6 @@ impl Workspace {
         let talk = self.model.talk.as_ref().filter(|talk| talk.open || ghost)?;
         let header = self.talk_header(&talk.task, cx)?;
         let brief = self.model.brief.is_some() && self.model.brief == talk.task.task();
-        // The dial is the conversation's: not over the brief, nor over the editor.
         let editor = self.model.editor_shown();
         // Not the brief or the editor: a fold drops them, the conversation would show in their place.
         if !brief && !editor {
@@ -950,7 +964,6 @@ impl Workspace {
         let btw = self.btw_column(cx);
         let whole = width;
         let width = if btw.is_some() { (width - crate::btw::WIDTH).max(0.) } else { width };
-        let dial = (!brief && !editor).then(|| self.dial_section(&talk.task, width, cx)).flatten();
         // The user's editor takes the conversation's place while it has its draft.
         let body = match brief {
             _ if editor => self.editor_body(cx),
@@ -986,7 +999,6 @@ impl Workspace {
                     .talk_note()
                     .map(|note| div().px_3().py_1().text_xs().text_color(rgb(theme::ERROR)).child(note)),
             )
-            .children(dial)
             .child(body)
             .children(self.agent_foot(&talk.task, width));
         let Some(btw) = btw else { return Some(drawer.into_any_element()) };
