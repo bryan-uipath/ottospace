@@ -17417,6 +17417,52 @@ fn a_tab_folds_out_to_another_display_and_back_in() {
     });
 }
 
+/// Each window's green button fills its own display: a tab out's never the main window's, the
+/// main window's never the tab out's. ⌃⌘F, the window with the keyboard. A test run moves no window.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_tab_outs_green_button_fills_its_own_window_and_the_main_ones_its_own() {
+    let otto = Otto::launch_with("tab-out-fill", &[("OTTOSPACE_FEATURES", "multi_monitor")]);
+    let main = json!({"uid": "main", "frame": [0, 0, 1728, 1117]});
+    let other = json!({"uid": "other", "frame": [1728, 0, 1920, 1080], "scale": 1});
+    otto.call(json!({"cmd": "displays_set", "displays": [main, other], "main": "main"}));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    otto.call(json!({"cmd": "split"}));
+    let state = otto.call(json!({"cmd": "key", "keys": "cmd-shift-o", "as": "user"}));
+    let out = state["out"][0]["tab"].as_u64().expect("a tab out");
+    otto.wait_for("the tab out's window", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        state["windows"][1]["frames"].as_u64().filter(|n| *n > 0)
+    });
+    let window = otto.call(json!({"cmd": "state"}))["window"].clone();
+    // (main window's, tab out's), and the main window where it was.
+    let filled = |o: &Otto, main: bool, out: bool| {
+        o.wait_for("the windows' fill", |o| {
+            let state = o.call(json!({"cmd": "state"}));
+            let now = (&state["windows"][0]["fill"], &state["windows"][1]["fill"], &state["state"]["fill_display"]);
+            (now == (&json!(main), &json!(out), &json!(main))).then_some(state)
+        })
+    };
+    // The tab out's green button: its window alone.
+    otto.call(json!({"cmd": "zoom_press", "tab": out}));
+    assert_eq!(filled(&otto, false, true)["window"], window);
+    // The main window's: the main one alone.
+    otto.call(json!({"cmd": "zoom_press"}));
+    filled(&otto, true, true);
+    otto.call(json!({"cmd": "zoom_press", "tab": out}));
+    filled(&otto, true, false);
+    otto.call(json!({"cmd": "zoom_press"}));
+    assert_eq!(filled(&otto, false, false)["window"], window);
+    // ⌃⌘F with the keyboard in the tab out's window (it went with the tab): that window.
+    otto.user_key("cmd-ctrl-f");
+    filled(&otto, false, true);
+    // Folded back in: its window goes, its fill with it; the main window's never came on.
+    let state = otto.call(json!({"cmd": "key", "keys": "cmd-shift-o", "as": "user"}));
+    assert_eq!((&state["out"], &state["state"]["fill_display"]), (&json!([]), &json!(false)), "{state}");
+    assert_eq!(state["windows"].as_array().map(Vec::len), Some(1), "{state}");
+}
+
 /// The only tab of a workspace folded out: an empty tab of the workspace stands in for it in the
 /// main window (its empty state, not Home). Folded back in, the tab takes its place again.
 #[test]

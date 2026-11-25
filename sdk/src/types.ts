@@ -1813,6 +1813,8 @@ export interface AppWindow {
   display: number | null;
   /** The keyboard is there. */
   key: boolean;
+  /** It fills its display: the main one's `fill_display`, or a tab out's own. */
+  fill: boolean;
   /** A tab out's window, once open: its frame and the frames it drew. Absent for the main one. */
   frame?: Rect | null;
   frames?: number | null;

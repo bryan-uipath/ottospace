@@ -561,8 +561,12 @@ pub enum Request {
         width: f64,
     },
     /// For tests (`test_refusal`): the window's green button, pressed as the user would: a zoom,
-    /// which fills the display instead. Refused outside a test run: only the user's hand fills it.
-    ZoomPress,
+    /// which fills the display instead. `tab`: tab out `tab`'s window's; else the main one's.
+    /// Refused outside a test run: only the user's hand fills it.
+    ZoomPress {
+        #[serde(default)]
+        tab: Option<u32>,
+    },
     /// For tests (`test_refusal`): a trackpad pinch at `x`, `y` (window points), `magnification`
     /// nearer (0.1: 10%; negative: farther), as the native hook (`ottospace_mac::magnify`) hands
     /// it over: the zoomed-out canvas or a code city zooms about it. `"as":"user"`: the user's.
@@ -865,7 +869,7 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         Request::WindowWidth { .. } => {
             Some("window_width is for tests (OTTOSPACE_E2E): only the user sizes their window")
         }
-        Request::ZoomPress => {
+        Request::ZoomPress { .. } => {
             Some("zoom_press is for tests (OTTOSPACE_E2E): only the user's green button fills the display")
         }
         Request::Pinch { .. } => Some("pinch is for tests (OTTOSPACE_E2E): only the user's trackpad pinches"),
@@ -1160,9 +1164,10 @@ mod tests {
         assert!(test_refusal(&typing, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&typing, true), None);
         // Nor the green button: it fills the display as the user.
-        let zoom = parse(r#"{"cmd":"zoom_press"}"#);
-        assert!(test_refusal(&zoom, false).expect("refused").contains("only the user"));
-        assert_eq!(test_refusal(&zoom, true), None);
+        for zoom in [r#"{"cmd":"zoom_press"}"#, r#"{"cmd":"zoom_press","tab":2}"#].map(parse) {
+            assert!(test_refusal(&zoom, false).expect("refused").contains("only the user"));
+            assert_eq!(test_refusal(&zoom, true), None);
+        }
         // Nor a pinch: it would zoom as the user's trackpad.
         let pinch = parse(r#"{"cmd":"pinch","x":10,"y":10,"magnification":0.1,"as":"user"}"#);
         assert!(test_refusal(&pinch, false).expect("refused").contains("only the user"));

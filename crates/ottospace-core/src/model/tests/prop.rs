@@ -2110,11 +2110,12 @@ const MAKERS: &[Make] = &[
     |_| Action::TalkWide,
     |_| Action::DialToggle,
     |_| Action::FillDisplay,
-    |_| Action::FillEnded,
     OUT_MAKERS[0],
     OUT_MAKERS[1],
     OUT_MAKERS[2],
     OUT_MAKERS[3],
+    OUT_MAKERS[4],
+    OUT_MAKERS[5],
     |g| {
         // A few made-up projects, a path sometimes twice.
         let project = |g: &mut Gen| Project {
@@ -2329,11 +2330,13 @@ const SLOT_MAKERS: [Make; 19] = [
 ];
 
 /// Displays and folds, also picked now and then once there are displays.
-const OUT_MAKERS: [Make; 4] = [
+const OUT_MAKERS: [Make; 6] = [
     |g| g.displays(),
     |g| Action::TabOut { tab: g.rng.coin().then(|| g.tab_id()) },
     |g| Action::TabIn { tab: g.rng.coin().then(|| g.tab_id()) },
     |g| Action::KeyWindow { tab: g.tab_id() },
+    |g| Action::FillWindow { out: g.rng.coin().then(|| g.tab_id()) },
+    |g| Action::FillEnded { out: g.rng.coin().then(|| g.tab_id()) },
 ];
 
 /// The way out of each box and mode. Picked one time in 8: with every action as likely as any
@@ -4176,6 +4179,8 @@ struct Shell {
     visual: Option<PaneId>,
     /// Its window fills the display.
     filled: bool,
+    /// The tabs out whose windows fill theirs.
+    filled_out: Vec<u32>,
     /// What it keeps of the draft in the bar: (the draft, the capture's number).
     kept: Vec<(String, u32)>,
     /// The bug report whose window picture it holds.
@@ -4463,6 +4468,7 @@ impl Run {
         let listen_pane = m.listen.on.as_ref().and_then(|on| on.source.pane());
         let transcribe_picker = m.picker.as_ref().is_some_and(|picker| picker.transcribe);
         let filled_before = m.fill_display;
+        let out_filled_before: Vec<u32> = m.out.iter().filter(|o| o.fill).map(|o| o.tab).collect();
         let (grants_before, ahead_before) = (m.agent.panes.clone(), m.agent.ahead.clone());
         let offers_before = m.agent.offers.clone();
         let (default, last_before) = (m.agent.default, m.agent.last.clone());
@@ -4776,8 +4782,11 @@ impl Run {
         // Only the user puts the window over the menu bar and the Dock, now or in the run whose
         // layout is restored (a client's restore is refused); anyone's end of it tells the shell.
         let restores = matches!(action, Action::RestoreLayout { .. }) && origin != Origin::Socket;
-        let fills = matches!(action, Action::FillDisplay) && origin == Origin::User || restores;
-        ensure!(fills || !m.fill_display || filled_before, "{origin:?}'s {action:?} filled the display");
+        let fills = matches!(action, Action::FillDisplay | Action::FillWindow { .. }) && origin == Origin::User;
+        ensure!(fills || restores || !m.fill_display || filled_before, "{origin:?}'s {action:?} filled the display");
+        // So for a tab out's window, each its own.
+        let new = m.out.iter().find(|o| o.fill && !out_filled_before.contains(&o.tab));
+        ensure!(fills || new.is_none(), "{origin:?}'s {action:?} filled tab out {new:?}'s display");
         // A notice is said to the user: only their dismissal takes one off the bar, and only a
         // read of the settings (their line fixed or changed) puts one back. No input: one effect.
         let dismisses = matches!(action, Action::NoticeDismiss { .. });
@@ -5911,6 +5920,13 @@ impl Run {
                     ensure!(into.is_none_or(empty), "a window is hosted into {into:?}, no empty pane");
                 }
                 Effect::FillDisplay { on } => self.shell.filled = *on,
+                Effect::FillOut { tab, on } => {
+                    self.shell.filled_out.retain(|t| t != tab);
+                    if *on {
+                        ensure!(m.is_out(*tab), "tab {tab}'s window fills its display, but it is not out");
+                        self.shell.filled_out.push(*tab);
+                    }
+                }
                 Effect::Activate { id } => {
                     let own = format!("{:?}", Source::Own { id: id.clone() });
                     ensure!(labelled.contains(&own), "a control with no label is activated: {id:?}");
@@ -6466,6 +6482,10 @@ impl Run {
             "the shell holds a pane the model closed without a word"
         );
         ensure!(self.shell.filled == m.fill_display, "the shell's window fills the display: {}", self.shell.filled);
+        let mut filled_out: Vec<u32> = m.out.iter().filter(|o| o.fill).map(|o| o.tab).collect();
+        let mut shell_out = self.shell.filled_out.clone();
+        (filled_out.sort(), shell_out.sort());
+        ensure!(shell_out == filled_out, "the shell fills tabs out {shell_out:?}; the model {filled_out:?}");
         ensure!(self.shell.live == m.live, "the shell's live pane is {:?}; the model's {:?}", self.shell.live, m.live);
         ensure!(
             self.shell.visual == m.visual,

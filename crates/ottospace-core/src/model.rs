@@ -2220,12 +2220,20 @@ pub enum Action {
     TalkWide,
     /// Collapse the shown conversation's dial to its marker, or open it again: kept per task.
     DialToggle,
-    /// Put the window over its whole display, the menu bar and the Dock away while ottospace is in
-    /// front; again: back as it was. Only the user's. Kept in `layout.json`: on at quit, on at start.
+    /// Put the window with the keyboard over its whole display, the menu bar and the Dock away
+    /// while ottospace is in front; again: back as it was. Only the user's. The main window's is
+    /// kept in `layout.json`: on at quit, on at start.
     FillDisplay,
-    /// The shell saw the window leave the display's frame (dragged, zoomed, a display gone): the
-    /// mode is over, the bars come back.
-    FillEnded,
+    /// As `FillDisplay`, for the window whose own button it is (the green one, the top row's):
+    /// the main one, or tab out `out`'s. Only the user's.
+    FillWindow {
+        out: Option<u32>,
+    },
+    /// The shell saw a window leave the display's frame (dragged, zoomed, a display gone): its
+    /// mode is over. `out`: a tab out's window, else the main one.
+    FillEnded {
+        out: Option<u32>,
+    },
     /// The displays as the shell's watcher reads them, and the main window's (`main`, a uid).
     /// Only the shell's (System). A tab out on a display gone folds in; plugged in again, the
     /// display takes it back (`displays`).
@@ -3020,7 +3028,8 @@ impl Action {
             | Action::TalkWide
             | Action::DialToggle
             | Action::FillDisplay
-            | Action::FillEnded
+            | Action::FillWindow { .. }
+            | Action::FillEnded { .. }
             | Action::SetDisplays { .. }
             | Action::TabOut { .. }
             | Action::TabIn { .. }
@@ -3184,6 +3193,7 @@ impl Action {
             | Action::AppsToggle { .. }
             | Action::AppsFilter { .. } => Some(Feature::AppsSection),
             Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(Feature::MultiMonitor),
+            Action::FillWindow { out: Some(_) } => Some(Feature::MultiMonitor),
             Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } | Action::TalkWide => {
                 Some(Feature::OverlayPanels)
             }
@@ -3543,7 +3553,8 @@ impl Action {
             | Action::TalkResize { .. }
             | Action::DialToggle
             | Action::FillDisplay
-            | Action::FillEnded
+            | Action::FillWindow { .. }
+            | Action::FillEnded { .. }
             | Action::SetDisplays { .. }
             | Action::TalkStart
             | Action::SetProjects { .. }
@@ -3952,6 +3963,11 @@ pub enum Effect {
     /// `on`: the window to its display's whole frame, the menu bar and the Dock away while
     /// ottospace is in front. Off: the bars as the system has them, the window back (`fill::back`).
     FillDisplay {
+        on: bool,
+    },
+    /// As `FillDisplay`, for tab out `tab`'s window. Off also when the tab folds in: its window goes.
+    FillOut {
+        tab: u32,
         on: bool,
     },
     /// The user typed a label in a hosted app: press the element at `path` in `pane`'s window
@@ -5469,7 +5485,7 @@ impl Model {
             }
             // How the user keeps their drawer, and the layout file that keeps it.
             Action::DialToggle => Some(chat::DIAL_USERS),
-            Action::FillDisplay => Some(crate::fill::USERS_ALONE),
+            Action::FillDisplay | Action::FillWindow { .. } => Some(crate::fill::USERS_ALONE),
             Action::CityCamera { .. } => Some(city::USERS_ALONE),
             Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => Some(displays::USERS_ALONE),
             // Only the shell's display watcher says what the displays are.
@@ -8218,15 +8234,9 @@ impl Model {
             Action::TalkResize { width } => self.talk_width = talk::width(width),
             Action::TalkWide => self.talk_wide = !self.talk_wide,
             Action::DialToggle => self.dial_toggle(),
-            Action::FillDisplay => {
-                self.fill_display = !self.fill_display;
-                effects.push(Effect::FillDisplay { on: self.fill_display });
-            }
-            Action::FillEnded => {
-                if std::mem::take(&mut self.fill_display) {
-                    effects.push(Effect::FillDisplay { on: false });
-                }
-            }
+            Action::FillDisplay => self.fill_window(self.away.map(|_| self.tabs[self.active].id), effects),
+            Action::FillWindow { out } => self.fill_window(out, effects),
+            Action::FillEnded { out } => self.fill_ended(out, effects),
             Action::SetDisplays { displays, main } => self.set_displays(displays, main),
             Action::TabOut { tab } => self.tab_out(tab, effects),
             Action::TabIn { tab } => self.tab_in(tab, effects),
@@ -12179,7 +12189,8 @@ mod tests {
         Action::TalkWide,
         Action::DialToggle,
         Action::FillDisplay,
-        Action::FillEnded,
+        Action::FillWindow { .. },
+        Action::FillEnded { .. },
         Action::SetDisplays { .. },
         Action::TabOut { .. },
         Action::TabIn { .. },
@@ -12629,7 +12640,8 @@ mod tests {
             Action::TalkWide,
             Action::DialToggle,
             Action::FillDisplay,
-            Action::FillEnded,
+            Action::FillWindow { out: Some(1) },
+            Action::FillEnded { out: None },
             Action::SetDisplays { displays: Vec::new(), main: None },
             Action::TabOut { tab: None },
             Action::TabIn { tab: None },
@@ -13325,7 +13337,7 @@ mod tests {
                         Some(btw::RUNNERS_ALONE)
                     }
                     Action::DialToggle => Some(chat::DIAL_USERS),
-                    Action::FillDisplay => Some(crate::fill::USERS_ALONE),
+                    Action::FillDisplay | Action::FillWindow { .. } => Some(crate::fill::USERS_ALONE),
                     Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => {
                         Some(displays::USERS_ALONE)
                     }
@@ -21027,7 +21039,7 @@ mod tests {
                         Some(btw::RUNNERS_ALONE)
                     }
                     Action::DialToggle => Some(chat::DIAL_USERS),
-                    Action::FillDisplay => Some(crate::fill::USERS_ALONE),
+                    Action::FillDisplay | Action::FillWindow { .. } => Some(crate::fill::USERS_ALONE),
                     Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => {
                         Some(displays::USERS_ALONE)
                     }

@@ -149,6 +149,7 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.audioProbeStop(),
   (c) => c.windowWidth({ width: 340 }),
   (c) => c.zoomPress(),
+  (c) => c.zoomPress({ tab: 2 }),
   (c) => c.pinch({ x: 400, y: 300, magnification: 0.1, as: "user" }),
   (c) => c.modifierFlags({ changes: [{ at: 0, cmd: true }, { at: 80, cmd: false, others: false, input_at: null }] }),
   (c) => c.displayChange(),

@@ -1169,6 +1169,8 @@ struct Workspace {
     main_window: gpui::AnyWindowHandle,
     /// Each tab out's window as last drawn: its frame, and how many frames it drew.
     out_frames: HashMap<u32, ([f32; 4], u64, isize)>,
+    /// Each tab out's window that fills its display: its frame before, and the one it was given.
+    out_filled: HashMap<u32, (ottospace_core::ax::Frame, ottospace_core::ax::Frame)>,
     /// The controls a tab out's window draws, apart from the main window's (`out_window`).
     out_controls: sneak::Controls,
     /// A terminal's or hosted window's output asked for a frame not drawn yet: a stall too.
@@ -1670,8 +1672,10 @@ impl Workspace {
                         this.listen_read_past(window, cx);
                     }
                     // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
-                    if ottospace_mac::window::take_zoom() {
-                        this.dispatch(Action::FillDisplay, Origin::User, window, cx);
+                    // The window zoomed fills its display: the main one or a tab out's.
+                    if let Some(zoomed) = ottospace_mac::window::take_zoom() {
+                        let out = this.out_frames.iter().find(|(_, (_, _, n))| *n == zoomed).map(|(tab, _)| *tab);
+                        this.dispatch(Action::FillWindow { out }, Origin::User, window, cx);
                     }
                     if hotkey::take_press() {
                         this.key_used(Binding::ReturnKey);
@@ -1973,6 +1977,7 @@ impl Workspace {
             keys_in: None,
             main_window: Window::window_handle(window),
             out_frames: HashMap::new(),
+            out_filled: HashMap::new(),
             out_controls: sneak::Controls::default(),
             output: false,
             home: home::Shared::default(),
@@ -2563,6 +2568,7 @@ impl Workspace {
                 }
                 Effect::Activate { id } => self.activate(id, window, cx),
                 Effect::FillDisplay { on } => self.fill_display(*on, window, cx),
+                Effect::FillOut { tab, .. } => self.fill_out(*tab, cx),
                 Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::ListFiles { folder } => self.list_files(folder),
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
@@ -3820,9 +3826,16 @@ impl Workspace {
                     }
                     None
                 }
-                // A test run only: the green button. The next tick takes the zoom it asks for.
-                Request::ZoomPress => {
-                    match ns_view(window).filter(|_| self.zoom_asks) {
+                // A test run only: the green button, of tab out `tab`'s window if named. The next
+                // tick takes the zoom it asks for.
+                Request::ZoomPress { tab } => {
+                    let out = tab.and_then(|tab| self.out_windows.iter().find(|(id, _)| *id == tab)?.1);
+                    let view = match (tab, out) {
+                        (None, _) => ns_view(window),
+                        (Some(_), out) => out.and_then(|out| out.update(cx, |_, window, _| ns_view(window)).ok()?),
+                    };
+                    match view.filter(|_| self.zoom_asks) {
+                        None if tab.is_some() => failure = Some("no window open for that tab out".into()),
                         // SAFETY: GPUI's own view, on the main thread.
                         Some(view) => {
                             if !unsafe { ottospace_mac::window::press_zoom(view) } {
@@ -6413,7 +6426,7 @@ impl Workspace {
         }
         // The bars before anything that can fail: nothing leaves them away. `at` was read first:
         // `visible` is what they leave while they show.
-        ottospace_mac::window::hide_bars(on);
+        ottospace_mac::window::hide_bars(self.model.fills_any());
         // Kept from a turn before whose frame is still to come: its `before` is the true one.
         if let (true, None, Some(at)) = (on, self.filled, at) {
             let frame = fill::frame(at.screen, at.safe_top);
@@ -6452,7 +6465,7 @@ impl Workspace {
         // SAFETY: GPUI's own view, on the main thread.
         let at = ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
         if at.is_some_and(|at| !fill::holds(at.window, fill::frame(at.screen, at.safe_top))) {
-            self.dispatch(Action::FillEnded, Origin::System, window, cx);
+            self.dispatch(Action::FillEnded { out: None }, Origin::System, window, cx);
         }
     }
 
@@ -8577,7 +8590,7 @@ impl Workspace {
         let tip = if on { "Back from the whole display  ⌃⌘F" } else { "Fill the whole display  ⌃⌘F" };
         let fill = button("fill-display".into(), FILL_ICONS[usize::from(on)], "fill".into(), tip).on_click(
             cx.listener(|this, _, window, cx| {
-                this.dispatch(Action::FillDisplay, this.input, window, cx);
+                this.dispatch(Action::FillWindow { out: None }, this.input, window, cx);
             }),
         );
         // Report a bug in ottospace: only while the settings name a checkout of it.
@@ -9664,11 +9677,9 @@ impl Workspace {
             }))
             // As the green button: `zoom_asks` turns it into Fill the Whole Display.
             .on_action(cx.listener(|_, _: &ZoomWindow, window, _| window.zoom_window()))
-            // The main window's alone: a tab out's fills nothing yet (slice 8).
+            // The window with the keyboard: the main one or a tab out's.
             .on_action(cx.listener(|this, _: &FillDisplay, window, cx| {
-                if Window::window_handle(window) == this.main_window {
-                    this.dispatch(Action::FillDisplay, this.input, window, cx);
-                }
+                this.dispatch(Action::FillDisplay, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &Quit, window, cx| this.ask_quit(window, cx)))
             .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {

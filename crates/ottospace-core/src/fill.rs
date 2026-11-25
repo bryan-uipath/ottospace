@@ -3,6 +3,7 @@
 //! Measured: `docs/ai/fill-display.md`.
 
 use crate::ax::Frame;
+use crate::model::{Effect, Model};
 use crate::restore;
 
 /// Why a client's request to fill the display is refused.
@@ -46,10 +47,49 @@ pub fn back(now: Frame, filled: Frame, before: Frame, screens: &[Frame], main: F
     restore::destination(if holds(now, filled) { before } else { now }, screens, main)
 }
 
+impl Model {
+    /// Window `out` (a tab out's; None: the main one) fills its display, or comes back. Each
+    /// window's mode is its own.
+    pub(crate) fn fill_window(&mut self, out: Option<u32>, effects: &mut Vec<Effect>) {
+        let Some(tab) = out else {
+            self.fill_display = !self.fill_display;
+            return effects.push(Effect::FillDisplay { on: self.fill_display });
+        };
+        if let Some(out) = self.out.iter_mut().find(|o| o.tab == tab) {
+            out.fill = !out.fill;
+            effects.push(Effect::FillOut { tab, on: out.fill });
+        }
+    }
+
+    /// Window `out`'s mode is over, if it was on.
+    pub(crate) fn fill_ended(&mut self, out: Option<u32>, effects: &mut Vec<Effect>) {
+        match out {
+            None if std::mem::take(&mut self.fill_display) => effects.push(Effect::FillDisplay { on: false }),
+            Some(tab) => {
+                if let Some(out) = self.out.iter_mut().find(|o| o.tab == tab && o.fill) {
+                    out.fill = false;
+                    effects.push(Effect::FillOut { tab, on: false });
+                }
+            }
+            None => {}
+        }
+    }
+
+    /// Whether tab out `tab`'s window fills its display.
+    pub fn fills_out(&self, tab: u32) -> bool {
+        self.out.iter().any(|o| o.tab == tab && o.fill)
+    }
+
+    /// Whether any window fills its display: the menu bar and the Dock stay away while one does.
+    pub fn fills_any(&self) -> bool {
+        self.fill_display || self.out.iter().any(|o| o.fill)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Action, Effect, Model, Origin};
+    use crate::model::{Action, Origin};
 
     const DISPLAY: Frame = Frame { x: 0., y: 0., w: 1920., h: 1080. };
     const VISIBLE: Frame = Frame { x: 0., y: 25., w: 1920., h: 975. };
@@ -111,9 +151,10 @@ mod tests {
         assert_eq!(m.update(Action::FillDisplay), [Effect::FillDisplay { on: true }]);
         assert_eq!(m.update(Action::FillDisplay), [Effect::FillDisplay { on: false }]);
         // Over already: nothing to tell the shell.
-        assert_eq!(m.update(Action::FillEnded.sent_by(Origin::System)), []);
+        assert_eq!(m.update(Action::FillEnded { out: None }.sent_by(Origin::System)), []);
         m.update(Action::FillDisplay);
-        assert_eq!(m.update(Action::FillEnded.sent_by(Origin::System)), [Effect::FillDisplay { on: false }]);
+        let ended = m.update(Action::FillEnded { out: None }.sent_by(Origin::System));
+        assert_eq!(ended, [Effect::FillDisplay { on: false }]);
         assert!(!m.fill_display);
     }
 

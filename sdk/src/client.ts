@@ -637,10 +637,11 @@ export class Client {
   }
   /**
    * For tests (`OTTOSPACE_E2E`): the window's green button, pressed as the user would. It fills
-   * the display instead of zooming. Rejects outside a test run: only the user's hand fills it.
+   * that window's display instead of zooming. `tab`: tab out `tab`'s window; else the main one.
+   * Rejects outside a test run: only the user's hand fills it.
    */
-  zoomPress(): Promise<Snapshot> {
-    return this.snapshot({ cmd: "zoom_press" });
+  zoomPress(args: { tab?: number } = {}): Promise<Snapshot> {
+    return this.snapshot({ cmd: "zoom_press", ...args });
   }
   /**
    * For tests (`OTTOSPACE_E2E`): a trackpad pinch at `x`, `y` (window points), `magnification`
