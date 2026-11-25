@@ -10536,3 +10536,47 @@ fn seed_1151_a_slot_offers_only_from_its_own_look() {
         ])
         .unwrap();
 }
+
+/// Seed 2900 of the long run: a client's click on a row of an explorer in a hidden tab focused it,
+/// bringing that tab up. A click lands only on a pane on show.
+#[test]
+fn seed_2900_a_click_on_an_explorer_in_a_hidden_tab_does_nothing() {
+    replay(&[
+        Action::Split { axis: Axis::Down, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Open { kind: Kind::Terminal, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        Action::WorktreeAdded {
+            repo: "/tmp".into(),
+            path: "/code/app-2".into(),
+            asked: "relative".into(),
+            fresh: true,
+            repos: vec![Repo {
+                name: "Ottospace".into(),
+                path: "e\u{301}".into(),
+                branch: Some("fix/zoom".into()),
+                worktrees: vec![Worktree {
+                    name: "My Project".into(),
+                    path: "/code/app/.claude/worktrees/agent-x".into(),
+                    branch: None,
+                }],
+            }],
+        }
+        .sent_by(Origin::User),
+        Action::ExplorerOpen { root: Some("/code/app/.claude/worktrees/agent-x".into()), axis: Axis::Down }
+            .sent_by(Origin::User),
+        Action::ExplorerListed {
+            pane: 3,
+            dir: "".into(),
+            entries: Some(vec![
+                crate::explorer::Entry { name: "README.md".into(), dir: false, link: true, ignored: false },
+                crate::explorer::Entry { name: "main.rs".into(), dir: true, link: false, ignored: false },
+                crate::explorer::Entry { name: ".git".into(), dir: true, link: false, ignored: true },
+                crate::explorer::Entry { name: "README.md".into(), dir: false, link: true, ignored: false },
+            ]),
+            cut: true,
+        }
+        .sent_by(Origin::User),
+        Action::NewEmptyTab.sent_by(Origin::System),
+        Action::ExplorerClick { pane: 3, row: 1 }.sent_by(Origin::Socket),
+    ])
+    .unwrap();
+}
