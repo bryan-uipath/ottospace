@@ -69,7 +69,11 @@
 {"cmd":"capture_start","pane":1}
 {"cmd":"bug_start"}
 {"cmd":"city_spin"}
+<<<<<<< HEAD
 {"cmd":"typing_time","full":true,"busy":true}
+=======
+{"cmd":"city_under","pane":1,"opacity":0.85}
+>>>>>>> e2745e07 (Code city under a terminal, for a test run (city_under): its folder's city on the live layer, the pane's background see-through over it)
 {"cmd":"inspector_fixture","app":"Fixture","tree":{"root":{"role":"AXWindow","children":[{"role":"AXButton","actions":["AXPress"]}]},"count":2,"truncated":{"depth":false,"nodes":false,"timeout":false}}}
 {"cmd":"task_brief","id":1}
 {"cmd":"ax_tree","pane":1,"depth":20,"nodes":500}

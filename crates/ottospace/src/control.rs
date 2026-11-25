@@ -406,6 +406,16 @@ pub enum Request {
         #[serde(default)]
         busy: bool,
     },
+    /// For tests (`OTTOSPACE_E2E`): the city of `pane`'s folder drawn under that pane (a
+    /// terminal), on its live layer with `city_live_layer`, and the pane's background at
+    /// `opacity` (0 to 1) over it; none (`pane` null) ends it. Refused outside a test run: the city
+    /// behind panes is not built.
+    CityUnder {
+        #[serde(default)]
+        pane: Option<PaneId>,
+        #[serde(default = "opaque")]
+        opacity: f32,
+    },
     /// For tests (`test_refusal`): opens the accessibility inspector on a pane (default: the
     /// focused one) as the user, with `tree` as if read from its window at `0,0` (`window` its
     /// size). A test run hosts no window to read.
@@ -724,6 +734,10 @@ pub enum Request {
     Quit,
 }
 
+fn opaque() -> f32 {
+    1.
+}
+
 fn one() -> usize {
     1
 }
@@ -802,7 +816,8 @@ fn two() -> f32 {
 /// capture hands over a hosted app's picture and text, and outside a test only the user starts one.
 /// `bug_start`: a bug report pictures the window, and outside a test only the user starts one.
 /// `city_spin`: it would turn the user's city, which only their pointer moves. `typing_time`: it
-/// opens panes and types keys into the window, as only the user's own command does.
+/// opens panes and types keys into the window, as only the user's own command does. `city_under`:
+/// a test's city under a terminal, not a feature.
 /// `repo_add`: it writes the user's settings, as only the user's own choice in the folder picker does.
 /// `sneak_app_tree`: it would choose what sneak mode labels in another app. `calendar_call`: it
 /// would raise or silence the user's meeting alert. `record_start`: it would film the window.
@@ -828,6 +843,9 @@ pub fn test_refusal(request: &Request, e2e: bool) -> Option<&'static str> {
         ),
         Request::CaptureStart { .. } => {
             Some("capture_start is for tests (OTTOSPACE_E2E): only the user starts a capture, with the capture key")
+        }
+        Request::CityUnder { .. } => {
+            Some("city_under is for tests (OTTOSPACE_E2E): the city behind panes is not built")
         }
         Request::CitySpin => {
             Some("city_spin is for tests (OTTOSPACE_E2E): only the user turns the city, with the Developer command")
@@ -1155,6 +1173,8 @@ mod tests {
         let bug = parse(r#"{"cmd":"bug_start"}"#);
         assert!(test_refusal(&bug, false).expect("refused").contains("only the user"));
         assert_eq!(test_refusal(&bug, true), None);
+        let under = parse(r#"{"cmd":"city_under","pane":2,"opacity":0.85}"#);
+        assert!(test_refusal(&under, false).is_some() && test_refusal(&under, true).is_none());
         // Nor a spin: it turns the user's city.
         let spin = parse(r#"{"cmd":"city_spin"}"#);
         assert!(test_refusal(&spin, false).expect("refused").contains("only the user"));

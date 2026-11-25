@@ -492,12 +492,20 @@ export class Client {
     return this.snapshot({ cmd: "city_spin" });
   }
   /**
+<<<<<<< HEAD
    * For tests (`OTTOSPACE_E2E`): the Developer command's timed typing, as the user: made-up keys
    * into a throwaway `cat` in a new pane (`full`: a full-screen program; `busy`: a pane printing
    * beside it); its numbers then in `typing`. Rejects outside a test run.
    */
   typingTime(args: { full?: boolean; busy?: boolean } = {}): Promise<Snapshot> {
     return this.snapshot({ cmd: "typing_time", ...args });
+=======
+   * For tests (`OTTOSPACE_E2E`): `pane`'s folder's city drawn under it (a terminal), its
+   * background at `opacity` over it; no pane ends it. Rejects outside a test run.
+   */
+  cityUnder(args: { pane?: number | null; opacity?: number } = {}): Promise<Snapshot> {
+    return this.snapshot({ cmd: "city_under", ...args });
+>>>>>>> e2745e07 (Code city under a terminal, for a test run (city_under): its folder's city on the live layer, the pane's background see-through over it)
   }
   /**
    * For tests (`OTTOSPACE_E2E`): opens the accessibility inspector on a pane (default: the focused

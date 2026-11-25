@@ -975,8 +975,8 @@ impl Workspace {
         let exclude: Exclude = crate::config::live().city_exclude.clone().unwrap_or_default().into_iter().collect();
         let mut on_show: HashMap<String, Asked> = HashMap::new();
         let mut floors = HashSet::new();
-        for at in self.model.empty_places() {
-            let Some(city) = self.model.city_at(at) else { continue };
+        for at in self.city_places() {
+            let Some(city) = self.city_for(at) else { continue };
             let floor = self.floor_of(at);
             floors.insert(floor);
             // Read only for a place a frame laid out large enough for a city; a place not laid
@@ -1107,7 +1107,7 @@ impl Workspace {
     /// files or the size changed; one of a folder, lit files and size already made, for another
     /// place, is painted at once.
     pub(crate) fn render_city(&self, floor: Floor, at: At, lattice: AnyElement, cx: &mut Context<Self>) -> AnyElement {
-        let Some(mut city) = self.model.city_at(at) else { return lattice };
+        let Some(mut city) = self.city_for(at) else { return lattice };
         let view = self.eased_view(at, city.view);
         let easing = self.city_ease.get().is_some_and(|(of, ..)| of == at);
         // Its camera moving: the user's drag of it that has moved, a reset easing back, or a
@@ -1594,8 +1594,8 @@ impl Workspace {
     /// For the state of a test run: the city of the first empty place on show that draws one
     /// (the main window's tab, else its empty panes by id, else a folded-out tab); null with none.
     pub(crate) fn city_snapshot(&self) -> serde_json::Value {
-        let mut floors: Vec<(Floor, At)> = (self.model.empty_places().into_iter())
-            .filter(|at| self.model.city_at(*at).is_some_and(|city| self.city.held.contains_key(city.dir)))
+        let mut floors: Vec<(Floor, At)> = (self.city_places().into_iter())
+            .filter(|at| self.city_for(*at).is_some_and(|city| self.city.held.contains_key(city.dir)))
             .map(|at| (self.floor_of(at), at))
             .collect();
         floors.sort_by_key(|(floor, _)| match floor {
@@ -1715,7 +1715,7 @@ impl Workspace {
             return;
         }
         // In the main window: its frames time the spin.
-        let places = self.model.empty_places().into_iter().map(|at| (self.floor_of(at), at));
+        let places = self.city_places().into_iter().map(|at| (self.floor_of(at), at));
         let first = places.filter(|(floor, _)| !matches!(floor, Floor::Out(_))).find(|(floor, _)| {
             let drawn = self.city_drawn.borrow();
             drawn.places.get(floor).is_some_and(|place| drawn.picture(place).is_some())
@@ -1782,7 +1782,7 @@ impl Workspace {
         }
         (spin.shown, spin.presents) = (shown, presents);
         // Its city covered (a pane opened over it) or gone: stopped, not done.
-        if self.model.city_at(spin.at).is_none() {
+        if self.city_for(spin.at).is_none() {
             return self.city_spin_end(spin, false, window, cx);
         }
         if spin.step == SPIN_STEPS {
@@ -1903,6 +1903,23 @@ pub(crate) fn background_around(holes: Vec<Bounds<Pixels>>) -> AnyElement {
 }
 
 impl Workspace {
+    /// The places that draw a city: the empty ones, and in a test run the pane a city stands
+    /// under (`city_under`).
+    pub(crate) fn city_places(&self) -> Vec<At> {
+        let mut places = self.model.empty_places();
+        places.extend(self.city_under.map(|(pane, _)| At::Pane(pane)).filter(|at| !places.contains(at)));
+        places
+    }
+
+    /// The city `at` draws: an empty place's, or the one under a test run's pane.
+    pub(crate) fn city_for(&self, at: At) -> Option<ottospace_core::model::city::City<'_>> {
+        let under = |pane| self.city_under.filter(|(of, _)| *of == pane).and_then(|_| self.model.city_under(pane));
+        self.model.city_at(at).or_else(|| match at {
+            At::Pane(pane) => under(pane),
+            At::Tab(_) => None,
+        })
+    }
+
     /// Where the main window's live layers show (`city_live_layer`): each place's picture area,
     /// while a picture of it is made. None with the flag off.
     pub(crate) fn city_live_holes(&self) -> Vec<Bounds<Pixels>> {

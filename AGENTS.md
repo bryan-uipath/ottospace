@@ -197,6 +197,10 @@ Design note: `docs/ai/attention/plan.md`.
     `p50`, `p95`, `p99`, `max` in ms: `key_write`, `write_echo`, `echo_taken`, `taken_painted`,
     `app` (the app's own share), `total`; `hz` the display's refresh). Null outside a test run.
     `scripts/bench`'s typing. Outside a test run only the user's command types into the window.
+  - `city_under` (`"pane"`, `"opacity"`): with `city_live_layer`, that terminal pane's folder's city
+    drawn on its live layer under it, the pane's background at `opacity` over it (the
+    `city-under` shot: text over the city); `"pane": null` ends it. Outside a test run the city
+    behind panes is not built.
   - `sneak_app_tree`: a fixture tree as if read from the focused pane's window while sneak mode
     is on (a test run hosts no window), so its elements get labels. The state's `app_presses`
     (null outside a test run) lists each press a label asked for.

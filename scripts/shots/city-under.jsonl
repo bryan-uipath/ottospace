@@ -1,0 +1,27 @@
+# A terminal over the code city on its live layer (`city_live_layer`; a test run's `city_under`:
+# the city behind panes is not built). Dense made-up text in several colours (dim, bright, bold),
+# a run of coloured background cells, box-drawing lines, the cursor and a selection, over the
+# city at 85% and 60% background opacity, still and turning, then opaque (no city seen). How
+# text composites over a live layer: fringes, contrast.
+{"env":{"OTTOSPACE_FEATURES":"code_city,city_live_layer"}}
+{"tree":"repos/app","files":400}
+{"cmd":"repo_add","path":"{ROOT}/repos/app"}
+{"until":"repos_bar.0"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"type","pane":1,"text":"clear; for i in 1 2 3 4 5 6; do printf '\\033[2mdim made-up line %s\\033[0m \\033[1;97mbright bold words\\033[0m \\033[32mgreen\\033[0m \\033[31mred\\033[0m \\033[34mblue\\033[0m \\033[33myellow\\033[0m\\n' $i; done; printf '\\033[44;97m background run of blue cells \\033[0m\\n'; printf '┌──────────────┐\\n│ a boxed line │\\n└──────────────┘\\n'; printf 'done\\n'\r"}
+{"cmd":"wait","pane":1,"pattern":"^done$"}
+{"drag":{"rect":"bounds.1"},"at":[0.05,0.08],"by":[220,30]}
+{"cmd":"city_under","pane":1,"opacity":0.85}
+{"until":"city.picture"}
+{"settle":1500}
+{"shot":"over-85"}
+{"cmd":"city_under","pane":1,"opacity":0.6}
+{"settle":800}
+{"shot":"over-60"}
+{"cmd":"city_spin"}
+{"settle":1200}
+{"shot":"over-60-turning"}
+{"until":"city.spin.result"}
+{"cmd":"city_under","pane":1,"opacity":1.0}
+{"settle":800}
+{"shot":"opaque"}

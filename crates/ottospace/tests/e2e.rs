@@ -18948,6 +18948,7 @@ fn typing_is_timed_from_key_to_painted_echo() {
     });
     assert!(stopped["keys"].as_u64().unwrap() < 250, "{stopped}");
     assert_eq!(panes(&otto), before);
+}
 
 /// With `city_live_layer` the city is drawn on a layer of its own under the window: a spin counts
 /// that layer's presents, as `live`, and puts the camera back.
