@@ -11,6 +11,17 @@ use crate::vim::Keys;
 pub const MAX_BYTES: u64 = 5 * 1024 * 1024;
 /// The longest path a viewer opens.
 pub const MAX_PATH: usize = 4096;
+/// The most bytes of a picture read: a photo is larger than any text the viewer reads.
+pub const MAX_IMAGE_BYTES: u64 = 32 * 1024 * 1024;
+/// The most pixels a picture decodes to, every frame of an animation together: 160 MB of colour.
+pub const MAX_PIXELS: u64 = 40_000_000;
+/// How near or far a picture may be zoomed: a pixel at most this many points, at least this share.
+pub const MAX_ZOOM: f32 = 32.;
+pub const MIN_ZOOM: f32 = 0.05;
+/// A step of ⌘= or ⌘-.
+pub const ZOOM_STEP: f32 = 1.25;
+/// How far a zoomed picture may be moved from centred, in points, either way.
+pub const MAX_PAN: f32 = 1_000_000.;
 
 /// What a file is shown as, by its name.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -23,12 +34,12 @@ pub enum Shows {
     /// Any other text: lines with their numbers.
     #[default]
     Text,
-    /// A PNG, JPEG, GIF or WebP, drawn as a picture.
+    /// A PNG, JPEG, GIF, WebP, BMP or TIFF, drawn as a picture; a GIF or WebP's frames play.
     Image,
 }
 
 const MARKDOWN: &[&str] = &["md", "markdown", "mdx", "mdown"];
-const IMAGES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp"];
+const IMAGES: &[&str] = &["png", "jpg", "jpeg", "gif", "webp", "bmp", "tif", "tiff"];
 const CODE: &[&str] = &[
     "rs", "ts", "mts", "cts", "tsx", "js", "jsx", "mjs", "cjs", "py", "rb", "go", "swift", "kt", "java", "c", "h",
     "cc", "cpp", "hpp", "m", "mm", "cs", "sh", "bash", "zsh", "fish", "json", "jsonl", "yaml", "yml", "toml", "sql",
@@ -187,8 +198,15 @@ pub enum Read {
     /// Not read yet.
     #[default]
     Reading,
-    /// Read and drawn: its lines (an image has none).
+    /// Read and drawn: its lines.
     Shown { lines: u32 },
+    /// A picture decoded and drawn: its size in pixels, its frames (one unless it plays) and its
+    /// file's bytes.
+    Picture { width: u32, height: u32, frames: u32, bytes: u64 },
+    /// A picture whose pixels, every frame together, are past `MAX_PIXELS`: not decoded.
+    TooManyPixels { width: u32, height: u32, frames: u32 },
+    /// A picture its decoder could not read: broken, or not what its name says.
+    Broken,
     /// "File not found".
     Missing,
     /// Larger than `MAX_BYTES`.
@@ -222,6 +240,45 @@ pub struct Viewer {
     /// asked for another place or file, or Esc.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub marked: Option<Lines>,
+    /// A picture's zoom, in points a pixel; `None`: fitted to the pane.
+    pub zoom: Option<f32>,
+    /// How far a zoomed picture is moved, in points, from centred.
+    pub pan: [f32; 2],
+    /// An animation plays (`true`) or stands on its first frame; `None`: as Reduce Motion says.
+    pub playing: Option<bool>,
+}
+
+/// A change of a picture's zoom.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "step", rename_all = "snake_case")]
+pub enum ZoomStep {
+    /// ⌘=: nearer by `ZOOM_STEP`.
+    In,
+    /// ⌘-: farther.
+    Out,
+    /// ⌘0: fitted to the pane again, centred.
+    Fit,
+    /// A pinch: nearer by `factor` (under 1: farther).
+    By { factor: f32 },
+}
+
+/// The zoom after `step`, from `zoom` (`None`: fitted, at `fit` points a pixel). Kept within
+/// `MIN_ZOOM` and `MAX_ZOOM` (or where it is, past them); `None`: fitted. A step that is not a
+/// number changes nothing.
+pub fn zoomed(zoom: Option<f32>, fit: f32, step: ZoomStep) -> Option<f32> {
+    let now = zoom.unwrap_or(fit);
+    let factor = match step {
+        ZoomStep::Fit => return None,
+        ZoomStep::In => ZOOM_STEP,
+        ZoomStep::Out => ZOOM_STEP.recip(),
+        ZoomStep::By { factor } => factor,
+    };
+    let next = now * factor;
+    if !(next.is_finite() && now.is_finite() && factor > 0.) {
+        return zoom;
+    }
+    // A step never goes the other way: a picture fitted under `MIN_ZOOM` stays where it is going out.
+    Some(next.clamp(MIN_ZOOM.min(now), MAX_ZOOM.max(now)))
 }
 
 impl Viewer {
@@ -480,5 +537,24 @@ mod tests {
         assert_eq!(absolute("~/n.md", None, Some("/Users/me")).as_deref(), Some("/Users/me/n.md"));
         assert_eq!((absolute("a.rs", None, None), absolute("a.rs", Some("rel"), None)), (None, None));
         assert_eq!(absolute("~/n.md", Some("/w"), None), None);
+    }
+
+    #[test]
+    fn a_picture_zooms_in_steps_from_its_fit_within_bounds() {
+        assert_eq!(shows("/a/scan.TIFF"), Shows::Image);
+        assert_eq!(shows("/a/icon.bmp"), Shows::Image);
+        // From fitted at 0.5 points a pixel: nearer by a step, farther, fitted again.
+        assert_eq!(zoomed(None, 0.5, ZoomStep::In), Some(0.625));
+        assert_eq!(zoomed(Some(1.), 0.5, ZoomStep::Out), Some(0.8));
+        assert_eq!(zoomed(Some(4.), 0.5, ZoomStep::Fit), None);
+        assert_eq!(zoomed(Some(30.), 0.5, ZoomStep::By { factor: 10. }), Some(MAX_ZOOM));
+        assert_eq!(zoomed(None, 0.06, ZoomStep::By { factor: 0.1 }), Some(MIN_ZOOM));
+        // Fitted at 4%: farther stays at 4%, never nearer (review).
+        assert_eq!(zoomed(None, 0.04, ZoomStep::Out), Some(0.04));
+        // A pinch that is no number, or none, changes nothing.
+        for factor in [f32::NAN, f32::INFINITY, 0., -2.] {
+            assert_eq!(zoomed(Some(2.), 0.5, ZoomStep::By { factor }), Some(2.), "{factor}");
+        }
+        assert_eq!(zoomed(None, f32::NAN, ZoomStep::In), None);
     }
 }

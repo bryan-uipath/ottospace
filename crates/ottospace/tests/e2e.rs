@@ -17625,6 +17625,99 @@ fn a_file_opens_in_a_viewer_moves_by_counts_reloads_and_edits_beside() {
     assert_eq!((reply["mode"].as_str(), reply["counts"]["file_prompts"].as_u64()), (Some("normal"), Some(1)));
 }
 
+/// A made-up animated GIF: `frames` frames of `side` × `side`, 60 ms each.
+fn made_up_gif(path: &Path, frames: u8, side: u32) {
+    let mut out = Vec::new();
+    {
+        let mut encoder = image::codecs::gif::GifEncoder::new(&mut out);
+        for at in 0..frames {
+            let buffer = image::RgbaImage::from_pixel(side, side, image::Rgba([at * 60, 120, 200, 255]));
+            let frame = image::Frame::from_parts(buffer, 0, 0, image::Delay::from_numer_denom_ms(60, 1));
+            encoder.encode_frame(frame).unwrap();
+        }
+    }
+    std::fs::write(path, out).unwrap();
+}
+
+/// A picture in the viewer: an animated GIF plays (frames counted while on show), pauses with its
+/// control, zooms with ⌘= and fits again with ⌘0; under Reduce Motion it stands on its first
+/// frame. A header past the pixel cap, or a broken file, is said, never decoded.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_gif_plays_zooms_and_pauses_and_a_huge_or_broken_picture_is_said() {
+    let dir = support::temp(&format!("ottospace-e2e-picture-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let dir = std::fs::canonicalize(&dir).unwrap();
+    let gif = dir.join("spin.gif");
+    made_up_gif(&gif, 4, 48);
+    let otto = Otto::launch("picture");
+    otto.call(json!({"cmd": "split"}));
+    let reply = otto.call(json!({"cmd": "open_file", "path": gif}));
+    let id = pane_ids(&reply).into_iter().max().unwrap();
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let read = otto.wait_for("the gif decoded", |o| {
+        let s = state(o);
+        (s["state"]["viewers"][id.to_string()]["read"]["status"] == "picture").then_some(s)
+    });
+    let status = &read["state"]["viewers"][id.to_string()]["read"];
+    assert_eq!((&status["width"], &status["height"], &status["frames"]), (&json!(48), &json!(48), &json!(4)));
+    // It plays: frames move on, and the drawn frame with them.
+    otto.wait_for("frames to play", |o| (state(o)["counts"]["picture_frames"].as_u64() > Some(2)).then_some(()));
+    // ⌘= nearer, ⌘0 fitted again.
+    let zoomed = otto.user_key("cmd-=");
+    assert!(zoomed["state"]["viewers"][id.to_string()]["zoom"].as_f64().is_some(), "{}", zoomed["state"]["viewers"]);
+    let fitted = otto.user_key("cmd-0");
+    assert_eq!(fitted["state"]["viewers"][id.to_string()]["zoom"], Value::Null);
+    // Its Pause: no frame moves on after it.
+    otto.user_click(at(otto.control(&format!("viewer-play:{id}")), 0.5, 0.5));
+    let paused = state(&otto);
+    assert_eq!(paused["state"]["viewers"][id.to_string()]["playing"], false);
+    let frames = paused["counts"]["picture_frames"].as_u64();
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    assert_eq!(state(&otto)["counts"]["picture_frames"].as_u64(), frames);
+    // A BMP whose header claims 20,000 × 20,000: too many pixels, said. A cut one: broken.
+    let mut bmp = Vec::new();
+    image::ImageEncoder::write_image(
+        image::codecs::bmp::BmpEncoder::new(&mut bmp),
+        &[1, 2, 3, 255],
+        1,
+        1,
+        image::ExtendedColorType::Rgba8,
+    )
+    .unwrap();
+    bmp[18..22].copy_from_slice(&20_000i32.to_le_bytes());
+    bmp[22..26].copy_from_slice(&20_000i32.to_le_bytes());
+    let huge = dir.join("huge.bmp");
+    std::fs::write(&huge, &bmp).unwrap();
+    let cut = dir.join("cut.gif");
+    std::fs::write(&cut, b"GIF89a\x10\x00").unwrap();
+    for (path, said) in [(huge, "too_many_pixels"), (cut, "broken")] {
+        let reply = otto.call(json!({"cmd": "open_file", "path": path}));
+        let id = pane_ids(&reply).into_iter().max().unwrap();
+        otto.wait_for(said, |o| (state(o)["state"]["viewers"][id.to_string()]["read"]["status"] == said).then_some(()));
+    }
+}
+
+/// Under Reduce Motion an animated GIF stands on its first frame: no frame moves on.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn under_reduce_motion_a_gif_stands_still() {
+    let dir = support::temp(&format!("ottospace-e2e-picture-calm-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let gif = std::fs::canonicalize(&dir).unwrap().join("spin.gif");
+    made_up_gif(&gif, 4, 24);
+    let otto = Otto::launch_with("picture-calm", &[("OTTOSPACE_REDUCE_MOTION", "1")]);
+    otto.call(json!({"cmd": "split"}));
+    let reply = otto.call(json!({"cmd": "open_file", "path": gif}));
+    let id = pane_ids(&reply).into_iter().max().unwrap();
+    otto.wait_for("the gif decoded", |o| {
+        let s = o.call(json!({"cmd": "state"}));
+        (s["state"]["viewers"][id.to_string()]["read"]["status"] == "picture").then_some(())
+    });
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert_eq!(otto.call(json!({"cmd": "state"}))["counts"]["picture_frames"], 0);
+}
+
 /// Evidence's open: a file at lines comes up scrolled to them, the first drawn marked inside the
 /// pane; asked again, the same viewer moves; Esc takes the mark off. Line 0 is refused.
 #[test]

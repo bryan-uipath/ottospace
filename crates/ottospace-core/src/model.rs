@@ -1726,6 +1726,23 @@ pub enum Action {
         path: String,
         read: crate::viewer::Read,
     },
+    /// ⌘= ⌘- ⌘0 or a pinch over a picture in a viewer (default: the focused pane): its zoom,
+    /// from `fit` (points a pixel, fitted to the pane, as the shell laid it out).
+    ViewerZoom {
+        pane: Option<PaneId>,
+        step: crate::viewer::ZoomStep,
+        fit: f32,
+    },
+    /// A drag or the wheel over a zoomed picture: moved by `by` points.
+    ViewerPan {
+        pane: PaneId,
+        by: [f32; 2],
+    },
+    /// An animation's play or pause control (default: the focused pane's).
+    ViewerPlay {
+        pane: Option<PaneId>,
+        play: bool,
+    },
     /// ⌃G or Edit: the user's editor on the viewer's file (default: the focused pane's), in a
     /// terminal beside it.
     ViewerEdit {
@@ -3096,6 +3113,9 @@ impl Action {
             | Action::ViewerKey { .. }
             | Action::ViewerScrolled { .. }
             | Action::ViewerRead { .. }
+            | Action::ViewerZoom { .. }
+            | Action::ViewerPan { .. }
+            | Action::ViewerPlay { .. }
             | Action::ViewerEdit { .. }
             | Action::BugPress { .. }
             | Action::BugDrag { .. }
@@ -3556,6 +3576,9 @@ impl Action {
             | Action::ViewerKey { .. }
             | Action::ViewerScrolled { .. }
             | Action::ViewerRead { .. }
+            | Action::ViewerZoom { .. }
+            | Action::ViewerPan { .. }
+            | Action::ViewerPlay { .. }
             | Action::ViewerEdit { .. }
             | Action::SetFeatures { .. }
             | Action::BugStart { .. }
@@ -7782,6 +7805,9 @@ impl Model {
             Action::ViewerScrolled { pane, top, most, page } => self.viewer_scrolled(pane, top, most, page),
             Action::ViewerRead { pane, path, read } => self.viewer_read(pane, &path, read),
             Action::ViewerEdit { pane } => self.viewer_edit(pane, effects),
+            Action::ViewerZoom { pane, step, fit } => self.viewer_zoom(pane, step, fit),
+            Action::ViewerPan { pane, by } => self.viewer_pan(pane, by),
+            Action::ViewerPlay { pane, play } => self.viewer_play(pane, play),
             Action::SettingsRead { text, written } => self.settings_read(&text, written, effects),
             Action::UnfilledOpen { pane } => self.unfilled_open(pane, effects),
             Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
@@ -12113,6 +12139,9 @@ mod tests {
         Action::ViewerKey { .. },
         Action::ViewerScrolled { .. },
         Action::ViewerRead { .. },
+        Action::ViewerZoom { .. },
+        Action::ViewerPan { .. },
+        Action::ViewerPlay { .. },
         Action::ViewerEdit { .. },
         Action::SettingsRead { .. },
         Action::UnfilledOpen { .. },
@@ -12550,6 +12579,9 @@ mod tests {
             Action::ViewerKey { key: "j".into() },
             Action::ViewerScrolled { pane: 1, top: 0, most: 0, page: 0 },
             Action::ViewerRead { pane: 1, path: "/w/a.md".into(), read: crate::viewer::Read::Missing },
+            Action::ViewerZoom { pane: None, step: crate::viewer::ZoomStep::In, fit: 1. },
+            Action::ViewerPan { pane: 1, by: [4., 0.] },
+            Action::ViewerPlay { pane: None, play: false },
             Action::ViewerEdit { pane: None },
             Action::SettingsRead { text: "{}".into(), written: false },
             Action::UnfilledOpen { pane: 1 },

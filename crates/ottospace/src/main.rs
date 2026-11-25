@@ -154,6 +154,7 @@ mod trace;
 mod typing;
 mod ui;
 mod viewer;
+mod viewer_picture;
 mod week_focus;
 mod words;
 mod workbook;
@@ -1029,6 +1030,10 @@ struct Workspace {
     viewers: HashMap<PaneId, viewer::FileView>,
     /// "File…" choices that would have shown the open panel: a test run shows none.
     file_prompts: u32,
+    /// Frames a picture's animation moved on to: none at rest, off show, paused or under Reduce Motion.
+    picture_frames: u64,
+    /// Frames of pictures whose viewer went: out of GPUI's atlas at the next tick.
+    retired_pictures: Vec<std::sync::Arc<gpui::RenderImage>>,
     /// Windows the picker's second step asked to host (`Effect::HostPicked`).
     window_picks: u32,
     /// How often "New window" asked by each kind of recipe (`Effect::NewWindow`): open, tell, the
@@ -1894,6 +1899,8 @@ impl Workspace {
             terminals: HashMap::new(),
             viewers: HashMap::new(),
             file_prompts: 0,
+            picture_frames: 0,
+            retired_pictures: Vec::new(),
             window_picks: 0,
             new_window_asks: [0; 3],
             asked: None,
@@ -2410,7 +2417,7 @@ impl Workspace {
                         ![Mark::Header(pane.id), Mark::Close(pane.id), Mark::ViewerMarked(pane.id)].contains(mark)
                     });
                     self.terminals.remove(&pane.id); // drop ends its shell
-                    self.viewers.remove(&pane.id);
+                    self.forget_viewer(pane.id);
                     if let Some(hosted) = self.hosted.remove(&pane.id) {
                         hosted.release();
                     }
@@ -2576,7 +2583,7 @@ impl Workspace {
                 // Carried out with its pane's `Opened`, before the shell starts.
                 Effect::History { .. } | Effect::EditSettings { .. } | Effect::EditFile { .. } => {}
                 // Read again from the start: the next tick does (`sync_viewers`).
-                Effect::ViewFile { pane } => drop(self.viewers.remove(pane)),
+                Effect::ViewFile { pane } => self.forget_viewer(*pane),
                 Effect::ViewerScroll { pane, top } => self.viewer_scroll(*pane, *top, cx),
                 Effect::ChooseFile { axis, new_tab } => self.choose_file(*axis, *new_tab, window, cx),
                 Effect::OpenEditor { text } => {
@@ -4762,6 +4769,8 @@ impl Workspace {
                 "dial_frames": self.dial_motion.borrow().frames,
                 // Frames a working line's sweep asked for: none at rest, none under Reduce Motion.
                 "shimmer_frames": self.sweep.frames.get(),
+                // Frames an animated picture in a viewer moved on to: none paused, off show or under Reduce Motion.
+                "picture_frames": self.picture_frames,
                 // Frames the toast asked for as it came or went: none under Reduce Motion.
                 "toast_frames": self.toast.frames,
                 // Frames drawn while the calendar band's loading bar slides: none once a read lands.

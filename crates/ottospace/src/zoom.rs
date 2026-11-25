@@ -10,6 +10,7 @@ use gpui::{
 };
 use ottospace_core::model::canvas::{Camera, CanvasStep, KEY_STEP, in_view};
 use ottospace_core::model::zoom::{ZOOM_MS, between};
+use ottospace_core::viewer::ZoomStep;
 use ottospace_core::{Action, Dir, Kind, Pane, Rect, theme};
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -440,7 +441,15 @@ impl Workspace {
                     self.dispatch(Action::ZoomCamera { step }, origin, window, cx);
                 }
             }
-            false => self.city_pinch(at, nearer, window, cx),
+            // Over a picture in a viewer: its zoom.
+            false => match self.picture_at(at).and_then(|id| Some((id, self.picture_fit(id)?))) {
+                Some((id, fit)) => {
+                    let step = ZoomStep::By { factor: nearer };
+                    self.dispatch(Action::ViewerZoom { pane: Some(id), step, fit }, origin, window, cx);
+                    cx.notify();
+                }
+                None => self.city_pinch(at, nearer, window, cx),
+            },
         }
         self.swap_origin(was);
     }
@@ -467,9 +476,20 @@ impl Workspace {
 
     /// ⌘= ⌘- ⌘0 while zoomed out: nearer, farther (about the middle), every tile. Else not ours.
     pub(crate) fn canvas_key(&mut self, step: CanvasStep, window: &mut Window, cx: &mut Context<Self>) {
-        match self.model.zoom.is_some() {
-            true => drop(self.dispatch(Action::ZoomCamera { step }, self.input, window, cx)),
-            false => cx.propagate(),
+        // A picture in the focused viewer: its own zoom.
+        let picture = self.model.keyboard_viewer().and_then(|id| Some((id, self.picture_fit(id)?)));
+        match (self.model.zoom.is_some(), picture) {
+            (true, _) => drop(self.dispatch(Action::ZoomCamera { step }, self.input, window, cx)),
+            (false, Some((id, fit))) => {
+                let step = match step {
+                    CanvasStep::Fit => ZoomStep::Fit,
+                    CanvasStep::Zoom { factor, .. } if factor > 1. => ZoomStep::In,
+                    _ => ZoomStep::Out,
+                };
+                self.dispatch(Action::ViewerZoom { pane: Some(id), step, fit }, self.input, window, cx);
+                cx.notify();
+            }
+            (false, None) => cx.propagate(),
         }
     }
 

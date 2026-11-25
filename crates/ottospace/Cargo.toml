@@ -66,7 +66,9 @@ tree-sitter-md = "=0.5.4"
 # The code city drawn offscreen (`city_gpu.rs`): the platform's own backends, WGSL shaders. MIT OR Apache-2.0.
 wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "metal", "vulkan", "dx12", "gles"] }
 # A rendered picture as GPUI's image (`RenderImage`): same version gpui uses, in the lock already.
-image = { version = "0.25", default-features = false }
+# The viewer decodes pictures with it, off the main thread, with limits: the formats gpui's own
+# defaults already build (no new crate in the lock).
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 pollster = "0.4"
 
 [dev-dependencies]

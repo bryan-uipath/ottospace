@@ -137,8 +137,8 @@ impl Fetch {
     }
 }
 
-/// `412 KB`, `1.5 MB`.
-fn size(bytes: u64) -> String {
+/// `412 KB`, `1.5 MB`: a size as the user reads it (a feed's, a file's in the viewer).
+pub fn size(bytes: u64) -> String {
     match bytes {
         b if b < 1 << 20 => format!("{} KB", b.div_ceil(1 << 10)),
         b => format!("{}.{} MB", b >> 20, (b % (1 << 20)) * 10 >> 20),

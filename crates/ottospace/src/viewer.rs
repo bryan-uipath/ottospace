@@ -4,6 +4,7 @@
 //! the conversation's renderer, lines with their numbers, or a picture), and tells the core what
 //! it read and where the view is. Never its text: the state has the path, kind, line and count.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read as _};
@@ -15,11 +16,12 @@ use std::sync::mpsc::{Receiver, channel};
 use std::time::{Duration, Instant, SystemTime};
 
 use gpui::{
-    AnyElement, Context, ElementId, HighlightStyle, ImageSource, KeyDownEvent, ScrollHandle, SharedString, StyledText,
-    UniformListScrollHandle, Window, div, img, point, prelude::*, px, rgb, uniform_list,
+    AnyElement, Bounds, Context, ElementId, HighlightStyle, ImageSource, KeyDownEvent, Pixels, Point, ScrollHandle,
+    SharedString, StyledText, UniformListScrollHandle, Window, canvas, div, img, point, prelude::*, px, rgb,
+    uniform_list,
 };
 use ottospace_core::terminal::CellPoint;
-use ottospace_core::viewer::{self, MAX_BYTES, Read, Shows};
+use ottospace_core::viewer::{self, MAX_BYTES, MAX_IMAGE_BYTES, Read, Shows, Viewer};
 use ottospace_core::{Action, Axis, Origin, PaneId, theme};
 
 use crate::Workspace;
@@ -27,6 +29,7 @@ use crate::conversation::Links;
 use crate::highlight::{self, Mark};
 use crate::markdown::{self, Block};
 use crate::syntax::{self, Colours};
+use crate::viewer_picture::{self, Picture};
 
 /// One line of code or text, and one step of a markdown view (`Viewer::top`), in points.
 pub const LINE: f32 = 18.;
@@ -45,7 +48,7 @@ enum Body {
     Markdown(Rc<Vec<Block>>),
     /// Each line, and its coloured runs (`highlight`), by byte within it; or by its grammar.
     Lines(Rc<Vec<String>>, Rc<Vec<Vec<Mark>>>, Option<Rc<Colours>>),
-    Image(Arc<gpui::Image>),
+    Picture(Rc<Picture>),
 }
 
 /// What a read thread hands back: the outcome, and the bytes a picture is drawn from or the text.
@@ -55,7 +58,7 @@ enum Loaded {
     /// stall the window.
     Markdown(Vec<Block>),
     Lines(Vec<String>, Vec<Vec<Mark>>, Option<Colours>),
-    Image(gpui::ImageFormat, Vec<u8>),
+    Picture(Picture),
 }
 
 /// A viewer pane's file as the shell holds it.
@@ -75,6 +78,12 @@ pub struct FileView {
     place: bool,
     /// What was last told the core: `[top, most, page]`.
     told: Option<[u32; 3]>,
+    /// A picture: where it was last laid out, when its frames began to play, the frame on show,
+    /// and where a drag that pans it was last.
+    area: Rc<Cell<Bounds<Pixels>>>,
+    began: Instant,
+    frame: Cell<usize>,
+    dragged: Cell<Option<Point<Pixels>>>,
 }
 
 impl FileView {
@@ -91,6 +100,10 @@ impl FileView {
             lines: UniformListScrollHandle::new(),
             place: true,
             told: None,
+            area: Rc::default(),
+            began: Instant::now(),
+            frame: Cell::new(0),
+            dragged: Cell::new(None),
         };
         view.read(shows);
         view
@@ -132,6 +145,14 @@ impl FileView {
         self.reading = Some(read);
     }
 
+    /// A picture's frames, to leave GPUI's atlas when it goes.
+    fn frames(&self) -> Vec<Arc<gpui::RenderImage>> {
+        match &self.body {
+            Body::Picture(picture) => picture.frames.iter().map(|(frame, _)| frame.clone()).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The scroll handle of what is drawn: a list keeps its offset in a plain one, shared.
     fn handle(&self) -> ScrollHandle {
         match self.body {
@@ -157,25 +178,27 @@ fn read_file(path: &Path, shows: Shows) -> (Read, Option<Loaded>) {
     if !meta.is_file() {
         return (Read::NotFile, None);
     }
-    if meta.len() > MAX_BYTES {
+    let most = if shows == Shows::Image { MAX_IMAGE_BYTES } else { MAX_BYTES };
+    if meta.len() > most {
         return (Read::TooLarge { bytes: meta.len() }, None);
     }
     let mut bytes = Vec::with_capacity(meta.len() as usize);
-    if (&file as &File).take(MAX_BYTES + 1).read_to_end(&mut bytes).is_err() {
+    if (&file as &File).take(most + 1).read_to_end(&mut bytes).is_err() {
         return (Read::Unreadable, None);
     }
-    if bytes.len() as u64 > MAX_BYTES {
+    if bytes.len() as u64 > most {
         return (Read::TooLarge { bytes: bytes.len() as u64 }, None);
     }
+    // Decoded here, on the read's thread, under the viewer's caps.
     if shows == Shows::Image {
-        let format = match ottospace_agents::Media::sniff(&bytes) {
-            Some(ottospace_agents::Media::Png) => gpui::ImageFormat::Png,
-            Some(ottospace_agents::Media::Jpeg) => gpui::ImageFormat::Jpeg,
-            Some(ottospace_agents::Media::Gif) => gpui::ImageFormat::Gif,
-            Some(ottospace_agents::Media::Webp) => gpui::ImageFormat::Webp,
-            None => return (Read::Binary, None),
+        let read = bytes.len() as u64;
+        return match viewer_picture::decode(&bytes) {
+            Ok(picture) => {
+                let (width, height, frames) = (picture.width, picture.height, picture.frames.len() as u32);
+                (Read::Picture { width, height, frames, bytes: read }, Some(Loaded::Picture(picture)))
+            }
+            Err(said) => (said, None),
         };
-        return (Read::Shown { lines: 0 }, Some(Loaded::Image(format, bytes)));
     }
     if bytes[..bytes.len().min(8192)].contains(&0) {
         return (Read::Binary, None);
@@ -246,12 +269,19 @@ impl Workspace {
             let every = if view.seen.is_some() { SETTLE / 2 } else { LOOK };
             (view.reading.is_none() && view.looking.is_none()).then(|| view.looked + every)
         };
-        self.viewers.values().filter_map(due).min()
+        let disk = self.viewers.values().filter_map(due).min();
+        // An animation on show: its next frame.
+        let frames = self.animated_panes().into_iter().filter_map(|id| {
+            let (view, core) = (self.viewers.get(&id)?, self.model.viewer(id)?);
+            let Body::Picture(picture) = &view.body else { return None };
+            playing(core).then(|| picture.next_change(view.began.elapsed()).map(|at| view.began + at))?
+        });
+        disk.into_iter().chain(frames).min()
     }
 
     /// Each tick: a view for each viewer pane, the files read handed to the core, changes on
     /// disk read again once they settle, and the core told where each view on show is.
-    pub(crate) fn sync_viewers(&mut self, window: &Window, cx: &mut Context<Self>) {
+    pub(crate) fn sync_viewers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let files: HashMap<PaneId, (String, Shows)> = self
             .model
             .viewers
@@ -261,7 +291,15 @@ impl Workspace {
                 _ => None,
             })
             .collect();
-        self.viewers.retain(|id, view| files.get(id).is_some_and(|(path, _)| *path == view.path));
+        // Pictures of viewers closed or reused since (`forget_viewer`), and those replaced below.
+        let mut retired = std::mem::take(&mut self.retired_pictures);
+        self.viewers.retain(|id, view| {
+            let kept = files.get(id).is_some_and(|(path, _)| *path == view.path);
+            if !kept {
+                retired.extend(view.frames());
+            }
+            kept
+        });
         let mut actions = Vec::new();
         for (id, (path, shows)) in &files {
             let view = self.viewers.entry(*id).or_insert_with(|| FileView::new(path.clone(), *shows));
@@ -269,12 +307,17 @@ impl Workspace {
                 view.reading = None;
                 view.stamp = at;
                 let (_, dir) = name_and_dir(path);
+                // The frames it drew before leave GPUI's atlas, whatever comes in their place.
+                retired.extend(view.frames());
                 view.body = match loaded {
                     Some(Loaded::Markdown(blocks)) => Body::Markdown(Rc::new(blocks)),
                     Some(Loaded::Lines(lines, marks, colours)) => {
                         Body::Lines(Rc::new(lines), Rc::new(marks), colours.map(Rc::new))
                     }
-                    Some(Loaded::Image(format, bytes)) => Body::Image(Arc::new(gpui::Image::from_bytes(format, bytes))),
+                    Some(Loaded::Picture(picture)) => {
+                        view.began = Instant::now();
+                        Body::Picture(Rc::new(picture))
+                    }
                     // The read thread made any text lines or markdown.
                     Some(Loaded::Text(_)) | None => Body::None,
                 };
@@ -347,6 +390,20 @@ impl Workspace {
                 view.told = Some(now);
                 actions.push(Action::ViewerScrolled { pane: id, top: now[0], most, page });
             }
+        }
+        // An animation on show moves to its next frame when its time comes; none at rest, none
+        // off show, none paused (or under Reduce Motion, until played).
+        for id in self.animated_panes() {
+            let (Some(view), Some(core)) = (self.viewers.get(&id), self.model.viewer(id)) else { continue };
+            let Body::Picture(picture) = &view.body else { continue };
+            let at = if playing(core) { picture.frame_at(view.began.elapsed()) } else { 0 };
+            if view.frame.replace(at) != at {
+                self.picture_frames += 1;
+                cx.notify();
+            }
+        }
+        for image in retired {
+            cx.drop_image(image, Some(window));
         }
         for action in actions {
             self.dispatch(action, Origin::System, window, cx);
@@ -462,13 +519,30 @@ impl Workspace {
             Read::Reading => return said("Reading…".into()),
             Read::Missing => return said("File not found".into()),
             Read::TooLarge { bytes } => {
-                let most = MAX_BYTES / (1024 * 1024);
-                return said(format!("Too large: {:.1} MB; the viewer reads up to {most} MB", bytes as f64 / 1e6));
+                let most = if self.model.viewer(id).is_some_and(|v| v.shows == Shows::Image) {
+                    viewer::MAX_IMAGE_BYTES
+                } else {
+                    MAX_BYTES
+                };
+                let size = ottospace_core::calendar::fetch::size;
+                return said(format!("Too large: {}; the viewer reads up to {}", size(bytes), size(most)));
             }
             Read::NotFile => return said("Not a regular file".into()),
             Read::Binary => return said("Not text: the viewer shows text, markdown and pictures".into()),
             Read::Unreadable => return said("Could not be read".into()),
+            Read::TooManyPixels { width, height, frames } => {
+                let of = if frames > 1 { format!(" × {frames} frames or more") } else { String::new() };
+                let most = viewer::MAX_PIXELS / 1_000_000;
+                return said(format!(
+                    "Too large: {width} × {height} pixels{of}; the viewer decodes up to {most} million"
+                ));
+            }
+            Read::Broken => return said("This picture could not be read".into()),
             Read::Shown { .. } => view.map(|view| &view.body),
+            Read::Picture { .. } => match view {
+                Some(view) => return self.picture_body(id, view, cx),
+                None => return said("Reading…".into()),
+            },
         };
         let (_, dir) = name_and_dir(path);
         let body = match shown {
@@ -564,14 +638,6 @@ impl Workspace {
                 .text_xs();
                 list.into_any_element()
             }
-            Some(Body::Image(image)) => div()
-                .id(ElementId::Name(format!("viewer-img:{id}").into()))
-                .size_full()
-                .overflow_y_scroll()
-                .track_scroll(&view.map(|view| view.scroll.clone()).unwrap_or_default())
-                .p_3()
-                .child(img(ImageSource::Image(image.clone())).max_w_full())
-                .into_any_element(),
             _ => return said("Reading…".into()),
         };
         let handle = view.map(FileView::handle).unwrap_or_default();
@@ -602,11 +668,218 @@ impl Workspace {
                 "syntax": colours.as_ref().map(|colours| colours.lang().grammar().name),
                 "marked_rect": marked(id),
             }),
-            Body::Image(_) => serde_json::json!({ "body": "image" }),
+            // `frame`: the frame on show (an animation's), never its pixels.
+            Body::Picture(picture) => serde_json::json!({
+                "body": "image",
+                "frames": picture.frames.len(),
+                "frame": view.frame.get(),
+            }),
         };
         let all: serde_json::Map<String, serde_json::Value> =
             self.viewers.iter().map(|(id, view)| (id.to_string(), drawn(*id, view))).collect();
         serde_json::Value::Object(all)
+    }
+}
+
+/// The foot under a picture: its size and zoom, an animation's control.
+const FOOT: f32 = 22.;
+
+/// An animation plays as the user set it, else unless Reduce Motion is on.
+fn playing(core: &Viewer) -> bool {
+    core.playing.unwrap_or_else(|| !crate::dial::calm())
+}
+
+impl Workspace {
+    /// The viewers whose animation may move on: on show, and not under the zoomed-out canvas.
+    fn animated_panes(&self) -> Vec<PaneId> {
+        if self.model.zoom.is_some() { Vec::new() } else { self.model.shown_panes() }
+    }
+
+    /// A viewer pane closed or reused: its view goes, its picture's frames with the next tick.
+    pub(crate) fn forget_viewer(&mut self, id: PaneId) {
+        if let Some(view) = self.viewers.remove(&id) {
+            self.retired_pictures.extend(view.frames());
+        }
+    }
+
+    /// A picture: fitted to the pane (never enlarged) or zoomed, moved by its pan, over a
+    /// checker for what is transparent, its size in the foot; an animation's play control.
+    fn picture_body(&self, id: PaneId, view: &FileView, cx: &mut Context<Self>) -> AnyElement {
+        let (Body::Picture(picture), Some(core)) = (&view.body, self.model.viewer(id)) else {
+            return div().into_any_element();
+        };
+        let area = view.area.get();
+        // Above the foot: the picture never goes under it fitted.
+        let room = (f32::from(area.size.width), (f32::from(area.size.height) - FOOT).max(0.));
+        let fit = viewer_picture::fit(room, picture.width, picture.height);
+        let scale = core.zoom.unwrap_or(fit);
+        let (w, h) = (picture.width as f32 * scale, picture.height as f32 * scale);
+        let (x, y) = ((room.0 - w) / 2. + core.pan[0], (room.1 - h) / 2. + core.pan[1]);
+        let frame = picture.frames[view.frame.get().min(picture.frames.len() - 1)].0.clone();
+        let laid = view.area.clone();
+        // The checker under it: what is transparent shows as such.
+        let checker = canvas(
+            move |bounds, _, _| bounds,
+            move |bounds, _, window, _| {
+                // Laid out anew (the first frame, a split, a resize): drawn again at its place.
+                if laid.replace(bounds) != bounds {
+                    window.refresh();
+                }
+                let shown = Bounds::new(bounds.origin + point(px(x), px(y)), gpui::size(px(w), px(h)));
+                let shown = shown.intersect(&bounds);
+                const SQUARE: f32 = 8.;
+                let (left, top) = (f32::from(shown.origin.x), f32::from(shown.origin.y));
+                let (right, bottom) = (left + f32::from(shown.size.width), top + f32::from(shown.size.height));
+                let (ox, oy) = (f32::from(bounds.origin.x) + x, f32::from(bounds.origin.y) + y);
+                let mut row = ((top - oy) / SQUARE).floor();
+                while oy + row * SQUARE < bottom {
+                    let mut col = ((left - ox) / SQUARE).floor();
+                    while ox + col * SQUARE < right {
+                        if (row + col) as i64 % 2 == 0 {
+                            let square = Bounds::new(
+                                point(px(ox + col * SQUARE), px(oy + row * SQUARE)),
+                                gpui::size(px(SQUARE), px(SQUARE)),
+                            )
+                            .intersect(&shown);
+                            window.paint_quad(gpui::fill(square, rgb(theme::RAISED)));
+                        }
+                        col += 1.;
+                    }
+                    row += 1.;
+                }
+            },
+        )
+        .absolute()
+        .size_full();
+        let animated = picture.frames.len() > 1;
+        let plays = playing(core);
+        let control = format!("viewer-play:{id}");
+        let play = animated.then(|| {
+            div()
+                .id(ElementId::Name(control.clone().into()))
+                .relative()
+                .px_1()
+                .rounded_sm()
+                .cursor_pointer()
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
+                .child(if plays { "Pause" } else { "Play" })
+                .child(self.controls.mark(control))
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    cx.stop_propagation();
+                    this.dispatch(Action::ViewerPlay { pane: Some(id), play: !plays }, this.input, window, cx);
+                }))
+        });
+        let of = core.read.clone();
+        let bytes = match of {
+            Read::Picture { bytes, .. } => ottospace_core::calendar::fetch::size(bytes),
+            _ => String::new(),
+        };
+        let frames = if animated { format!(" · {} frames", picture.frames.len()) } else { String::new() };
+        let said = format!("{} × {} px{frames} · {bytes} · {:.0}%", picture.width, picture.height, scale * 100.);
+        let foot = div()
+            .absolute()
+            .bottom_0()
+            .left_0()
+            .right_0()
+            .h(px(FOOT))
+            .px_2()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_2()
+            .bg(rgb(theme::BACKGROUND))
+            .border_t_1()
+            .border_color(rgb(theme::BORDER))
+            .text_xs()
+            .text_color(rgb(theme::MUTED))
+            .child(crate::cut_text(said))
+            .children(play);
+        let (zoomed, room_now) = (core.zoom.is_some(), (room.0, room.1, w, h));
+        div()
+            .id(ElementId::Name(format!("viewer-img:{id}").into()))
+            .absolute()
+            .size_full()
+            .overflow_hidden()
+            .bg(rgb(theme::BACKGROUND))
+            .child(checker)
+            .child(img(ImageSource::Render(frame)).absolute().left(px(x)).top(px(y)).w(px(w)).h(px(h)))
+            .child(foot)
+            // Zoomed: the wheel and a drag move it, never past where it would leave the pane.
+            .when(zoomed, |d| {
+                d.on_scroll_wheel(cx.listener(move |this, e: &gpui::ScrollWheelEvent, window, cx| {
+                    let delta = e.delta.pixel_delta(px(LINE));
+                    let by = [f32::from(delta.x), f32::from(delta.y)];
+                    this.picture_pan(id, by, room_now, window, cx);
+                }))
+                .on_mouse_down(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |this, e: &gpui::MouseDownEvent, _, _| {
+                        if let Some(view) = this.viewers.get(&id) {
+                            view.dragged.set(Some(e.position));
+                        }
+                    }),
+                )
+                .on_mouse_move(cx.listener(move |this, e: &gpui::MouseMoveEvent, window, cx| {
+                    let Some(from) = this.viewers.get(&id).and_then(|view| view.dragged.get()) else { return };
+                    if e.pressed_button != Some(gpui::MouseButton::Left) {
+                        return this.viewers.get(&id).iter().for_each(|view| view.dragged.set(None));
+                    }
+                    let by = [f32::from(e.position.x - from.x), f32::from(e.position.y - from.y)];
+                    if let Some(view) = this.viewers.get(&id) {
+                        view.dragged.set(Some(e.position));
+                    }
+                    this.picture_pan(id, by, room_now, window, cx);
+                }))
+                .on_mouse_up(
+                    gpui::MouseButton::Left,
+                    cx.listener(move |this, _: &gpui::MouseUpEvent, _, _| {
+                        if let Some(view) = this.viewers.get(&id) {
+                            view.dragged.set(None);
+                        }
+                    }),
+                )
+            })
+            .into_any_element()
+    }
+
+    /// Moves a zoomed picture by `by`, kept so a quarter of the pane (or all of the picture, if
+    /// smaller) still shows it. `room`: the pane's width and height, then the picture's drawn.
+    fn picture_pan(
+        &mut self,
+        id: PaneId,
+        by: [f32; 2],
+        room: (f32, f32, f32, f32),
+        window: &Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(pan) = self.model.viewer(id).map(|view| view.pan) else { return };
+        let (rw, rh, w, h) = room;
+        let most = |side: f32, drawn: f32| ((side + drawn) / 2. - (side.min(drawn) / 4.)).max(0.);
+        let to = [(pan[0] + by[0]).clamp(-most(rw, w), most(rw, w)), (pan[1] + by[1]).clamp(-most(rh, h), most(rh, h))];
+        let by = [to[0] - pan[0], to[1] - pan[1]];
+        if by != [0., 0.] {
+            self.dispatch(Action::ViewerPan { pane: id, by }, self.input, window, cx);
+            cx.notify();
+        }
+    }
+
+    /// The fit of the picture in viewer `id` as last laid out, in points a pixel.
+    pub(crate) fn picture_fit(&self, id: PaneId) -> Option<f32> {
+        let view = self.viewers.get(&id)?;
+        let Body::Picture(picture) = &view.body else { return None };
+        let area = view.area.get();
+        let room = (f32::from(area.size.width), (f32::from(area.size.height) - FOOT).max(0.));
+        Some(viewer_picture::fit(room, picture.width, picture.height))
+    }
+
+    /// The viewer whose picture is under `at`, in the main window (the one pinches are read in).
+    pub(crate) fn picture_at(&self, at: Point<Pixels>) -> Option<PaneId> {
+        let main = self.model.tree_at(self.model.main_at());
+        let shown = main.map(|tree| tree.leaves()).unwrap_or_default();
+        self.viewers.iter().find_map(|(id, view)| {
+            let over = matches!(view.body, Body::Picture(_)) && view.area.get().contains(&at);
+            (over && shown.contains(id)).then_some(*id)
+        })
     }
 }
 
