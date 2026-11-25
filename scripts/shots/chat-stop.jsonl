@@ -1,4 +1,4 @@
-# Native chat: a long draft wraps in the composer; Stop while a turn runs, the agent stopped, then Resume. The stand-in `claude`
+# Native chat: a long draft wraps in the composer; a message queued while a turn runs; Stop while a turn runs, the agent stopped, then Resume. The stand-in `claude`
 # writes its session file so the stop can be gone on with; its resume prints hook lines.
 {"env":{"OTTOSPACE_AGENTS_DIR":"{ROOT}/bin"}}
 {"cmd":"split","kind":"empty"}
@@ -18,6 +18,9 @@
 {"shot":"turn"}
 {"settle":700}
 {"shot":"turn-sweep"}
+{"cmd":"key","keys":"a l s o space c h e c k space t h e space d o c s enter","as":"user"}
+{"settle":300}
+{"shot":"queued"}
 {"cmd":"key","keys":"cmd-shift-p","as":"user"}
 {"cmd":"key","keys":"s t o p space t h e space a g e n t","as":"user"}
 {"cmd":"key","keys":"enter","as":"user"}

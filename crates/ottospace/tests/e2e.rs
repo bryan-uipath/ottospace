@@ -13861,6 +13861,76 @@ fn finish_fixtures() -> Vec<(&'static str, String)> {
     ]
 }
 
+/// While a turn runs ↵ queues: two messages wait (the state counts them, never their words) and
+/// go to the agent in order, each its own turn, once it is done. ⌘↵ mid-turn, for Claude Code
+/// (it takes nothing mid-turn here): the turn stops, then the message goes.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn messages_queue_while_the_agent_works_and_send_now_stops_the_turn_first() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let text = |words: &str| {
+        format!(
+            r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{{"type":"text","text":"{words}"}}]}}}}"#
+        )
+    };
+    let done = r#"{"type":"result","subtype":"success","is_error":false}"#;
+    let working = format!(
+        r#"{{"type":"stream_event",{S},"parent_tool_use_id":null,"event":{{"type":"content_block_delta","index":0,"delta":{{"type":"text_delta","text":"Working"}}}}}}"#
+    );
+    let init =
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+    let interrupted =
+        r#"{"type":"result","subtype":"error_during_execution","is_error":true,"terminal_reason":"aborted_streaming"}"#;
+    let fixtures = [
+        ("turn1.jsonl", [init, text("Planned."), done.into()].join("\n")),
+        // A long turn: what is typed meanwhile waits.
+        ("turn2.jsonl", [working.clone(), r#"{"_sleep":4}"#.into(), text("Two done."), done.into()].join("\n")),
+        ("turn3.jsonl", [text("Alpha done."), done.into()].join("\n")),
+        ("turn4.jsonl", [text("Beta done."), done.into()].join("\n")),
+        // A turn that runs until it is stopped.
+        ("turn5.jsonl", working),
+        ("turn2-interrupted.jsonl", interrupted.into()),
+        ("turn6.jsonl", [text("Now done."), done.into()].join("\n")),
+    ];
+    let fixtures: Vec<(&str, String)> = fixtures.into_iter().collect();
+    let (root, record, env) = native_setup("queue", &fixtures, &[]);
+    let otto = launch_env("queue", &env);
+    let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.wait_for("the first reply", |o| {
+        (chat(o)["transcript"]["turn"].is_null() && chat(o)["replies"].as_array()?.len() == 1).then_some(())
+    });
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    otto.user_key("g o enter");
+    // Mid-turn: two messages queue; nothing more reaches the agent.
+    let queued = otto.user_key("a l p h a enter b e t a enter");
+    let mine = &queued["drawer"]["native"]["chats"]["1"];
+    assert_eq!((&mine["queued"], &mine["draft_chars"]), (&json!(2), &json!(0)), "{mine}");
+    assert!(!queued.to_string().contains("alpha"), "a queued message's words are never in the state");
+    assert!(!stdin().contains("alpha"));
+    assert!(otto.control_opt("talk:queue-now:1").is_some(), "each queued row has Send now");
+    // Each goes on its own, in order, once the agent is done.
+    let idle = |o: &Otto| chat(o)["transcript"]["turn"].is_null();
+    otto.wait_for("both sent", |o| (stdin().contains("beta") && chat(o)["queued"] == 0 && idle(o)).then_some(()));
+    let sent = stdin();
+    let (go, alpha, beta) = (sent.find("\"go\"").unwrap(), sent.find("alpha").unwrap(), sent.find("beta").unwrap());
+    assert!(go < alpha && alpha < beta, "{sent}");
+    // ⌘↵ mid-turn: Claude Code takes nothing mid-turn here, so the turn stops, then it goes.
+    otto.user_key("g o 2 enter");
+    otto.wait_for("the long turn", |o| (!chat(o)["transcript"]["turn"].is_null()).then_some(()));
+    otto.user_key("n o w cmd-enter");
+    otto.wait_for("sent after the stop", |o| (stdin().contains("\"now\"") && idle(o)).then_some(()));
+    let sent = stdin();
+    let (stop, now) = (sent.find(r#""subtype":"interrupt""#).unwrap(), sent.find("\"now\"").unwrap());
+    assert!(stop < now, "{sent}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A task's first turn over: launched with `finish_fixtures`, its conversation open and idle.
 fn finish_launch(name: &str) -> (PathBuf, PathBuf, Otto) {
     finish_launch_with(name, &[])

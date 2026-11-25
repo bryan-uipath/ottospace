@@ -2282,16 +2282,22 @@ impl Workspace {
                     }
                 }
                 Effect::StopAgent { task } => agents.extend(self.stop_agent(task)),
-                Effect::AgentSend { task, text } => self.native_input(task, NativeInput::Send(text.clone())),
+                // Not written (its agent had ended): the core puts it back first in the queue.
+                Effect::AgentSend { task, text } => {
+                    if !self.native_input(task, NativeInput::Send(text.clone())) {
+                        let failed = Action::AgentSendFailed { task: task.clone(), text: text.clone() };
+                        drop(self.dispatch(failed, Origin::System, window, cx));
+                    }
+                }
                 Effect::AgentAnswer { task, ticket, allow, message } => {
                     let answer = NativeInput::Answer { ticket: *ticket, allow: *allow, message: message.clone() };
-                    self.native_input(task, answer);
+                    drop(self.native_input(task, answer));
                 }
                 Effect::AgentAnswers { task, ticket, answers } => {
                     let answers = NativeInput::Answers { ticket: *ticket, answers: answers.clone() };
-                    self.native_input(task, answers);
+                    drop(self.native_input(task, answers));
                 }
-                Effect::AgentInterrupt { task } => self.native_input(task, NativeInput::Interrupt),
+                Effect::AgentInterrupt { task } => drop(self.native_input(task, NativeInput::Interrupt)),
                 Effect::AgentSideQuestion { task, id, question, history } => {
                     agents.extend(self.side_question(task, *id, question, history))
                 }
@@ -9448,8 +9454,13 @@ impl Workspace {
                     this.dispatch(Action::TaskStop { id }, this.input, window, cx);
                 }
             }))
-            // ⌘↵ is the new-task box's "start" while it has the keyboard; in a conversation, its Done.
+            // ⌘↵ is the new-task box's "start" while it has the keyboard; in a conversation, its Done;
+            // while its turn runs with a message written, "send now".
             .on_action(cx.listener(|this, _: &TalkGo, window, cx| {
+                let writing = this
+                    .model
+                    .shown_chat()
+                    .is_some_and(|chat| chat.transcript.turn.is_some() && !chat.draft.text().trim().is_empty());
                 // ⌘↵ in Go to's files: the file below (its binding comes before the palette's keys).
                 let files =
                     this.model.palette.as_ref().is_some_and(|p| p.view() == ottospace_core::commands::View::Files);
@@ -9457,6 +9468,8 @@ impl Workspace {
                     this.dispatch(Action::GoToSplit, this.input, window, cx);
                 } else if this.model.bug.is_some() {
                     this.bug_send(window, cx);
+                } else if writing && this.model.talk_typing() {
+                    this.dispatch(Action::TalkSendNow, this.input, window, cx);
                 } else if this.model.compose_keys() {
                     this.dispatch(Action::ComposeSubmit { open: true }, this.input, window, cx);
                 } else if let Some(Action::TaskDone { id }) = this.model.done_key() {

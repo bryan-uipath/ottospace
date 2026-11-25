@@ -56,7 +56,7 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?(layout|layout_file|restore|workbook|motion|divider|reorder)(\.rs|/)      split|layout|resize|divider|swap|drop|dragged|drag_|header|workbook|restart|quitting|restored|tabs_keep|kept_between|dragged_along|row_dragged
 /src/(.*/)?(terminal|term_links|selection|vim|clip|clipboard|cell_art|copy_ask|words)(\.rs|/)          terminal|scrolls_back|select|copy|paste|visual_mode|cmd_click|capture_and_wait|held_key|typed_command|tick_sleeps
 /src/(.*/)?(edit|field|compose|complete|tags)(\.rs|/)                        text_field|new_task|tag|dropdown|path_typed|files_dropped|composer|ctrl_g|multi_select|several_questions|long_question|side_question|message_
-/src/(.*/)?(conversation|chat|chat_select|btw|ask|talk|agent|agents|editor)(\.rs|/)   conversation|(?<!quit_)question|btw|cards|tool_rows|transcript_text|composer|talked|stopped_agent|later_asks|real_cli|agent_chip|agent_that_ends|message_|ctrl_g|unsent|working_line
+/src/(.*/)?(conversation|chat|chat_select|btw|ask|talk|agent|agents|editor)(\.rs|/)   conversation|(?<!quit_)question|btw|cards|tool_rows|transcript_text|composer|talked|stopped_agent|later_asks|real_cli|agent_chip|agent_that_ends|message_|ctrl_g|unsent|working_line|messages_queue
 /src/(.*/)?working(\.rs|/)                                                   working_line|tasks_are_listed
 ^crates/ottospace-agents/(src|tests/fakes)/                                  conversation|(?<!quit_)question|btw|cards|tool_rows|talked|stopped_agent|later_asks|real_cli|agent_chip|agent_that_ends|message_|dial|follows_its_agent
 /src/(.*/)?(sessions|activity|cadence|station|snapshot|claude|codex)(\.rs|/) session|dial|watched|tool_rows|native_conversation

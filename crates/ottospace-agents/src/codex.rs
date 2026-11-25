@@ -132,6 +132,11 @@ pub struct Codex {
     cwd: String,
     /// An interrupt came before the turn had an id: sent when it has one.
     interrupt_pending: bool,
+    /// Messages sent while a turn started but had no id yet: steered into it once it has one.
+    steering: Vec<Input>,
+    /// Each `turn/steer` asked, by request id, with its message: refused (the turn ended), the
+    /// message starts a turn of its own instead of being lost.
+    steers: BTreeMap<i64, Input>,
 }
 
 impl Codex {
@@ -159,6 +164,8 @@ impl Codex {
             files: BTreeMap::new(),
             cwd: cwd.to_string(),
             interrupt_pending: false,
+            steering: Vec::new(),
+            steers: BTreeMap::new(),
         })
     }
 
@@ -169,15 +176,35 @@ impl Codex {
         json!({"id": id, "method": method, "params": params}).to_string()
     }
 
+    /// A message: a new turn; while one runs, into it (`turn/steer`, for the turn it names).
     fn turn_start(&mut self, thread: &str, text: String, images: Vec<crate::Image>) -> String {
         let text = (!text.is_empty()).then(|| json!({"type": "text", "text": text, "text_elements": []}));
         let images = images.into_iter().map(|image| json!({"type": "localImage", "path": image.path}));
         let input: Vec<Value> = text.into_iter().chain(images).collect();
-        self.request("turn/start", json!({"threadId": thread, "input": input}), Asked::Turn)
+        match self.turn.clone() {
+            Some(turn) => {
+                let params = json!({"threadId": thread, "input": input, "expectedTurnId": turn});
+                self.request("turn/steer", params, Asked::Other)
+            }
+            None => self.request("turn/start", json!({"threadId": thread, "input": input}), Asked::Turn),
+        }
+    }
+
+    /// A turn asked for and not yet given an id.
+    fn starting(&self) -> bool {
+        self.turn.is_none() && self.asked.values().any(|asked| *asked == Asked::Turn)
     }
 
     fn response(&mut self, id: i64, message: &Value, out: &mut Output) {
         let asked = self.asked.remove(&id);
+        // A steer refused (its turn ended first): the message is sent again, as a turn of its own.
+        if let Some(input) = self.steers.remove(&id) {
+            if message.get("error").is_some() {
+                self.turn = None;
+                out.replies.extend(self.write(input).unwrap_or_default());
+            }
+            return;
+        }
         if message.get("error").is_some() {
             out.events.push(Event::Error { kind: "request_failed".into(), retrying: false });
             // No thread or no turn: the messages waiting for one end here, as a failed turn.
@@ -208,10 +235,18 @@ impl Codex {
             Some(Asked::Turn) => {
                 if let Some(turn) = result["turn"]["id"].as_str() {
                     self.turn.get_or_insert_with(|| turn.to_string());
+                    self.steer_if_pending(out);
                     self.interrupt_if_pending(out);
                 }
             }
             Some(Asked::Other) | None => {}
+        }
+    }
+
+    /// Steers the messages that waited for this turn's id into it.
+    fn steer_if_pending(&mut self, out: &mut Output) {
+        for input in std::mem::take(&mut self.steering) {
+            out.replies.extend(self.write(input).unwrap_or_default());
         }
     }
 
@@ -231,6 +266,7 @@ impl Codex {
             "turn/started" if ours => {
                 self.turn = params["turn"]["id"].as_str().map(str::to_string);
                 out.events.push(Event::TurnStarted);
+                self.steer_if_pending(out);
                 self.interrupt_if_pending(out);
             }
             "turn/completed" if ours => {
@@ -242,7 +278,9 @@ impl Codex {
                     Some("interrupted") => Outcome::Interrupted,
                     _ => Outcome::Failed { kind: code(&turn["error"]["codexErrorInfo"], "error") },
                 };
-                emit.push(Event::TurnFinished { outcome });
+                out.events.push(Event::TurnFinished { outcome });
+                // Messages that waited for its id, now for a turn of their own.
+                self.steer_if_pending(out);
             }
             "item/agentMessage/delta" if ours => {
                 emit.push(Event::TextDelta { text: Untrusted::new(params["delta"].as_str().unwrap_or(""), MAX_TEXT) })
@@ -548,7 +586,17 @@ impl Wire for Codex {
                     self.queued.push(Input::Send { text, images });
                     return Ok(Vec::new());
                 };
-                Ok(vec![self.turn_start(&thread, text, images)])
+                // Its turn has no id yet: steered into it once it has one, never a second turn.
+                if self.starting() {
+                    self.steering.push(Input::Send { text, images });
+                    return Ok(Vec::new());
+                }
+                let steer = self.turn.is_some().then(|| Input::Send { text: text.clone(), images: images.clone() });
+                let line = self.turn_start(&thread, text, images);
+                if let Some(input) = steer {
+                    self.steers.insert(self.next - 1, input);
+                }
+                Ok(vec![line])
             }
             Input::Answer { ticket, answer } => {
                 let TicketKind::Codex = ticket.kind else {
@@ -794,6 +842,38 @@ mod tests {
         idle.thread = Some(UUID.into());
         assert_eq!(idle.write(Input::Interrupt), Ok(vec![]));
         assert!(!idle.interrupt_pending);
+    }
+
+    /// A message while a turn runs goes into that turn (`turn/steer`), not a second one.
+    #[test]
+    fn a_message_mid_turn_steers_it() {
+        let mut codex = codex();
+        codex.thread = Some(UUID.into());
+        let start = codex.write(Input::Send { text: "go".into(), images: vec![] }).unwrap();
+        let id = sent(&start[0])["id"].clone();
+        codex.read(&json!({"id": id, "result": {"turn": {"id": "t9", "status": "inProgress"}}}).to_string());
+        let more = codex.write(Input::Send { text: "and the docs".into(), images: vec![] }).unwrap();
+        let steer = sent(&more[0]);
+        assert_eq!((steer["method"].as_str(), &steer["params"]["expectedTurnId"]), (Some("turn/steer"), &json!("t9")));
+        assert_eq!(steer["params"]["input"][0]["text"], "and the docs");
+        // Refused (the turn ended first): it starts a turn of its own, never lost.
+        let refused = codex.read(
+            &json!({"id": steer["id"], "error": {"code": -32600, "message": "no active turn to steer"}}).to_string(),
+        );
+        assert_eq!(sent(&refused.replies[0])["method"], "turn/start");
+        assert!(refused.events.is_empty(), "no error shown: it went on");
+    }
+
+    /// A message before the turn has an id waits for it, then steers: never a second turn.
+    #[test]
+    fn a_message_before_the_turn_id_steers_once_it_has_one() {
+        let mut codex = codex();
+        codex.thread = Some(UUID.into());
+        let start = codex.write(Input::Send { text: "go".into(), images: vec![] }).unwrap();
+        assert_eq!(codex.write(Input::Send { text: "more".into(), images: vec![] }), Ok(vec![]));
+        let id = sent(&start[0])["id"].clone();
+        let out = codex.read(&json!({"id": id, "result": {"turn": {"id": "t9", "status": "inProgress"}}}).to_string());
+        assert_eq!(sent(&out.replies[0])["method"], "turn/steer");
     }
 
     /// A thread that cannot start ends the messages waiting for it as a failed turn.

@@ -1845,8 +1845,30 @@ pub enum Action {
         at: u64,
     },
     /// ↵ in the shown conversation's composer: its draft to the agent, if no turn runs and no
-    /// card waits. Only the user's.
+    /// card waits; while one runs (or a card waits), the draft is queued, sent on its own once the
+    /// conversation is idle. Only the user's.
     TalkSend,
+    /// ⌘↵ in the shown conversation's composer while a turn runs: its draft now. A runner that
+    /// takes a message mid-turn (`Structured::mid_turn`) gets it in the turn; another's turn is
+    /// stopped and the message goes first. Only the user's.
+    TalkSendNow,
+    /// The shown conversation's queued message `id`, by the user: removed; back in the composer
+    /// to edit (`QueueEdit`); or sent now, as `TalkSendNow` sends a draft.
+    QueueRemove {
+        id: u64,
+    },
+    QueueEdit {
+        id: u64,
+    },
+    QueueSendNow {
+        id: u64,
+    },
+    /// A message the shell could not write to its agent (it had ended): back first in the queue,
+    /// held, never lost. Only the shell's runner reports it (`Origin::System`).
+    AgentSendFailed {
+        task: Subject,
+        text: String,
+    },
     /// Allow or Deny the shown conversation's first card. Allow only once a cut card was opened
     /// in full (`TalkExpand`). Deny carries the draft when the user wrote one for it
     /// (`TalkDenyNote`). `ticket`: the card the user saw; another card first (the CLI withdrew
@@ -2986,7 +3008,12 @@ impl Action {
             | Action::CalendarRetry
             | Action::CopyPath { .. }
             | Action::AgentEvents { .. }
+            | Action::AgentSendFailed { .. }
             | Action::TalkSend
+            | Action::TalkSendNow
+            | Action::QueueRemove { .. }
+            | Action::QueueEdit { .. }
+            | Action::QueueSendNow { .. }
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
             | Action::TalkAsk { .. }
@@ -3439,7 +3466,12 @@ impl Action {
             | Action::WorkbookReopen { .. }
             | Action::SetAgents { .. }
             | Action::AgentEvents { .. }
+            | Action::AgentSendFailed { .. }
             | Action::TalkSend
+            | Action::TalkSendNow
+            | Action::QueueRemove { .. }
+            | Action::QueueEdit { .. }
+            | Action::QueueSendNow { .. }
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
             | Action::TalkAsk { .. }
@@ -4499,6 +4531,9 @@ pub struct Model {
     /// The conversations drawn natively, with their transcripts and drafts (`chat`).
     #[serde(skip)]
     chats: Vec<chat::Chat>,
+    /// The next queued message's id (`tasks::Queued`): never used twice in a run.
+    #[serde(skip)]
+    queue_next: u64,
     /// The last side question's id (`btw`): never used twice, so a late answer finds no other.
     #[serde(skip)]
     btw_next: u64,
@@ -4756,6 +4791,7 @@ impl Default for Model {
             agent_commands: Default::default(),
             default_agent: None,
             chats: Vec::new(),
+            queue_next: 1,
             btw_next: 0,
             views: Vec::new(),
             dials: Vec::new(),
@@ -5352,6 +5388,10 @@ impl Model {
             // What reaches a native agent, or stops its turn, is the user's: a message is as
             // strong as typing into it, an answer grants a tool call.
             Action::TalkSend
+            | Action::TalkSendNow
+            | Action::QueueRemove { .. }
+            | Action::QueueEdit { .. }
+            | Action::QueueSendNow { .. }
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
             | Action::TalkAsk { .. }
@@ -5386,6 +5426,7 @@ impl Model {
             }
             // Only the shell's runner reports events (System); a client never does.
             // Only the shell's runner reports an agent's events (a user's is dropped in `chat_act`).
+            Action::AgentSendFailed { .. } if origin != Origin::System => Some(chat::RUNNERS_ALONE),
             Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
             // On a rail list keys move over the rail: the user's, as the move that got there.
             Action::ListMove { .. } | Action::ListChoose { .. } | Action::LeaveList if self.rail_focus.is_some() => {
@@ -7830,7 +7871,12 @@ impl Model {
                 self.conversation_view = shows;
             }
             action @ (Action::AgentEvents { .. }
+            | Action::AgentSendFailed { .. }
             | Action::TalkSend
+            | Action::TalkSendNow
+            | Action::QueueRemove { .. }
+            | Action::QueueEdit { .. }
+            | Action::QueueSendNow { .. }
             | Action::TalkAnswer { .. }
             | Action::TalkExpand { .. }
             | Action::TalkAsk { .. }
@@ -12065,7 +12111,12 @@ mod tests {
         Action::CalendarRetry,
         Action::CopyPath { .. },
         Action::AgentEvents { .. },
+        Action::AgentSendFailed { .. },
         Action::TalkSend,
+        Action::TalkSendNow,
+        Action::QueueRemove { .. },
+        Action::QueueEdit { .. },
+        Action::QueueSendNow { .. },
         Action::TalkAnswer { .. },
         Action::TalkExpand { .. },
         Action::DecisionsOpen,
@@ -12506,6 +12557,11 @@ mod tests {
             Action::CopyPath { path: "/code/app".into() },
             Action::AgentEvents { task: Subject::Task(1), events: Vec::new(), at: 0 },
             Action::TalkSend,
+            Action::TalkSendNow,
+            Action::QueueRemove { id: 1 },
+            Action::QueueEdit { id: 1 },
+            Action::QueueSendNow { id: 1 },
+            Action::AgentSendFailed { task: Subject::Task(1), text: "hi".into() },
             Action::TalkAnswer { allow: false, ticket: 1 },
             Action::TalkExpand { ticket: 1 },
             Action::DecisionsOpen,
@@ -12622,6 +12678,10 @@ mod tests {
         matches!(
             action,
             Action::TalkSend
+                | Action::TalkSendNow
+                | Action::QueueRemove { .. }
+                | Action::QueueEdit { .. }
+                | Action::QueueSendNow { .. }
                 | Action::TalkAnswer { .. }
                 | Action::TalkExpand { .. }
                 | Action::TalkAsk { .. }
@@ -13173,6 +13233,7 @@ mod tests {
                         Some(displays::USERS_ALONE)
                     }
                     Action::SetDisplays { .. } if origin == Origin::Socket => Some(displays::SHELLS_ALONE),
+                    Action::AgentSendFailed { .. } if origin != Origin::System => Some(chat::RUNNERS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
@@ -20841,6 +20902,7 @@ mod tests {
                         Some(displays::USERS_ALONE)
                     }
                     Action::SetDisplays { .. } if origin == Origin::Socket => Some(displays::SHELLS_ALONE),
+                    Action::AgentSendFailed { .. } if origin != Origin::System => Some(chat::RUNNERS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),

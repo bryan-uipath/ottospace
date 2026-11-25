@@ -43,6 +43,10 @@ export interface NativeChat {
   /** Each reply's blocks by kind, and its links that open. */
   replies: { blocks: Record<string, number>; links: { web: number; file: number } }[];
   draft_chars: number;
+  /** Messages queued while the agent works: how many, never their words. */
+  queued: number;
+  /** The user stopped the turn: the queue waits for their ↵. */
+  held: boolean;
   /** The user's editor has the draft (⌃G): the composer takes no typing. */
   editing: boolean;
   /** The draft is the message of a Deny. */
@@ -444,6 +448,8 @@ export interface Task {
   line?: string;
   /** The lines after its title's in the new-task box, as typed: its agent is asked them after the title. Absent: none. */
   body?: string;
+  /** Messages queued in its conversation, kept over a restart: how many, never their words. Absent: none. */
+  queued?: number;
   /** When it was filed, in milliseconds since 1970. Null: filed before this was kept. */
   created: number | null;
   /** The session it was adopted from, or null. */

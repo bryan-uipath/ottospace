@@ -10,7 +10,7 @@ use crate::ask::{self, Act, Form};
 use crate::edit::Field;
 use crate::runner::{RunnerId, Status, Support};
 use crate::talk::{self, Chip, Subject};
-use crate::tasks::{Group, State};
+use crate::tasks::{Group, Queued, State};
 use crate::transcript::{Event, Transcript, View};
 
 /// Why a client's send, answer, interrupt or switch is refused.
@@ -22,6 +22,14 @@ pub const DIAL_USERS: &str = "only the user collapses or opens a conversation's 
 
 /// The most characters a composer draft holds.
 pub const MAX_DRAFT: usize = 100_000;
+
+/// The most characters a conversation's queued messages hold together: its task's file stays
+/// small enough to read back (`config::load_tasks`).
+pub const MAX_QUEUE: usize = 100_000;
+/// Why ↵ queued nothing: the queue is full; the message stays in the composer.
+pub const QUEUE_FULL: &str = "The queue is full: send or remove a queued message first. This one stays in the box";
+/// Why Edit took nothing back: the composer has no room for it beside what is written.
+pub const NO_ROOM: &str = "No room in the box for that message beside what is written: it stays queued";
 
 /// The most conversations whose transcript is kept: twice the sessions whose reads are kept.
 const KEPT: usize = crate::talk::KEPT * 2;
@@ -47,6 +55,10 @@ pub struct Chat {
     pub added: Option<agents::Added>,
     /// The first message's entry, and the user's line as text and tag pills (`compose::parts`).
     pub asked: Option<(u64, Vec<crate::compose::Part>)>,
+    /// Its task's queued messages wait for the user's ↵ (an empty composer sends the next): they
+    /// stopped the turn, or the queue was read back after a restart. The queue is the task's
+    /// (`Task::queued`, `Model::queue_of`).
+    pub held: bool,
 }
 
 impl Chat {
@@ -83,7 +95,20 @@ impl Chat {
     fn new(subject: Subject) -> Self {
         let (transcript, draft) = (Transcript::default(), Field::lines(MAX_DRAFT));
         let (queued, btw, added, asked) = (None, None, None, None);
-        Self { subject, transcript, draft, deny: false, armed: false, queued, btw, untrusted: false, added, asked }
+        let held = false;
+        Self {
+            subject,
+            transcript,
+            draft,
+            deny: false,
+            armed: false,
+            queued,
+            btw,
+            untrusted: false,
+            added,
+            asked,
+            held,
+        }
     }
 }
 
@@ -334,7 +359,8 @@ impl Model {
             {
                 self.chats.remove(at);
             }
-            self.chats.push(Chat::new(subject.clone()));
+            let chat = self.new_chat(subject);
+            self.chats.push(chat);
         }
         // A new session is asked its task first: shown as the user's own line, its tags as pills
         // (`compose::parts`); what ottospace adds (`Task: `, the brief, the skills asked, its
@@ -357,6 +383,108 @@ impl Model {
                 effects.push(Effect::AgentSend { task: subject.clone(), text });
             }
         }
+        self.send_queued(subject, effects);
+    }
+
+    /// The next queued message, if the conversation is idle: live, no turn, no card, not stopping,
+    /// and not held by the user's stop. Each is a turn of its own; the next waits for its end.
+    pub(super) fn send_queued(&mut self, subject: &Subject, effects: &mut Vec<Effect>) {
+        let (now, ending, waiting) = (self.now, self.is_ending(subject), !self.queue_of(subject).is_empty());
+        let Some(chat) = self.chat_mut(subject) else { return };
+        if ending || chat.held || !chat.transcript.live || chat.transcript.busy() || !waiting {
+            return;
+        }
+        let Some(text) = self.queue_mut(subject).map(|queue| queue.remove(0).text) else { return };
+        if let Some(chat) = self.chat_mut(subject) {
+            chat.transcript.send(&text, now);
+        }
+        effects.push(Effect::AgentSend { task: subject.clone(), text });
+        self.chat_state(subject);
+    }
+
+    /// A conversation as it is first made: a task's queue read back (a restart) waits for the
+    /// user's ↵, never sent unasked.
+    fn new_chat(&self, subject: &Subject) -> Chat {
+        let mut chat = Chat::new(subject.clone());
+        chat.held = !self.queue_of(subject).is_empty();
+        chat
+    }
+
+    /// The messages queued in `subject`'s conversation, oldest first: its task's. None for a
+    /// session no task owns.
+    pub fn queue_of(&self, subject: &Subject) -> &[Queued] {
+        subject.task().and_then(|id| self.tasks.get(id)).map_or(&[], |task| &task.queued)
+    }
+
+    fn queue_mut(&mut self, subject: &Subject) -> Option<&mut Vec<Queued>> {
+        let id = subject.task()?;
+        self.tasks.list.iter_mut().find(|task| task.id == id).map(|task| &mut task.queued)
+    }
+
+    /// The composer emptied: what it held was queued.
+    fn clear_draft(&mut self, subject: &Subject) {
+        if let Some(chat) = self.chat_mut(subject) {
+            chat.draft = Field::lines(MAX_DRAFT);
+        }
+    }
+
+    /// Queues `text` in `subject`'s conversation, last. False: no task to keep it, or no room
+    /// (the box says so); the words stay where they are.
+    fn enqueue(&mut self, subject: &Subject, text: String, effects: &mut Vec<Effect>) -> bool {
+        let used: usize = self.queue_of(subject).iter().map(|queued| queued.text.chars().count()).sum();
+        if used + text.chars().count() > MAX_QUEUE {
+            effects.push(Effect::Notice { text: QUEUE_FULL.into() });
+            return false;
+        }
+        let queued = self.queued(text);
+        self.queue_mut(subject).map(|queue| queue.push(queued)).is_some()
+    }
+
+    /// `text` as a queued message, with an id no other has had in this run, nor in the tasks read
+    /// back.
+    fn queued(&mut self, text: String) -> Queued {
+        let kept = self.tasks.list.iter().flat_map(|task| task.queued.iter().map(|queued| queued.id)).max();
+        let id = self.queue_next.max(kept.map_or(1, |id| id + 1));
+        self.queue_next = id + 1;
+        Queued { id, text }
+    }
+
+    /// What "send now" (⌘↵) does in `subject` while its turn runs: true, it stops the turn first
+    /// (its runner takes no message mid-turn); false, the message goes into the turn.
+    pub fn send_now_stops(&self, subject: &Subject) -> bool {
+        !self.runner_of(subject).is_some_and(|runner| runner.spec().structured.mid_turn)
+    }
+
+    /// `text` now, in the shown conversation, by the user: into its turn where its runner takes
+    /// that; else first in the queue, and the turn stopped (it goes once the turn has ended).
+    /// Idle, it is simply sent.
+    /// A card waits (a question first), or the agent stops: it goes first in the queue instead.
+    fn send_now(&mut self, text: String, effects: &mut Vec<Effect>) {
+        let Some(subject) = self.shown_chat().map(|chat| chat.subject.clone()) else { return };
+        let (now, stops, ending) = (self.now, self.send_now_stops(&subject), self.is_ending(&subject));
+        let Some(chat) = self.chat_mut(&subject) else { return };
+        chat.held = false;
+        let carded = !chat.transcript.cards.is_empty();
+        match chat.transcript.turn.is_some() {
+            true if !stops && !carded && !ending => {
+                chat.transcript.send(&text, now);
+                effects.push(Effect::AgentSend { task: subject.clone(), text });
+            }
+            running => {
+                let queued = self.queued(text);
+                if let Some(queue) = self.queue_mut(&subject) {
+                    queue.insert(0, queued);
+                }
+                if running && !carded && !ending {
+                    if let Some(chat) = self.chat_mut(&subject) {
+                        chat.armed = false;
+                    }
+                    effects.push(Effect::AgentInterrupt { task: subject.clone() });
+                }
+            }
+        }
+        self.send_queued(&subject, effects);
+        self.chat_state(&subject);
     }
 
     /// Its agent is gone: its transcript stops being live. Returns whether the user switched it
@@ -654,7 +782,8 @@ impl Model {
                     {
                         self.chats.remove(at);
                     }
-                    self.chats.push(Chat::new(subject.clone()));
+                    let chat = self.new_chat(&subject);
+                    self.chats.push(chat);
                 }
                 let elsewhere = self.watched_elsewhere(&subject);
                 let Some(chat) = self.chat_mut(&subject) else { return };
@@ -689,6 +818,7 @@ impl Model {
                 chat.deny &= chat.transcript.cards.front().map(|card| card.ticket) == front;
                 if turns {
                     self.chat_state(&subject);
+                    self.send_queued(&subject, effects);
                 }
             }
             // ↵ while the user's editor has the draft: nothing is sent.
@@ -698,9 +828,18 @@ impl Model {
             Action::TalkSend if self.talk.as_ref().is_some_and(|talk| talk.open && self.is_ending(&talk.task)) => {
                 let Some(chat) = self.shown_draft_chat_mut() else { return };
                 let text = chat.draft.text().to_string();
+                let subject = chat.subject.clone();
                 if text.trim().is_empty() || chat.queued.is_some() {
                     return;
                 }
+                // Messages wait already: behind them, in order.
+                if !self.queue_of(&subject).is_empty() {
+                    if self.enqueue(&subject, text, effects) {
+                        self.clear_draft(&subject);
+                    }
+                    return;
+                }
+                let Some(chat) = self.chat_mut(&subject) else { return };
                 (chat.queued, chat.draft) = (Some(text), Field::lines(MAX_DRAFT));
             }
             // ↵ while the user writes a Deny's message: the Deny, with it.
@@ -714,25 +853,106 @@ impl Model {
             Action::TalkSend if self.shown_chat().is_none() => {
                 let Some(chat) = self.shown_draft_chat_mut() else { return };
                 let text = chat.draft.text().to_string();
+                let subject = chat.subject.clone();
                 if text.trim().is_empty() || chat.queued.is_some() {
                     return;
                 }
-                (chat.queued, chat.draft) = (Some(text), Field::lines(MAX_DRAFT));
-                let subject = chat.subject.clone();
+                // Messages wait already: this one behind them; they go in order once it runs.
+                if !self.queue_of(&subject).is_empty() {
+                    if !self.enqueue(&subject, text, effects) {
+                        return;
+                    }
+                    self.clear_draft(&subject);
+                    if let Some(chat) = self.chat_mut(&subject) {
+                        chat.held = false;
+                    }
+                } else if let Some(chat) = self.chat_mut(&subject) {
+                    (chat.queued, chat.draft) = (Some(text), Field::lines(MAX_DRAFT));
+                }
                 self.talk_to(subject, true, effects);
             }
             Action::TalkSend => {
                 let now = self.now;
-                let Some(chat) = self.shown_chat_mut().filter(|chat| !chat.transcript.busy()) else { return };
+                let Some(chat) = self.shown_chat_mut() else { return };
                 let text = chat.draft.text().to_string();
+                let subject = chat.subject.clone();
+                // An empty composer: the queue the user's stop held goes on.
                 if text.trim().is_empty() {
-                    return;
+                    chat.held = false;
+                    return self.send_queued(&subject, effects);
                 }
+                // A turn runs, a card waits, or messages wait already: this one waits behind them
+                // (a hold stays: only the empty ↵ lets them go). No task to keep it: as before, nothing.
+                let busy = chat.transcript.busy();
+                if busy || !self.queue_of(&subject).is_empty() {
+                    if self.enqueue(&subject, text, effects) {
+                        self.clear_draft(&subject);
+                    }
+                    return self.send_queued(&subject, effects);
+                }
+                let Some(chat) = self.chat_mut(&subject) else { return };
                 chat.transcript.send(&text, now);
                 chat.draft = Field::lines(MAX_DRAFT);
                 let subject = chat.subject.clone();
                 effects.push(Effect::AgentSend { task: subject.clone(), text });
                 self.chat_state(&subject);
+            }
+            Action::TalkSendNow if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
+            Action::TalkSendNow => {
+                let Some(chat) = self.shown_chat_mut().filter(|chat| !chat.deny) else { return };
+                let text = chat.draft.text().to_string();
+                if text.trim().is_empty() {
+                    return;
+                }
+                chat.draft = Field::lines(MAX_DRAFT);
+                self.send_now(text, effects);
+            }
+            // Not while the user's editor has the draft: an edit would be written over by its save.
+            Action::QueueEdit { .. } if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
+            // By the row's id: a row the queue has moved on from (sent meanwhile) is no other row.
+            act @ (Action::QueueRemove { id } | Action::QueueEdit { id } | Action::QueueSendNow { id }) => {
+                let Some(subject) = self.shown_chat().map(|chat| chat.subject.clone()) else { return };
+                let Some(index) = self.queue_of(&subject).iter().position(|queued| queued.id == id) else { return };
+                let text = self.queue_of(&subject)[index].text.clone();
+                match act {
+                    // Back in the composer, after what is written there; if all of it fits. Hidden
+                    // from the state as a btw answer is: it may have been one.
+                    Action::QueueEdit { .. } => {
+                        let Some(chat) = self.chat_mut(&subject) else { return };
+                        let before = chat.draft.text().trim_end().to_string();
+                        let joined = if before.is_empty() { text } else { format!("{before}\n{text}") };
+                        if joined.chars().count() > MAX_DRAFT {
+                            return effects.push(Effect::Notice { text: NO_ROOM.into() });
+                        }
+                        (chat.draft, chat.untrusted) = (Field::lines(MAX_DRAFT), true);
+                        chat.draft.apply(crate::edit::Edit::Paste(joined));
+                        self.queue_mut(&subject).map(|queue| queue.remove(index));
+                    }
+                    Action::QueueRemove { .. } => drop(self.queue_mut(&subject).map(|queue| queue.remove(index))),
+                    _ => {
+                        self.queue_mut(&subject).map(|queue| queue.remove(index));
+                        self.send_now(text, effects);
+                    }
+                }
+            }
+            // Not delivered (its agent had ended): first in its queue again, held for the user's ↵
+            // (its row says so; no notice: the shell's news interrupts nobody).
+            Action::AgentSendFailed { .. } if self.by_user => {}
+            Action::AgentSendFailed { task: subject, text } => {
+                if subject.task().is_some() {
+                    let queued = self.queued(text);
+                    if let Some(queue) = self.queue_mut(&subject) {
+                        queue.insert(0, queued);
+                    }
+                    if let Some(chat) = self.chat_mut(&subject) {
+                        chat.held = true;
+                    }
+                } else if let Some(chat) = self.chat_mut(&subject) {
+                    // No task to queue it: back in the composer, after what is written there.
+                    let before = chat.draft.text().trim_end().to_string();
+                    let joined = if before.is_empty() { text } else { format!("{before}\n{text}") };
+                    chat.draft = Field::lines_of(&joined, MAX_DRAFT);
+                }
             }
             Action::TalkAnswer { allow, ticket } => {
                 let Some(chat) = self.shown_chat_mut().filter(|chat| chat.front_is(ticket)) else { return };
@@ -773,15 +993,16 @@ impl Model {
                 if chat.transcript.turn.is_none() {
                     return self.talk_keys(false, effects);
                 }
-                // Esc, Esc: the turn stops. One Esc only says so.
+                // Esc, Esc: the turn stops, and what is queued waits for the user. One Esc only says so.
                 chat.armed = !chat.armed;
                 if !chat.armed {
+                    chat.held = true;
                     effects.push(Effect::AgentInterrupt { task: chat.subject.clone() });
                 }
             }
             Action::TalkInterrupt => {
                 if let Some(chat) = self.shown_chat_mut().filter(|chat| chat.transcript.turn.is_some()) {
-                    chat.armed = false;
+                    (chat.armed, chat.held) = (false, true);
                     effects.push(Effect::AgentInterrupt { task: chat.subject.clone() });
                 }
             }
@@ -887,6 +1108,11 @@ mod tests {
 
     fn events(m: &mut Model, subject: &Subject, events: Vec<Event>) -> Vec<Effect> {
         m.update(Action::AgentEvents { task: subject.clone(), events, at: 5 }.sent_by(Origin::System))
+    }
+
+    /// The words of `subject`'s queued messages, in order.
+    fn texts(m: &Model, subject: &Subject) -> Vec<String> {
+        m.queue_of(subject).iter().map(|queued| queued.text.clone()).collect()
     }
 
     fn typed(m: &mut Model, text: &str) {
@@ -1267,10 +1493,156 @@ mod tests {
         assert_eq!(m.update(Action::TalkSend), [Effect::AgentSend { task: one.clone(), text: "hello".into() }]);
         assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::Running));
         typed(&mut m, "more");
-        assert_eq!(m.update(Action::TalkSend), [], "a turn runs: ↵ sends nothing");
-        events(&mut m, &one, vec![Event::TurnStarted, Event::TurnFinished { outcome: Outcome::Completed }]);
-        assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::NeedsYou));
-        assert_eq!(m.update(Action::TalkSend), [Effect::AgentSend { task: one, text: "more".into() }]);
+        assert_eq!(m.update(Action::TalkSend), [], "a turn runs: ↵ queues it");
+        assert_eq!(texts(&m, &one), ["more"]);
+        let ended = events(&mut m, &one, vec![Event::TurnStarted, Event::TurnFinished { outcome: Outcome::Completed }]);
+        assert_eq!(ended, [Effect::AgentSend { task: one.clone(), text: "more".into() }], "sent once the turn ends");
+        assert_eq!(m.tasks.get(one.task().unwrap_or_default()).map(|t| t.state), Some(State::Running));
+    }
+
+    /// While a turn runs ↵ queues; each queued message is a turn of its own, in order, once the
+    /// conversation is idle; a card (a question) comes first; the user's Stop holds the queue
+    /// until their ↵; ⌘↵ sends now, stopping the turn where the runner takes nothing mid-turn;
+    /// the queue is kept with the task; only the user queues, edits, removes or sends now.
+    #[test]
+    fn messages_queue_while_a_turn_runs_and_go_in_order() {
+        let mut m = two_live();
+        let one = first(&m);
+        let id = one.task().unwrap_or_default();
+        let turn = |m: &mut Model, events| super::tests::events(m, &one, events);
+        let done = || vec![Event::TurnFinished { outcome: Outcome::Completed }];
+        let queue = |m: &Model| texts(m, &one);
+        typed(&mut m, "first");
+        m.update(Action::TalkSend);
+        for text in ["second", "third"] {
+            typed(&mut m, text);
+            assert_eq!(m.update(Action::TalkSend), []);
+        }
+        assert_eq!(queue(&m), ["second", "third"]);
+        // A task serialised (the state, the inbox, a socket reply) has their count, never their
+        // words; only its file has them, and reads them back.
+        let state = serde_json::to_string(&m.tasks).unwrap_or_default();
+        let task = m.tasks.get(id).cloned().unwrap_or_else(|| panic!("task {id}"));
+        let json = serde_json::json!(task).to_string();
+        assert!(state.contains("\"queued\":2") && !state.contains("second") && !json.contains("second"), "{json}");
+        let file = task.file_json();
+        let words: Vec<&str> =
+            file["queued"].as_array().into_iter().flatten().filter_map(|q| q["text"].as_str()).collect();
+        assert_eq!(words, ["second", "third"]);
+        let back: crate::tasks::Task = serde_json::from_value(file).unwrap_or_else(|e| panic!("{e}"));
+        assert_eq!(back.queued, task.queued);
+        let counted: crate::tasks::Task = serde_json::from_str(&json).unwrap_or_else(|e| panic!("{e}"));
+        assert!(counted.queued.is_empty(), "a count brings no words back");
+        // A client queues, edits, removes and sends nothing.
+        for theirs in [
+            Action::TalkSendNow,
+            Action::QueueRemove { id: 1 },
+            Action::QueueEdit { id: 1 },
+            Action::QueueSendNow { id: 1 },
+        ] {
+            assert_eq!(m.refusal(&theirs, Origin::Socket), Some(super::USERS_ALONE));
+        }
+        // A card first: what is queued waits behind the question.
+        assert_eq!(turn(&mut m, vec![card(4, false)]), []);
+        assert_eq!(queue(&m).len(), 2);
+        m.update(Action::TalkAnswer { allow: false, ticket: 4 });
+        // The turn ends: the next goes, alone; then the next.
+        assert_eq!(turn(&mut m, done()), [Effect::AgentSend { task: one.clone(), text: "second".into() }]);
+        assert_eq!(turn(&mut m, done()), [Effect::AgentSend { task: one.clone(), text: "third".into() }]);
+        assert!(queue(&m).is_empty());
+        // The user's Stop holds the queue; their ↵ on an empty composer sends the next.
+        typed(&mut m, "fourth");
+        m.update(Action::TalkSend);
+        m.update(Action::TalkInterrupt);
+        assert_eq!(turn(&mut m, done()), [], "held after the user's stop");
+        assert_eq!(m.update(Action::TalkSend), [Effect::AgentSend { task: one.clone(), text: "fourth".into() }]);
+        // Edit puts it back in the composer; remove drops it.
+        for text in ["fifth", "sixth"] {
+            typed(&mut m, text);
+            m.update(Action::TalkSend);
+        }
+        let ids: Vec<u64> = m.queue_of(&one).iter().map(|queued| queued.id).collect();
+        m.update(Action::QueueEdit { id: ids[1] });
+        m.update(Action::QueueRemove { id: ids[0] });
+        assert_eq!((queue(&m), m.chat(&one).map(|chat| chat.draft.text().to_string())), (vec![], Some("sixth".into())));
+        // ⌘↵ while a turn runs, Claude Code (no message mid-turn): the turn stops, the message goes first after it.
+        assert!(m.send_now_stops(&one));
+        assert_eq!(m.update(Action::TalkSendNow), [Effect::AgentInterrupt { task: one.clone() }]);
+        assert_eq!(queue(&m), ["sixth"]);
+        let stopped = vec![Event::TurnFinished { outcome: Outcome::Interrupted }];
+        assert_eq!(turn(&mut m, stopped), [Effect::AgentSend { task: one.clone(), text: "sixth".into() }]);
+    }
+
+    /// Found in review: a card waiting keeps "send now" behind the question (no stop); a full queue
+    /// leaves the message in the box and says so; a queue read back waits for the user's ↵.
+    #[test]
+    fn the_queue_waits_for_a_question_has_a_limit_and_is_held_after_a_restart() {
+        let mut m = two_live();
+        let one = first(&m);
+        let id = one.task().unwrap_or_default();
+        typed(&mut m, "go");
+        m.update(Action::TalkSend);
+        typed(&mut m, "now");
+        events(&mut m, &one, vec![card(4, false)]);
+        assert_eq!(m.update(Action::TalkSendNow), [], "no stop while a question waits");
+        assert_eq!(texts(&m, &one), ["now"]);
+        m.update(Action::TalkAnswer { allow: false, ticket: 4 });
+        typed(&mut m, &"x".repeat(super::MAX_QUEUE));
+        let full = m.update(Action::TalkSend);
+        assert_eq!(full, [Effect::Notice { text: super::QUEUE_FULL.into() }]);
+        assert_eq!(m.chat(&one).map(|chat| chat.draft.text().chars().count()), Some(super::MAX_QUEUE));
+        // Read back after a restart: held until the user's empty ↵.
+        let queued = m.tasks.get(id).map(|task| task.queued.clone()).unwrap_or_default();
+        let mut fresh = Model::default();
+        add(&mut fresh, "fix login");
+        let again = fresh.tasks.list[0].id;
+        fresh.tasks.set_queued(again, queued);
+        started(&mut fresh, Action::TaskTalk { id: again });
+        let subject = Subject::Task(again);
+        let up =
+            fresh.update(Action::AgentStarted { task: subject.clone(), session: None, at: 1 }.sent_by(Origin::System));
+        assert!(fresh.chat(&subject).is_some_and(|chat| chat.held), "{up:?}");
+        assert_eq!(texts(&fresh, &subject), ["now"]);
+    }
+
+    /// A row names its message by id: the turn ending between the row's draw and the click sends
+    /// the first; the click on the row drawn first then acts on nothing, never on the next one.
+    /// A message whose write failed (its agent had ended) is back first in the queue, held.
+    #[test]
+    fn a_row_acts_on_its_own_message_and_an_undelivered_one_comes_back_first() {
+        let mut m = two_live();
+        let one = first(&m);
+        typed(&mut m, "go");
+        m.update(Action::TalkSend);
+        for text in ["alpha", "beta"] {
+            typed(&mut m, text);
+            m.update(Action::TalkSend);
+        }
+        let drawn: Vec<u64> = m.queue_of(&one).iter().map(|queued| queued.id).collect();
+        // The turn ends: alpha goes. The user's click was on alpha's row, drawn before.
+        let sent = events(&mut m, &one, vec![Event::TurnFinished { outcome: Outcome::Completed }]);
+        assert_eq!(sent, [Effect::AgentSend { task: one.clone(), text: "alpha".into() }]);
+        m.update(Action::QueueRemove { id: drawn[0] });
+        assert_eq!(texts(&m, &one), ["beta"], "beta stays: the click was alpha's");
+        // alpha was never written: first again, held for the user.
+        let back = Action::AgentSendFailed { task: one.clone(), text: "alpha".into() };
+        assert_eq!(m.refusal(&back, Origin::Socket), Some(super::RUNNERS_ALONE));
+        m.update(back.clone());
+        assert_eq!(texts(&m, &one), ["beta"], "the user's report is nothing: only the runner's");
+        m.update(back.sent_by(Origin::System));
+        assert_eq!(texts(&m, &one), ["alpha", "beta"]);
+        assert!(m.chat(&one).is_some_and(|chat| chat.held));
+        let ids: Vec<u64> = m.queue_of(&one).iter().map(|queued| queued.id).collect();
+        assert!(!drawn.contains(&ids[0]), "a new id: an old row's click is not this message's");
+    }
+
+    /// A runner that takes a message mid-turn gets "send now" in the turn; Claude Code's is off
+    /// until a probe pins its queue.
+    #[test]
+    fn send_now_stops_only_where_the_runner_takes_nothing_mid_turn() {
+        use crate::runner::RunnerId;
+        assert!(!RunnerId::Claude.spec().structured.mid_turn);
+        assert!(RunnerId::Codex.spec().structured.mid_turn);
     }
 
     /// Only the shell's runner reports what an agent said: a user's or a client's report is nothing.

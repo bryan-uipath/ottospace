@@ -368,6 +368,11 @@ pub struct Task {
     /// The lines after its title's in the box, as typed: its agent is asked them after the title.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<String>,
+    /// Messages the user queued in its conversation while its agent worked, oldest first: kept
+    /// over a restart. Unsent words: a task serialises them as their count alone (the socket,
+    /// the state, the inbox); only its file has them (`file_json`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "count", deserialize_with = "texts")]
+    pub queued: Vec<Queued>,
     /// When it was filed (milliseconds since 1970). `None`: filed before this was kept.
     #[serde(default)]
     pub created: Option<u64>,
@@ -425,6 +430,15 @@ pub fn colour_for(tasks: &[Task]) -> u8 {
 }
 
 impl Task {
+    /// The task's file: `for_file`, with its queued messages' words, which nothing else serialises.
+    pub fn file_json(&self) -> serde_json::Value {
+        let mut value = serde_json::to_value(self.for_file()).unwrap_or_default();
+        if let Some(fields) = value.as_object_mut().filter(|_| !self.queued.is_empty()) {
+            fields.insert("queued".into(), serde_json::to_value(&self.queued).unwrap_or_default());
+        }
+        value
+    }
+
     /// The task as it is written to its file. A reference keeps what it is, its name, its id
     /// then and its app's name: not a window's title, a terminal's directory or program, or
     /// where an app is installed. The tasks folder may be shared; those stay in memory.
@@ -569,6 +583,33 @@ enum Undo {
     Dismiss { id: TaskId },
 }
 
+/// A message queued in a task's conversation: its words, and an id of its own, so a click on its
+/// row acts on it even if the queue moved under the pointer.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Queued {
+    pub id: u64,
+    pub text: String,
+}
+
+/// Queued messages as their count: never their words (`Task::queued`).
+fn count<S: serde::Serializer>(queued: &[Queued], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u64(queued.len() as u64)
+}
+
+/// Queued messages from a task's file: their words; a count (a state's copy) brings none back.
+fn texts<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Vec<Queued>, D::Error> {
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Kept {
+        Texts(Vec<Queued>),
+        Count(serde::de::IgnoredAny),
+    }
+    Ok(match Kept::deserialize(deserializer)? {
+        Kept::Texts(texts) => texts,
+        Kept::Count(_) => Vec::new(),
+    })
+}
+
 /// The task list, and the one step that `undo` takes back.
 #[derive(Debug, Default, Serialize)]
 pub struct Tasks {
@@ -658,6 +699,7 @@ impl Tasks {
             skills,
             line: None,
             body: None,
+            queued: Vec::new(),
             created: None,
             session: None,
             refs: Vec::new(),
@@ -672,6 +714,13 @@ impl Tasks {
             extra: Default::default(),
         });
         self.next_id
+    }
+
+    /// The messages queued in its conversation, kept with it.
+    pub fn set_queued(&mut self, id: TaskId, queued: Vec<Queued>) {
+        if let Some(task) = self.list.iter_mut().find(|t| t.id == id) {
+            task.queued = queued;
+        }
     }
 
     /// What its agent is asked after the title: the box's lines after the title's.
@@ -1116,6 +1165,7 @@ mod tests {
             skills: Vec::new(),
             line: None,
             body: None,
+            queued: Vec::new(),
             created: None,
             session: None,
             refs: Vec::new(),

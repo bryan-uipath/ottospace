@@ -783,6 +783,7 @@ impl Gen<'_> {
             skills: self.names(SKILLS, 2),
             line: None,
             body: None,
+            queued: Vec::new(),
             created: self.rng.coin().then(|| self.time()),
             session: self.rng.one_in(4).then(|| self.link()),
             refs: Vec::new(),
@@ -1853,6 +1854,11 @@ const MAKERS: &[Make] = &[
         Action::AgentEvents { task, events, at: g.rng.pick(&[0, 1, 5_000]) }
     },
     |_| Action::TalkSend,
+    |_| Action::TalkSendNow,
+    |g| Action::QueueRemove { id: g.rng.below(6) as u64 },
+    |g| Action::QueueEdit { id: g.rng.below(6) as u64 },
+    |g| Action::QueueSendNow { id: g.rng.below(6) as u64 },
+    |g| Action::AgentSendFailed { task: g.subject(), text: g.rng.pick(&["go on", "and the docs"]).to_string() },
     |g| Action::TalkAnswer { allow: g.rng.coin(), ticket: g.card() },
     |g| Action::TalkExpand { ticket: g.card() },
     |g| Action::TalkAsk { ticket: g.card(), act: g.ask_act() },
@@ -3330,6 +3336,20 @@ fn check(m: &Model) -> Result<(), String> {
     // A picker's list and the tag's dropdown never both; a list only of a picker the box shows.
     ensure!(m.picker_menu().is_none() || m.dropdown().is_none(), "a picker's list and the dropdown at once");
     ensure!(m.picker_menu().is_none_or(|menu| m.compose_pickers().contains(&menu.mark)), "a list of no picker");
+    // A queued message is never empty, and a queue stays small enough for its task's file.
+    for task in &m.tasks.list {
+        ensure!(task.queued.iter().all(|q| !q.text.trim().is_empty()), "an empty message queued in task {}", task.id);
+        let ids: std::collections::BTreeSet<u64> = task.queued.iter().map(|q| q.id).collect();
+        ensure!(ids.len() == task.queued.len(), "task {} queues two messages under one id", task.id);
+        // A message that did not reach its agent comes back over the limit rather than be lost.
+        let used: usize = task
+            .queued
+            .iter()
+            .map(|q| q.text.chars().count())
+            .sum::<usize>()
+            .saturating_sub(crate::model::chat::MAX_DRAFT);
+        ensure!(used <= crate::model::chat::MAX_QUEUE, "task {} queues {used} characters", task.id);
+    }
     if let Some((of, field)) = m.open_field() {
         let most = match of {
             "compose" if m.bar_draft().is_some() => MAX_TITLE,
@@ -3970,7 +3990,8 @@ fn check_views(m: &Model) -> Result<(), String> {
         "no project is not last"
     );
     for task in &m.tasks.list {
-        let text = serde_json::to_string(&task.for_file()).map_err(|e| e.to_string())?;
+        // Its file's form: its queued words are only there (`file_json`).
+        let text = serde_json::to_string(&task.file_json()).map_err(|e| e.to_string())?;
         let back: Task =
             serde_json::from_str(&text).map_err(|e| format!("task {} does not read back: {e}", task.id))?;
         ensure!(back == task.for_file(), "task {} reads back changed", task.id);
@@ -4070,7 +4091,6 @@ fn check_state(m: &Model) -> Result<(), String> {
         let text = serde_json::to_string(what).unwrap_or_default();
         serde_json::from_str::<T>(&text).is_ok_and(|read| read == *what)
     }
-    ensure!(round_trips(&m.tasks.list), "the tasks do not read back as written");
     ensure!(round_trips(&m.repos), "the repositories do not read back as written");
     ensure!(round_trips(&m.found), "the sessions do not read back as written");
     ensure!(m.panes.iter().all(|pane| round_trips(&pane.kind)), "a pane's kind does not read back as written");
@@ -4862,6 +4882,8 @@ impl Run {
             Action::AgentEvents { .. }
                 | Action::AppUsed { .. }
                 | Action::TalkSend
+                | Action::TalkSendNow
+                | Action::QueueSendNow { .. }
                 | Action::AgentStarted { .. }
                 | Action::AgentExited { .. }
         );
@@ -5369,7 +5391,18 @@ impl Run {
         let edited = |subject: &Subject| {
             saved && editing_before.as_ref().is_some_and(|e| e.target == editor::Target::Chat(subject.clone()))
         };
-        for chat in m.chats.iter().filter(|chat| !user && !edited(&chat.subject)) {
+        // Or the user's own message comes back to it: one that waited on a start that failed, or a
+        // send its agent never got (`AgentSendFailed`, a session no task owns).
+        let returned = |chat: &chat::Chat| {
+            let was = chats_before.iter().find(|was| was.subject == chat.subject);
+            let waited = was.and_then(|was| was.queued.clone()).filter(|_| chat.queued.is_none());
+            let failed = match &action {
+                Action::AgentSendFailed { task, text } if *task == chat.subject => Some(text.clone()),
+                _ => None,
+            };
+            [waited, failed].into_iter().flatten().any(|text| chat.draft.text().ends_with(text.as_str()))
+        };
+        for chat in m.chats.iter().filter(|chat| !user && !edited(&chat.subject) && !returned(chat)) {
             let before = drafts.iter().find(|(subject, _)| *subject == chat.subject).map(|(_, text)| text.as_str());
             ensure!(before.unwrap_or("") == chat.draft.text(), "{origin:?} changed the draft of {:?}", chat.subject);
         }
