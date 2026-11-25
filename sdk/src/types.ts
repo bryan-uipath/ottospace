@@ -2056,6 +2056,10 @@ export interface CitySpun {
   render_p95: number;
   /** Drawn on the live layer (`city_live_layer`), not painted as an image. */
   live: boolean;
+  /** Pictures made for its place, its place's paints, and the new pictures seen there. */
+  made: number;
+  paints: number;
+  new: number;
   boxes: number;
 }
 

@@ -197,6 +197,9 @@ fn fields_of(event: &str) -> &'static [&'static str] {
             "render_p50",
             "render_p95",
             "live",
+            "made",
+            "paints",
+            "new",
             "boxes",
         ],
         // Why a waiting slot is offered nothing: counts by reason code, never a title or id.
@@ -439,7 +442,7 @@ mod tests {
                 json!({ "steps": 240, "done": true, "frames": 240, "mean": 16.7, "p50": 16.6, "p95": 17.1, "p99": 33.4,
                     "max": 50.1, "over_16": 9, "over_33": 2, "repeats": 4, "wait_p50": 5.2, "wait_p95": 12.0,
                     "wait_max": 20.4, "boxes": 10392, "shown_p50": 9.1, "shown_p95": 15.0, "shown_p99": 18.0, "render_p50": 3.1, "render_p95": 4.2,
-                    "live": false }),
+                    "live": false, "made": 240, "paints": 240, "new": 236 }),
             ),
             ("slot_miss", json!({ "pane": 3, "bundle": "us.zoom.xos", "why": { "no_id": 1, "in_pane": 1 } })),
             (
