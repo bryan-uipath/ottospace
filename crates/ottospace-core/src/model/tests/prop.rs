@@ -10348,3 +10348,18 @@ mod done_worktree_races {
         replay(&steps).unwrap();
     }
 }
+
+/// Seed 1151: a Slack slot was offered a window of a second look that named it by name alone,
+/// while its look (by bundle) did not list that window.
+#[test]
+fn seed_1151_a_slot_offers_only_from_its_own_look() {
+    replay(&[
+            Action::Open { kind: Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() }, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+            Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+            Action::Open { kind: Kind::App { window: 2, title: "general".into(), bundle: Some("com.slack".into()), name: "Slack".into() }, axis: Axis::Down, beside: Some(1) }.sent_by(Origin::User),
+            Action::WindowGone { pane: 3, app_running: false, at: 200000000, was: None }.sent_by(Origin::System),
+            slot_windows("{\"bundle\":\"com.slack\",\"name\":\"שלום\\\"@z\",\"running\":true,\"windows\":[{\"pid\":2,\"window\":12,\"title\":\"SLOTSEEN İ\",\"identifier\":null,\"subrole\":\"AXStandardWindow\",\"frame\":{\"x\":0.0,\"y\":0.0,\"w\":800.0,\"h\":600.0},\"sheet\":true},{\"pid\":1,\"window\":1,\"title\":\"SLOTSEEN general\",\"identifier\":null,\"subrole\":\"AXStandardWindow\",\"frame\":{\"x\":2000.0,\"y\":0.0,\"w\":400.0,\"h\":300.0},\"sheet\":false}],\"displays\":[{\"x\":0.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0},{\"x\":1920.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0}],\"frontmost\":null}").sent_by(Origin::System),
+            slot_windows("{\"bundle\":null,\"name\":\"Slack\",\"running\":true,\"windows\":[{\"pid\":1,\"window\":10,\"title\":\"SLOTSEEN w1\",\"identifier\":\"slotseen.main\",\"subrole\":\"AXDialog\",\"frame\":{\"x\":0.0,\"y\":0.0,\"w\":800.0,\"h\":600.0},\"sheet\":false},{\"pid\":2,\"window\":11,\"title\":\"SLOTSEEN w1\",\"identifier\":\"slotseen.main\",\"subrole\":\"AXStandardWindow\",\"frame\":{\"x\":2000.0,\"y\":0.0,\"w\":400.0,\"h\":300.0},\"sheet\":false}],\"displays\":[{\"x\":0.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0},{\"x\":1920.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0}],\"frontmost\":10}").sent_by(Origin::System),
+        ])
+        .unwrap();
+}

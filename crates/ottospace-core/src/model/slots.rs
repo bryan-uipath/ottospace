@@ -1041,7 +1041,12 @@ impl Model {
             }
         }
         let shown = self.layout.as_ref().map(super::Node::leaves).unwrap_or_default();
-        let ours = |run: &Run| same_app((run.bundle.as_deref(), &run.name), (app.0.as_deref(), &app.1));
+        // A slot this look is the look of: the first that names its app, as every other read of a
+        // slot's look takes it. Two looks may both name one slot (one by bundle, one by name).
+        let ours = |run: &Run| {
+            let first = self.slot_looks.iter().find(|look| run.of(look));
+            first.is_some_and(|look| look.bundle == app.0 && look.name == app.1)
+        };
         let waiting: Vec<PaneId> = shown
             .iter()
             .copied()
@@ -1252,7 +1257,13 @@ impl Model {
                 .iter()
                 .copied()
                 .filter(|id| !filled.contains(id))
-                .filter(|id| self.slots.get(id).is_some_and(|run| run.pending.is_none() && run.of(look)))
+                // Only by its own look (the first that names its app): two may name one slot.
+                .filter(|id| {
+                    self.slots.get(id).is_some_and(|run| {
+                        let first = self.slot_looks.iter().find(|l| run.of(l));
+                        run.pending.is_none() && first.is_some_and(|first| std::ptr::eq(first, look))
+                    })
+                })
                 .collect();
             pairs.extend(self.slot_pairs(look, &waiting, &BTreeSet::new()));
         }
