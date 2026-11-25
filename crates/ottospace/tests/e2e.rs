@@ -10900,8 +10900,17 @@ fn go_to_finds_a_worktree_then_a_file_in_it_and_a_gt_runs_a_command() {
     let reply = otto.wait_for("a terminal in the worktree", landed);
     assert_eq!(reply["mode"], "normal");
 
-    // Tab: its files, read by git; a name and ↵ open one in a viewer.
-    otto.user_key("cmd-p a p p f i x tab");
+    // ⌘P there: its files at once, read by git; a name and ↵ open one in a viewer. ⌫ lists the
+    // places, Tab goes back into the highlighted one's files.
+    otto.user_key("cmd-p");
+    let files = |o: &Otto| {
+        let rows = o.call(json!({"cmd": "state"}))["goto_rows"].clone();
+        rows.as_array()?.iter().any(|row| row["file"] == "src/login.rs").then_some(())
+    };
+    otto.wait_for("the worktree's files at once", files);
+    assert_eq!(otto.user_key("backspace")["goto_rows"][0]["file"], Value::Null);
+    otto.user_key("escape");
+    otto.user_key("cmd-p backspace a p p f i x tab");
     let file = |o: &Otto| {
         let rows = o.call(json!({"cmd": "state"}))["goto_rows"].clone();
         rows.as_array()?.iter().any(|row| row["file"] == "src/login.rs").then_some(())

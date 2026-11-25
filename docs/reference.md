@@ -48,7 +48,7 @@ running, and the rest of the design is not built: see the
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | Scrolling over an app pane you are not in enters it (`APP`), as a click does, and that first scroll reaches the app | Verified on CI (`e2e-apps`): the wheel enters, the window comes up under the pointer and the canary receives the first scroll |
 | [Command palette](#command-palette) (⌘⇧P): every command of the menu bar by name, with its key; a Developer group | Works today |
-| [Go to](#go-to) (⌘P): a workspace, a listed checkout or a task by name, then a file in its folder | Works today |
+| [Go to](#go-to) (⌘P): the files of the checkout on show, fuzzy, as you type; ⌫ for a workspace, a listed checkout or a task by name, then a file in its folder | Works today |
 | [Accessibility inspector](#accessibility-inspector): a hosted app's accessibility tree in the right drawer's place, read-only | Works today |
 | [Zoom out](#zoom-out) (⌘⇧\\): every tab of the workspace on show as a tile on a grid, each a live miniature; arrows select, ↵ goes in, Esc goes back | Works today, behind the `zoom_out` [flag](#features), off by default |
 | Marks (⌘B, ⌘⇧B, ⌘' and a letter): named ways back to a pane or a tab, kept in `~/.ottospace/marks.json` | Works today, behind the `marks` [flag](#features), off by default |
@@ -110,7 +110,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | The keys, by what you are doing, the ones you have not learned first; in list or visual mode that mode's own keys come first. A bar under a key shows how much you use it. Keys you use often fold into `Known · n` at the bottom: a click or ↵ opens it. A key unused for about eight days comes back up. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
 | ⌘⇧P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘⇧P closes |
-| ⌘P | [Go to](#go-to): a place by name, Tab or `/` for its files, `>` for the commands |
+| ⌘P | [Go to](#go-to): a file of the checkout on show (↵ opens, ⌘↵ below); ⌫ for a place by name, Tab or `/` for its files; `>` for the commands |
 | ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | ⌘⌘ or F18 | From any app: take the keyboard back and bring ottospace forward |
 | ⌘T | New tab, with an empty pane: ⌘E picks what goes in it. Opened from a tab that keeps a checkout (`open_repo` made it), it keeps that checkout too: its code city, and a terminal there starts in it (until the tab moves to another workspace; kept across a restart). Pressed in a folded-out window, the new tab opens in the main window with that window's tab's checkout |
@@ -542,7 +542,17 @@ it: the agent gets no key while it is open, and when it closes the keyboard goes
 
 ## Go to
 
-⌘P, or View ▸ Go to Place or File…, opens one list of places: the workspaces, each checkout the
+⌘P, or View ▸ Go to Place or File…, opens on the files of the checkout on show: the tab's (a
+Repos click opened it there), else its space's (a task's worktree, a workspace's default), when the
+Repos section lists it. Type to find one: a match in a file's name ranks before one only in its
+folders, a name it starts before one it runs through, letters in a row and at word starts higher,
+then the files you opened recently, then the shorter path. Nothing typed: the recent ones first.
+A query longer than 32 letters is found whole. ↵ opens it in a viewer (in the focused pane if it
+is empty, else beside it), ⌘↵ below it.
+Esc closes; ⌫ with nothing typed lists the places. Elsewhere (Home, a space with no listed
+checkout) ⌘P opens on the places.
+
+The places: the workspaces, each checkout the
 Repos section lists (a repository's own folder and its worktrees, with the branch) and the tasks
 not done (needs-you first). Each row has its section's icon, its name and a muted detail: a
 workspace's default folder, a checkout's folder or repository and branch, a task's state. With

@@ -37,7 +37,8 @@ ottospace            # opens on the Repos list
 | Quit | ⌘Q, or the window's close button. Asks first while a terminal or an agent runs ("Quitting ends these:") or a draft has words ("Not sent yet"; click a row to go to it): ↵, Q or ⌘Q again quits; Esc, any other key or shortcut cancels and does nothing else. Shells at a prompt and drafts of only spaces do not count. Dock ▸ Quit and logout do not ask |
 | Start empty next time | File ▸ Start Fresh. Otherwise the tabs, splits, the tab on show and the drawer come back after quitting (`restore_layout`) |
 | Find an action by name | ⌘⇧P: type part of its name, ↵ runs it. Or the menu bar |
-| Go to a workspace, checkout, task or file | ⌘P: type part of its name, ↵ goes there. Tab or `/` lists its files; ↵ opens one. `>` for commands |
+| Find a file in the workspace | ⌘P: the checkout on show's files; type part of the name, ↵ opens it, ⌘↵ below |
+| Go to a workspace, checkout, task or file | ⌘P then ⌫ (at once from Home): type part of its name, ↵ goes there. Tab or `/` lists its files; ↵ opens one. `>` for commands |
 | Edit the settings | ⌘, (Open Settings): `settings.json` in your editor, in a tab of its own |
 | See what an app exposes to accessibility | Focus its pane, ⌘⇧P, "inspector": its tree in a panel on the right, counted by role. Click a row to outline it |
 | Switch tab (of the task on show) | ⌘1 … ⌘9 · ⌘⇧] ⌘⇧[ · ⌃Tab |

@@ -1,0 +1,12 @@
+# ⌘P in a checkout's tab: its files at once (goto/repos/app, made up), found as you type; ⌫ the places.
+{"until":"repos_bar.0"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"key","keys":"cmd-p","as":"user"}
+{"until":"goto_rows.3"}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"files"}
+{"cmd":"key","keys":"l o g","as":"user"}
+{"shot":"files-typed"}
+{"cmd":"key","keys":"backspace backspace backspace backspace","as":"user"}
+{"until":"goto_rows.0.place","exists":true}
+{"shot":"places"}

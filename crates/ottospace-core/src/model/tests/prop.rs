@@ -1211,6 +1211,7 @@ const MAKERS: &[Make] = &[
     |_| Action::PaletteFeatures,
     |_| Action::PaletteGoTo,
     |_| Action::GoToDrill,
+    |_| Action::GoToSplit,
     |_| Action::GoToBack,
     |g| Action::GoToFiles {
         folder: g.repo_path(),
@@ -2396,6 +2397,7 @@ fn selects_tab(action: &Action) -> bool {
             | Action::ListChoose { .. }
             // Go to's ↵: a place's own row's step.
             | Action::PaletteChoose { .. }
+            | Action::GoToSplit
             | Action::MarkType { .. }
             | Action::MarkSubmit
             | Action::CaptureBack
@@ -5218,6 +5220,7 @@ impl Run {
                 | Action::PaletteFeatures
                 | Action::PaletteGoTo
                 | Action::GoToDrill
+                | Action::GoToSplit
                 | Action::GoToBack
                 | Action::PaletteMove { .. }
                 | Action::PaletteChoose { .. }
@@ -6170,7 +6173,7 @@ impl Run {
                 }
                 // Files are listed only for the user's go-to, in a listed checkout.
                 Effect::ListFiles { folder } => {
-                    let goto = matches!(action, Action::GoToDrill | Action::FieldEdit { .. });
+                    let goto = matches!(action, Action::PaletteGoTo | Action::GoToDrill | Action::FieldEdit { .. });
                     ensure!(user && goto && m.repo_listed(folder), "{origin:?}'s {action:?} listed {folder:?}")
                 }
                 // The list is read again only for a folder an agent's session moved into, and a while after.
