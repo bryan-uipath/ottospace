@@ -109,11 +109,8 @@ const CALLS: Array<(client: Client) => Promise<unknown>> = [
   (c) => c.captureStart({ pane: 1 }),
   (c) => c.bugStart(),
   (c) => c.citySpin(),
-<<<<<<< HEAD
   (c) => c.typingTime({ full: true, busy: true }),
-=======
   (c) => c.cityUnder({ pane: 1, opacity: 0.85 }),
->>>>>>> e2745e07 (Code city under a terminal, for a test run (city_under): its folder's city on the live layer, the pane's background see-through over it)
   (c) =>
     c.inspectorFixture({
       app: "Fixture",
