@@ -36,7 +36,7 @@ Goals, which the rules below serve:
 - **Flow and joy.** The loop is now delegate, wait, decide, verify: ottospace gives quick wins,
   shows progress, and makes the right things satisfying to do.
 
-Design rules for every feature. Each change answers to all three.
+Design rules for every feature. Each change answers to all four.
 
 ### Human attention
 
@@ -80,6 +80,19 @@ Design rules for every feature. Each change answers to all three.
 - A reward marks an outcome (a decision made, a stack landed, main green), never activity.
 - It plays over a model that has already moved on; under Reduce Motion it is at once.
 - Nothing celebrates by itself: no animation, sound or badge arrives uninvited.
+
+### Wherever the conversation happens (wording proposed)
+
+> No matter where the conversation happens, ottospace can help.
+
+- A conversation started anywhere (a `claude` or `codex` in a terminal of the person's own) gets
+  the same help as one started in ottospace: its transcript, its place in the city, its
+  decisions, its turn in needs-you. Read-only where it must be, and saying so.
+- Correct detection, live updates and counts come before any switching feature.
+- One writer at a time: the switch between a terminal and ottospace is offered only when the
+  other side is idle or ended; ottospace never kills or signals the person's process.
+
+Design note: `docs/ai/sessions-seamless.md`.
 
 When they conflict (wording proposed): ottospace offers and waits. It may show that something
 needs you; it never acts on your screen, focus or keyboard to make you look.
