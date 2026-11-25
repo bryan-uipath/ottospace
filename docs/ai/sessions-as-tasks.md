@@ -322,8 +322,9 @@ today. Off: Elsewhere, unchanged.
 Opening in place (built after #488): with `terminal_tasks`, `SessionOpen` (its card, Elsewhere's
 row, or its agent's icon in a code city, the user's click) puts the session's conversation in the
 drawer over the space on show (`Model::glance`, `space_subject` gives it): no tab, no space on the
-row. Another space on show, it goes. Going on with it here (the banner's or card's Take over: a
-task, `SessionAdopt`; Resume: its own space, as before) is the step that gives it a place.
+row. Another space on show, it goes. Take over (the banner's or the card's) makes it a task,
+`SessionAdopt`. Resume goes on with it where it is: a start never changes the tab on show; opened
+again after another space was on show, its running agent has a space of its own.
 
 Slice 1 as built (#425): as above, but for these, left for a later step: the Project view shows no
 cards (live sessions stay Elsewhere's rows there); opening an ended or idle card shows today's
