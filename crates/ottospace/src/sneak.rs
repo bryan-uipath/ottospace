@@ -504,7 +504,7 @@ impl Workspace {
                 self.click_row_menu(name, window, cx);
                 None
             }
-            ("top", "fill") => Some(Action::FillDisplay),
+            ("top", "fill") => Some(Action::FillWindow { out: None }),
             // The bug button's label: a report starts as by its click (the core refuses one not the user's).
             ("top", "bug") => {
                 self.error = self.bug_start(self.input, window, cx).err();

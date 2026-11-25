@@ -280,6 +280,7 @@ function appWindow(value: unknown, at: string): AppWindow {
     tab: orNull(num)(o.tab, `${at}.tab`),
     display: orNull(num)(o.display, `${at}.display`),
     key: bool(o.key, `${at}.key`),
+    fill: bool(o.fill, `${at}.fill`),
   };
   if ("frame" in o) out.frame = orNull(rect)(o.frame, `${at}.frame`);
   if ("frames" in o) out.frames = orNull(num)(o.frames, `${at}.frames`);

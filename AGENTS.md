@@ -285,9 +285,10 @@ Design note: `docs/ai/attention/plan.md`.
   - `pinch` (`"x"`, `"y"`, `"magnification"`, `"as"`): a trackpad pinch as the native hook
     (`ottospace_mac::magnify`) hands it over: the zoomed-out canvas or a code city zooms about it.
     Outside a test run only the user's trackpad pinches; a real pinch needs a trackpad.
-  - `zoom_press`: the window's green button, pressed as the user would (`performZoom:`). The zoom
-    fills the display instead (`ottospace_mac::window::zoom_asks`); refused if that hook is not in,
-    so it never zooms the test's window. Outside a test run only the user's hand fills the display.
+  - `zoom_press` (`"tab"` optional: a tab out's window): the window's green button, pressed as the
+    user would (`performZoom:`). The zoom fills that window's display instead
+    (`ottospace_mac::window::zoom_asks`); refused if that hook is not in, so it never zooms the
+    test's window. Outside a test run only the user's hand fills the display.
   - `modifier_flags` (`"changes": [{"at", "cmd", "others", "input_at"}]`): modifier changes as ⌘⌘'s
     listener would hear them in another app (`double_cmd`; a test run listens to no keyboard); a
     double tap returns as the return key, without bringing the window forward. The state's

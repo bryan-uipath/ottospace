@@ -89,7 +89,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
     window_active: false,
     displays: [{ id: 0, frame: [0, 0, 1728, 1117], scale: 2, main: true }],
     out: [],
-    windows: [{ main: true, tab: null, display: 0, key: true }],
+    windows: [{ main: true, tab: null, display: 0, key: true, fill: false }],
     parking: [1919, 1079],
     return_key: null,
     version: "0.1.0 · local",

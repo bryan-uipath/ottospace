@@ -1,7 +1,7 @@
 //! Changes to ottospace's own window that GPUI does not expose.
 
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, AtomicPtr, Ordering};
 
 use objc2::ffi::{class_addMethod, class_getInstanceMethod, method_getImplementation};
 use objc2::rc::Retained;
@@ -9,7 +9,8 @@ use objc2::runtime::{AnyClass, AnyObject, Imp, Sel};
 use objc2::{AnyThread, MainThreadMarker, msg_send, sel};
 use objc2_app_kit::{
     NSApplication, NSApplicationActivationPolicy, NSApplicationPresentationOptions, NSEvent, NSEventModifierFlags,
-    NSEventType, NSFloatingWindowLevel, NSImage, NSScreen, NSView, NSWindowCollectionBehavior, NSWindowOcclusionState,
+    NSEventType, NSFloatingWindowLevel, NSImage, NSScreen, NSView, NSWindow, NSWindowCollectionBehavior,
+    NSWindowOcclusionState,
 };
 use objc2_core_foundation::CGPoint;
 use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags, CGEventType, CGMouseButton, CGScrollEventUnit};
@@ -319,12 +320,15 @@ pub unsafe fn zoom_instead_of_fullscreen(ns_view: *mut c_void) {
     }
 }
 
-/// Set by a zoom of the window (the green button, Window ▸ Zoom, a title bar double-click), taken by `take_zoom`.
-static ZOOM_ASKED: AtomicBool = AtomicBool::new(false);
+/// The number of the window last zoomed (the green button, Window ▸ Zoom, a title bar
+/// double-click), taken by `take_zoom`; 0: none. Every window of the class shares `zoom:`.
+static ZOOMED: AtomicIsize = AtomicIsize::new(0);
 
-/// `zoom:`: no zoom; the shell fills the display instead.
-extern "C-unwind" fn zoom_instead(_: &AnyObject, _: Sel, _: *mut AnyObject) {
-    ZOOM_ASKED.store(true, Ordering::SeqCst);
+/// `zoom:`: no zoom; the shell fills the receiver's display instead.
+extern "C-unwind" fn zoom_instead(this: &AnyObject, _: Sel, _: *mut AnyObject) {
+    // SAFETY: `zoom:` is added to an NSWindow subclass: the receiver is a window.
+    let window = unsafe { &*(this as *const AnyObject as *const NSWindow) };
+    ZOOMED.store(window.windowNumber(), Ordering::SeqCst);
     crate::wake::post();
 }
 
@@ -347,9 +351,9 @@ pub unsafe fn zoom_asks(ns_view: *mut c_void) -> bool {
     unsafe { class_addMethod(class, sel!(zoom:), imp, c"v@:@".as_ptr()) }.as_bool()
 }
 
-/// True once after each zoom `zoom_asks` turned away.
-pub fn take_zoom() -> bool {
-    ZOOM_ASKED.swap(false, Ordering::SeqCst)
+/// Once after each zoom `zoom_asks` turned away: the number of the window zoomed (as `number`).
+pub fn take_zoom() -> Option<isize> {
+    Some(ZOOMED.swap(0, Ordering::SeqCst)).filter(|n| *n != 0)
 }
 
 /// The part of the title bar the shell's own drags take (`x, y, w, h`, points from the view's
@@ -400,7 +404,7 @@ pub unsafe fn press_zoom(ns_view: *mut c_void) -> bool {
     if let Some(window) = view.window() {
         window.performZoom(None);
     }
-    ZOOM_ASKED.load(Ordering::SeqCst)
+    ZOOMED.load(Ordering::SeqCst) != 0
 }
 
 /// Keeps a test run's window drawn wherever the user is: above ordinary windows, and on every

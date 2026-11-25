@@ -35,12 +35,13 @@ pub struct Display {
 
 /// A tab folded out, and the display it is on. `stand_in`: the empty tab made for its space in
 /// the main window when it was that space's only one (its id and title), removed when the tab
-/// folds back in if still empty and not renamed.
+/// folds back in if still empty and not renamed. `fill`: its window fills its display (`fill`).
 #[derive(Clone, Debug, PartialEq)]
 pub struct Out {
     pub tab: u32,
     pub display: String,
     pub stand_in: Option<(u32, String)>,
+    pub fill: bool,
 }
 
 /// Which window holds the keyboard: the main one, or a tab out's.
@@ -48,6 +49,13 @@ pub struct Out {
 pub(crate) enum Window {
     Main,
     Out(u32),
+}
+
+/// A tab out that filled its display folded in: its window goes, and with it the mode.
+fn filled_in(out: &Out, effects: &mut Vec<Effect>) {
+    if out.fill {
+        effects.push(Effect::FillOut { tab: out.tab, on: false });
+    }
 }
 
 impl Model {
@@ -221,7 +229,7 @@ impl Model {
                 .unwrap_or_else(|| self.main_after(at)),
             None => main,
         };
-        self.out.push(Out { tab: id, display: display.clone(), stand_in });
+        self.out.push(Out { tab: id, display: display.clone(), stand_in, fill: false });
         self.claim(at, &display);
         // Its space on the row: the main window's row lists it, marked out.
         let of = self.tabs[at].space.clone();
@@ -295,6 +303,7 @@ impl Model {
             self.key_main(effects);
         }
         let out = self.out.remove(place);
+        filled_in(&out, effects);
         self.drop_stand_in(&out, effects);
         // The user's fold in: no display takes it back by itself.
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
@@ -338,7 +347,7 @@ impl Model {
                 tab.display.as_ref() == Some(&uid) && !self.is_out(tab.id) && tab.id != main && !self.holds_app(*at)
             });
             if let Some(at) = at.filter(|_| !taken(self)) {
-                self.out.push(Out { tab: self.tabs[at].id, display: uid.clone(), stand_in: None });
+                self.out.push(Out { tab: self.tabs[at].id, display: uid.clone(), stand_in: None, fill: false });
                 self.claim(at, &uid);
             }
         }
@@ -376,6 +385,7 @@ impl Model {
         // A hide changes no tab: a closing workspace keeps its stand-in until its Undo brings it back
         // (then an empty one goes) or it ends.
         for out in gone {
+            filled_in(&out, effects);
             match self.tabs.iter().find(|tab| tab.id == out.tab) {
                 Some(tab) if self.closing(&tab.space) => self.folded_closing.push(out),
                 _ => self.drop_stand_in(&out, effects),
@@ -991,5 +1001,44 @@ mod tests {
         assert_eq!((m.tabs_out(), m.away, id(&m)), (vec![], None, 1));
         m.update(Action::TabOut { tab: None });
         assert!(m.tabs_out().is_empty());
+    }
+
+    /// Each window fills its own display: a tab out's green button fills that window, never the
+    /// main one; ⌃⌘F, the window with the keyboard. Folded in, its mode goes with its window.
+    #[test]
+    fn a_tab_outs_window_fills_its_own_display_and_the_main_window_stays() {
+        let mut m = two();
+        m.update(Action::TabOut { tab: None });
+        let out = id(&m);
+        assert_eq!(m.update(Action::FillWindow { out: Some(out) }), [Effect::FillOut { tab: out, on: true }]);
+        assert!(m.fills_out(out) && !m.fill_display);
+        // The main window's green button: the main window alone.
+        assert_eq!(m.update(Action::FillWindow { out: None }), [Effect::FillDisplay { on: true }]);
+        assert!(m.fills_out(out));
+        m.update(Action::FillWindow { out: None });
+        // ⌃⌘F with the keyboard in the tab out's window: that window.
+        assert_eq!(m.update(Action::FillDisplay), [Effect::FillOut { tab: out, on: false }]);
+        m.update(Action::FillDisplay);
+        // With the keyboard in the main window: the main one.
+        m.update(Action::KeyWindow { tab: main_id(&m) });
+        assert_eq!(m.update(Action::FillDisplay), [Effect::FillDisplay { on: true }]);
+        // A client's is refused; the shell's end is anyone's.
+        assert_eq!(m.update(Action::FillWindow { out: Some(out) }.sent_by(Origin::Socket)), []);
+        assert!(m.fills_out(out));
+        // Folded in: its window goes, its mode with it. The main window's stays.
+        assert!(m.update(Action::TabIn { tab: Some(out) }).contains(&Effect::FillOut { tab: out, on: false }));
+        assert!(!m.fills_out(out) && m.fill_display);
+        // Out again: not filled. Its window moved off the display's frame: over.
+        m.update(Action::TabOut { tab: Some(out) });
+        assert!(!m.fills_out(out));
+        m.update(Action::FillWindow { out: Some(out) });
+        let ended = m.update(Action::FillEnded { out: Some(out) }.sent_by(Origin::System));
+        assert_eq!(ended, [Effect::FillOut { tab: out, on: false }]);
+        assert_eq!(m.update(Action::FillEnded { out: Some(out) }.sent_by(Origin::System)), []);
+        // Its display unplugged: it folds in, and its mode ends.
+        m.update(Action::FillWindow { out: Some(out) });
+        let action = Action::SetDisplays { displays: vec![display("left", 0.)], main: Some("left".into()) };
+        assert!(m.update(action.sent_by(Origin::System)).contains(&Effect::FillOut { tab: out, on: false }));
+        assert!(m.tabs_out().is_empty() && !m.fills_out(out) && m.fill_display);
     }
 }
