@@ -1,0 +1,7 @@
+# A slot's ⋯ menu: each item on one line, the menu as wide as its longest label.
+{"env":{"OTTOSPACE_FEATURES":"slots"}}
+{"cmd":"app_fixture","name":"Meetings","user":true}
+{"cmd":"slot_make","pane":1,"slot":{"select":{"title":"Meeting chat"},"pick":"any","matching":"manual"}}
+{"click":"slot-dots:1"}
+{"until":"row_menu.pane","exists":true}
+{"shot":"menu"}

@@ -18253,6 +18253,12 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
     let reply = otto.user_click(at(otto.control("slot-dialog:keep"), 0.5, 0.5));
     let slot = |reply: &Value| reply["state"]["slots"][pane.to_string()].clone();
     assert_eq!((slot(&reply)["status"].clone(), reply["state"]["slot_dialog"].clone()), (json!("filled"), Value::Null));
+    // Each item on one line, however long its label: a wrapped one reads as two.
+    let menu = otto.user_click(at(dots, 0.5, 0.5))["row_menu"].clone();
+    for item in menu["items"].as_array().unwrap() {
+        assert!(rect(&item["rect"])[3] < 40., "{menu}");
+    }
+    otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
     // Give back the window, in ⋯'s menu: the slot waits, passing over that window.
     let reply = slot_menu(&otto, pane, "slot_give_back");
     assert_eq!(reply["state"]["panes"][0]["kind"]["type"], "slot", "{reply}");
