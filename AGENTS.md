@@ -36,7 +36,7 @@ Goals, which the rules below serve:
 - **Flow and joy.** The loop is now delegate, wait, decide, verify: ottospace gives quick wins,
   shows progress, and makes the right things satisfying to do.
 
-Design rules for every feature. Each change answers to all three.
+Design rules for every feature. Each change answers to all four.
 
 ### Human attention
 
@@ -90,7 +90,7 @@ Design rules for every feature. Each change answers to all three.
   decisions, its turn in needs-you. Read-only where it must be, and saying so.
 - Correct detection, live updates and counts come before any switching feature.
 - One writer at a time: the switch between a terminal and ottospace is offered only when the
-  other side is idle or ended; ottospace never kills the person's process.
+  other side is idle or ended; ottospace never kills or signals the person's process.
 
 Design note: `docs/ai/sessions-seamless.md`.
 

@@ -1,8 +1,8 @@
 # One conversation, wherever it runs
 
-Status: design note, no code. Written 2026-11-24 against `main` 70ac51c9, with #482, #486,
-#488 and #490 open (the fixes that come first). Each open point has a recommendation; the owner
-picks before anything is built.
+Status: design note, no code. Written 2026-11-24 against `main` 70ac51c9; #482, #486, #488,
+#490 and #515 (the fixes that come first) have merged since. Each open point has a
+recommendation; the owner picks before anything is built.
 
 The owner: "we should make it seamless to go between terminal sessions and ottospace
 tasks/sessions", and "so i can build confidence that no matter where i have my conversation,
@@ -37,31 +37,33 @@ What splits it today:
 
 | Split | Where | Effect |
 |---|---|---|
-| Elsewhere vs the task list | `Heading::Sessions`, cards (`terminal_tasks`) | A live session is a card among the tasks; an idle or past one is a row in Elsewhere, folded below Done. The same session moves between two lists as it goes idle. |
+| Elsewhere vs the task list | `Heading::Sessions`, cards (`terminal_tasks`) | A live session is a card among the tasks; an ended or past one is a row in Elsewhere, folded below Done. Without `disk.held` (Codex) live means its file is active (`sessions::live`), so an idle one moves between the two lists. |
 | Adopted vs free | `Tasks::adopted`, `Model::session` | Track or Take over makes a task with a `Link`. From then on the session's row, its card and the city's `Who::Session` give way to the task, with a new title (the repository's), a new colour, and a new history (the task's). |
-| A separate tab on open | `open_space(Owner::Session)` | Fixed for `terminal_tasks` by #490: it opens in place. A Resume still makes `Owner::Session`, a space of its own that is no task's. |
-| Two subjects | `Subject::Session` vs `Subject::Task` | Chats, views, dials and the drawer key by subject, so adopting a session leaves its watched chat behind under the old key. |
+| A separate tab on open | `open_space(Owner::Session)` | Fixed for `terminal_tasks` by #490: it opens in place; #515 keeps a Resume of one opened in place there. |
+| Two subjects | `Subject::Session` vs `Subject::Task` | Chats, views and dials move on adoption (`talk_moves`, `chat_moves`), but the drawer's watch is keyed by subject: it starts over and reads the file again (`WatchFromStart`). |
 | Titles | `Found::title` (quoted) vs `Task::title` | A task is never named from the runner's title, so the row changes its name when tracked. |
 
 **Recommendation:** one key per conversation, `(runner, session id)`, which a task points to.
 Leave the `Subject` and `Task` types as they are, and fix the four places where the split shows:
 
-- **a.** When a session is tracked, its chat moves to the task's subject. Today the watched
-  transcript is dropped and read again.
+- **a.** When a session is tracked, its watch carries over to the task's subject. Today the
+  chat moves but the watch starts over and reads the file again.
 - **b.** The task's title starts as the session's quoted title, marked as the runner's, until
   the user renames it. **Owner's pick:** this changes the rule "never a task's title" from
   sessions-as-tasks.md (Identity).
 - **c.** An idle session that was live this run stays a card ("idle in a terminal"), and does not
-  drop to Elsewhere until it ends. Elsewhere remains the archive of sessions that ended.
+  drop to Elsewhere until it ends. Elsewhere remains the archive of sessions that ended. Claude
+  Code does this already (a held session is live); without `disk.held` (Codex) idle and ended
+  look alike outside our panes (sessions-as-tasks.md), so this needs a signal first.
 - **d.** The city and decisions key by session too, so a session tracked mid-turn keeps its icon
   and glow.
 
 ## 2. Terminal → ottospace
 
 What exists: Take over (#490 makes the banner's the same as the card's). It runs `SessionAdopt`
-for the user: a task named after the repository, linked to the session, and then
-`<runner> --resume <id>` in the drawer (structured mode, `RunnerSpec::terminal.resume` /
-`agents::Start::Resume`). The full history is in the session file, so the CLI has it. The drawer
+for the user (a session not listed, or already a task's: `TalkStart`): a task named after the
+repository, linked to the session, and then a resume in the drawer (structured mode,
+`agents::Start::Resume`: Claude Code's `--resume <id>`, Codex's `thread/resume`). The full history is in the session file, so the CLI has it. The drawer
 shows what the watch built until the resumed agent's events replace it.
 
 What should change:
@@ -101,7 +103,7 @@ with ottospace following it as it follows any terminal session.
 - Not while a turn runs or a card waits (decided 1). Stop first, as `Chat | Terminal` already
   requires.
 - **Owner's pick:** a pane of ottospace's (recommended: it is detected at once, the session's
-  waits are known through `disk.waits`, and ⌘J reaches it), or the user's own terminal app (it
+  waits are known through `disk.waits` (Claude Code; not Codex), and ⌘J reaches it), or the user's own terminal app (it
   needs a URL scheme or AppleScript per terminal app, and is only detected by file).
 
 ## 4. Two processes on one session
@@ -120,8 +122,9 @@ daemon.
 - **Shown otherwise:** the read-only banner, the "Watching" chip (or "Not updating"), and a dim
   Take over with its reason. No composer field.
 - **Never:** kill or signal the user's process, queue a message for when it ends, or resume a
-  session `in_use` (the property check covers `Subject::Session` starts. Extend it to a task's
-  linked session: sessions-as-tasks.md lists this as not yet covered).
+  session `in_use` (the property check covers `Subject::Session` starts, and a task's linked
+  session while one of our panes runs it. Extend it to a linked session held or active outside
+  our panes).
 - **Race:** the user types in the terminal at the same instant Take over starts. The resume is
   refused if the facts read for the click say `in_use` (sessions-as-tasks.md). The window left
   is the few ms between that read and the CLI's start. Accepted, and stated in the hover.
@@ -139,7 +142,7 @@ daemon.
 
 ## Order (recommended)
 
-1. #482, #486, #488, #490: correct detection, live updates, counts and words.
+1. #482, #486, #488, #490, #515 (merged): correct detection, live updates, counts and words.
 2. 1a and 1c (one transcript, one row through idle), then 2 (Take over keeps the history).
 3. 3 ("Continue in a terminal") once the owner picks between a pane of ottospace's and the
    user's own terminal app.
