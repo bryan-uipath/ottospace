@@ -2,13 +2,13 @@
 //! has none: a right click opens its menu at the pointer). What it offers, what a key does and
 //! when it closes are the core's (`ottospace_core::row_menu`).
 
-use gpui::{Context, ElementId, MouseButton, MouseDownEvent, Stateful, Window, div, prelude::*, px, rgb};
+use gpui::{Context, ElementId, MouseButton, MouseDownEvent, Stateful, Window, div, prelude::*, px, rems, rgb};
 use ottospace_core::layout::Rect;
 use ottospace_core::list::ListRow;
 use ottospace_core::row_menu::{MenuOf, menu_key};
 use ottospace_core::{Action, Origin, theme};
 
-use crate::{Workspace, dialog, rect};
+use crate::{Workspace, dialog, rect, status_bar};
 
 /// The menu's width, and an item's height, in points.
 const WIDTH: f32 = 150.;
@@ -217,29 +217,20 @@ impl Workspace {
         // An item that does nothing now is dimmed, with why under it.
         let whys: Vec<Option<&str>> = (0..items.len()).map(|index| self.model.row_menu_why(index)).collect();
         let view = window.viewport_size();
-        // As wide as its longest label (`Swap with “Meeting chat”`), so none wraps: a wrapped
-        // one reads as two items.
-        let (style, size) = (window.text_style(), window.rem_size() * 0.875);
-        let label = |item: &ottospace_core::row_menu::Item| {
-            let text = self.model.menu_label(*item);
-            let run = gpui::TextRun {
-                len: text.len(),
-                font: style.font(),
-                color: style.color,
-                background_color: None,
-                underline: None,
-                strikethrough: None,
-            };
-            f32::from(window.text_system().shape_line(text.into(), size, &[run], None).width)
-        };
-        let longest = items.iter().map(label).fold(0., f32::max);
+        // Each label on one line (a window's title may hold a line break): a wrapped one reads as
+        // two items. The menu as wide as the longest (`Swap with “Meeting chat”`), cut only where
+        // the window is narrower.
+        let labels: Vec<String> =
+            items.iter().map(|item| self.model.menu_label(*item).replace(char::is_control, " ")).collect();
+        let longest = labels.iter().map(|text| status_bar::width_at(window, text, rems(0.875))).fold(0., f32::max);
         let least = if whys.iter().any(Option::is_some) { WIDE } else { WIDTH };
-        let width = least.max(longest + PAD).min(f32::from(view.width) - 8.);
+        let room = f32::from(view.width) - 8.;
+        let (width, cut) = (least.max(longest + PAD).min(room), longest + PAD > room);
         let left = dots.x.min(f32::from(view.width) - width - 4.).max(4.);
         let height = items.len() as f32 * ITEM + whys.iter().flatten().count() as f32 * WHY + 10.;
         let under = dots.y + dots.h + 2.;
         let top = if under + height > f32::from(view.height) - FOOT { (dots.y - height - 2.).max(4.) } else { under };
-        let rows = items.iter().zip(whys).enumerate().map(|(index, (item, why))| {
+        let rows = labels.into_iter().zip(whys).enumerate().map(|(index, (label, why))| {
             div()
                 .id(("row-menu", index))
                 .relative()
@@ -253,7 +244,7 @@ impl Workspace {
                 .when(menu.selected == Some(index), |d| d.bg(rgb(theme::SELECTED)))
                 .hover(|s| s.bg(rgb(theme::SELECTED)))
                 .when(why.is_some(), |d| d.pb_1().text_color(rgb(theme::MUTED)))
-                .child(div().whitespace_nowrap().overflow_hidden().text_ellipsis().child(self.model.menu_label(*item)))
+                .child(div().whitespace_nowrap().when(cut, |d| d.overflow_hidden().text_ellipsis()).child(label))
                 .children(why.map(|why| div().text_xs().child(why)))
                 .child(self.controls.mark(item_control(index)))
                 .on_click(cx.listener(move |this, _, window, cx| this.row_menu_choose(Some(index), window, cx)))

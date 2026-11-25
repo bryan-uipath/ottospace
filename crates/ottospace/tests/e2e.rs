@@ -18258,6 +18258,8 @@ fn a_slot_is_made_from_the_dialog_waits_says_what_for_and_only_the_user_fills_it
     for item in menu["items"].as_array().unwrap() {
         assert!(rect(&item["rect"])[3] < 40., "{menu}");
     }
+    // Wider than it was (150 points): "Give back the window" whole, not cut.
+    assert!(rect(&menu["items"][0]["rect"])[2] > 150., "{menu}");
     otto.call(json!({"cmd": "key", "keys": "escape", "as": "user"}));
     // Give back the window, in ⋯'s menu: the slot waits, passing over that window.
     let reply = slot_menu(&otto, pane, "slot_give_back");
