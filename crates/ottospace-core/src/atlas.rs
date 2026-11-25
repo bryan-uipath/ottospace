@@ -13,6 +13,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use crate::layout::Rect;
+use crate::strata::{self, History};
 
 /// The plan is cut as if drawn this much wider than tall, whatever the window: a resize
 /// stretches the plan and never rearranges it.
@@ -36,6 +37,9 @@ pub struct Node {
     /// A second measure, 0 to 1, that is only drawn and moves nothing, so it may change often
     /// (churn, a month's messages). The code city's: a building's height (`scene::height`).
     pub height: Option<f32>,
+    /// Its levels' colours, the base first (drawn only, as `height`). The code city's: a file's
+    /// commits (`strata`).
+    pub strata: Vec<u32>,
     /// In the order they are laid out: one that keeps old things before new ones keeps them
     /// in place.
     pub children: Vec<Node>,
@@ -52,6 +56,7 @@ pub struct Place {
     /// It has children: a district, not a building.
     pub group: bool,
     pub height: Option<f32>,
+    pub strata: Vec<u32>,
 }
 
 /// Every node but the root, a group before what is in it.
@@ -136,7 +141,8 @@ impl Layout {
         if children.len() == 1 && *end >= to {
             let group = !first.children.is_empty();
             let (id, label) = (first.id.clone(), first.label.clone());
-            self.atlas.places.push(Place { id, label, depth, rect: area.rect(), group, height: first.height });
+            let (height, strata) = (first.height, first.strata.clone());
+            self.atlas.places.push(Place { id, label, depth, rect: area.rect(), group, height, strata });
             return self.group(first, area, depth + 1);
         }
         let middle = from + (to - from) / 2;
@@ -192,14 +198,15 @@ struct Folder<'a> {
 }
 
 impl Folder<'_> {
-    fn node(&self, path: &str, label: &str, commits: &dyn Fn(&str) -> u32) -> Node {
+    fn node(&self, path: &str, label: &str, strata: &dyn Fn(&str) -> Vec<u32>) -> Node {
         let join = |name: &str| if path.is_empty() { name.to_string() } else { format!("{path}/{name}") };
-        let folders = self.folders.iter().map(|(name, folder)| folder.node(&join(name), name, commits));
+        let folders = self.folders.iter().map(|(name, folder)| folder.node(&join(name), name, strata));
         // A file and a folder may share a name in a list that is not git's: the file's id says so.
         let file = |(name, lines): (&&str, &u64)| {
             let id = if self.folders.contains_key(name) { join(name) + "/" } else { join(name) };
-            let height = Some(crate::scene::height(commits(&join(name))));
-            Node { id, label: name.to_string(), footprint: file_weight(*lines), height, ..Node::default() }
+            let strata = strata(&join(name));
+            let height = Some(crate::scene::height(strata.len() as u32));
+            Node { id, label: name.to_string(), footprint: file_weight(*lines), height, strata, ..Node::default() }
         };
         let children = folders.chain(self.files.iter().map(file)).collect();
         Node { id: path.to_string(), label: label.to_string(), children, ..Node::default() }
@@ -211,11 +218,13 @@ impl Folder<'_> {
 /// A folder's children are its folders by name, then its files by name, as a file explorer lists
 /// them. An id is the path. No file has commits: each is as low as one with none.
 pub fn repo(files: &[(String, u64)]) -> Node {
-    repo_with(files, &HashMap::new())
+    repo_with(files, &History::default())
 }
 
-/// `repo`, each file as tall as the commits that touched it (`commits`, by path; `scene::height`).
-pub fn repo_with(files: &[(String, u64)], commits: &HashMap<String, u32>) -> Node {
+/// `repo`, each file a level for each commit of `history` that touched it, the newest first, in
+/// its colour (`strata::colour`, its age through the history), as tall (`scene::height`): at most
+/// `scene::LEVELS`, and fewer for all if the city's would be more than `MOST_LEVELS`.
+pub fn repo_with(files: &[(String, u64)], history: &History) -> Node {
     let mut root = Folder::default();
     for (path, lines) in files {
         let mut parts: Vec<&str> = path.split('/').filter(|part| !part.is_empty()).collect();
@@ -223,25 +232,22 @@ pub fn repo_with(files: &[(String, u64)], commits: &HashMap<String, u32>) -> Nod
         let folder = parts.into_iter().fold(&mut root, |folder, part| folder.folders.entry(part).or_default());
         folder.files.insert(name, *lines);
     }
-    root.node("", "", &|id| commits.get(id).copied().unwrap_or(0))
+    let levels = |path: &str| history.files.get(path).map_or(&[][..], Vec::as_slice);
+    let most = most_levels(&files.iter().map(|(path, _)| levels(path).len()).collect::<Vec<_>>());
+    let (oldest, span) = (history.span.0, history.span.1.saturating_sub(history.span.0).max(1));
+    let age = |at: u64| at.saturating_sub(oldest) as f32 / span as f32;
+    root.node("", "", &|id| levels(id).iter().take(most).map(|l| strata::colour(l.change, age(l.at))).collect())
 }
 
-/// The commits that touched each path, from `git log -z --name-only --format=%x01`: each commit
-/// a `\x01`, then a new line and the paths it changed, each ended by a NUL.
-pub fn touched(log: &str) -> HashMap<String, u32> {
-    let mut commits: HashMap<String, u32> = HashMap::new();
-    let mut first = false;
-    for said in log.split('\0') {
-        // The new line is git's, before a commit's first path only.
-        let path = if std::mem::take(&mut first) { said.strip_prefix('\n').unwrap_or(said) } else { said };
-        if said == "\x01" {
-            first = true;
-        } else if !path.is_empty() {
-            let count = commits.entry(path.to_string()).or_default();
-            *count = count.saturating_add(1);
-        }
-    }
-    commits
+/// The levels drawn in a city at most: boxes for the GPU, one each.
+const MOST_LEVELS: usize = 100_000;
+
+/// The most levels each file stands, its `counts` levels given: `scene::LEVELS`, less while the
+/// whole city's would be more than `MOST_LEVELS` (the newest of each kept). A file of commits
+/// has a stub too: one more box.
+fn most_levels(counts: &[usize]) -> usize {
+    let total = |most: usize| counts.iter().map(|n| (*n).min(most) + usize::from(*n > 0)).sum::<usize>();
+    (0..=crate::scene::LEVELS as usize).rev().find(|most| total(*most) <= MOST_LEVELS).unwrap_or(0)
 }
 
 /// Lines added and removed by each path, from `git diff --numstat -z --no-renames`: each record
@@ -350,18 +356,20 @@ mod tests {
         assert_eq!((named(&city, "app/mod.rs"), named(&city, "other/top.rs")), (none.clone(), none));
     }
 
-    /// A file is as tall as the commits git says touched it; one it names no commit of is a stub.
+    /// A file is as tall as the commits git says touched it, a level each, the newest first in the
+    /// colour of its kind and age; one it names no commit of is a stub.
     #[test]
-    fn a_files_height_is_the_commits_that_touched_it() {
-        let log = "\x01\0\nsrc/a.rs\0b.md\0\x01\0\nsrc/a.rs\0\x01\0\x01\0\ngone.rs\0";
-        let commits = touched(log);
-        let want: HashMap<String, u32> = [("src/a.rs".into(), 2), ("b.md".into(), 1), ("gone.rs".into(), 1)].into();
-        assert_eq!(commits, want);
-        let plan = atlas(&repo_with(&files(&[("src/a.rs", 9), ("b.md", 9), ("c.md", 9)]), &commits));
-        let height = |id: &str| plan.places.iter().find(|p| p.id == id).and_then(|p| p.height);
+    fn a_files_height_and_strata_are_the_commits_that_touched_it() {
+        let log = "\x01300\tfeat: x\0\nsrc/a.rs\0b.md\0\x01200\tfix: y\0\nsrc/a.rs\0\x01100\tz\0\ngone.rs\0";
+        let plan = atlas(&repo_with(&files(&[("src/a.rs", 9), ("b.md", 9), ("c.md", 9)]), &strata::history(log)));
+        let at = |id: &str| plan.places.iter().find(|p| p.id == id).map(|p| (p.height, p.strata.clone()));
         let level = crate::scene::height;
-        assert_eq!((height("src/a.rs"), height("b.md"), height("c.md")), (Some(level(2)), Some(level(1)), Some(0.)));
-        // Heights move nothing.
+        let (feat, fix) =
+            (strata::colour(Some(strata::Change::Feat), 1.), strata::colour(Some(strata::Change::Fix), 0.5));
+        assert_eq!(at("src/a.rs"), Some((Some(level(2)), vec![feat, fix])));
+        assert_eq!(at("b.md"), Some((Some(level(1)), vec![feat])));
+        assert_eq!(at("c.md"), Some((Some(0.), vec![])));
+        // Heights and strata move nothing.
         let rects = |a: Atlas| a.places.into_iter().map(|p| p.rect).collect::<Vec<_>>();
         assert_eq!(rects(plan), rects(city(&[("src/a.rs", 9), ("b.md", 9), ("c.md", 9)])));
     }
@@ -380,6 +388,16 @@ mod tests {
     fn ls_tree_gives_each_blobs_size() {
         let said = "100644 blob 6d86ca5     639\tsrc/a b.rs\0160000 commit 24d8dc9       -\tvendor\0bad\0";
         assert_eq!(tree_sizes(said), [("src/a b.rs".to_string(), 639)].into());
+    }
+
+    /// A city of more levels than the GPU is given draws fewer of each file's: the newest.
+    #[test]
+    fn a_city_of_too_many_levels_draws_fewer_of_each() {
+        assert_eq!(most_levels(&[3, 500, 0]), crate::scene::LEVELS as usize);
+        let many = vec![200; 2_000];
+        let most = most_levels(&many);
+        assert_eq!(most, MOST_LEVELS / 2_000 - 1, "a stub each");
+        assert!(many.iter().map(|n| (*n).min(most + 1) + 1).sum::<usize>() > MOST_LEVELS);
     }
 
     #[test]

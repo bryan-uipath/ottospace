@@ -115,10 +115,23 @@ Windows). It replaces the 2D plan this note first recommended.
   (`TIER_LIFT` 13, 8, 4.6, 2.6, 1.7, then 1.1, in a tower's sixtieths, at three quarters); each
   file a box on its district, its footprint by its lines and its height by its commits, as the
   owner's city's strata stack them (the owner's word, 2026-11-24): a level (1.6 of its units,
-  where its tallest tower of lines is 60) for each commit of the past year, at most 120; a file
-  with none a stub (0.4). In a city of few files (under about 400) the lots are large, so a
+  where its tallest tower of lines is 60) for each commit of the past year, at most 120, on a
+  stub (0.4); a file with none only its stub. In a city of few files (under about 400) the lots are large, so a
   tower of lines (60) is at least 2.5 lot sides and streets a tenth of one: towers on streets,
   not slabs.
+- **Strata** (the owner's word, 2026-11-24: "i liked the strata of the original one based on git
+  layers"). As the owner's city's Strata mode: a building is a stack of slabs, one a commit
+  (`strata`), the newest at the base, older above, a slab 1.15 of a level's 1.6 so the gaps
+  part them. A slab's colour is its kind of change, a conventional commit's type (`feat` cyan,
+  `fix` red, `refactor` violet, `chore` slate, `docs` green, `test` amber, `perf` pink, `ci`
+  grey; a subject with no type that says it fixes is a fix), `0.55 + 0.6·age` as bright, age 0
+  the oldest commit read and 1 the newest; a commit of no kind, old violet to new cyan. Its stub
+  keeps its folder's colour. Kept from ottospace: a lit building is whole, in its task's
+  colour. Not kept: the owner's slabs narrow to the file's lines at that commit (from
+  `--numstat`, too slow: see "Height"); here each slab is the whole lot. At most 100,000 slabs
+  a city (fewer levels for every file past that, the newest kept). The rise grows a stack from
+  its floor as one; under Reduce Motion it stands at once. A subject is read only for its type,
+  never kept, drawn or logged.
 - **Districts read as blocks** (the owner's word, 2026-11-20: "see folders as 'blocks' /
   elevated districts"). Rules, each tested: a folder of more than one child is a district (one
   child: none of its own, as the owner's city; `src/main/java` is one plate), a tier above the
@@ -460,6 +473,7 @@ issue waiting on them; for code, the task working in that folder asks a question
 | 4 | Agent markers and trails; the task's "needs you" as a beacon on its district | |
 | 5 | Coupling for the hovered building (one `git log`); hover itself is 2b | |
 | 6 | Height from commits (the owner's word, 2026-11-24: footprint by lines too) | built |
+| 6b | Strata: a slab a commit, coloured by its kind and age (the owner's word, 2026-11-24) | built |
 | 7 | The camera in the core (a view from an `Action`), eased in the shell, Reduce Motion | built: the user's pointer (2026-11-20); following navigation proposed |
 | 8 | The explorer pane (file-viewer.md, D), then the map beside it and the camera following it | needs D |
 | 9 | Inside a file: markdown headings first | |

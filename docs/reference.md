@@ -1754,7 +1754,10 @@ In the city a folder is a district, a plinth standing on its parent's, its top e
 a street apart from its neighbours and a shade lighter per tier (a folder with one
 child is none of its own: `src/main/java` is one district), a file a building on it, of glass (its faces see-through, its edges whole), in its folder's
 colour, its ground sized by its lines and its height by the commits of the past year that
-touched it (a level each, at most 120; none: a stub). A file is where it was the last time: the
+touched it: a stack of slabs on a stub of its folder's colour, one slab a commit, the newest at
+the base, each in its kind of change (a conventional commit's type: `feat` cyan, `fix` red,
+`refactor` violet, `docs` green, `test` amber; with no type, old violet to new cyan), brighter
+the newer (at most 120; none: only the stub). A file is where it was the last time: the
 same files give the same plan, most edits of a line or two move nothing (a file's lines count in
 steps: 100 to 112 is one), and a new file most times moves only its own folder
 (design and numbers: [code-city/plan.md](ai/code-city/plan.md)). A building's colour is its
