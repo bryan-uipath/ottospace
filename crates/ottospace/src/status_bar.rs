@@ -6,7 +6,7 @@ use std::path::Path;
 use std::sync::mpsc::{Receiver, Sender};
 use std::time::Duration;
 
-use gpui::{AnyView, Context, Div, FontWeight, Stateful, TextRun, Window, div, prelude::*, px, rems, rgb, svg};
+use gpui::{AnyView, Context, Div, FontWeight, Rems, Stateful, TextRun, Window, div, prelude::*, px, rems, rgb, svg};
 use ottospace_core::features::Feature;
 use ottospace_core::status_bar::{self, Agents, Fit, Meeting, Part, Place, Widths};
 use ottospace_core::tasks::Group;
@@ -94,6 +94,11 @@ fn read(dir: &Path, roots: &[String]) -> Option<Checkout> {
 
 /// A line's width in points at the bar's size, as drawn.
 pub(crate) fn width(window: &Window, text: &str) -> f32 {
+    width_at(window, text, rems(0.75))
+}
+
+/// A line's width in points at `size`, as drawn.
+pub(crate) fn width_at(window: &Window, text: &str, size: Rems) -> f32 {
     if text.is_empty() {
         return 0.;
     }
@@ -106,7 +111,7 @@ pub(crate) fn width(window: &Window, text: &str) -> f32 {
         underline: None,
         strikethrough: None,
     };
-    let size = rems(0.75).to_pixels(window.rem_size());
+    let size = size.to_pixels(window.rem_size());
     f32::from(window.text_system().shape_line(text.to_string().into(), size, &[run], None).width)
 }
 
