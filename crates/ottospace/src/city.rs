@@ -58,9 +58,9 @@ const EASE: Duration = Duration::from_millis(200);
 
 /// How long `git ls-files` may take, how much it may say, and how many files a city has. Past
 /// any of them there is no city: half of one would put files where the whole one does not.
-const TIMEOUT: Duration = Duration::from_secs(10);
-const MOST_BYTES: u64 = 4 << 20;
-const MOST_FILES: usize = 20_000;
+const TIMEOUT: Duration = Duration::from_secs(60);
+const MOST_BYTES: u64 = 64 << 20;
+const MOST_FILES: usize = 600_000;
 /// Cities kept, by folder: a task's tab shown again draws at once.
 const KEPT: usize = 8;
 /// Folders of this tier and outer are named on their front wall (2: a folder of the root and
@@ -143,8 +143,11 @@ type ReadJob = (String, Vec<String>, Exclude);
 /// its agents are at change, once each (`latest_each`). No timer of its own.
 pub struct Reader {
     jobs: Sender<ReadJob>,
-    reads: Receiver<(ReadJob, Option<(Option<Atlas>, u64)>)>,
+    reads: Receiver<(ReadJob, Option<Option<(Option<Atlas>, u64)>>)>,
     asked: HashMap<String, Asked>,
+    /// The folders on show, as the read's thread sees them: a read of one no longer on show
+    /// (its tab closed) stops.
+    wanted: Arc<std::sync::Mutex<HashSet<String>>>,
     held: HashMap<String, Arc<Atlas>>,
     /// How many reads came, and how long the last took (µs): for the state of a test run.
     came: usize,
@@ -153,21 +156,30 @@ pub struct Reader {
 
 impl Reader {
     pub fn new() -> Self {
+        let wanted: Arc<std::sync::Mutex<HashSet<String>>> = Arc::default();
+        let on_show = wanted.clone();
         let (jobs, reads) = latest_each(
             |job: &ReadJob| job.0.clone(),
-            |(dir, roots, exclude): &ReadJob| {
+            move |(dir, roots, exclude): &ReadJob| {
                 let started = Instant::now();
-                (read(Path::new(dir), roots, exclude), started.elapsed().as_micros() as u64)
+                let gone = || on_show.lock().is_ok_and(|wanted| !wanted.contains(dir));
+                let atlas = read(Path::new(dir), roots, exclude, &gone);
+                // Stopped (its place closed): no answer, so a city held for it is kept.
+                (atlas.is_some() || !gone()).then(|| (atlas, started.elapsed().as_micros() as u64))
             },
             ottospace_mac::wake::post,
         );
-        Self { jobs, reads, asked: HashMap::new(), held: HashMap::new(), came: 0, read_us: None }
+        Self { jobs, reads, asked: HashMap::new(), wanted, held: HashMap::new(), came: 0, read_us: None }
     }
 
     /// The folders on show, each with what it is asked with: one new, or whose roots or lit
     /// files changed, is read (again). A folder no longer on show is forgotten, and read again
     /// when it comes back.
     fn ask(&mut self, on_show: HashMap<String, Asked>) {
+        // Published first: a read sent below must find its folder wanted.
+        if let Ok(mut wanted) = self.wanted.lock() {
+            *wanted = on_show.keys().cloned().collect();
+        }
         for (dir, asked) in &on_show {
             if self.asked.get(dir) != Some(asked) {
                 let _ = self.jobs.send((dir.clone(), asked.0.clone(), asked.1.clone()));
@@ -179,7 +191,7 @@ impl Reader {
     /// Takes the reads that came. True if one did.
     fn take(&mut self) -> bool {
         let came: Vec<(String, (Option<Atlas>, u64))> =
-            self.reads.try_iter().filter_map(|((dir, ..), read)| Some((dir, read?))).collect();
+            self.reads.try_iter().filter_map(|((dir, ..), read)| Some((dir, read.flatten()?))).collect();
         let any = !came.is_empty();
         for (dir, (read, us)) in came {
             (self.came, self.read_us) = (self.came + 1, Some(us));
@@ -211,38 +223,42 @@ fn exclude_for(dir: &Path, setting: &[(String, Vec<String>)]) -> Vec<String> {
 
 /// The plan of the checkout at `dir` (`checkout_files`), less the folders `exclude` leaves out
 /// for it (`city_filter`): dropped before the count and the layout, an untracked one never
-/// listed by git. `None`: no city.
-fn read(dir: &Path, roots: &[String], exclude: &[(String, Vec<String>)]) -> Option<Atlas> {
+/// listed by git. `None`: no city, or `gone` (its place closed) said to stop.
+fn read(dir: &Path, roots: &[String], exclude: &[(String, Vec<String>)], gone: &dyn Fn() -> bool) -> Option<Atlas> {
     let rule = city_filter::Exclude::new(&exclude_for(dir, exclude));
     let keep = |name: &str| !rule.excludes(name);
-    let (files, _) = checkout_files(dir, roots, MOST_FILES, MOST_BYTES, true, &rule.git_patterns(), &keep)?;
+    let limits = (MOST_FILES, MOST_BYTES, TIMEOUT);
+    let (files, _) = checkout_files(dir, roots, limits, true, &rule.git_patterns(), &keep, gone)?;
     (!files.is_empty()).then(|| atlas::atlas(&atlas::repo(&files)))
 }
 
 /// The files git lists in the checkout at `dir` (tracked, and new ones it does not ignore), each
-/// with its size: at most `most`, and true if there were more (or more than `most_bytes` of
-/// names); `whole`: a list that was cut is none. Hardened as the status bar's read
+/// with its size, within `(most, most_bytes, timeout)`: at most `most` files, and true if there
+/// were more (or more than `most_bytes` of names), all of it within `timeout`; `whole`: a list that was cut is none. Hardened as the status bar's read
 /// (`child::git_read`), and only in a folder that, resolved, is one of `roots`
 /// (`status_bar::reads_changes`). A link is no file, and nothing under a folder that is a link is
 /// one: nothing outside the checkout is looked at. Git lists no untracked file under `skip`
 /// (its `--exclude` patterns), and only names `keep` keeps are counted or looked at. `None`: not
-/// such a checkout, or git failed or took too long.
+/// such a checkout, git failed or took too long, or `gone` said to stop (looked at every 1,024 files).
 pub(crate) fn checkout_files(
     dir: &Path,
     roots: &[String],
-    most: usize,
-    most_bytes: u64,
+    (most, most_bytes, timeout): (usize, u64, Duration),
     whole: bool,
     skip: &[String],
     keep: &dyn Fn(&str) -> bool,
+    gone: &dyn Fn() -> bool,
 ) -> Option<(Vec<(String, u64)>, bool)> {
     let top =
         dir.canonicalize().ok().filter(|top| top.to_str().is_some_and(|top| status_bar::reads_changes(top, roots)))?;
     let mut list = crate::child::git_read(&top);
     list.args(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
     list.args(skip.iter().map(|pattern| format!("--exclude={pattern}")));
-    let late = Instant::now() + TIMEOUT;
-    let said = crate::child::run(list, TIMEOUT, most_bytes).ok()?;
+    if gone() {
+        return None;
+    }
+    let late = Instant::now() + timeout;
+    let said = crate::child::run_until(list, timeout, most_bytes, gone).ok()?;
     // Cut at `most_bytes`: git stops on the closed pipe, and the last name may be half of one.
     let full = said.out.len() as u64 >= most_bytes;
     if !said.ok && !full {
@@ -262,9 +278,9 @@ pub(crate) fn checkout_files(
     let mut folders: HashMap<&Path, bool> = HashMap::new();
     let real = |folder: &Path| std::fs::symlink_metadata(top.join(folder)).is_ok_and(|at| at.is_dir());
     let mut files: Vec<(String, u64)> = Vec::new();
-    for name in names {
+    for (i, name) in names.into_iter().enumerate() {
         // A slow disk: the limit is the whole read's, not git's alone.
-        if Instant::now() > late {
+        if Instant::now() > late || (i % 1024 == 0 && gone()) {
             return None;
         }
         let mut over = Path::new(name).ancestors().skip(1).filter(|folder| !folder.as_os_str().is_empty());
@@ -2385,13 +2401,16 @@ mod tests {
         let roots = [top.to_string_lossy().into_owned()];
         let ids = |exclude: &[&str]| {
             let exclude: Exclude = vec![("*".into(), exclude.iter().map(|e| e.to_string()).collect())];
-            read(&top, &roots, &exclude).map(|atlas| atlas.places.into_iter().map(|p| p.id).collect::<Vec<_>>())
+            read(&top, &roots, &exclude, &|| false)
+                .map(|atlas| atlas.places.into_iter().map(|p| p.id).collect::<Vec<_>>())
         };
         assert_eq!(ids(&["notes/archive"]), Some(vec!["src".into(), "src/a.rs".into()]));
         // A key that is this checkout's path: its own entries too.
         let own: Exclude = vec![(top.to_string_lossy().into_owned(), vec!["src".into()])];
-        let left = read(&top, &roots, &own).map(|a| a.places.into_iter().map(|p| p.id).collect::<Vec<_>>());
+        let left = read(&top, &roots, &own, &|| false).map(|a| a.places.into_iter().map(|p| p.id).collect::<Vec<_>>());
         assert!(left.is_some_and(|ids| !ids.iter().any(|id| id.starts_with("src"))));
+        // Its place closed while it read: no plan.
+        assert!(read(&top, &roots, &[], &|| true).is_none());
         let all = ids(&["!node_modules"]).unwrap();
         assert!(
             all.contains(&"node_modules/m/i.js".to_string()) && all.contains(&"notes/archive/old.md".into()),
@@ -2429,32 +2448,87 @@ mod tests {
     }
 
     /// The pictures of a turn of the city, as the picture's thread makes them while the user's drag
-    /// turns it, at a Retina tab's size, for the owner's repository's scale (about 9,500 files in
-    /// 900 folders): each stage's time per picture, as a distribution. Needs a GPU; no window.
+    /// turns it, at a Retina tab's size: each stage's time per picture, as a distribution, and the
+    /// one-off costs (plan, layout, boxes, first picture, names, hit test, memory). Sizes: the
+    /// owner's repository's (9,500 files) and a config repository's (50,000), or `CITY_SIZES`
+    /// (`files:folders:deepest`, `,` between). Needs a GPU; no window.
     /// `cargo test -p ottospace --release -- --ignored a_turn_is_timed --nocapture`.
     #[test]
     #[ignore = "needs a GPU; prints timings"]
     fn a_turn_is_timed() {
         let gpu = Gpu::new().expect("a GPU");
         gpu.warm();
-        // The owner's repository's scale, and a config repository's: wide, many small files.
-        for (count, dirs, deepest) in [(9_500, 900, 8), (50_000, 6_800, 9)] {
-            let files = made_up_repo(count, dirs, deepest);
+        let sizes = std::env::var("CITY_SIZES").unwrap_or_else(|_| "9500:900:8,50000:6800:9".into());
+        for size in sizes.split(',') {
+            let n: Vec<usize> = size.split(':').map(|n| n.parse().expect("files:folders:deepest")).collect();
+            let rss_before = rss_mb();
+            let started = Instant::now();
+            let files = made_up_repo(n[0], n[1], n[2]);
+            let listed_ms = started.elapsed().as_secs_f64() * 1e3;
             let folders: HashSet<&str> = files.iter().filter_map(|(p, _)| p.rsplit_once('/').map(|(d, _)| d)).collect();
             let bytes: usize = files.iter().map(|(p, _)| p.len() + 1).sum();
             let started = Instant::now();
             let plan = Arc::new(atlas::atlas(&atlas::repo(&files)));
             let atlas_ms = started.elapsed().as_secs_f64() * 1e3;
-            turn(&gpu, &plan, files.len(), folders.len(), bytes, atlas_ms);
+            println!(
+                "\n{} files, {} folders, {bytes} bytes of names; made up in {listed_ms:.0} ms; plan (atlas) {atlas_ms:.1} ms",
+                files.len(),
+                folders.len()
+            );
+            drop(files);
+            // On the main thread: a lit file's lookup each frame, a read again compared with the
+            // plan held, and the old plan let go.
+            let t = Instant::now();
+            let found = plan.labelled("d3/f12.rs", "made-up").count();
+            let lookup_ms = t.elapsed().as_secs_f64() * 1e3;
+            let again = Arc::new((*plan).clone());
+            let t = Instant::now();
+            let same = *again == *plan;
+            let compare_ms = t.elapsed().as_secs_f64() * 1e3;
+            let t = Instant::now();
+            drop(again);
+            let drop_ms = t.elapsed().as_secs_f64() * 1e3;
+            println!(
+                "main thread (ms): a lit file's lookup {lookup_ms:.2} ({found} found), a read again compared {compare_ms:.1} ({same}), a plan let go {drop_ms:.1}"
+            );
+            turn(&gpu, &plan, rss_before);
         }
     }
 
-    fn turn(gpu: &Gpu, plan: &Arc<Atlas>, files: usize, folders: usize, bytes: usize, atlas_ms: f64) {
+    /// This process's resident size, in MB.
+    fn rss_mb() -> f64 {
+        let pid = std::process::id().to_string();
+        let out = std::process::Command::new("/bin/ps").args(["-o", "rss=", "-p", &pid]).output();
+        let out = out.map(|o| String::from_utf8_lossy(&o.stdout).trim().to_string()).unwrap_or_default();
+        out.parse::<f64>().unwrap_or(0.) / 1024.
+    }
+
+    fn print_stage(name: &str, v: &mut [f64]) {
+        if v.is_empty() {
+            return;
+        }
+        v.sort_by(f64::total_cmp);
+        let p = |q: f64| v[((v.len() as f64 * q).ceil() as usize).clamp(1, v.len()) - 1];
+        let over = |ms: f64| v.iter().filter(|t| **t > ms).count();
+        let mean = v.iter().sum::<f64>() / v.len() as f64;
+        println!(
+            "| {name} | {mean:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {} | {} |",
+            p(0.5),
+            p(0.95),
+            p(0.99),
+            v[v.len() - 1],
+            over(16.7),
+            over(33.)
+        );
+    }
+
+    fn turn(gpu: &Gpu, plan: &Arc<Atlas>, rss_before: f64) {
+        let (w, h) = (2560u32, 1500u32);
         let mut key = Key {
             dir: "made-up".into(),
             plan: Arc::as_ptr(plan) as usize,
             lit: Vec::new(),
-            size: (2560, 1500),
+            size: (w, h),
             glass: true,
             rise: 1000,
             view: [0; 5],
@@ -2462,6 +2536,20 @@ mod tests {
             folders: Vec::new(),
             moving: false,
         };
+        // The one-off stages apart: layout, folder colours, boxes (as `make` does them once).
+        let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
+        let t = Instant::now();
+        let layout = scene::layout(plan, &[], w as f32 / h as f32, scene::LOWER);
+        let layout_ms = ms(t);
+        let t = Instant::now();
+        let tints = city_colours::tints(plan, &layout.blocks, &FolderColours::built_in());
+        let tints_ms = ms(t);
+        let mut fitted = layout.scene(&View::default());
+        fitted.tints = tints;
+        let t = Instant::now();
+        drop(Boxes::new(&fitted, true));
+        let boxes_ms = ms(t);
+        drop(layout);
         let set = |key: &mut Key, v: View| key.view = [v.yaw, v.pitch, v.zoom, v.pan[0], v.pan[1]].map(f32::to_bits);
         let mut last = Layouts::new();
         let mut view = View::default();
@@ -2469,8 +2557,49 @@ mod tests {
         let skip = crate::trace::jsonl().lines().count();
         let at_rest = Instant::now();
         let first = make(gpu, &key, plan, &mut last).unwrap();
-        let (rest_ms, blocks) = (at_rest.elapsed().as_secs_f64() * 1e3, first.scene.blocks.len());
+        let rest_ms = ms(at_rest);
+        let blocks = first.scene.blocks.len();
         let districts = first.scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).count();
+        // What a fitted picture shows: buildings under a pixel wide or deep on screen.
+        let camera = first.scene.camera.unwrap();
+        let px = |b: &scene::Block| camera.bounds(b).map(|r| (r[2] * w as f32, r[3] * h as f32));
+        let buildings: Vec<(f32, f32)> =
+            first.scene.blocks.iter().filter(|b| b.kind == Kind::Building).filter_map(px).collect();
+        let under = |n: f32| buildings.iter().filter(|(bw, bh)| bw.min(*bh) < n).count();
+        // Names at rest: the things that may be named, then placed (as `paint`, names ~6 px a letter).
+        let t = Instant::now();
+        let mut marks: Vec<(&Mark, [f32; 4])> = (first.marks.iter())
+            .map(|m| {
+                (m, [m.bounds[0] * w as f32, m.bounds[1] * h as f32, m.bounds[2] * w as f32, m.bounds[3] * h as f32])
+            })
+            .filter(|(_, b)| city_labels::sized(*b, [w as f32, h as f32]))
+            .collect();
+        marks.sort_by(|a, b| b.1[2].max(b.1[3]).total_cmp(&a.1[2].max(a.1[3])));
+        marks.truncate(SHAPED);
+        let at = |(x, y): (f32, f32)| [x * w as f32, y * h as f32];
+        let candidates: Vec<Candidate> = (marks.iter())
+            .map(|(m, b)| Candidate {
+                key: m.place,
+                tier: m.tier,
+                bounds: *b,
+                top: at(m.top),
+                face: m.face.map(at),
+                size: [6. * m.text.len() as f32, 14.],
+            })
+            .collect();
+        let placed = city_labels::place(&candidates, [w as f32, h as f32], &[], &[]).len();
+        let names_ms = ms(t);
+        // Hover: the box under the pointer, at 200 points of the picture.
+        let t = Instant::now();
+        let hits = (0..200)
+            .filter(|i| first.scene.hit((i % 20) as f32 / 20. + 0.02, (i / 20) as f32 / 10. + 0.05).is_some())
+            .count();
+        let hit_ms = ms(t) / 200.;
+        let rss_city = rss_mb();
+        // GPU bytes kept: instances, and the targets of the half-size picture (4× colour and depth,
+        // resolve, read buffer).
+        let (hw, hh) = (u64::from(w / 2), u64::from(h / 2));
+        let gpu_mb = (blocks as u64 * 64 + hw * hh * 4 * (4 + 4 + 1 + 1)) as f64 / 1048576.;
         let mut stages: HashMap<&str, Vec<f64>> = HashMap::new();
         let mut kept = Some(first);
         key.moving = true;
@@ -2479,42 +2608,71 @@ mod tests {
             set(&mut key, view);
             let started = Instant::now();
             let made = make(gpu, &key, plan, &mut last).unwrap();
-            let total = started.elapsed().as_secs_f64() * 1e3;
+            let total = ms(started);
             // The picture it replaces is let go, as `read_city` retires it.
             let dropped = Instant::now();
             drop(kept.replace(made));
-            stages.entry("drop old").or_default().push(dropped.elapsed().as_secs_f64() * 1e3);
+            stages.entry("drop old").or_default().push(ms(dropped));
             stages.entry("picture total").or_default().push(total);
         }
         let trace = crate::trace::jsonl();
-        let pictures: Vec<serde_json::Value> = (trace.lines().skip(skip))
+        let events = |skip: usize, w: u64| -> Vec<serde_json::Value> {
+            (trace.lines().skip(skip))
+                .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+                .filter(|e| e["ev"] == "city_picture" && e["w"] == w)
+                .collect()
+        };
+        let pictures = events(skip, u64::from(w / 2));
+        let marks_ms: f64 = (trace.lines().skip(skip))
             .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-            .filter(|e| e["ev"] == "city_picture" && e["w"] == 1280)
-            .collect();
-        for field in ["scene_us", "prep_us", "boxes_us", "alloc_us", "gpu_us", "copy_us", "image_us"] {
+            .find(|e| e["ev"] == "city_marks")
+            .and_then(|e| e["us"].as_f64())
+            .unwrap_or(0.)
+            / 1e3;
+        for field in ["scene_us", "boxes_us", "alloc_us", "gpu_us", "copy_us", "image_us"] {
             let v = pictures.iter().filter_map(|e| e[field].as_f64()).map(|us| us / 1e3).collect();
             stages.insert(field.trim_end_matches("_us"), v);
         }
-        println!("\n{files} files, {folders} folders, {bytes} bytes of names, {blocks} boxes ({districts} districts)");
-        println!("once: plan {atlas_ms:.1} ms; first picture at rest (layout, render, names) {rest_ms:.1} ms");
-        println!("turn: 240 pictures at 1280×750 (half of 2560×1500), ms");
+        // The same turn with opaque buildings: the GPU's time without glass.
+        key.glass = false;
+        let skip = crate::trace::jsonl().lines().count();
+        for _ in 0..60 {
+            view = view.orbited(1.5, 0.);
+            set(&mut key, view);
+            drop(make(gpu, &key, plan, &mut last).unwrap());
+        }
+        let trace = crate::trace::jsonl();
+        let opaque: Vec<f64> = (trace.lines().skip(skip))
+            .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+            .filter(|e| e["ev"] == "city_picture" && e["w"] == u64::from(w / 2) && e["rise"] == 1000)
+            .skip(1)
+            .filter_map(|e| e["gpu_us"].as_f64().map(|us| us / 1e3))
+            .collect();
+        stages.insert("gpu, no glass", opaque);
+        println!("{blocks} boxes ({districts} districts, {} buildings)", buildings.len());
+        println!(
+            "once (ms): layout {layout_ms:.1}, folder colours {tints_ms:.1}, boxes {boxes_ms:.1}; first picture at rest {rest_ms:.1} \
+             (of it, what may be named {marks_ms:.1}); names placed {names_ms:.1} ({placed} of {} candidates)",
+            candidates.len()
+        );
+        println!(
+            "hover: {hit_ms:.2} ms a hit test ({hits} of 200 on a box); memory: RSS +{:.0} MB, GPU ~{gpu_mb:.0} MB",
+            rss_city - rss_before
+        );
+        println!(
+            "fitted picture {w}×{h}: buildings under 1 px {} ({:.0}%), under 2 px {}, under 4 px {}",
+            under(1.),
+            100. * under(1.) as f64 / buildings.len().max(1) as f64,
+            under(2.),
+            under(4.)
+        );
+        println!("turn: 240 pictures at {}×{} (half size), ms", w / 2, h / 2);
         println!("| stage | mean | p50 | p95 | p99 | max | over 16.7 | over 33 |");
         println!("|---|---|---|---|---|---|---|---|");
-        for name in ["scene", "prep", "boxes", "alloc", "gpu", "copy", "image", "drop old", "picture total"] {
-            let Some(v) = stages.get_mut(name).filter(|v| !v.is_empty()) else { continue };
-            v.sort_by(f64::total_cmp);
-            let p = |q: f64| v[((v.len() as f64 * q).ceil() as usize).clamp(1, v.len()) - 1];
-            let over = |ms: f64| v.iter().filter(|t| **t > ms).count();
-            let mean = v.iter().sum::<f64>() / v.len() as f64;
-            println!(
-                "| {name} | {mean:.2} | {:.2} | {:.2} | {:.2} | {:.2} | {} | {} |",
-                p(0.5),
-                p(0.95),
-                p(0.99),
-                v[v.len() - 1],
-                over(16.7),
-                over(33.)
-            );
+        for name in ["scene", "boxes", "alloc", "gpu", "gpu, no glass", "copy", "image", "drop old", "picture total"] {
+            if let Some(v) = stages.get_mut(name) {
+                print_stage(name, v);
+            }
         }
     }
 
@@ -2527,8 +2685,13 @@ mod tests {
             let top = Path::new(dir).canonicalize().unwrap();
             let roots = [top.to_string_lossy().into_owned()];
             let started = Instant::now();
-            let places = read(&top, &roots, &[]).map(|atlas| atlas.places.len());
-            println!("{dir}: {places:?} places in {:.1} ms", started.elapsed().as_secs_f64() * 1000.);
+            let places = read(&top, &roots, &[], &|| false).map(|atlas| atlas.places.len());
+            let took = started.elapsed();
+            // Its tab closed as it read: how long until the read lets go.
+            let at = Instant::now();
+            drop(read(&top, &roots, &[], &|| true));
+            println!("{dir}: a read whose place closed ends in {:.0} ms", at.elapsed().as_secs_f64() * 1e3);
+            println!("{dir}: {places:?} places in {:.1} ms", took.as_secs_f64() * 1000.);
         }
     }
 }

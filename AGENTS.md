@@ -399,6 +399,8 @@ Design note: `docs/ai/attention/plan.md`.
   runner), the table in the job summary, the JSON as an artifact. Red past the thresholds in
   `scripts/bench`; not a required check: whoever merges a red run says in the pull request whether
   the regression is real and accepted. Nightly and by hand on `main`: the JSON alone, for trends.
+  With the label `pr-bench-large` as well, it also spins the code city of 50,000 to 600,000 made-up
+  files (`--city-large`).
 - `.github/workflows/duped.yml`, on pull requests (not docs-only ones), on `ubuntu-latest`:
   `duped check --base origin/<base>` (a merge group: its `base_sha`; the release binary, pinned by version and checksum) fails on an
   added helper identical to one already there, or an identical file of 10 lines or more. A deliberate

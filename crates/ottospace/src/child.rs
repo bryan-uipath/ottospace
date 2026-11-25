@@ -14,7 +14,12 @@ pub struct Said {
 }
 
 /// Runs `command` (its argv and environment set by the caller) for at most `timeout`.
-pub fn run(mut command: Command, timeout: Duration, most: u64) -> Result<Said, String> {
+pub fn run(command: Command, timeout: Duration, most: u64) -> Result<Said, String> {
+    run_until(command, timeout, most, &|| false)
+}
+
+/// `run`, killed as soon as `stop` says so (looked at while it waits).
+pub fn run_until(mut command: Command, timeout: Duration, most: u64, stop: &dyn Fn() -> bool) -> Result<Said, String> {
     let name = command.get_program().to_string_lossy().rsplit('/').next().unwrap_or("program").to_string();
     command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped());
     let mut child = command.spawn().map_err(|err| format!("{name}: {err}"))?;
@@ -38,7 +43,7 @@ pub fn run(mut command: Command, timeout: Duration, most: u64) -> Result<Said, S
     let status = loop {
         match child.try_wait() {
             Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() < deadline => {
+            Ok(None) if Instant::now() < deadline && !stop() => {
                 std::thread::sleep(pause);
                 pause = (pause * 2).min(Duration::from_millis(50));
             }

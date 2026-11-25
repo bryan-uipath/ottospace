@@ -1765,8 +1765,8 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   folders `city_exclude` leaves out and built-in ones (`node_modules`, `target`, `dist`, …):
   dropped before the layout, they take no room, move nothing and count toward no limit. Read off
   the main thread with the status bar's hardened git, only in a checkout listed in Repos, when
-  the tab comes on show and when the lit files change. No timer. Over 20,000 files, 4 MB of
-  names or 10 seconds: no city, the lattice stays.
+  the tab comes on show and when the lit files change. No timer. Over 600,000 files, 64 MB of
+  names or 60 seconds: no city, the lattice stays. A read of a tab that closes stops.
 - It takes no click and no key, and nothing in it moves: a still picture, made again when the
   files, the lit files or the tab's size change. Districts and files are named as a map is:
   each name centred on its plinth (a folder's, in capitals, once the plinth on screen is wider

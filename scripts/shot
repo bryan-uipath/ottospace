@@ -123,9 +123,10 @@ def made_up_tree(at, count):
             f.write("x" * (200 + r * r * r // 20000))
 
 
-def made_up_repo(at, files, folders, deepest):
+def made_up_repo(at, files, folders, deepest, empty=False):
     """A git repository at `at` as `city::tests::made_up_repo` lists it, the same every run: `files`
-    files in about `folders` folders up to `deepest` deep, most near the top; most small."""
+    files in about `folders` folders up to `deepest` deep, most near the top; most small (`empty`:
+    every file empty, for sizes a disk would not hold)."""
     x, mask = 0x2545F4914F6CDD1D, (1 << 64) - 1
 
     def nxt():
@@ -151,7 +152,7 @@ def made_up_repo(at, files, folders, deepest):
             os.makedirs(os.path.join(at, folder), exist_ok=True)
             made.add(folder)
         with open(os.path.join(at, folder, f"f{i}.rs"), "w") as f:
-            f.write("x" * size)
+            f.write("" if empty else "x" * size)
 
 
 def copy_fixtures(name, root):

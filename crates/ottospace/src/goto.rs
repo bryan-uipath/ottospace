@@ -31,11 +31,11 @@ impl Reader {
                 let read = crate::city::checkout_files(
                     Path::new(&folder),
                     &roots,
-                    MOST_FILES,
-                    MOST_BYTES,
+                    (MOST_FILES, MOST_BYTES, std::time::Duration::from_secs(10)),
                     false,
                     &[],
                     &|_| true,
+                    &|| false,
                 );
                 let cut = read.as_ref().is_some_and(|(_, cut)| *cut);
                 let paths = read.map(|(files, _)| files.into_iter().map(|(path, _)| path).collect());
