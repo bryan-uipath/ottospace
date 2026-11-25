@@ -3,6 +3,8 @@
 //! shape. The shell renders it; the core decides what stands where, how tall, and where the
 //! camera is. Design: `docs/ai/code-city/plan.md`, "Drawing".
 
+use std::sync::Arc;
+
 use crate::atlas::Atlas;
 
 /// The plan is this much wider than deep, as the atlas cuts it.
@@ -122,8 +124,9 @@ pub struct Scene {
     pub shown: Vec<bool>,
     /// The colour a closed box glows in for a lit file it hides (`lod::Tree::apply`). Empty: none.
     pub glow: Vec<Option<u32>>,
-    /// The strata a building is drawn as, in place of its box (`Layer`), by block.
-    pub layers: Vec<Layer>,
+    /// The strata a building is drawn as, in place of its box (`Layer`), by block. Shared with
+    /// its layout: a camera move copies none.
+    pub layers: Arc<[Layer]>,
 }
 
 /// A slice of building `block`'s box, drawn in place of it: from `y[0]` up to `y[1]` (no higher
@@ -441,7 +444,7 @@ pub fn scene_lowered(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, view: &Vie
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     pub blocks: Vec<Block>,
-    pub layers: Vec<Layer>,
+    pub layers: Arc<[Layer]>,
     fit: Option<Fit>,
     aspect: f32,
     lit_floor: f32,
@@ -574,7 +577,7 @@ pub fn layout(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, lower: f32) -> La
     }
     blocks.extend(buildings);
     let fit = frame(&blocks, aspect, lower);
-    Layout { blocks, layers, fit, aspect, lit_floor: highest + LIT_ABOVE }
+    Layout { blocks, layers: layers.into(), fit, aspect, lit_floor: highest + LIT_ABOVE }
 }
 
 impl Camera {
@@ -855,8 +858,8 @@ mod tests {
         let big: Vec<(String, u64)> = (0..5_000).map(|i| (format!("d{}/f{i}.rs", i % 7), u64::MAX)).collect();
         let s = scene(&plan(&big), &[], 1.6, &View::default());
         let tallest = s.blocks.iter().filter(|b| b.kind == Kind::Building).map(|b| b.max[1] - b.min[1]);
-        // 5,000 files of 120 levels are more than a city draws: 20 each, the roof the top slab's.
-        assert!((tallest.fold(0., f32::max) - TALLEST * (STUB + 19. * LEVEL + SLAB)).abs() < 1e-5);
+        // 5,000 files of 120 levels are more than a city draws: 19 each and a stub, the roof the top slab's.
+        assert!((tallest.fold(0., f32::max) - TALLEST * (STUB + 18. * LEVEL + SLAB)).abs() < 1e-5);
     }
 
     #[test]

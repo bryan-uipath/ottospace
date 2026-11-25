@@ -65,16 +65,14 @@ pub fn history(log: &str) -> History {
         } else if let Some(level) = commit.filter(|_| !said.is_empty()) {
             // Only a commit with a path counts for the span: a log cut short ends in a header.
             history.span = (history.span.0.min(level.at), history.span.1.max(level.at));
-            let levels = history.files.entry(said.to_string()).or_default();
-            // No more than a file stands (git's newest first): a city draws no more.
-            if levels.len() < crate::scene::LEVELS as usize {
-                levels.push(level);
-            }
+            history.files.entry(said.to_string()).or_default().push(level);
         }
     }
     // Newest first by time, as the owner's city sorts them: a commit's clock may be behind its parent's.
+    // No more than a file stands, the newest: a city draws no more.
     for levels in history.files.values_mut() {
         levels.sort_by(|a, b| b.at.cmp(&a.at));
+        levels.truncate(crate::scene::LEVELS as usize);
     }
     if history.files.is_empty() {
         history.span = (0, 0);
@@ -137,6 +135,15 @@ fn mix(a: u32, b: u32, t: f32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Past the most a file stands, the newest by time are kept, though git gave one last.
+    #[test]
+    fn a_file_keeps_its_newest_levels_by_time() {
+        let mut log: String = (1..=120).rev().map(|at| format!("\x01{at}\tx\0\na.rs\0")).collect();
+        log.push_str("\x01500\tfix: late clock\0\na.rs\0");
+        let levels = &history(&log).files["a.rs"];
+        assert_eq!((levels.len(), levels[0].at, levels[119].at), (120, 500, 2));
+    }
 
     #[test]
     fn a_log_gives_each_files_levels_newest_first_and_the_span() {

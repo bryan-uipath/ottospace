@@ -401,11 +401,12 @@ fn history(top: &Path, head: Option<&str>, late: Instant, gone: &dyn Fn() -> boo
     log.args(["-z", "--format=%x01%ct%x09%s", "--no-show-signature", "--no-color", head, "--", "."]);
     log.env("GIT_NO_LAZY_FETCH", "1");
     match crate::child::run_until(log, late.saturating_duration_since(Instant::now()), LOG_BYTES, gone) {
-        Ok(said) if said.ok => (strata::history(&said.out), true),
-        // Cut at `LOG_BYTES`: its last path may be cut too (`src/a` of `src/abc`), so it is dropped.
+        // Cut at `LOG_BYTES` (git may still end well): its last path may be cut too (`src/a` of
+        // `src/abc`), so it is dropped.
         Ok(said) if said.out.len() as u64 >= LOG_BYTES => {
             (strata::history(&said.out[..said.out.rfind('\0').map_or(0, |at| at + 1)]), false)
         }
+        Ok(said) if said.ok => (strata::history(&said.out), true),
         _ => (strata::History::default(), false),
     }
 }

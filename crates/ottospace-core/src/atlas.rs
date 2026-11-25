@@ -243,9 +243,10 @@ pub fn repo_with(files: &[(String, u64)], history: &History) -> Node {
 const MOST_LEVELS: usize = 100_000;
 
 /// The most levels each file stands, its `counts` levels given: `scene::LEVELS`, less while the
-/// whole city's would be more than `MOST_LEVELS` (the newest of each kept).
+/// whole city's would be more than `MOST_LEVELS` (the newest of each kept). A file of commits
+/// has a stub too: one more box.
 fn most_levels(counts: &[usize]) -> usize {
-    let total = |most: usize| counts.iter().map(|n| (*n).min(most)).sum::<usize>();
+    let total = |most: usize| counts.iter().map(|n| (*n).min(most) + usize::from(*n > 0)).sum::<usize>();
     (0..=crate::scene::LEVELS as usize).rev().find(|most| total(*most) <= MOST_LEVELS).unwrap_or(0)
 }
 
@@ -395,8 +396,8 @@ mod tests {
         assert_eq!(most_levels(&[3, 500, 0]), crate::scene::LEVELS as usize);
         let many = vec![200; 2_000];
         let most = most_levels(&many);
-        assert_eq!(most, MOST_LEVELS / 2_000);
-        assert!(many.iter().map(|n| (*n).min(most + 1)).sum::<usize>() > MOST_LEVELS);
+        assert_eq!(most, MOST_LEVELS / 2_000 - 1, "a stub each");
+        assert!(many.iter().map(|n| (*n).min(most + 1) + 1).sum::<usize>() > MOST_LEVELS);
     }
 
     #[test]
