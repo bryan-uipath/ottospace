@@ -102,9 +102,9 @@ THRESHOLDS = [
     ("cpu_idle_pct", None, 1.0, 2.0),
     ("city_2000_ms", 0.25, 100, 0),
     ("city_20000_ms", 0.25, 150, 0),
-    # A turn of 9,500 files: frames' p99 and those over two frames' time (a hitch).
-    ("spin_9500_p99_ms", 0.25, 4.0, 0),
-    ("spin_9500_over_33", None, 3, 3),
+    # A turn of 9,500 files: not its frames' p99 nor those over 33 ms: an A/A run of one build swung them 30% and more.
+    # Its repeated frames and its pictures' wait held within a few percent.
+    ("spin_9500_wait_p50_ms", 0.25, 3.0, 0),
     # Frames that showed the picture before (of 240): the turn standing still on screen.
     ("spin_9500_repeats", None, 24, 24),
     # Key to painted echo: the display's frame is most of it, so a frame's rise.
@@ -117,7 +117,7 @@ THRESHOLDS = [
 CEILINGS = [("typing_app_p99_ms", 8.3), ("typing_busy_app_p99_ms", 8.3), ("typing_full_app_p99_ms", 8.3)]
 LIMITS = ("startup median +20% and +50 ms; RSS +25% and +10 MB; idle CPU above 2% of a core and +1 point; "
           "code city +25% and +100 ms (20,000 files: +150 ms); "
-          "a spin of 9,500 files: frames' p99 +25% and +4 ms, frames over 33 ms and repeated frames above 3 and +3, 24 and +24; "
+          "a spin of 9,500 files: a new picture's wait p50 +25% and +3 ms, repeated frames above 24 and +24; "
           "a spin the base made and this side did not; typing's key to screen p99 +25% and +4 ms (each run); "
           "the app's own share of a key (p99) above 8.3 ms on this side; typing the base timed and this side did not.")
 
@@ -634,6 +634,7 @@ def bench(sides, args, scratch):
             result[name]["spin_9500_p99_ms"] = result[name]["spin"][9500]["p99"]
             result[name]["spin_9500_over_33"] = result[name]["spin"][9500]["over_33"]
             result[name]["spin_9500_repeats"] = result[name]["spin"][9500]["repeats"]
+            result[name]["spin_9500_wait_p50_ms"] = result[name]["spin"][9500]["wait_p50"]
         result[name]["typing"] = typed[name]
         for kind, t in typed[name].items():
             if t:
@@ -667,6 +668,7 @@ ROWS = [
     ("spin_9500_p99_ms", "code city spun, 9,500 files: frames' p99 (ms)"),
     ("spin_9500_over_33", "  frames over 33 ms"),
     ("spin_9500_repeats", "  frames that repeated the picture before"),
+    ("spin_9500_wait_p50_ms", "  a new picture's wait, made to painted, p50 (ms)"),
     ("typing_total_p99_ms", "typing at a prompt: key to painted echo, p99 (ms)"),
     ("typing_app_p99_ms", "  the app's own share, p99 (ms)"),
     ("typing_busy_total_p99_ms", "  beside a busy pane: key to painted, p99 (ms)"),
