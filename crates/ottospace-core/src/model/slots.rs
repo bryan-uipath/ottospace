@@ -828,7 +828,7 @@ impl Model {
         let mut look = look.clone();
         look.windows.retain(|seen| held.contains(&seen.window));
         let held: BTreeSet<u32> = held.into_iter().collect();
-        let targets = self.slot_pairs(&look, &group, &held);
+        let targets = self.slot_pairs(&look, &group, &held, &BTreeSet::new());
         // Each slot in turn gets its window from whichever slot holds it now.
         for (id, window) in targets {
             let holder = group.iter().copied().find(
@@ -953,8 +953,14 @@ impl Model {
     /// order) offers or takes (`slot::pair`): those that name their window first (Away ones
     /// first of all), the most served; then the rest by size, the largest pane with the largest
     /// window as its app sized it, ties front to back. A window in a pane or asked for is no one's,
-    /// but those `freed` (Re-sort's own).
-    fn slot_pairs(&self, look: &Look, ids: &[PaneId], freed: &BTreeSet<u32>) -> BTreeMap<PaneId, u32> {
+    /// but those `freed` (Re-sort's own); one `taken` (another look's offer) is no one's either.
+    fn slot_pairs(
+        &self,
+        look: &Look,
+        ids: &[PaneId],
+        freed: &BTreeSet<u32>,
+        taken: &BTreeSet<u32>,
+    ) -> BTreeMap<PaneId, u32> {
         let unit = crate::layout::Rect { x: 0., y: 0., w: 1000., h: 1000. };
         let rects = self.layout.as_ref().map(|layout| layout.rects(unit)).unwrap_or_default();
         let area = |id: PaneId| rects.iter().find(|(p, _)| *p == id).map_or(0., |(_, r)| r.w * r.h);
@@ -974,7 +980,8 @@ impl Model {
                 let run = &self.slots[id];
                 let claimed = self.slot_claims(Some(*id), false);
                 let passed = |window: u32| {
-                    !freed.contains(&window) && (claimed.contains(&window) || run.declined.contains(&window))
+                    let claimed = claimed.contains(&window) || run.declined.contains(&window);
+                    taken.contains(&window) || (!freed.contains(&window) && claimed)
                 };
                 let found = look.candidates(&run.slot, &self.window_rules, passed);
                 let by_size = Self::by_size(run);
@@ -1062,7 +1069,11 @@ impl Model {
             return;
         };
         // Which window each offers or takes, the whole app's slots at once (several slots, §3).
-        let pairs = if look.running { self.slot_pairs(&look, &waiting, &BTreeSet::new()) } else { BTreeMap::new() };
+        let pairs = if look.running {
+            self.slot_pairs(&look, &waiting, &BTreeSet::new(), &BTreeSet::new())
+        } else {
+            BTreeMap::new()
+        };
         for id in waiting {
             let Some(run) = self.slots.get(&id) else { continue };
             // Looked at: a plain pane of its app waits no more, and the app's windows once it
@@ -1183,7 +1194,7 @@ impl Model {
             .filter(|id| self.slots.get(id).is_some_and(|run| run.pending.is_none() && run.of(&look)))
             .collect();
         // The slot the pairing gives it, if any: one window, one slot.
-        let pairs = self.slot_pairs(&look, &waiting, &BTreeSet::new());
+        let pairs = self.slot_pairs(&look, &waiting, &BTreeSet::new(), &BTreeSet::new());
         let id = pairs.iter().find(|(_, w)| **w == seen.window).map(|(id, _)| *id)?;
         // Only a return goes in now: whether the user is in a new window, the next look says.
         let back = self.slots.get(&id).is_some_and(|run| run.away.is_some() && run.takes(seen, look.frontmost));
@@ -1265,7 +1276,10 @@ impl Model {
                     })
                 })
                 .collect();
-            pairs.extend(self.slot_pairs(look, &waiting, &BTreeSet::new()));
+            // A window id is the window server's, one for every app: one another look's slot offers
+            // is not offered again.
+            let taken: BTreeSet<u32> = pairs.values().copied().collect();
+            pairs.extend(self.slot_pairs(look, &waiting, &BTreeSet::new(), &taken));
         }
         for id in order {
             // What other slots offer is not this one's to count.

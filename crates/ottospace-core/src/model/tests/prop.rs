@@ -10536,3 +10536,40 @@ fn seed_1151_a_slot_offers_only_from_its_own_look() {
         ])
         .unwrap();
 }
+
+/// Seed 97 of the long run (base 806e6224): two apps' looks each listed window 12 (made-up ids
+/// repeat across apps; macOS's are global), and a slot of each offered it. One id, one slot.
+#[test]
+fn seed_97_one_window_id_is_offered_by_one_slot_across_looks() {
+    replay(&[
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Open { kind: Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() }, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        slot_make(2, 1, "{\"select\":{},\"pick\":\"any\",\"matching\":\"automatic\",\"absent\":\"wait\",\"closed\":\"keep\"}").sent_by(Origin::User),
+        Action::SlotGiveBack { pane: 2 }.sent_by(Origin::User),
+        adopt("{\"type\":\"app\",\"window\":10,\"title\":\"HOSTEDTITLE general\",\"name\":\"\"}", None, "{\"pid\":1,\"window\":10,\"title\":\"SLOTSEEN general\",\"identifier\":null,\"subrole\":\"AXStandardWindow\",\"frame\":{\"x\":0.0,\"y\":0.0,\"w\":800.0,\"h\":600.0},\"sheet\":false}").sent_by(Origin::User),
+        slot_make(3, 0, "{\"select\":{},\"pick\":{\"display\":2},\"matching\":\"manual\",\"absent\":\"wait\",\"closed\":\"keep\"}").sent_by(Origin::User),
+        Action::SlotGiveBack { pane: 3 }.sent_by(Origin::User),
+        slot_windows("{\"bundle\":null,\"name\":\"app\",\"running\":true,\"windows\":[{\"pid\":0,\"window\":12,\"title\":\"SLOTSEEN general\",\"identifier\":\"slotseen.other\",\"subrole\":\"AXStandardWindow\",\"frame\":{\"x\":0.0,\"y\":0.0,\"w\":800.0,\"h\":600.0},\"sheet\":false}],\"displays\":[{\"x\":0.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0},{\"x\":1920.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0}],\"frontmost\":null}").sent_by(Origin::System),
+        slot_windows("{\"bundle\":null,\"name\":\"\",\"running\":true,\"windows\":[{\"pid\":0,\"window\":12,\"title\":\"SLOTSEEN @z~/\",\"identifier\":null,\"subrole\":\"AXStandardWindow\",\"frame\":{\"x\":2000.0,\"y\":0.0,\"w\":400.0,\"h\":300.0},\"sheet\":false},{\"pid\":2,\"window\":1,\"title\":\"SLOTSEEN w1\",\"identifier\":\"slotseen.main\",\"subrole\":\"AXStandardWindow\",\"frame\":{\"x\":2000.0,\"y\":0.0,\"w\":400.0,\"h\":300.0},\"sheet\":false}],\"displays\":[{\"x\":0.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0},{\"x\":1920.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0}],\"frontmost\":null}").sent_by(Origin::System),
+    ])
+        .unwrap();
+}
+
+/// Seed 2652 of the long run (main 22e07af2): a window offered by two slots, [2, 2].
+#[test]
+fn seed_2652_one_window_is_offered_by_one_slot() {
+    replay(&[
+        Action::Split { axis: Axis::Right, kind: Kind::Terminal }.sent_by(Origin::User),
+        Action::Open { kind: Kind::App { window: 1, title: "w1".into(), bundle: None, name: "app".into() }, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        slot_make(2, 1, "{\"select\":{},\"pick\":\"any\",\"matching\":\"automatic\",\"absent\":\"wait\",\"closed\":\"keep\"}").sent_by(Origin::User),
+        Action::SlotGiveBack { pane: 2 }.sent_by(Origin::User),
+        Action::Open { kind: Kind::App { window: 9, title: "w9".into(), bundle: None, name: "app".into() }, axis: Axis::Right, beside: None }.sent_by(Origin::User),
+        adopt("{\"type\":\"app\",\"window\":12,\"title\":\"HOSTEDTITLE w1\",\"name\":\"Slides\"}", None, "{\"pid\":1,\"window\":12,\"title\":\"SLOTSEEN w1\",\"identifier\":\"slotseen.other\",\"subrole\":\"AXDialog\",\"frame\":{\"x\":0.0,\"y\":0.0,\"w\":60.0,\"h\":40.0},\"sheet\":true}").sent_by(Origin::User),
+        Action::Open { kind: Kind::File { path: "/w/x.png".into() }, axis: Axis::Right, beside: None }.sent_by(Origin::System),
+        adopt("{\"type\":\"app\",\"window\":11,\"title\":\"HOSTEDTITLE w1\",\"name\":\"Slides\"}", Some(2), "{\"pid\":1,\"window\":11,\"title\":\"SLOTSEEN w1\",\"identifier\":\"slotseen.other\",\"subrole\":\"AXDialog\",\"frame\":{\"x\":2000.0,\"y\":0.0,\"w\":400.0,\"h\":300.0},\"sheet\":false}").sent_by(Origin::User),
+        Action::WindowGone { pane: 6, app_running: false, at: 200000000, was: None }.sent_by(Origin::System),
+        slot_windows("{\"bundle\":null,\"name\":\"Slides\",\"running\":true,\"windows\":[{\"pid\":1,\"window\":2,\"title\":\"SLOTSEEN w1\",\"identifier\":null,\"subrole\":\"AXDialog\",\"frame\":{\"x\":2000.0,\"y\":0.0,\"w\":400.0,\"h\":300.0},\"sheet\":false},{\"pid\":0,\"window\":1,\"title\":\"SLOTSEEN w1\",\"identifier\":\"slotseen.other\",\"subrole\":\"AXDialog\",\"frame\":{\"x\":0.0,\"y\":0.0,\"w\":800.0,\"h\":600.0},\"sheet\":true}],\"displays\":[{\"x\":0.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0},{\"x\":1920.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0}],\"frontmost\":2}").sent_by(Origin::System),
+        slot_windows("{\"bundle\":null,\"name\":\"app\",\"running\":true,\"windows\":[{\"pid\":2,\"window\":10,\"title\":\"SLOTSEEN w1\",\"identifier\":\"slotseen.other\",\"subrole\":\"AXStandardWindow\",\"frame\":{\"x\":0.0,\"y\":0.0,\"w\":60.0,\"h\":40.0},\"sheet\":false},{\"pid\":1,\"window\":2,\"title\":\"SLOTSEEN general\",\"identifier\":\"slotseen.other\",\"subrole\":\"AXStandardWindow\",\"frame\":{\"x\":0.0,\"y\":0.0,\"w\":800.0,\"h\":600.0},\"sheet\":false}],\"displays\":[{\"x\":0.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0},{\"x\":1920.0,\"y\":0.0,\"w\":1920.0,\"h\":1080.0}],\"frontmost\":2}").sent_by(Origin::System),
+    ])
+        .unwrap();
+}
