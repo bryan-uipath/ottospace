@@ -642,6 +642,21 @@ impl Gen<'_> {
     }
 
     /// A viewer pane, else any.
+    fn explorer_pane(&mut self) -> PaneId {
+        let real: Vec<PaneId> = self.m.explorers.keys().copied().collect();
+        self.one_of(&real, |g| g.pane())
+    }
+
+    /// A folder of an explorer as it may be named: one it opened, the root, or a hostile one.
+    fn explorer_dir(&mut self, pane: PaneId) -> String {
+        let open: Vec<String> = self.m.explorer(pane).map(|e| e.listings.keys().cloned().collect()).unwrap_or_default();
+        match self.rng.below(3) {
+            0 if !open.is_empty() => self.rng.pick(&open).clone(),
+            1 => String::new(),
+            _ => ["../etc", "src", "a\nb", ".git"][self.rng.below(4) as usize].to_string(),
+        }
+    }
+
     fn file_pane(&mut self) -> PaneId {
         let real: Vec<PaneId> = self.m.viewers.keys().copied().collect();
         self.one_of(&real, |g| g.pane())
@@ -1831,6 +1846,43 @@ const MAKERS: &[Make] = &[
         Action::ViewerPan { pane: g.file_pane(), by }
     },
     |g| Action::ViewerPlay { pane: g.rng.coin().then(|| g.file_pane()), play: g.rng.coin() },
+    |g| {
+        let listed: Vec<String> = g.m.repos.iter().flat_map(|r| r.checkouts()).map(|c| c.path).collect();
+        let root = match g.rng.below(3) {
+            0 if !listed.is_empty() => Some(g.rng.pick(&listed).clone()),
+            1 => Some(g.name(CWDS)),
+            _ => None,
+        };
+        let axis = if g.rng.coin() { Axis::Right } else { Axis::Down };
+        Action::ExplorerOpen { root, axis }
+    },
+    |g| {
+        use crate::explorer::Entry;
+        let pane = g.explorer_pane();
+        let dir = g.explorer_dir(pane);
+        let names = ["src", "main.rs", "..", ".git", "a/b", "evil\n", "README.md", "target"];
+        let entries = (0..g.rng.below(6))
+            .map(|_| Entry {
+                name: names[g.rng.below(names.len())].to_string(),
+                dir: g.rng.coin(),
+                link: g.rng.below(4) == 0,
+                ignored: g.rng.below(4) == 0,
+            })
+            .collect();
+        Action::ExplorerListed { pane, dir, entries: g.rng.coin().then_some(entries), cut: g.rng.coin() }
+    },
+    |g| {
+        use crate::explorer::Mark;
+        let pane = g.explorer_pane();
+        let marks = vec![("src/main.rs".into(), Mark::Modified), ("../x".into(), Mark::Untracked)];
+        Action::ExplorerMarks { pane, marks }
+    },
+    |g| {
+        let keys = ["up", "down", "left", "right", "enter", "r", "s", "m", "escape", " "];
+        Action::ExplorerKey { key: keys[g.rng.below(keys.len())].into() }
+    },
+    |g| Action::ExplorerClick { pane: g.explorer_pane(), row: g.rng.below(6) as usize },
+    |g| Action::ExplorerIgnored { pane: g.explorer_pane() },
     |g| Action::SettingsRead {
         text: g
             .rng
@@ -2856,6 +2908,7 @@ fn check(m: &Model) -> Result<(), String> {
         ensure!(m.live.is_none(), "an app is live over the bug report");
     }
     check_viewers(m)?;
+    check_explorers(m)?;
     // A btw answer's words ("Redis": only its maker's) in the composer are never in the state.
     if let Some(("talk", field)) = m.field() {
         ensure!(!field.text().contains("Redis") || m.field_hidden(), "a btw answer in the state: {:?}", field.text());
@@ -3650,6 +3703,10 @@ fn check(m: &Model) -> Result<(), String> {
                 Kind::File { path: open },
             ) => path == open,
             (
+                marks::Target::Pane(PaneRecord { kind: RecordKind::Explorer { root }, .. }),
+                Kind::Explorer { root: open },
+            ) => root == open,
+            (
                 marks::Target::Pane(PaneRecord { kind: RecordKind::App { bundle, name, .. }, .. }),
                 Kind::App { bundle: b, name: n, .. } | Kind::Slot { bundle: b, name: n },
             ) => marks::same_app((bundle.as_deref(), name), (b.as_deref(), n)),
@@ -3688,6 +3745,7 @@ fn check(m: &Model) -> Result<(), String> {
             MenuOf::Space(id) => m.shown_spaces().iter().any(|space| space.of == Owner::Workbook { id: *id }),
             // A tab of the row on show.
             MenuOf::Tab(id) => m.space_tabs(m.shown_space()).iter().any(|at| m.tabs[*at].id == *id),
+            MenuOf::Explorer(pane, _) => m.layout.as_ref().is_some_and(|layout| layout.leaves().contains(pane)),
             MenuOf::Transcript => m.listen.shown && !items.is_empty(),
             MenuOf::ReposAdd => m.sidebar == Some(Section::Repos) && !m.repo_dirs.fixed,
             // A pane's ⋯: on show, an app pane or a slot, `slots` on.
@@ -3791,6 +3849,32 @@ fn check(m: &Model) -> Result<(), String> {
 /// One view for each viewer pane and none for another; its file by a path it opens; its line no
 /// further than the shell says it goes; a count typed only where the keys go now; marked lines
 /// from 1, in order, within the file read.
+fn check_explorers(m: &Model) -> Result<(), String> {
+    for pane in &m.panes {
+        if let Kind::Explorer { root } = &pane.kind {
+            ensure!(crate::viewer::sound(root), "explorer {} of {root:?}", pane.id);
+            ensure!(m.explorers.contains_key(&pane.id), "explorer {} has no tree", pane.id);
+        }
+    }
+    for (id, explorer) in &m.explorers {
+        ensure!(
+            m.pane(*id).is_some_and(|p| matches!(p.kind, Kind::Explorer { .. })),
+            "a tree for pane {id}, no explorer"
+        );
+        for dir in explorer.listings.keys() {
+            ensure!(dir.is_empty() || dir.split('/').all(crate::explorer::listable), "explorer {id} lists {dir:?}");
+        }
+        let rows = explorer.rows();
+        ensure!(
+            rows.iter().all(|row| row.path.split('/').all(crate::explorer::listable)),
+            "explorer {id} shows a bad name"
+        );
+        ensure!(rows.iter().all(|row| !(row.link && (row.dir || row.open))), "explorer {id} opens a link");
+        ensure!(rows.iter().all(|row| explorer.show_ignored || !row.ignored), "explorer {id} shows an ignored file");
+    }
+    Ok(())
+}
+
 fn check_viewers(m: &Model) -> Result<(), String> {
     for pane in &m.panes {
         if let Kind::File { path } = &pane.kind {
@@ -6285,6 +6369,25 @@ impl Run {
                     ensure!(user && matches!(action, Action::PaletteChoose { .. }), "{command:?} run by {action:?}")
                 }
                 // Files are listed only for the user's go-to, in a listed checkout.
+                // An explorer's folder, while it waits for it: never outside an explorer pane.
+                Effect::ListDir { pane, root, dir } => {
+                    let open = matches!(m.pane(*pane).map(|p| &p.kind), Some(Kind::Explorer { root: r }) if r == root);
+                    let reading = m
+                        .explorer(*pane)
+                        .is_some_and(|e| e.listings.get(dir) == Some(&crate::explorer::Listing::Reading));
+                    ensure!(
+                        open && reading && dir.split('/').all(|p| p.is_empty() || crate::explorer::listable(p)),
+                        "{action:?} listed {dir:?} of {pane}"
+                    );
+                }
+                Effect::ExplorerMarks { pane, root } => {
+                    let open = matches!(m.pane(*pane).map(|p| &p.kind), Some(Kind::Explorer { root: r }) if r == root);
+                    ensure!(open, "{action:?} asked marks of {pane}");
+                }
+                // Finder shows a file only for the user's own menu.
+                Effect::Reveal { .. } => {
+                    ensure!(user && matches!(action, Action::RowMenuChoose { .. }), "{origin:?}'s {action:?} revealed")
+                }
                 Effect::ListFiles { folder } => {
                     let goto = matches!(action, Action::PaletteGoTo | Action::GoToDrill | Action::FieldEdit { .. });
                     ensure!(user && goto && m.repo_listed(folder), "{origin:?}'s {action:?} listed {folder:?}")
@@ -6335,7 +6438,8 @@ impl Run {
                 // A program's text reaches the clipboard only by the user's answer, or a pane they
                 // let copy always; never one past the cap.
                 Effect::CopyText { text } => {
-                    let answered = user && matches!(action, Action::CopyAnswer { .. });
+                    // An explorer row's Copy path: the user's menu.
+                    let answered = user && matches!(action, Action::CopyAnswer { .. } | Action::RowMenuChoose { .. });
                     let always = matches!(action, Action::CopyAsked { pane, .. } if m.copy_always.contains(&pane));
                     ensure!(answered || always, "{origin:?}'s {action:?} copied");
                     ensure!(text.len() <= copy_ask::MOST, "{action:?} copied {} bytes", text.len());
@@ -6934,6 +7038,7 @@ fn code(sent: &Envelope) -> String {
         ("range", "sessions::Range"),
         ("waits_for", "WaitsFor"),
         ("runner", "RunnerId"),
+        ("marks", "crate::explorer::Mark"),
         // A conversation's: `TaskStop { id: Task(1) }`.
         ("task", "Subject"),
         ("id", "Subject"),

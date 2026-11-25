@@ -1071,12 +1071,13 @@ mod tests {
     fn a_linked_worktrees_row_offers_delete_and_the_repositorys_own_folder_none() {
         use crate::row_menu::Item;
         let m = worktree_menu(WORKTREE);
-        assert_eq!(m.row_menu().map(|(_, items)| items.to_vec()), Some(vec![Item::DeleteWorktree]));
+        assert_eq!(m.row_menu().map(|(_, items)| items.to_vec()), Some(vec![Item::DeleteWorktree, Item::ExplorerHere]));
         assert_eq!(Item::DeleteWorktree.label(), "Delete worktree…");
         assert_eq!(m.row_menu_action(Some(0)), Some(Action::WorktreeDelete { path: WORKTREE.into() }));
         assert_eq!(m.row_menu_why(0), None);
-        // The `default` row: `git worktree remove` cannot remove it, so no menu.
-        assert!(worktree_menu("/code/app").row_menu().is_none());
+        // The `default` row: `git worktree remove` cannot remove it, so its explorer alone.
+        let own = worktree_menu("/code/app");
+        assert_eq!(own.row_menu().map(|(_, items)| items.to_vec()), Some(vec![Item::ExplorerHere]));
     }
 
     #[test]

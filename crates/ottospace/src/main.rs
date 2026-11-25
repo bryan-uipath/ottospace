@@ -94,6 +94,7 @@ mod divider;
 mod drawer_rail;
 mod editor;
 mod event_log;
+mod explorer_pane;
 mod features;
 mod field;
 mod finish;
@@ -912,6 +913,7 @@ fn keymap() -> Vec<KeyBinding> {
         KeyBinding::new("cmd-/", ShowKeys, None),
         KeyBinding::new("cmd-shift-p", commands::CommandPalette, None),
         KeyBinding::new("cmd-p", commands::GoToPlace, None),
+        KeyBinding::new("cmd-shift-x", commands::FileExplorer, None),
         KeyBinding::new("cmd-,", commands::EditSettings, None),
         KeyBinding::new("cmd-w", ClosePane, None),
         KeyBinding::new("cmd-alt-left", FocusLeft, None),
@@ -1304,6 +1306,10 @@ struct Workspace {
     city: city::Reader,
     /// Go to's file lists, read off the main thread.
     goto_files: goto::Reader,
+    /// Explorer panes' folders, read off the main thread; each one's list scroll and the row it last showed.
+    explorer_reader: explorer_pane::Reader,
+    explorer_scroll: RefCell<HashMap<PaneId, gpui::UniformListScrollHandle>>,
+    explorer_shown: RefCell<HashMap<PaneId, usize>>,
     city_drawn: city::Shared,
     city_painter: city::Painter,
     /// A drag of a city's camera in flight; a reset easing back (the place, from, since); the
@@ -1658,6 +1664,7 @@ impl Workspace {
                     }
                     this.take_tags(window, cx);
                     this.take_files(window, cx);
+                    this.take_explorer_reads(window, cx);
                     this.store_layout(false);
                     this.store_key_use(false);
                     if ticks.every(15, 0) {
@@ -2034,6 +2041,9 @@ impl Workspace {
             status_git: status_bar::Reader::new(),
             city: city::Reader::new(),
             goto_files: goto::Reader::new(),
+            explorer_reader: explorer_pane::Reader::new(),
+            explorer_scroll: RefCell::default(),
+            explorer_shown: RefCell::default(),
             city_drawn: city::Shared::default(),
             city_painter: city::Painter::new(),
             city_drag: None,
@@ -2577,6 +2587,11 @@ impl Workspace {
                 Effect::FillOut { tab, .. } => self.fill_out(*tab, cx),
                 Effect::Run { command } => self.run_command(*command, window, cx),
                 Effect::ListFiles { folder } => self.list_files(folder),
+                Effect::ListDir { pane, root, dir } => self.list_dir(*pane, root, dir),
+                Effect::ExplorerMarks { pane, root } => self.read_explorer_marks(*pane, root),
+                // Finder, only for the user's own menu: never a client's.
+                Effect::Reveal { path } if self.input == Origin::User => cx.reveal_path(std::path::Path::new(path)),
+                Effect::Reveal { .. } => {}
                 Effect::PressApp { pane, path, role, at, .. } => self.press_app(*pane, path, role, *at, window, cx),
                 Effect::HostWindow { mark, bundle, name, title, into, axis, launch } => {
                     let (bundle, name, title) = (bundle.clone(), name.clone(), title.clone());
@@ -4619,6 +4634,8 @@ impl Workspace {
             // Each file viewer as drawn: `body` (`markdown` with its blocks' `shape`, `lines`, `image`,
             // or null), never the file's text. Its path, kind, line and count are `state.viewers`.
             "viewers": self.viewers_snapshot(),
+            // Each explorer's shape (rows, selected, open folders), never a name; a test run's adds its paths.
+            "explorers": self.explorers_snapshot(),
             // A test run's stand-in clipboard: the last text copied. Null outside a test run.
             "copied": self.clipboard.test_text(),
             // The picker's rows as drawn, or null: `state.picker.items` narrowed by its filter,
@@ -5689,6 +5706,10 @@ impl Workspace {
         }
         // The Decisions card has the keyboard: its numbers answer, S skips, L puts off, Esc closes.
         if self.model.keyboard_decision() && self.decision_key(event, window, cx) {
+            cx.stop_propagation();
+            return;
+        }
+        if self.model.keyboard_explorer().is_some() && self.explorer_key(event, window, cx) {
             cx.stop_propagation();
             return;
         }
@@ -6870,6 +6891,7 @@ impl Workspace {
             Kind::App { title, name, .. } if title.is_empty() => name.clone(),
             Kind::App { title, .. } => title.clone(),
             Kind::File { path } => viewer::name_and_dir(path).0,
+            Kind::Explorer { root } => viewer::name_and_dir(root).0,
             Kind::Decision => ottospace_core::model::decisions::NAME.into(),
         }
     }
@@ -7768,6 +7790,7 @@ impl Workspace {
             Kind::Empty => "Empty pane".into(),
             Kind::Slot { name, .. } => format!("Slot · {name}").into(),
             Kind::File { .. } => "File".into(),
+            Kind::Explorer { .. } => "Explorer".into(),
             Kind::Decision => ottospace_core::model::decisions::NAME.into(),
         };
         // A marked pane says so, with its letter: ⌘B gives no other sign while the Marks list is shut.
@@ -7935,6 +7958,8 @@ impl Workspace {
             }
         } else if let Kind::File { path } = &pane.kind {
             self.viewer_body(id, path, cx)
+        } else if let Kind::Explorer { root } = &pane.kind {
+            self.explorer_body(id, root, cx)
         } else if let Some(terminal) = self.terminals.get(&id) {
             let screen = terminal.screen();
             let cell = self.cell;
@@ -9730,6 +9755,9 @@ impl Workspace {
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.ask_close_tab(None, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &crate::commands::FileExplorer, window, cx| {
+                this.dispatch(Action::ExplorerOpen { root: None, axis: Axis::Right }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &crate::commands::RenameTab, window, cx| {
                 this.dispatch(Action::TabEdit { tab: None }, this.input, window, cx);

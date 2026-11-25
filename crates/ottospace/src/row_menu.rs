@@ -36,6 +36,8 @@ fn dots_control(row: &MenuOf) -> Option<String> {
         MenuOf::Row(ListRow::Repo(path)) => Some(format!("repo:{path}")),
         MenuOf::Pane(id) => Some(format!("slot-dots:{id}")),
         MenuOf::Tab(id) => Some(format!("tab:{id}")),
+        // A right click's: its pane (rows scroll; the pointer says where).
+        MenuOf::Explorer(pane, _) => Some(format!("pane:{pane}")),
         _ => None,
     }
 }
@@ -256,6 +258,11 @@ impl Workspace {
             MenuOf::Tab(id) => Some(id),
             _ => None,
         };
+        // An explorer's row: its pane, never the row's name.
+        let explorer = match &menu.row {
+            MenuOf::Explorer(pane, _) => Some(*pane),
+            _ => None,
+        };
         let worktree = match &menu.row {
             MenuOf::Row(ListRow::Repo(path)) => Some(path),
             _ => None,
@@ -272,7 +279,7 @@ impl Workspace {
         let items: Vec<serde_json::Value> = items.iter().enumerate().map(item).collect();
         serde_json::json!({
             "workbook": workbook, "tab": tab, "space": space, "transcript": transcript, "worktree": worktree, "pane": pane,
-            "open_tab": open_tab,
+            "open_tab": open_tab, "explorer": explorer,
             "selected": menu.selected, "items": items
         })
     }

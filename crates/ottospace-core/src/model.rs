@@ -69,6 +69,8 @@ pub enum Kind {
     },
     /// A file, read only (`viewer`): its view is the model's `viewers`, by pane.
     File { path: String },
+    /// A checkout's tree (`explorer`), from `root`: its rows are the model's `explorers`, by pane.
+    Explorer { root: String },
     /// The Decisions workspace's card (`decisions`): what it shows is the model's `decisions`.
     /// Never made from an action's kind: only `DecisionsOpen`.
     Decision,
@@ -1743,6 +1745,38 @@ pub enum Action {
         pane: Option<PaneId>,
         play: bool,
     },
+    /// ⌘⇧X, the palette or a Repos row's menu: an explorer of `root` (default: the checkout on
+    /// show), beside the focused pane. Only a checkout the Repos section lists.
+    ExplorerOpen {
+        root: Option<String>,
+        axis: Axis,
+    },
+    /// What the shell listed of folder `dir` (from the root, `""` itself) of explorer `pane`;
+    /// `None`: it could not. The shell's alone.
+    ExplorerListed {
+        pane: PaneId,
+        dir: String,
+        entries: Option<Vec<crate::explorer::Entry>>,
+        cut: bool,
+    },
+    /// Git's marks of explorer `pane`'s files, as the shell read them. The shell's alone.
+    ExplorerMarks {
+        pane: PaneId,
+        marks: Vec<(String, crate::explorer::Mark)>,
+    },
+    /// A key in the focused explorer.
+    ExplorerKey {
+        key: String,
+    },
+    /// A click on row `row` of explorer `pane`.
+    ExplorerClick {
+        pane: PaneId,
+        row: usize,
+    },
+    /// Its ignored files shown, or not.
+    ExplorerIgnored {
+        pane: PaneId,
+    },
     /// ⌃G or Edit: the user's editor on the viewer's file (default: the focused pane's), in a
     /// terminal beside it.
     ViewerEdit {
@@ -3125,6 +3159,12 @@ impl Action {
             | Action::ViewerZoom { .. }
             | Action::ViewerPan { .. }
             | Action::ViewerPlay { .. }
+            | Action::ExplorerOpen { .. }
+            | Action::ExplorerListed { .. }
+            | Action::ExplorerMarks { .. }
+            | Action::ExplorerKey { .. }
+            | Action::ExplorerClick { .. }
+            | Action::ExplorerIgnored { .. }
             | Action::ViewerEdit { .. }
             | Action::BugPress { .. }
             | Action::BugDrag { .. }
@@ -3590,6 +3630,12 @@ impl Action {
             | Action::ViewerZoom { .. }
             | Action::ViewerPan { .. }
             | Action::ViewerPlay { .. }
+            | Action::ExplorerOpen { .. }
+            | Action::ExplorerListed { .. }
+            | Action::ExplorerMarks { .. }
+            | Action::ExplorerKey { .. }
+            | Action::ExplorerClick { .. }
+            | Action::ExplorerIgnored { .. }
             | Action::ViewerEdit { .. }
             | Action::SetFeatures { .. }
             | Action::BugStart { .. }
@@ -3990,6 +4036,21 @@ pub enum Effect {
     ListFiles {
         folder: String,
     },
+    /// List folder `dir` (from `root`) of explorer `pane`: `ExplorerListed` with it.
+    ListDir {
+        pane: PaneId,
+        root: String,
+        dir: String,
+    },
+    /// Read git's marks of the checkout at `root` for explorer `pane`: `ExplorerMarks` with them.
+    ExplorerMarks {
+        pane: PaneId,
+        root: String,
+    },
+    /// Show `path` in Finder, selected: the user's own act (a row's menu).
+    Reveal {
+        path: String,
+    },
     /// Host a window of this app: the one titled `title`, else as `marks::pick_window` says; an
     /// app that is not running is started. `into`: the empty pane it fills (`Action::Fill`),
     /// else a new pane (`Action::Open` along `axis`). `mark`: the pane mark to bind to that pane.
@@ -4202,6 +4263,7 @@ pub mod chat;
 pub mod city;
 mod clone;
 pub mod editor;
+mod explorer;
 pub mod finish;
 pub mod goto;
 pub mod offers;
@@ -4669,6 +4731,9 @@ pub struct Model {
     pub(crate) settings_pane: Option<PaneId>,
     /// Each file viewer's view, by pane: one for each `Kind::File` pane (`settle_viewers`).
     pub viewers: std::collections::BTreeMap<PaneId, crate::viewer::Viewer>,
+    /// Each explorer pane's tree: names, never in the state (`explorer_shape` says its shape).
+    #[serde(skip)]
+    pub(crate) explorers: std::collections::BTreeMap<PaneId, crate::explorer::Explorer>,
     /// What the status bar says of `settings.json` (`settings_line`).
     #[serde(skip)]
     settings_file: crate::settings::Watch,
@@ -4908,6 +4973,7 @@ impl Default for Model {
             settings_pane: None,
             cameras: city::Cameras::default(),
             viewers: Default::default(),
+            explorers: Default::default(),
             settings_file: crate::settings::Watch::default(),
             editing: None,
             editor_note: None,
@@ -5073,6 +5139,10 @@ impl Model {
             Action::NoticeDismiss { .. } => Some(crate::notice::USERS_ALONE),
             // So does a scroll in another app.
             Action::AppWheel { .. } => Some(crate::app_wheel::USERS_ALONE),
+            // What is in an explorer's folders is the shell's to say.
+            Action::ExplorerListed { .. } | Action::ExplorerMarks { .. } if origin == Origin::Socket => {
+                Some(explorer::SHELLS_ALONE)
+            }
             // What was read and drawn of a file is the shell's to say.
             Action::ViewerRead { .. } | Action::ViewerScrolled { .. } if origin == Origin::Socket => {
                 Some(viewer::SHELLS_ALONE)
@@ -5879,6 +5949,7 @@ impl Model {
         self.settle_overlays(overlays, &mut effects);
         // After the overlays: an opened sidebar's list takes the keyboard, a viewer's count goes.
         self.settle_viewers(&mut effects);
+        self.settle_explorers(&mut effects);
         // A client's step left a fresh start in a collapsed drawer with nothing to reopen: its box waits for ⌘⇧R.
         if origin != Origin::User && self.drawer_collapsed() && !self.drawer_opens() && self.welcome() {
             self.folded = Some(rail::Folded::Box);
@@ -7824,6 +7895,12 @@ impl Model {
             Action::ViewerZoom { pane, step, fit } => self.viewer_zoom(pane, step, fit),
             Action::ViewerPan { pane, by } => self.viewer_pan(pane, by),
             Action::ViewerPlay { pane, play } => self.viewer_play(pane, play),
+            Action::ExplorerOpen { root, axis } => self.explorer_open(root, axis, effects),
+            Action::ExplorerListed { pane, dir, entries, cut } => self.explorer_listed(pane, dir, entries, cut),
+            Action::ExplorerMarks { pane, marks } => self.explorer_marks(pane, marks),
+            Action::ExplorerKey { key } => self.explorer_key(&key, effects),
+            Action::ExplorerClick { pane, row } => self.explorer_click(pane, row, effects),
+            Action::ExplorerIgnored { pane } => self.explorer_ignored(pane),
             Action::SettingsRead { text, written } => self.settings_read(&text, written, effects),
             Action::UnfilledOpen { pane } => self.unfilled_open(pane, effects),
             Action::WorkbookSave { uid, cwds, histories } => self.workbook_save(uid, (&cwds, &histories), effects),
@@ -9044,7 +9121,7 @@ impl Model {
         for pane in &self.panes {
             let id = Some(pane.id as u32);
             match &pane.kind {
-                Kind::Empty | Kind::Slot { .. } | Kind::File { .. } | Kind::Decision => {}
+                Kind::Empty | Kind::Slot { .. } | Kind::File { .. } | Kind::Explorer { .. } | Kind::Decision => {}
                 Kind::Terminal => {
                     let info = self.terminals.iter().find(|info| info.pane == pane.id);
                     let cwd = info.and_then(|info| info.cwd.clone()).or(pane.cwd.clone());
@@ -11065,6 +11142,7 @@ impl Model {
             Kind::App { .. } => None,
             Kind::Terminal => Some("a terminal"),
             Kind::File { .. } => Some("a file"),
+            Kind::Explorer { .. } => Some("an explorer"),
             Kind::Empty | Kind::Slot { .. } => Some("empty"),
             Kind::Decision => Some("a Decisions card"),
         };
@@ -12152,6 +12230,12 @@ mod tests {
         Action::ViewerZoom { .. },
         Action::ViewerPan { .. },
         Action::ViewerPlay { .. },
+        Action::ExplorerOpen { .. },
+        Action::ExplorerListed { .. },
+        Action::ExplorerMarks { .. },
+        Action::ExplorerKey { .. },
+        Action::ExplorerClick { .. },
+        Action::ExplorerIgnored { .. },
         Action::ViewerEdit { .. },
         Action::SettingsRead { .. },
         Action::UnfilledOpen { .. },
@@ -12593,6 +12677,12 @@ mod tests {
             Action::ViewerZoom { pane: None, step: crate::viewer::ZoomStep::In, fit: 1. },
             Action::ViewerPan { pane: 1, by: [4., 0.] },
             Action::ViewerPlay { pane: None, play: false },
+            Action::ExplorerOpen { root: None, axis: Axis::Right },
+            Action::ExplorerListed { pane: 1, dir: String::new(), entries: None, cut: false },
+            Action::ExplorerMarks { pane: 1, marks: vec![] },
+            Action::ExplorerKey { key: "down".into() },
+            Action::ExplorerClick { pane: 1, row: 0 },
+            Action::ExplorerIgnored { pane: 1 },
             Action::ViewerEdit { pane: None },
             Action::SettingsRead { text: "{}".into(), written: false },
             Action::UnfilledOpen { pane: 1 },
@@ -13413,6 +13503,9 @@ mod tests {
                     }
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TabEdit { .. } => Some(tab_name::USERS_ALONE),
+                    Action::ExplorerListed { .. } | Action::ExplorerMarks { .. } if origin == Origin::Socket => {
+                        Some(explorer::SHELLS_ALONE)
+                    }
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
@@ -21115,6 +21208,9 @@ mod tests {
                     }
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
                     Action::TabEdit { .. } => Some(tab_name::USERS_ALONE),
+                    Action::ExplorerListed { .. } | Action::ExplorerMarks { .. } if origin == Origin::Socket => {
+                        Some(explorer::SHELLS_ALONE)
+                    }
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),

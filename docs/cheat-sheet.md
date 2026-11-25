@@ -38,6 +38,7 @@ ottospace            # opens on the Repos list
 | Start empty next time | File ▸ Start Fresh. Otherwise the tabs, splits, the tab on show and the drawer come back after quitting (`restore_layout`) |
 | Find an action by name | ⌘⇧P: type part of its name, ↵ runs it. Or the menu bar |
 | Zoom a picture in a viewer | ⌘= ⌘- or a pinch; ⌘0 fits it; zoomed, drag or scroll to move it. A GIF's Pause / Play in its foot |
+| Browse the checkout's files | ⌘⇧X: the File Explorer. Arrows and → / ← move and open folders, ↵ opens a file beside, letters jump to a name. Show ignored in its header. Right click a row for Reveal, Copy path, Terminal here |
 | Find a file in the workspace | ⌘P: the checkout on show's files; type part of the name, ↵ opens it, ⌘↵ below |
 | Go to a workspace, checkout, task or file | ⌘P then ⌫ (at once from Home): type part of its name, ↵ goes there. Tab or `/` lists its files; ↵ opens one. `>` for commands |
 | Edit the settings | ⌘, (Open Settings): `settings.json` in your editor, in a tab of its own |

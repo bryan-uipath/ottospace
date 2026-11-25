@@ -34,6 +34,7 @@ impl Model {
                 Kind::Terminal => "terminal",
                 Kind::App { .. } => "app",
                 Kind::File { .. } => "file",
+                Kind::Explorer { .. } => "explorer",
                 Kind::Empty => "empty",
                 Kind::Slot { .. } => "slot",
                 Kind::Decision => "decision",

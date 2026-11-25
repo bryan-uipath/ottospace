@@ -38,6 +38,7 @@ pub fn place(pane: Option<&Pane>, cwd: Option<&str>) -> Option<Place> {
             let dir = std::path::Path::new(path).parent()?.to_str()?;
             Some(Place::Folder(dir.to_string()))
         }
+        Kind::Explorer { root } => Some(Place::Folder(root.clone())),
         Kind::App { name, .. } | Kind::Slot { name, .. } => Some(Place::App(name.clone())),
         Kind::Empty | Kind::Decision => None,
     }

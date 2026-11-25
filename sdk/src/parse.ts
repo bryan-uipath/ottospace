@@ -4,6 +4,7 @@
 
 import type {
   CopyAsk,
+  ExplorerShape,
   AppWindow,
   CloneDrawn,
   Display,
@@ -546,6 +547,7 @@ function paneKind(value: unknown, at: string): PaneKind {
     return slot;
   }
   if (o.type === "file") return { type: "file", path: str(o.path, `${at}.path`) };
+  if (o.type === "explorer") return { type: "explorer", root: str(o.root, `${at}.root`) };
   if (o.type === "decision") return { type: "decision" };
   throw wrong(`${at}.type`, "a pane kind", o.type);
 }
@@ -582,6 +584,19 @@ function viewer(value: unknown, at: string): Viewer {
     view.marked = { first: num(marked.first, `${at}.marked.first`), last: num(marked.last, `${at}.marked.last`) };
   }
   return view;
+}
+
+function explorerShape(value: unknown, at: string): ExplorerShape {
+  const o = fields(value, at);
+  return {
+    rows: num(o.rows, `${at}.rows`),
+    selected: orNull(num)(o.selected, `${at}.selected`),
+    open: num(o.open, `${at}.open`),
+    reading: num(o.reading, `${at}.reading`),
+    marked: num(o.marked, `${at}.marked`),
+    show_ignored: bool(o.show_ignored, `${at}.show_ignored`),
+    paths: orNull(list(str))(o.paths, `${at}.paths`),
+  };
 }
 
 function viewerDrawn(value: unknown, at: string): ViewerDrawn {
@@ -2118,7 +2133,7 @@ function rowMenu(value: unknown, at: string): RowMenu {
     const kinds = [
       "rename", "delete", "remove", "keep", "pause", "resume", "delete_worktree", "local_folder", "from_github",
       "slot_keep", "slot_edit", "slot_look_again", "slot_give_back", "slot_swap", "slot_resort", "slot_clear",
-      "close", "fold_out",
+      "close", "fold_out", "explorer_here", "open", "open_below", "reveal", "copy_path", "terminal_here",
     ] as const;
     const known = kinds.find((k) => k === kind);
     if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);
@@ -2137,6 +2152,7 @@ function rowMenu(value: unknown, at: string): RowMenu {
     worktree: orNull(str)(o.worktree, `${at}.worktree`),
     pane: orNull(num)(o.pane, `${at}.pane`),
     open_tab: orNull(num)(o.open_tab, `${at}.open_tab`),
+    explorer: orNull(num)(o.explorer, `${at}.explorer`),
     selected: orNull(num)(o.selected, `${at}.selected`),
     items: list(item)(o.items, `${at}.items`),
   };
@@ -2773,6 +2789,7 @@ export function snapshot(value: unknown): Snapshot {
     crop: map(num)(o.crop, "crop"),
     terminals: map(terminal)(o.terminals, "terminals"),
     viewers: map(viewerDrawn)(o.viewers, "viewers"),
+    explorers: map(explorerShape)(o.explorers, "explorers"),
     copied: orNull(str)(o.copied, "copied"),
     picker_rows: orNull(list(pickItem))(o.picker_rows, "picker_rows"),
     palette_rows: orNull(list(paletteRow))(o.palette_rows, "palette_rows"),

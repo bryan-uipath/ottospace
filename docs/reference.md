@@ -43,7 +43,7 @@ running, and the rest of the design is not built: see the
 | Pane picker: choose a terminal, a running app, or (once you type) any installed app for a new pane or tab | Works today |
 | Icon rail with a secondary bar | Works today |
 | The Apps section: the Dock's apps, pins, "Not running" and "All apps" | Works today, behind the `apps_section` [flag](#features), off by default |
-| Repos: each repository's name over its checkouts, one line each (a dot for what happens there: grey while idle, lit in the task's colour while its agent works there (in the working colour for a session no task has), amber while a task there needs you, one short pulse when a commit lands (none under Reduce Motion); the branch; `default` on the repository's own folder; its open pull request's mark; the badge of a task there not done). The chevron folds a repository (a count while folded, then one dot for its checkouts: amber while a task there needs you, else lit while one works, none while all are idle; no pulse; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. Opt-in, in your order: + in the bar's header (Local folder…, the folder picker, ↵ at once; or From GitHub…: paste `owner/name` or a GitHub link, see the full destination `<clone_dir>/<name>`, ↵ clones it with your `gh` and lists it; refused if that folder is there; it is cloned into a hidden `.ottospace-clone-<name>` beside it and moved into place only once done, never over a folder that came meanwhile; Esc stops a clone and removes that hidden folder, a click outside hides the dialog while it goes on), a dropped folder or Add Folder to Repos adds a repository to the end of `repos`; a name dragged to another place moves it there in `repos` (a pinned one among the pinned; Esc puts it back); a folder of repositories from older settings is one folded group. On a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed). A right click on a linked worktree's row: Delete worktree…, after a question that names its branch and full path (⌘↵ or its red Delete worktree deletes, ↵ alone does nothing; Esc, Keep it, ×, any other key or a click outside keeps it); `git worktree remove`, never `--force`, so a worktree with changes, or a locked one, stays and the notice says why; its branch stays; no Undo. Not offered on the repository's own folder; dimmed, with why, while a terminal is in it or a task works there (not done, or its agent runs) | Works today |
+| Repos: each repository's name over its checkouts, one line each (a dot for what happens there: grey while idle, lit in the task's colour while its agent works there (in the working colour for a session no task has), amber while a task there needs you, one short pulse when a commit lands (none under Reduce Motion); the branch; `default` on the repository's own folder; its open pull request's mark; the badge of a task there not done). The chevron folds a repository (a count while folded, then one dot for its checkouts: amber while a task there needs you, else lit while one works, none while all are idle; no pulse; kept in `layout.json`; shown while a task there runs or needs you). Open a terminal in one. Opt-in, in your order: + in the bar's header (Local folder…, the folder picker, ↵ at once; or From GitHub…: paste `owner/name` or a GitHub link, see the full destination `<clone_dir>/<name>`, ↵ clones it with your `gh` and lists it; refused if that folder is there; it is cloned into a hidden `.ottospace-clone-<name>` beside it and moved into place only once done, never over a folder that came meanwhile; Esc stops a clone and removes that hidden folder, a click outside hides the dialog while it goes on), a dropped folder or Add Folder to Repos adds a repository to the end of `repos`; a name dragged to another place moves it there in `repos` (a pinned one among the pinned; Esc puts it back); a folder of repositories from older settings is one folded group. On a name under the pointer, + makes a worktree (`worktrees_dir`) and the trash stops listing it (asked first while a task works there; the status bar says nothing on disk changed). A right click on a checkout's row: Open in explorer ([File explorer](#file-explorer)); on a linked worktree's also Delete worktree…, after a question that names its branch and full path (⌘↵ or its red Delete worktree deletes, ↵ alone does nothing; Esc, Keep it, ×, any other key or a click outside keeps it); `git worktree remove`, never `--force`, so a worktree with changes, or a locked one, stays and the notice says why; its branch stays; no Undo. Not offered on the repository's own folder; dimmed, with why, while a terminal is in it or a task works there (not done, or its agent runs) | Works today |
 | List mode (⌘⌃E): drive the bar with the keyboard | Works today |
 | Sneak mode (⌘; or ⌘⌃G): a letter label on each of ottospace's own controls, and on the buttons and text fields of the focused app pane; typing it clicks the control, presses the app's button, or focuses its text field | Works today |
 | Scrolling over an app pane you are not in enters it (`APP`), as a click does, and that first scroll reaches the app | Verified on CI (`e2e-apps`): the wheel enters, the window comes up under the pointer and the canary receives the first scroll |
@@ -110,6 +110,7 @@ Short version: [cheat-sheet.md](cheat-sheet.md).
 | ⌘⌃A | Debug: outline the focused app pane's accessibility targets (parked panes only) |
 | ⌘/ | The keys, by what you are doing, the ones you have not learned first; in list or visual mode that mode's own keys come first. A bar under a key shows how much you use it. Keys you use often fold into `Known · n` at the bottom: a click or ↵ opens it. A key unused for about eight days comes back up. In a small window the list scrolls: J / K or the arrows, space or Page Down / Page Up, Home / End |
 | ⌘⇧P | [Command palette](#command-palette): run any command of the menu bar by name. Type to filter, ↑/↓ or ⌃N/⌃P move, ↵ runs, Esc or ⌘⇧P closes |
+| ⌘⇧X | [File explorer](#file-explorer) of the checkout on show, beside the focused pane |
 | ⌘P | [Go to](#go-to): a file of the checkout on show (↵ opens, ⌘↵ below); ⌫ for a place by name, Tab or `/` for its files; `>` for the commands |
 | ⌘, | Open Settings: `settings.json` in your editor, in a tab of its own (see [Settings](#settings)) |
 | ⌘⌘ or F18 | From any app: take the keyboard back and bring ottospace forward |
@@ -1239,6 +1240,28 @@ in the terminal.
   Motion it stands on its first frame until you press Play. Decoded off the main thread, at most
   32 MB of file and 40 million pixels (every frame together): past that, or a file its decoder
   cannot read, the pane says so. Never a picture from the web. SVG shows as its XML source.
+
+## File explorer
+
+⌘⇧X, File Explorer in the palette or the View menu, or **Open in explorer** in a Repos row's
+right click opens a pane of the checkout's tree: the tab's checkout, else its space's (a task's
+worktree, a workspace's default). Only a checkout the Repos section lists; elsewhere a notice
+says so.
+
+- Folders first, then files, by name as a person sorts them (`f2` before `f10`); a glyph by kind
+  (folder, markdown, code, picture, text, link).
+- ↑ ↓ move, → opens a folder (or goes into it), ← closes it (or goes to its parent), ↵ opens a
+  file in the viewer beside (the same viewer for the next one) and keeps the keyboard; letters
+  typed go to the next name that starts with them. A click does the same.
+- What git ignores is hidden; **Show ignored** in its header shows it. `.git` is never listed.
+  Git's marks: `M` changed, `A` added, `U` new, `!` in conflict; a folder carries the strongest
+  under it. Read once (`git status`, hardened as the status bar's) in a checkout Repos lists.
+- Folders are read one at a time, off the main thread, as you open them; at most 5,000 names a
+  folder (the header says when there were more). A link is listed (↗) and never followed, nor is
+  any folder outside the checkout read.
+- A row's right click: **Open**, **Open below**, **Reveal in Finder** (your click only), **Copy
+  path**; on a folder **Open terminal here**.
+- The state has its shape (rows, selected, open folders), never a name.
 
 ## App panes
 

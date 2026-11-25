@@ -338,6 +338,11 @@ refused. A viewer of that file already in the tab moves there and marks them ins
 one opening. A markdown file opened at a line shows its source (`shows`: `code`). The mark stays
 until the viewer is asked for other lines or another file, or Esc in it.
 
+The user's File Explorer (⌘⇧X, the palette, a Repos row's menu) is a pane of kind
+`{"type":"explorer","root":...}`: a checkout's tree. `state.explorers` by pane gives its shape
+only (`rows`, `selected`, `open`, `reading`, `marked`, `show_ignored`), never a name: list the
+folder yourself. There is no request to open one or move in it: it is the user's.
+
 Tasks (the inbox in the Tasks section):
 
 ```sh

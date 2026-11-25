@@ -284,6 +284,8 @@ export type PaneKind =
   | { type: "slot"; name: string; bundle?: string }
   /** A file, read only (`open_file`). Its view: `state.viewers`. */
   | { type: "file"; path: string }
+  /** A checkout's tree (`File Explorer`): its shape is `state.explorers`. */
+  | { type: "explorer"; root: string }
   /** The Decisions workspace's card (the `decisions` flag). What it shows: `state.decisions`. */
   | { type: "decision" };
 
@@ -325,6 +327,18 @@ export interface Viewer {
   pan: [number, number];
   /** An animation plays or stands on its first frame; null: as Reduce Motion says. */
   playing: boolean | null;
+}
+
+/** An explorer pane's shape: its rows, the row selected, folders open and being read, rows git marks. */
+export interface ExplorerShape {
+  rows: number;
+  selected: number | null;
+  open: number;
+  reading: number;
+  marked: number;
+  show_ignored: boolean;
+  /** A test run's only (`OTTOSPACE_E2E`): each row's path from the root. */
+  paths: string[] | null;
 }
 
 /** A file viewer as drawn, by pane id: never its text. */
@@ -1435,13 +1449,15 @@ export interface RowMenu {
   pane: PaneId | null;
   /** A tab of the tab row, by its `id` (a right click opened it): Rename, Fold out (`multi_monitor` on), Close. */
   open_tab: number | null;
+  /** A row of an explorer pane, by the pane's id (a right click opened it): never the row's name. */
+  explorer: PaneId | null;
   /** The item the keys are on; null: none (a click opened it). */
   selected: number | null;
   /** `why`: the item does nothing now, and why (drawn dimmed). */
   items: {
     item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree" | "local_folder" | "from_github"
       | "slot_keep" | "slot_edit" | "slot_look_again" | "slot_give_back" | "slot_swap" | "slot_resort" | "slot_clear"
-      | "close" | "fold_out";
+      | "close" | "fold_out" | "explorer_here" | "open" | "open_below" | "reveal" | "copy_path" | "terminal_here";
     label: string;
     why: string | null;
     rect: Rect | null;
@@ -2245,6 +2261,8 @@ export interface Snapshot {
   terminals: Record<string, Terminal>;
   /** Each file viewer as drawn, by pane id. */
   viewers: Record<string, ViewerDrawn>;
+  /** Each explorer pane's shape, by pane id: never a name (a test run's adds `paths`). */
+  explorers: Record<string, ExplorerShape>;
   /** A test run's stand-in clipboard: the last text copied. Null outside a test run. */
   copied: string | null;
   /** The picker's rows as drawn, or null: its items narrowed by the filter, then, once something is typed, the installed apps that are not running. */

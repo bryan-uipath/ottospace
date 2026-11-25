@@ -1,0 +1,17 @@
+# The File Explorer (⌘⇧X) on a made-up checkout: folders first, a folder opened (→), a file's
+# right click menu.
+{"tree": "repos/notes", "files": 120}
+{"cmd": "repo_add", "path": "{ROOT}/repos/notes"}
+{"until": "repos_bar.0"}
+{"cmd": "open_repo", "path": "{ROOT}/repos/notes"}
+{"cmd": "key", "keys": "cmd-shift-x", "as": "user"}
+{"until": "explorers.2.rows", "exists": true}
+{"settle": 500}
+{"cmd": "mouse", "action": "move", "x": -50, "y": -50, "as": "user"}
+{"shot": "tree"}
+{"cmd": "key", "keys": "right", "as": "user"}
+{"settle": 500}
+{"shot": "opened"}
+{"click": "explorer-row:2:1", "button": "right", "at": [0.4, 0.5]}
+{"until": "row_menu.explorer", "exists": true}
+{"shot": "menu"}
