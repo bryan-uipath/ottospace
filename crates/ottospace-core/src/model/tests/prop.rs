@@ -784,6 +784,7 @@ impl Gen<'_> {
             line: None,
             body: None,
             queued: Vec::new(),
+            images: Vec::new(),
             created: self.rng.coin().then(|| self.time()),
             session: self.rng.one_in(4).then(|| self.link()),
             refs: Vec::new(),
@@ -1858,7 +1859,16 @@ const MAKERS: &[Make] = &[
     |g| Action::QueueRemove { id: g.rng.below(6) as u64 },
     |g| Action::QueueEdit { id: g.rng.below(6) as u64 },
     |g| Action::QueueSendNow { id: g.rng.below(6) as u64 },
-    |g| Action::AgentSendFailed { task: g.subject(), text: g.rng.pick(&["go on", "and the docs"]).to_string() },
+    |g| Action::AgentSendFailed {
+        task: g.subject(),
+        text: g.rng.pick(&["go on", "and the docs"]).to_string(),
+        images: Vec::new(),
+    },
+    |g| Action::ImagePaste {
+        id: format!("{:016x}", g.rng.below(4)),
+        kind: g.rng.pick(&["png", "jpeg", "tiff"]).to_string(),
+    },
+    |g| Action::ImageRemove { id: format!("{:016x}", g.rng.below(4)) },
     |g| Action::TalkAnswer { allow: g.rng.coin(), ticket: g.card() },
     |g| Action::TalkExpand { ticket: g.card() },
     |g| Action::TalkAsk { ticket: g.card(), act: g.ask_act() },
@@ -4853,8 +4863,15 @@ impl Run {
             let pins = effects.iter().any(|e| matches!(e, Effect::SaveApps { .. }));
             ensure!(!pins, "{action:?} wrote a pin with the Apps section off");
         }
-        let acts =
-            |e: &Effect| matches!(e, Effect::StartAgent { .. } | Effect::ReadSession { .. } | Effect::AgentSend { .. });
+        let acts = |e: &Effect| {
+            matches!(
+                e,
+                Effect::StartAgent { .. }
+                    | Effect::ReadSession { .. }
+                    | Effect::AgentSend { .. }
+                    | Effect::AgentSendWith { .. }
+            )
+        };
         let resumes = |e: &Effect| {
             matches!(e, Effect::StartAgent { start: agents::Start::Resume { .. }, .. } | Effect::ReadSession { .. })
         };
@@ -5349,6 +5366,7 @@ impl Run {
             matches!(
                 e,
                 Effect::AgentSend { .. }
+                    | Effect::AgentSendWith { .. }
                     | Effect::AgentAnswer { .. }
                     | Effect::AgentAnswers { .. }
                     | Effect::AgentInterrupt { .. }
@@ -5397,7 +5415,7 @@ impl Run {
             let was = chats_before.iter().find(|was| was.subject == chat.subject);
             let waited = was.and_then(|was| was.queued.clone()).filter(|_| chat.queued.is_none());
             let failed = match &action {
-                Action::AgentSendFailed { task, text } if *task == chat.subject => Some(text.clone()),
+                Action::AgentSendFailed { task, text, .. } if *task == chat.subject => Some(text.clone()),
                 _ => None,
             };
             [waited, failed].into_iter().flatten().any(|text| chat.draft.text().ends_with(text.as_str()))
@@ -5940,6 +5958,7 @@ impl Run {
                 }
                 // A message, an answer or an interrupt is the user's, to the conversation shown.
                 Effect::AgentSend { task, .. }
+                | Effect::AgentSendWith { task, .. }
                 | Effect::AgentAnswer { task, .. }
                 | Effect::AgentAnswers { task, .. }
                 | Effect::AgentInterrupt { task } => {
@@ -6118,6 +6137,16 @@ impl Run {
                     ensure!(bugs || m.repos.iter().any(|r| r.path == *repo), "a worktree of {repo:?}, not listed");
                     ensure!(crate::repos::in_worktrees(path, root), "a worktree at {path:?}, outside {root:?}");
                     ensure!(m.repo_dirs.worktrees.as_ref() == Some(root), "a worktree in {root:?}, not the setting's");
+                }
+                // An image's file goes only once nothing holds it, and only a name the shell made.
+                Effect::ImagesDrop { images } => {
+                    for image in images {
+                        ensure!(
+                            crate::tasks::Pasted::new(&image.id, &image.kind).as_ref() == Some(image),
+                            "dropped {image:?}"
+                        );
+                        ensure!(!m.images_held.contains(image), "{action:?} dropped {image:?}, still held");
+                    }
                 }
                 Effect::Notice { text } => {
                     ensure!((user || answered) && !text.is_empty(), "{origin:?} is told {text:?}")

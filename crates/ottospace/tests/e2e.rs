@@ -13931,6 +13931,64 @@ fn messages_queue_while_the_agent_works_and_send_now_stops_the_turn_first() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// An image on the clipboard (the test's stand-in: a made-up PNG) pasted in the composer is a chip;
+/// sent, it reaches the agent as an image block and its file goes. Pasted in the new-task box, it
+/// is the task's, kept for its first message. The state counts them, never names them.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_pasted_image_goes_with_the_message_in_both_boxes() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let text = |words: &str| {
+        format!(
+            r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{{"type":"text","text":"{words}"}}]}}}}"#
+        )
+    };
+    let done = r#"{"type":"result","subtype":"success","is_error":false}"#;
+    let init =
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#);
+    let fixtures: Vec<(&str, String)> = vec![
+        ("turn1.jsonl", [init, text("Planned."), done.into()].join("\n")),
+        ("turn2.jsonl", [text("Seen."), done.into()].join("\n")),
+    ];
+    let picture = support::temp(&format!("ottospace-e2e-picture-{}", std::process::id()));
+    std::fs::create_dir_all(&picture).unwrap();
+    // A made-up PNG: its signature, then bytes that are no picture of anything.
+    let png = picture.join("made-up.png");
+    std::fs::write(&png, [&[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a][..], &[7u8; 64]].concat()).unwrap();
+    let image = png.to_str().unwrap().to_string();
+    let (root, record, env) = native_setup("pasted-image", &fixtures, &[("OTTOSPACE_CLIPBOARD_IMAGE", &image)]);
+    let home = PathBuf::from(&env.iter().find(|(k, _)| k == "OTTOSPACE_HOME").unwrap().1);
+    let kept = || std::fs::read_dir(home.join("images")).map(|dir| dir.count()).unwrap_or(0);
+    let otto = launch_env("pasted-image", &env);
+    let stdin = || std::fs::read_to_string(record.join("stdin")).unwrap_or_default();
+    let chat = |o: &Otto| o.call(json!({"cmd": "state"}))["drawer"]["native"]["chats"]["1"].clone();
+    otto.call(json!({"cmd": "split", "kind": "empty"}));
+    otto.call(json!({"cmd": "task_new", "line": "plan the week >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.wait_for("the first reply", |o| {
+        (chat(o)["transcript"]["turn"].is_null() && chat(o)["replies"].as_array()?.len() == 1).then_some(())
+    });
+    otto.user_click(at(otto.control("talk"), 0.5, 0.5));
+    let pasted = otto.user_key("cmd-v");
+    assert_eq!(pasted["drawer"]["native"]["chats"]["1"]["images"], 1, "{}", pasted["notice"]);
+    assert_eq!(kept(), 1);
+    assert!(!pasted.to_string().contains(".png"), "an image's name is never in the state");
+    otto.user_key("l o o k enter");
+    otto.wait_for("sent with its image", |_| stdin().contains(r#""type":"image""#).then_some(()));
+    otto.wait_for("its file gone", |o| (chat(o)["images"] == 0 && kept() == 0).then_some(()));
+    // The new-task box: the image is the task's, kept for its first message.
+    let boxed = otto.user_key("cmd-n s e e space t h i s cmd-v");
+    assert_eq!(boxed["compose_images"], 1, "{}", boxed["notice"]);
+    let filed = otto.user_key("cmd-shift-enter");
+    let task = filed["state"]["tasks"]["list"].as_array().unwrap().iter().find(|t| t["title"] == "see this").cloned();
+    assert_eq!(task.map(|t| t["images"].clone()), Some(json!(1)));
+    assert_eq!(kept(), 1);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&picture);
+}
+
 /// A task's first turn over: launched with `finish_fixtures`, its conversation open and idle.
 fn finish_launch(name: &str) -> (PathBuf, PathBuf, Otto) {
     finish_launch_with(name, &[])

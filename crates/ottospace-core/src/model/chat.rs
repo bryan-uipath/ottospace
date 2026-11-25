@@ -10,7 +10,7 @@ use crate::ask::{self, Act, Form};
 use crate::edit::Field;
 use crate::runner::{RunnerId, Status, Support};
 use crate::talk::{self, Chip, Subject};
-use crate::tasks::{Group, Queued, State};
+use crate::tasks::{Group, Pasted, Queued, State};
 use crate::transcript::{Event, Transcript, View};
 
 /// Why a client's send, answer, interrupt or switch is refused.
@@ -55,6 +55,8 @@ pub struct Chat {
     pub added: Option<agents::Added>,
     /// The first message's entry, and the user's line as text and tag pills (`compose::parts`).
     pub asked: Option<(u64, Vec<crate::compose::Part>)>,
+    /// Images pasted in its composer, sent with its next message (or queued with it).
+    pub images: Vec<Pasted>,
     /// Its task's queued messages wait for the user's ↵ (an empty composer sends the next): they
     /// stopped the turn, or the queue was read back after a restart. The queue is the task's
     /// (`Task::queued`, `Model::queue_of`).
@@ -95,7 +97,7 @@ impl Chat {
     fn new(subject: Subject) -> Self {
         let (transcript, draft) = (Transcript::default(), Field::lines(MAX_DRAFT));
         let (queued, btw, added, asked) = (None, None, None, None);
-        let held = false;
+        let (held, images) = (false, Vec::new());
         Self {
             subject,
             transcript,
@@ -108,6 +110,7 @@ impl Chat {
             added,
             asked,
             held,
+            images,
         }
     }
 }
@@ -380,7 +383,7 @@ impl Model {
             }
             if let Some(text) = chat.queued.take() {
                 chat.transcript.send(&text, now);
-                effects.push(Effect::AgentSend { task: subject.clone(), text });
+                effects.push(sent(subject, text, std::mem::take(&mut chat.images)));
             }
         }
         self.send_queued(subject, effects);
@@ -394,11 +397,11 @@ impl Model {
         if ending || chat.held || !chat.transcript.live || chat.transcript.busy() || !waiting {
             return;
         }
-        let Some(text) = self.queue_mut(subject).map(|queue| queue.remove(0).text) else { return };
+        let Some(next) = self.queue_mut(subject).map(|queue| queue.remove(0)) else { return };
         if let Some(chat) = self.chat_mut(subject) {
-            chat.transcript.send(&text, now);
+            chat.transcript.send(&next.text, now);
         }
-        effects.push(Effect::AgentSend { task: subject.clone(), text });
+        effects.push(sent(subject, next.text, next.images));
         self.chat_state(subject);
     }
 
@@ -421,32 +424,37 @@ impl Model {
         self.tasks.list.iter_mut().find(|task| task.id == id).map(|task| &mut task.queued)
     }
 
-    /// The composer emptied: what it held was queued.
+    /// The composer emptied: what it held, its images too, was queued.
     fn clear_draft(&mut self, subject: &Subject) {
         if let Some(chat) = self.chat_mut(subject) {
-            chat.draft = Field::lines(MAX_DRAFT);
+            (chat.draft, chat.images) = (Field::lines(MAX_DRAFT), Vec::new());
         }
+    }
+
+    /// The images pasted in `subject`'s composer, for the message it sends.
+    fn draft_images(&self, subject: &Subject) -> Vec<Pasted> {
+        self.chat(subject).map(|chat| chat.images.clone()).unwrap_or_default()
     }
 
     /// Queues `text` in `subject`'s conversation, last. False: no task to keep it, or no room
     /// (the box says so); the words stay where they are.
-    fn enqueue(&mut self, subject: &Subject, text: String, effects: &mut Vec<Effect>) -> bool {
+    fn enqueue(&mut self, subject: &Subject, text: String, images: Vec<Pasted>, effects: &mut Vec<Effect>) -> bool {
         let used: usize = self.queue_of(subject).iter().map(|queued| queued.text.chars().count()).sum();
         if used + text.chars().count() > MAX_QUEUE {
             effects.push(Effect::Notice { text: QUEUE_FULL.into() });
             return false;
         }
-        let queued = self.queued(text);
+        let queued = self.queued(text, images);
         self.queue_mut(subject).map(|queue| queue.push(queued)).is_some()
     }
 
     /// `text` as a queued message, with an id no other has had in this run, nor in the tasks read
     /// back.
-    fn queued(&mut self, text: String) -> Queued {
+    fn queued(&mut self, text: String, images: Vec<Pasted>) -> Queued {
         let kept = self.tasks.list.iter().flat_map(|task| task.queued.iter().map(|queued| queued.id)).max();
         let id = self.queue_next.max(kept.map_or(1, |id| id + 1));
         self.queue_next = id + 1;
-        Queued { id, text }
+        Queued { id, text, images }
     }
 
     /// What "send now" (⌘↵) does in `subject` while its turn runs: true, it stops the turn first
@@ -459,7 +467,7 @@ impl Model {
     /// that; else first in the queue, and the turn stopped (it goes once the turn has ended).
     /// Idle, it is simply sent.
     /// A card waits (a question first), or the agent stops: it goes first in the queue instead.
-    fn send_now(&mut self, text: String, effects: &mut Vec<Effect>) {
+    fn send_now(&mut self, text: String, images: Vec<Pasted>, effects: &mut Vec<Effect>) {
         let Some(subject) = self.shown_chat().map(|chat| chat.subject.clone()) else { return };
         let (now, stops, ending) = (self.now, self.send_now_stops(&subject), self.is_ending(&subject));
         let Some(chat) = self.chat_mut(&subject) else { return };
@@ -468,10 +476,10 @@ impl Model {
         match chat.transcript.turn.is_some() {
             true if !stops && !carded && !ending => {
                 chat.transcript.send(&text, now);
-                effects.push(Effect::AgentSend { task: subject.clone(), text });
+                effects.push(sent(&subject, text, images));
             }
             running => {
-                let queued = self.queued(text);
+                let queued = self.queued(text, images);
                 if let Some(queue) = self.queue_mut(&subject) {
                     queue.insert(0, queued);
                 }
@@ -834,7 +842,7 @@ impl Model {
                 }
                 // Messages wait already: behind them, in order.
                 if !self.queue_of(&subject).is_empty() {
-                    if self.enqueue(&subject, text, effects) {
+                    if self.enqueue(&subject, text, self.draft_images(&subject), effects) {
                         self.clear_draft(&subject);
                     }
                     return;
@@ -859,7 +867,7 @@ impl Model {
                 }
                 // Messages wait already: this one behind them; they go in order once it runs.
                 if !self.queue_of(&subject).is_empty() {
-                    if !self.enqueue(&subject, text, effects) {
+                    if !self.enqueue(&subject, text, self.draft_images(&subject), effects) {
                         return;
                     }
                     self.clear_draft(&subject);
@@ -885,7 +893,7 @@ impl Model {
                 // (a hold stays: only the empty ↵ lets them go). No task to keep it: as before, nothing.
                 let busy = chat.transcript.busy();
                 if busy || !self.queue_of(&subject).is_empty() {
-                    if self.enqueue(&subject, text, effects) {
+                    if self.enqueue(&subject, text, self.draft_images(&subject), effects) {
                         self.clear_draft(&subject);
                     }
                     return self.send_queued(&subject, effects);
@@ -894,7 +902,7 @@ impl Model {
                 chat.transcript.send(&text, now);
                 chat.draft = Field::lines(MAX_DRAFT);
                 let subject = chat.subject.clone();
-                effects.push(Effect::AgentSend { task: subject.clone(), text });
+                effects.push(sent(&subject, text, std::mem::take(&mut chat.images)));
                 self.chat_state(&subject);
             }
             Action::TalkSendNow if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
@@ -905,7 +913,8 @@ impl Model {
                     return;
                 }
                 chat.draft = Field::lines(MAX_DRAFT);
-                self.send_now(text, effects);
+                let images = std::mem::take(&mut chat.images);
+                self.send_now(text, images, effects);
             }
             // Not while the user's editor has the draft: an edit would be written over by its save.
             Action::QueueEdit { .. } if shown.as_ref().is_some_and(|subject| self.edits(subject)) => {}
@@ -913,7 +922,7 @@ impl Model {
             act @ (Action::QueueRemove { id } | Action::QueueEdit { id } | Action::QueueSendNow { id }) => {
                 let Some(subject) = self.shown_chat().map(|chat| chat.subject.clone()) else { return };
                 let Some(index) = self.queue_of(&subject).iter().position(|queued| queued.id == id) else { return };
-                let text = self.queue_of(&subject)[index].text.clone();
+                let Queued { text, images, .. } = self.queue_of(&subject)[index].clone();
                 match act {
                     // Back in the composer, after what is written there; if all of it fits. Hidden
                     // from the state as a btw answer is: it may have been one.
@@ -926,21 +935,29 @@ impl Model {
                         }
                         (chat.draft, chat.untrusted) = (Field::lines(MAX_DRAFT), true);
                         chat.draft.apply(crate::edit::Edit::Paste(joined));
+                        chat.images.extend(images);
                         self.queue_mut(&subject).map(|queue| queue.remove(index));
                     }
                     Action::QueueRemove { .. } => drop(self.queue_mut(&subject).map(|queue| queue.remove(index))),
                     _ => {
                         self.queue_mut(&subject).map(|queue| queue.remove(index));
-                        self.send_now(text, effects);
+                        self.send_now(text, images, effects);
                     }
+                }
+            }
+            Action::ImagePaste { id, kind } => self.paste_image(&id, &kind, effects),
+            Action::ImageRemove { id } => {
+                self.compose_images.retain(|image| image.id != id);
+                if let Some(chat) = self.shown_chat_mut() {
+                    chat.images.retain(|image| image.id != id);
                 }
             }
             // Not delivered (its agent had ended): first in its queue again, held for the user's ↵
             // (its row says so; no notice: the shell's news interrupts nobody).
             Action::AgentSendFailed { .. } if self.by_user => {}
-            Action::AgentSendFailed { task: subject, text } => {
+            Action::AgentSendFailed { task: subject, text, images } => {
                 if subject.task().is_some() {
-                    let queued = self.queued(text);
+                    let queued = self.queued(text, images);
                     if let Some(queue) = self.queue_mut(&subject) {
                         queue.insert(0, queued);
                     }
@@ -952,6 +969,7 @@ impl Model {
                     let before = chat.draft.text().trim_end().to_string();
                     let joined = if before.is_empty() { text } else { format!("{before}\n{text}") };
                     chat.draft = Field::lines_of(&joined, MAX_DRAFT);
+                    chat.images.extend(images);
                 }
             }
             Action::TalkAnswer { allow, ticket } => {
@@ -1062,6 +1080,98 @@ impl Model {
         if self.tasks.get(task).is_some_and(|task| task.state != state) {
             self.tasks.set_state(task, state);
         }
+    }
+}
+
+/// The most images in one message.
+pub const MAX_IMAGES: usize = 5;
+/// Why a pasted image was not taken: where it would go, nothing takes images.
+pub const IMAGES_NOT_HERE: &str =
+    "This agent takes no images here: they go to Claude Code in Chat view. Nothing was attached";
+/// Why: the message has as many as it may.
+pub const TOO_MANY_IMAGES: &str = "At most 5 images in a message: nothing was attached";
+/// Why: a capture's title in the bar is one line, with no attachments.
+pub const NO_IMAGES_BAR: &str = "A capture's title takes no image: attach it in the new-task box (⌘N)";
+
+impl Model {
+    /// A pasted image, for the message being written: the new-task box's while it has the keys,
+    /// else the shown composer's; only where its agent takes images and draws natively. Refused,
+    /// its file goes at once and the box says why.
+    fn paste_image(&mut self, id: &str, kind: &str, effects: &mut Vec<Effect>) {
+        let Some(image) = Pasted::new(id, kind) else { return };
+        let why = if self.composing() {
+            let agent = self.compose_plan().map(|plan| plan.agent).unwrap_or_default();
+            let runner = agents::read(&agent, &self.models).runner;
+            let takes = runner.is_some_and(|runner| {
+                let structured = &runner.spec().structured;
+                structured.images && structured.status == Status::Verified && self.conversation_view == View::Native
+            });
+            match () {
+                _ if self.bar_draft().is_some() => Some(NO_IMAGES_BAR),
+                _ if !takes => Some(IMAGES_NOT_HERE),
+                _ if self.compose_images.len() >= MAX_IMAGES => Some(TOO_MANY_IMAGES),
+                _ => return self.compose_images.push(image),
+            }
+        } else if let Some(subject) =
+            self.shown_draft_chat().map(|chat| chat.subject.clone()).filter(|_| self.talk_typing())
+        {
+            let takes = self.runner_of(&subject).is_some_and(|runner| runner.spec().structured.images)
+                && self.talk_view(&subject) == View::Native;
+            let full = self.chat(&subject).is_some_and(|chat| chat.images.len() >= MAX_IMAGES);
+            match () {
+                _ if !takes => Some(IMAGES_NOT_HERE),
+                _ if full => Some(TOO_MANY_IMAGES),
+                _ => return drop(self.chat_mut(&subject).map(|chat| chat.images.push(image))),
+            }
+        } else {
+            None
+        };
+        if let Some(why) = why {
+            effects.push(Effect::Notice { text: why.into() });
+        }
+        effects.push(Effect::ImagesDrop { images: vec![image] });
+    }
+
+    /// The images pasted in the new-task box, for the task it files.
+    pub fn compose_images(&self) -> &[Pasted] {
+        &self.compose_images
+    }
+
+    /// True if something holds `image` now: a drop decided earlier in a step (before a failed
+    /// send put it back) leaves its file.
+    pub fn holds_image(&self, image: &Pasted) -> bool {
+        self.images_held.contains(image)
+    }
+
+    /// Every pasted image something still holds: the box's, a composer's, a queued message's, a
+    /// task's not done. One nothing holds any more is dropped (its file removed), once.
+    pub(super) fn settle_images(&mut self, effects: &mut Vec<Effect>) {
+        if self.compose.is_none() {
+            self.compose_images.clear();
+        }
+        let tasks = self.tasks.list.iter().filter(|task| task.state != State::Done);
+        let queued = self.tasks.list.iter().flat_map(|task| task.queued.iter().flat_map(|q| q.images.iter()));
+        let held: std::collections::BTreeSet<Pasted> = self
+            .compose_images
+            .iter()
+            .chain(self.chats.iter().flat_map(|chat| chat.images.iter()))
+            .chain(tasks.flat_map(|task| task.images.iter()))
+            .chain(queued)
+            .cloned()
+            .collect();
+        let gone: Vec<Pasted> = self.images_held.difference(&held).cloned().collect();
+        if !gone.is_empty() {
+            effects.push(Effect::ImagesDrop { images: gone });
+        }
+        self.images_held = held;
+    }
+}
+
+/// The send effect for `text` and its images: `AgentSendWith` only when there are some.
+fn sent(task: &Subject, text: String, images: Vec<Pasted>) -> Effect {
+    match images.is_empty() {
+        true => Effect::AgentSend { task: task.clone(), text },
+        false => Effect::AgentSendWith { task: task.clone(), text, images },
     }
 }
 
@@ -1625,7 +1735,7 @@ mod tests {
         m.update(Action::QueueRemove { id: drawn[0] });
         assert_eq!(texts(&m, &one), ["beta"], "beta stays: the click was alpha's");
         // alpha was never written: first again, held for the user.
-        let back = Action::AgentSendFailed { task: one.clone(), text: "alpha".into() };
+        let back = Action::AgentSendFailed { task: one.clone(), text: "alpha".into(), images: Vec::new() };
         assert_eq!(m.refusal(&back, Origin::Socket), Some(super::RUNNERS_ALONE));
         m.update(back.clone());
         assert_eq!(texts(&m, &one), ["beta"], "the user's report is nothing: only the runner's");
@@ -1634,6 +1744,38 @@ mod tests {
         assert!(m.chat(&one).is_some_and(|chat| chat.held));
         let ids: Vec<u64> = m.queue_of(&one).iter().map(|queued| queued.id).collect();
         assert!(!drawn.contains(&ids[0]), "a new id: an old row's click is not this message's");
+    }
+
+    /// A pasted image joins the message being written: the composer's goes with its message; a
+    /// client pastes nothing; one nothing holds any more has its file dropped, once; the state
+    /// counts a task's, never names them.
+    #[test]
+    fn a_pasted_image_goes_with_its_message_and_its_file_goes_after() {
+        use crate::tasks::Pasted;
+        let mut m = two_live();
+        let one = first(&m);
+        let image = |n: u8| Pasted::new(&format!("{n:016x}"), "png").unwrap_or_else(|| panic!("{n}"));
+        let paste = |n: u8| Action::ImagePaste { id: image(n).id, kind: "png".into() };
+        assert_eq!(m.refusal(&paste(1), Origin::Socket), Some(super::USERS_ALONE));
+        // Not a name the shell makes: nothing.
+        assert_eq!(m.update(Action::ImagePaste { id: "../../etc".into(), kind: "png".into() }), []);
+        m.update(paste(1));
+        typed(&mut m, "look");
+        let sent = m.update(Action::TalkSend);
+        let with = Effect::AgentSendWith { task: one.clone(), text: "look".into(), images: vec![image(1)] };
+        // A task's conversation keeps nothing once sent: its file goes after the send reads it.
+        assert_eq!(sent, [with, Effect::ImagesDrop { images: vec![image(1)] }]);
+        // Too many: the sixth is refused, said, its file dropped.
+        for n in 2..7 {
+            m.update(paste(n));
+        }
+        let sixth = m.update(paste(7));
+        assert_eq!(
+            sixth,
+            [Effect::Notice { text: super::TOO_MANY_IMAGES.into() }, Effect::ImagesDrop { images: vec![image(7)] }]
+        );
+        // × on a chip: gone, and its file.
+        assert_eq!(m.update(Action::ImageRemove { id: image(2).id }), [Effect::ImagesDrop { images: vec![image(2)] }]);
     }
 
     /// A runner that takes a message mid-turn gets "send now" in the turn; Claude Code's is off

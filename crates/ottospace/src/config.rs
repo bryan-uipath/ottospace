@@ -240,6 +240,13 @@ pub fn materials_dir() -> Option<PathBuf> {
     Some(get().home.as_ref()?.join("materials"))
 }
 
+/// Where pasted images wait for their message: `images` in the user's folder, private, each
+/// `<id>.<kind>` (`tasks::Pasted`), removed once nothing holds it. `None`: no image is kept, so none
+/// is pasted (a test run that named no folder).
+pub fn images_dir() -> Option<PathBuf> {
+    Some(get().home.as_ref()?.join("images"))
+}
+
 /// What the tasks folder held at start.
 #[derive(Default)]
 pub struct Kept {

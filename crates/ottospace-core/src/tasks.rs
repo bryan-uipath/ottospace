@@ -373,6 +373,10 @@ pub struct Task {
     /// the state, the inbox); only its file has them (`file_json`).
     #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "count", deserialize_with = "texts")]
     pub queued: Vec<Queued>,
+    /// Images pasted for it (its first message's, and its conversation's since): kept while it is
+    /// not done, then removed (`Model::settle_images`). The state has their count.
+    #[serde(default, skip_serializing_if = "Vec::is_empty", serialize_with = "pasted_count")]
+    pub images: Vec<Pasted>,
     /// When it was filed (milliseconds since 1970). `None`: filed before this was kept.
     #[serde(default)]
     pub created: Option<u64>,
@@ -435,6 +439,9 @@ impl Task {
         let mut value = serde_json::to_value(self.for_file()).unwrap_or_default();
         if let Some(fields) = value.as_object_mut().filter(|_| !self.queued.is_empty()) {
             fields.insert("queued".into(), serde_json::to_value(&self.queued).unwrap_or_default());
+        }
+        if let Some(fields) = value.as_object_mut().filter(|_| !self.images.is_empty()) {
+            fields.insert("images".into(), serde_json::to_value(&self.images).unwrap_or_default());
         }
         value
     }
@@ -589,6 +596,38 @@ enum Undo {
 pub struct Queued {
     pub id: u64,
     pub text: String,
+    /// The images pasted with it.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<Pasted>,
+}
+
+/// An image the user pasted, as the shell saved it: `<id>.<kind>` in ottospace's private images
+/// folder. The core never sees its bytes. e.g. `{"id": "3f2a9c0e7b1d4e55", "kind": "png"}`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct Pasted {
+    pub id: String,
+    pub kind: String,
+}
+
+impl Pasted {
+    /// The kinds an image may be, by what its first bytes say.
+    pub const KINDS: [&str; 4] = ["png", "jpeg", "gif", "webp"];
+
+    /// Only a name the shell makes: 16 lowercase hex digits, and a known kind. Never a path.
+    pub fn new(id: &str, kind: &str) -> Option<Self> {
+        let hex = id.len() == 16 && id.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        (hex && Self::KINDS.contains(&kind)).then(|| Self { id: id.into(), kind: kind.into() })
+    }
+
+    /// Its file's name in the images folder.
+    pub fn file(&self) -> String {
+        format!("{}.{}", self.id, self.kind)
+    }
+}
+
+/// Pasted images as their count (`Task::images`).
+fn pasted_count<S: serde::Serializer>(images: &[Pasted], serializer: S) -> Result<S::Ok, S::Error> {
+    serializer.serialize_u64(images.len() as u64)
 }
 
 /// Queued messages as their count: never their words (`Task::queued`).
@@ -700,6 +739,7 @@ impl Tasks {
             line: None,
             body: None,
             queued: Vec::new(),
+            images: Vec::new(),
             created: None,
             session: None,
             refs: Vec::new(),
@@ -1166,6 +1206,7 @@ mod tests {
             line: None,
             body: None,
             queued: Vec::new(),
+            images: Vec::new(),
             created: None,
             session: None,
             refs: Vec::new(),

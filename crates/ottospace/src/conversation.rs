@@ -349,6 +349,47 @@ const MAX_THUMB: u64 = 8 << 20;
 const BATCH: usize = 500;
 
 impl Workspace {
+    /// The pasted images' files, read as an agent takes them; one gone or no longer an image is
+    /// left out.
+    pub(crate) fn images_of(&self, pasted: &[ottospace_core::tasks::Pasted]) -> Vec<ottospace_agents::Image> {
+        let Some(dir) = crate::config::images_dir() else { return Vec::new() };
+        pasted.iter().filter_map(|image| ottospace_agents::Image::load(&dir.join(image.file())).ok()).collect()
+    }
+
+    /// The image on the clipboard, for the message being written: saved under a name made here
+    /// (never one from the clipboard) in the private images folder, then offered to the core,
+    /// which takes it or says why not. False: no image there, or none could be kept.
+    pub(crate) fn paste_image(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        let Some(bytes) = self.clipboard.image(cx) else { return false };
+        let Some(dir) = crate::config::images_dir() else { return false };
+        let kind = match ottospace_agents::Media::sniff(&bytes) {
+            Some(media) if bytes.len() as u64 <= ottospace_agents::MAX_IMAGE => {
+                media.mime().trim_start_matches("image/")
+            }
+            _ => {
+                self.error = Some("Only a PNG, JPEG, GIF or WebP image of at most 20 MB is attached".into());
+                return true;
+            }
+        };
+        let id = crate::talk::new_uuid().map(|uuid| uuid.replace('-', "")[..16].to_string());
+        let Some(pasted) = id.and_then(|id| ottospace_core::tasks::Pasted::new(&id, kind)) else { return false };
+        if let Err(err) = crate::config::write_private(&dir, &pasted.file(), &bytes) {
+            self.error = Some(format!("The image could not be kept: {err}"));
+            return true;
+        }
+        let paste = Action::ImagePaste { id: pasted.id, kind: pasted.kind };
+        drop(self.dispatch(paste, self.input, window, cx));
+        true
+    }
+
+    /// Images nothing holds any more: their files go.
+    pub(crate) fn drop_images(&self, images: &[ottospace_core::tasks::Pasted]) {
+        let Some(dir) = crate::config::images_dir() else { return };
+        for image in images.iter().filter(|image| !self.model.holds_image(image)) {
+            let _ = std::fs::remove_file(dir.join(image.file()));
+        }
+    }
+
     /// Starts a conversation's Claude Code in its structured mode: the argv from the agents
     /// crate's fixed table, through the login shell for its `PATH`, the prompt on stdin.
     /// Returns the new session's id, or why nothing started.
@@ -364,6 +405,11 @@ impl Workspace {
         // task's tab have none.
         let pass = subject.task().map(|_| crate::pass::Live::mint()).transpose()?;
         let server = pass.as_ref().and_then(crate::talk::mcp_server);
+        // The box's images, with the first message of a new session.
+        let images = match start {
+            Start::New(launch) => self.images_of(&launch.images),
+            Start::Resume { .. } => Vec::new(),
+        };
         let (runner, begin, session, model, prompt, added) = match start {
             Start::New(launch) => {
                 let id = crate::talk::new_uuid().ok_or("no random bytes for a session id")?;
@@ -414,7 +460,7 @@ impl Workspace {
         let name = runner.name();
         let driver = Driver::spawn(command, wire).map_err(|err| format!("{name}: {err}"))?;
         if let Some(text) = prompt {
-            driver.send(Input::Send { text, images: Vec::new() }).map_err(|err| format!("{name}: {err}"))?;
+            driver.send(Input::Send { text, images }).map_err(|err| format!("{name}: {err}"))?;
         }
         let model = model.unwrap_or_else(|| name.into());
         let given = session.clone().map(|id| (runner, id));
@@ -437,10 +483,10 @@ impl Workspace {
     /// A message, an answer or an interrupt the core asked for, to the agent.
     /// False: a message it could not write (no agent, or its pipe broke as it ended).
     pub(crate) fn native_input(&mut self, subject: &Subject, input: NativeInput) -> bool {
-        let sends = matches!(input, NativeInput::Send(_));
+        let sends = matches!(input, NativeInput::Send(..));
         let Some(native) = self.drawer.native.get_mut(subject) else { return !sends };
         let input = match input {
-            NativeInput::Send(text) => Input::Send { text, images: Vec::new() },
+            NativeInput::Send(text, images) => Input::Send { text, images },
             NativeInput::Interrupt => Input::Interrupt,
             NativeInput::Answer { ticket: n, allow, message } => {
                 let answer = if allow { Answer::Allow } else { Answer::Deny { message } };
@@ -2374,6 +2420,14 @@ impl Workspace {
                 )
             })
             .children(self.queue_rows(chat, cx))
+            // The images pasted for the message being written.
+            .when(!chat.images.is_empty(), |composer| {
+                composer.child(div().flex().flex_wrap().gap_1().children(self.image_chips(
+                    &chat.images,
+                    "talk-image",
+                    cx,
+                )))
+            })
             .child(
                 div()
                     .flex()
@@ -2498,6 +2552,8 @@ impl Workspace {
                     "draft_chars": chat.draft.text().chars().count(),
                     // Messages queued while the agent works: how many, never their words; and whether the user's stop holds them.
                     "queued": self.model.queue_of(&subject).len(),
+                    // Images pasted for the message being written: how many, never their names.
+                    "images": chat.images.len(),
                     "held": chat.held,
                     // The user's editor has its draft (⌃G).
                     "editing": self.model.edits(&subject),
@@ -2532,7 +2588,7 @@ impl Workspace {
 
 /// What the core asked to reach an agent.
 pub enum NativeInput {
-    Send(String),
+    Send(String, Vec<ottospace_agents::Image>),
     Answer { ticket: u64, allow: bool, message: Option<String> },
     Answers { ticket: u64, answers: Vec<ottospace_core::ask::Chosen> },
     Interrupt,

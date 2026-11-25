@@ -2284,11 +2284,22 @@ impl Workspace {
                 Effect::StopAgent { task } => agents.extend(self.stop_agent(task)),
                 // Not written (its agent had ended): the core puts it back first in the queue.
                 Effect::AgentSend { task, text } => {
-                    if !self.native_input(task, NativeInput::Send(text.clone())) {
-                        let failed = Action::AgentSendFailed { task: task.clone(), text: text.clone() };
+                    if !self.native_input(task, NativeInput::Send(text.clone(), Vec::new())) {
+                        let failed =
+                            Action::AgentSendFailed { task: task.clone(), text: text.clone(), images: Vec::new() };
                         drop(self.dispatch(failed, Origin::System, window, cx));
                     }
                 }
+                // Its images read from their files now: the drop after it in this step removes them.
+                Effect::AgentSendWith { task, text, images } => {
+                    let read = self.images_of(images);
+                    if !self.native_input(task, NativeInput::Send(text.clone(), read)) {
+                        let failed =
+                            Action::AgentSendFailed { task: task.clone(), text: text.clone(), images: images.clone() };
+                        drop(self.dispatch(failed, Origin::System, window, cx));
+                    }
+                }
+                Effect::ImagesDrop { images } => self.drop_images(images),
                 Effect::AgentAnswer { task, ticket, allow, message } => {
                     let answer = NativeInput::Answer { ticket: *ticket, allow: *allow, message: message.clone() };
                     drop(self.native_input(task, answer));
@@ -4581,6 +4592,8 @@ impl Workspace {
             // The one line under the box: what ↵ does with the line as it is, then the other keys;
             // null while it is closed. The tag hint, while the box's tags' sheet shows ("? tags", ⌘/).
             "compose_status": self.model.compose_status(),
+            // Images pasted in the new-task box: how many, never their names.
+            "compose_images": self.model.compose_images().len(),
             "compose_hint": self.model.compose_hint(),
             // Where the open box's ↵ starts its task (`space`, `name`), and whether that is not the
             // space on show (`elsewhere`); null while it is closed.
