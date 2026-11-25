@@ -81,6 +81,7 @@ pub mod sneak_apps;
 pub mod sneak_place;
 pub mod stats;
 pub mod status_bar;
+pub mod strata;
 pub mod talk;
 pub mod tasks;
 pub mod term_links;

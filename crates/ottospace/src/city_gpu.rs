@@ -4,7 +4,9 @@
 //! paint. Run
 //! on a thread of its own; a still picture, made again only when the scene or its size changes.
 
-use ottospace_core::scene::{Block, Kind, Scene};
+use std::collections::HashMap;
+
+use ottospace_core::scene::{Block, Kind, Layer, Scene};
 use ottospace_core::theme;
 
 /// The picture, `width` × `height` pixels, BGRA, rows packed.
@@ -28,8 +30,9 @@ const FORMAT: wgpu::TextureFormat = wgpu::TextureFormat::Bgra8Unorm;
 const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Per box: its corners (min, max), its top's colour, 1 if it glows (lit), its edges' colour,
 /// when it starts to rise (`Scene::rise_delays`; below 0: it stands from the start), how bright
-/// its sides' edges are, a share of its top's, and how opaque its faces are.
-const STRIDE: u64 = 16 * 4;
+/// its sides' edges are, a share of its top's, how opaque its faces are, and the floor it rises
+/// from (a stratum's is its building's).
+const STRIDE: u64 = 17 * 4;
 /// How opaque a glass building's faces are (the original city's are 0.92; the owner asked for a
 /// little more see-through): its edges are whole.
 const GLASS: f32 = 0.8;
@@ -69,13 +72,15 @@ const NORMALS = array<vec3<f32>, 6>(
 );
 
 @vertex
-fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>, @location(3) edge: vec3<f32>, @location(4) delay: f32, @location(5) sides: f32, @location(6) alpha: f32) -> Out {
-    // Rising (`frame.light.w`: the share of the rise, 1 at rest): as tall as `scene::risen` says.
+fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>, @location(3) edge: vec3<f32>, @location(4) delay: f32, @location(5) sides: f32, @location(6) alpha: f32, @location(7) base: f32) -> Out {
+    // Rising (`frame.light.w`: the share of the rise, 1 at rest): as tall as `scene::risen` says,
+    // from its floor (a stratum: its building's, so a stack grows as one).
     let at = clamp((frame.light.w - delay) / (1. - STAGGER), 0., 1.);
     let grown = select(1. - (1. - at) * (1. - at) * (1. - at), 1., delay < 0.);
-    let top_y = lo.y + (hi.y - lo.y) * grown;
+    let low_y = base + (lo.y - base) * grown;
+    let top_y = base + (hi.y - base) * grown;
     let corner = CORNERS[FACES[i]];
-    let world = vec3(lo.x + (hi.x - lo.x) * corner.x, lo.y + (top_y - lo.y) * corner.y, lo.z + (hi.z - lo.z) * corner.z);
+    let world = vec3(lo.x + (hi.x - lo.x) * corner.x, low_y + (top_y - low_y) * corner.y, lo.z + (hi.z - lo.z) * corner.z);
     let normal = NORMALS[i / 6u];
     // Sides darker than the top: ambient, and a light from above to one side.
     let light = 0.3 + 0.7 * max(dot(normal, normalize(frame.light.xyz)), 0.);
@@ -85,7 +90,7 @@ fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi
     out.colour = mix(top.rgb * light, top.rgb * (0.75 + 0.25 * normal.y), top.a);
     out.lit = top.a;
     out.world = world;
-    out.lo = lo;
+    out.lo = vec3(lo.x, low_y, lo.z);
     out.hi = vec3(hi.x, top_y, hi.z);
     out.edge = edge;
     out.axis = i / 12u;
@@ -181,8 +186,13 @@ struct Targets {
 /// opaque, the solid first, then the glass. Made once a layout (`Boxes::new`); a camera move only
 /// orders the glass and copies each box's corners.
 pub struct Boxes {
-    base: Vec<[f32; 16]>,
-    /// Indices into the scene's blocks: the solid ones, then the glass.
+    base: Vec<[f32; 17]>,
+    /// Each instance's block, and a stratum's slice of its height (`Scene::layers`).
+    owner: Vec<u32>,
+    layer: Vec<Option<[f32; 2]>>,
+    /// The scene's blocks, for a check that these are its boxes.
+    blocks: usize,
+    /// Indices into the instances: the solid ones, then the glass.
     solid: Vec<u32>,
     glass: Vec<u32>,
 }
@@ -192,19 +202,42 @@ impl Boxes {
         let delays = scene.rise_delays();
         let tint = |i: usize| scene.tints.get(i).copied().flatten();
         let see_through = |b: &Block| glass && b.kind == Kind::Building;
-        let (mut solid, mut clear) = (Vec::new(), Vec::new());
-        let base = (scene.blocks.iter().enumerate())
-            .map(|(i, b)| {
-                let alpha = if see_through(b) { GLASS } else { 1. };
+        // Each building's strata, by block: they come in the blocks' order.
+        let mut strata: HashMap<usize, &[Layer]> = HashMap::new();
+        for run in scene.layers.chunk_by(|a, b| a.block == b.block) {
+            strata.insert(run[0].block, run);
+        }
+        let mut boxes = Self {
+            base: Vec::new(),
+            owner: Vec::new(),
+            layer: Vec::new(),
+            blocks: scene.blocks.len(),
+            solid: Vec::new(),
+            glass: Vec::new(),
+        };
+        for (i, b) in scene.blocks.iter().enumerate() {
+            let alpha = if see_through(b) { GLASS } else { 1. };
+            let layers = strata.get(&i).copied().filter(|_| b.kind == Kind::Building).unwrap_or_default();
+            // A building's strata in place of its box, each in its commit's colour edged a third of
+            // the way to white (its stub in the block's own), rising from the building's floor.
+            let slices = layers
+                .iter()
+                .map(|l| (Some(l.y), l.colour.map(|c| (c, ottospace_core::palette::dim(c, 0xffffff))).or(tint(i))));
+            let whole = std::iter::once((None, tint(i)));
+            let parts: Vec<_> = if layers.is_empty() { whole.collect() } else { slices.collect() };
+            for (y, colours) in parts {
+                let at = boxes.base.len() as u32;
                 if see_through(b) {
-                    clear.push(i as u32)
+                    boxes.glass.push(at)
                 } else {
-                    solid.push(i as u32)
+                    boxes.solid.push(at)
                 }
-                instance(b, delays[i], tint(i), alpha)
-            })
-            .collect();
-        Self { base, solid, glass: clear }
+                boxes.base.push(instance(b, delays[i], colours, alpha, b.min[1]));
+                boxes.owner.push(i as u32);
+                boxes.layer.push(y);
+            }
+        }
+        boxes
     }
 }
 
@@ -241,7 +274,8 @@ impl Gpu {
             immediate_size: 0,
         });
         let attributes = wgpu::vertex_attr_array![
-            0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3, 4 => Float32, 5 => Float32, 6 => Float32
+            0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3, 4 => Float32, 5 => Float32, 6 => Float32,
+            7 => Float32
         ];
         let pipeline = |glass: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -392,7 +426,7 @@ impl Gpu {
         rise: f32,
         into: Option<&wgpu::TextureView>,
     ) -> Result<Picture, String> {
-        if boxes.base.len() != scene.blocks.len() {
+        if boxes.blocks != scene.blocks.len() {
             return Err("boxes of another scene".into());
         }
         let prepared = std::time::Instant::now();
@@ -427,24 +461,34 @@ impl Gpu {
         // sight may cut others down).
         let boxing = std::time::Instant::now();
         let far = |i: &u32| {
-            let top = scene.blocks[*i as usize].top();
+            let top = scene.blocks[boxes.owner[*i as usize] as usize].top();
             // Farthest first: a distance's bits order as it does (never negative).
             std::cmp::Reverse((0..3).map(|k| (top[k] - camera.eye[k]).powi(2)).sum::<f32>().to_bits())
         };
-        // Only the boxes drawn at this level of detail (`Scene::shown`).
-        let shown = |i: &&u32| scene.is_shown(**i as usize);
+        // Only the boxes drawn at this level of detail (`Scene::shown`), and a stratum only below
+        // its building's top (a lit building's line of sight may cut it down).
+        let shown = |i: &&u32| {
+            let block = boxes.owner[**i as usize] as usize;
+            let below = boxes.layer[**i as usize].is_none_or(|y| y[0] < scene.blocks[block].max[1]);
+            below && scene.is_shown(block)
+        };
         let mut clear: Vec<u32> = boxes.glass.iter().filter(shown).copied().collect();
         clear.sort_by_cached_key(far);
         let solid: Vec<u32> = boxes.solid.iter().filter(shown).copied().collect();
         let solid_count = solid.len() as u32;
         let placed = |i: &u32| {
-            let (b, mut one) = (&scene.blocks[*i as usize], boxes.base[*i as usize]);
+            let block = boxes.owner[*i as usize] as usize;
+            let (b, mut one) = (&scene.blocks[block], boxes.base[*i as usize]);
             // A closed box standing for a lit file glows in its colour.
-            if let Some(colour) = scene.glows(*i as usize) {
-                one = instance(&Block { kind: Kind::Lit(colour), ..*b }, one[13], None, one[15]);
+            if let Some(colour) = scene.glows(block) {
+                one = instance(&Block { kind: Kind::Lit(colour), ..*b }, one[13], None, one[15], one[16]);
             }
             one[..3].copy_from_slice(&b.min);
             one[3..6].copy_from_slice(&b.max);
+            // A stratum: its slice of the building's height.
+            if let Some(y) = boxes.layer[*i as usize] {
+                (one[1], one[4]) = (y[0], y[1].min(b.max[1]));
+            }
             one
         };
         let data: Vec<f32> = solid.iter().chain(&clear).map(placed).flatten().collect();
@@ -566,12 +610,12 @@ fn targets(device: &wgpu::Device, size: wgpu::Extent3d) -> Targets {
     }
 }
 
-fn instance(block: &Block, delay: f32, tint: Option<(u32, u32)>, alpha: f32) -> [f32; 16] {
+fn instance(block: &Block, delay: f32, tint: Option<(u32, u32)>, alpha: f32, base: f32) -> [f32; 17] {
     let ([r, g, b], edge) = tint.map_or_else(|| colour(block.kind), |(top, edge)| (rgb(top), rgb(edge)));
     let (lo, hi) = (block.min, block.max);
     let glows = if matches!(block.kind, Kind::Lit(_)) { 1. } else { 0. };
     let sides = if matches!(block.kind, Kind::Plate(_)) { 0.25 } else { 1. };
-    [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2], delay, sides, alpha]
+    [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2], delay, sides, alpha, base]
 }
 
 fn bytes(values: &[f32]) -> Vec<u8> {
@@ -588,6 +632,7 @@ pub(crate) mod tests {
     use super::*;
     use ottospace_core::atlas;
     use ottospace_core::scene::View;
+    use ottospace_core::strata::{Change, History, Level};
 
     /// Renders made-up repositories and writes each into the folder `CITY_PICTURE` names, as a
     /// BMP, with the time each step took: `CITY_PICTURE=/tmp cargo test -p ottospace --release
@@ -606,8 +651,19 @@ pub(crate) mod tests {
                     (format!("d{}/{deep}g{}/f{i}.rs", i % 7, i % 5), 200 + r * r * r / 20_000)
                 })
                 .collect();
+            // A year of 25 commits, of each kind in turn: most files in one, a few in all.
+            let kinds = [Some(Change::Feat), Some(Change::Fix), None, Some(Change::Refactor), Some(Change::Docs)];
+            let levels = |i: u64| {
+                let r = (i * 7919) % 1000;
+                (1..=25u64)
+                    .rev()
+                    .filter(move |c| *c == 1 || r * c < 1000)
+                    .map(move |c| Level { at: c, change: kinds[c as usize % 5] })
+            };
+            let paths = files.iter().enumerate().map(|(i, (path, _))| (path.clone(), levels(i as u64).collect()));
+            let history = History { files: paths.collect(), span: (1, 25) };
             let started = std::time::Instant::now();
-            let plan = atlas::atlas(&atlas::repo(&files));
+            let plan = atlas::atlas(&atlas::repo_with(&files, &history));
             let laid = started.elapsed();
             let lit = [(plan.places.iter().rev().find(|p| !p.group).unwrap().id.as_str(), 0xff6467)];
             let started = std::time::Instant::now();

@@ -11,9 +11,10 @@ const WIDE: f32 = 1.6;
 /// 1): the unit of a building's height.
 const TALLEST: f32 = 0.12;
 /// The owner's strata (in `TALLEST`s): the most levels a file stacks, each one commit; a level's
-/// height; a file with no commit's stub.
+/// height, and its slab's (the rest a gap, so the strata read apart); the stub a file stands on.
 pub(crate) const LEVELS: u32 = 120;
 const LEVEL: f32 = 1.6 / 60.;
+const SLAB: f32 = 1.15 / 60.;
 const STUB: f32 = 0.4 / 60.;
 /// The rise from a district to the one inside it, by depth, then `LIFT_MIN`: the owner's city's
 /// terraces (`TIER_LIFT`, in its units where a tower is at most 60), in ours.
@@ -121,6 +122,18 @@ pub struct Scene {
     pub shown: Vec<bool>,
     /// The colour a closed box glows in for a lit file it hides (`lod::Tree::apply`). Empty: none.
     pub glow: Vec<Option<u32>>,
+    /// The strata a building is drawn as, in place of its box (`Layer`), by block.
+    pub layers: Vec<Layer>,
+}
+
+/// A slice of building `block`'s box, drawn in place of it: from `y[0]` up to `y[1]` (no higher
+/// than the box, which a lit building's sight line may have cut), in `colour`, or with none in the
+/// box's own (its stub, in its folder's colour).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Layer {
+    pub block: usize,
+    pub y: [f32; 2],
+    pub colour: Option<u32>,
 }
 
 /// Where the user has turned, moved and zoomed the camera, from the fitted view: degrees round
@@ -223,11 +236,10 @@ pub(crate) fn height(commits: u32) -> f32 {
 }
 
 /// How tall a place of `height` (0 to 1) stands, in `tallest`s: as the owner's city's strata,
-/// a level (1.6 of its units, where a tower of lines is at most 60) for each of `LEVELS`; with
-/// none, its stub (0.4).
+/// its stub (0.4 of its units, where a tower of lines is at most 60) and a level (1.6) for each
+/// of `LEVELS`.
 fn rise(height: Option<f32>) -> f32 {
-    let h = height.unwrap_or(0.).clamp(0., 1.);
-    if h > 0. { h * LEVELS as f32 * LEVEL } else { STUB }
+    STUB + height.unwrap_or(0.).clamp(0., 1.) * LEVELS as f32 * LEVEL
 }
 
 /// The top of a district at `depth` (0: the ground), each lift `lift` times the terraces'.
@@ -429,6 +441,7 @@ pub fn scene_lowered(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, view: &Vie
 #[derive(Clone, Debug, PartialEq)]
 pub struct Layout {
     pub blocks: Vec<Block>,
+    pub layers: Vec<Layer>,
     fit: Option<Fit>,
     aspect: f32,
     lit_floor: f32,
@@ -439,15 +452,32 @@ impl Layout {
     /// or not (a moved one cuts nothing: `clear_sight`). Nothing is laid out again.
     pub fn scene(&self, view: &View) -> Scene {
         let mut blocks = self.blocks.clone();
+        let layers = self.layers.clone();
         let Some(fit) = self.fit else {
-            return Scene { blocks, camera: None, fit: None, tints: Vec::new(), shown: Vec::new(), glow: Vec::new() };
+            return Scene {
+                blocks,
+                camera: None,
+                fit: None,
+                tints: Vec::new(),
+                shown: Vec::new(),
+                glow: Vec::new(),
+                layers,
+            };
         };
         let camera = fit.camera(view, self.aspect);
         // A lift moves no eye: the same lines of sight.
         if (View { lift: 0., ..*view }) == View::default() {
             clear_sight(&mut blocks, camera.eye, self.lit_floor);
         }
-        Scene { blocks, camera: Some(camera), fit: Some(fit), tints: Vec::new(), shown: Vec::new(), glow: Vec::new() }
+        Scene {
+            blocks,
+            camera: Some(camera),
+            fit: Some(fit),
+            tints: Vec::new(),
+            shown: Vec::new(),
+            glow: Vec::new(),
+            layers,
+        }
     }
 }
 
@@ -482,7 +512,7 @@ pub fn layout(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, lower: f32) -> La
     let mut districts = 0;
     let mut rooms = vec![root];
     let mut highest = 0f32;
-    let mut buildings = Vec::new();
+    let (mut buildings, mut layers) = (Vec::new(), Vec::new());
     for (i, place) in atlas.places.iter().enumerate() {
         while rooms.len() > 1 && rooms.last().is_some_and(|room| room.depth >= place.depth) {
             rooms.pop();
@@ -516,6 +546,18 @@ pub fn layout(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, lower: f32) -> La
         let colour = lit.iter().find(|(id, _)| *id == place.id).map(|(_, colour)| *colour);
         let top = floor + rise(place.height) * tallest;
         let kind = colour.map_or(Kind::Building, Kind::Lit);
+        // A building of commits is its stub and a slab a level, the newest lowest, its roof the
+        // top slab's; a lit one is whole.
+        let mut top = top;
+        if kind == Kind::Building && !place.strata.is_empty() {
+            let at = |level: f32| floor + (STUB + level * LEVEL) * tallest;
+            layers.push(Layer { block: buildings.len(), y: [floor, at(0.)], colour: None });
+            for (level, colour) in place.strata.iter().enumerate() {
+                let y = [at(level as f32), at(level as f32) + SLAB * tallest];
+                layers.push(Layer { block: buildings.len(), y, colour: Some(*colour) });
+                top = y[1];
+            }
+        }
         buildings.push(Block {
             min: [lot.x0 + sx, floor, lot.z0 + sz],
             max: [lot.x1 - sx, top, lot.z1 - sz],
@@ -527,9 +569,12 @@ pub fn layout(atlas: &Atlas, lit: &[(&str, u32)], aspect: f32, lower: f32) -> La
     for block in buildings.iter_mut().filter(|b| matches!(b.kind, Kind::Lit(_))) {
         block.max[1] = block.max[1].max(highest + LIT_ABOVE);
     }
+    for layer in &mut layers {
+        layer.block += blocks.len();
+    }
     blocks.extend(buildings);
     let fit = frame(&blocks, aspect, lower);
-    Layout { blocks, fit, aspect, lit_floor: highest + LIT_ABOVE }
+    Layout { blocks, layers, fit, aspect, lit_floor: highest + LIT_ABOVE }
 }
 
 impl Camera {
@@ -738,8 +783,10 @@ mod tests {
 
     /// The plan of `files`, each with its number of lines and a commit for each thousand of them.
     fn plan(files: &[(String, u64)]) -> Atlas {
-        let commits = files.iter().map(|(path, n)| (path.clone(), (n / 1000).min(u32::MAX as u64) as u32)).collect();
-        atlas(&repo_with(files, &commits))
+        let level = crate::strata::Level { at: 0, change: None };
+        let levels = |n: &u64| vec![level; (n / 1000).min(200) as usize];
+        let files_of = files.iter().map(|(path, n)| (path.clone(), levels(n))).collect();
+        atlas(&repo_with(files, &crate::strata::History { files: files_of, span: (0, 0) }))
     }
 
     /// A repository with a tall file in front of a small one, as the camera sees them.
@@ -753,13 +800,39 @@ mod tests {
         plan(&files)
     }
 
-    /// As the owner's strata: a level a commit, up to 120; a file with none is a stub.
+    /// As the owner's strata: a stub, and a level a commit on it, up to 120.
     #[test]
     fn a_file_is_as_tall_as_its_commits_stack_in_the_owners_city() {
         assert_eq!((height(0), height(60), height(120), height(u32::MAX)), (0., 0.5, 1., 1.));
         assert_eq!((rise(None), rise(Some(0.))), (0.4 / 60., 0.4 / 60.));
-        assert!((rise(Some(height(1))) - 1.6 / 60.).abs() < 1e-7);
-        assert!((rise(Some(height(120))) - 120. * 1.6 / 60.).abs() < 1e-5);
+        assert!((rise(Some(height(1))) - 2. / 60.).abs() < 1e-7);
+        assert!((rise(Some(height(120))) - (0.4 + 120. * 1.6) / 60.).abs() < 1e-5);
+    }
+
+    /// A building of commits is drawn as its stub in its own colour and a slab a commit, the
+    /// newest lowest, a gap between them, all inside its box; a lit one, and one of no commit,
+    /// as its box.
+    #[test]
+    fn a_building_of_commits_is_drawn_as_its_strata() {
+        let log = "\x012\tfeat: a\0\nsrc/a.rs\0\x011\tfix: b\0\nsrc/a.rs\0src/b.rs\0";
+        let files: Vec<(String, u64)> = ["src/a.rs", "src/b.rs", "src/c.rs"].map(|p| (p.to_string(), 9)).into();
+        let plan = atlas(&crate::atlas::repo_with(&files, &crate::strata::history(log)));
+        let s = scene(&plan, &[("src/b.rs", 7)], 1.6, &View::default());
+        let block = |id: &str| s.blocks.iter().position(|b| b.place.is_some_and(|p| plan.places[p].id == id)).unwrap();
+        let of = |i: usize| s.layers.iter().filter(|l| l.block == i).copied().collect::<Vec<_>>();
+        let (a, b, c) = (block("src/a.rs"), block("src/b.rs"), block("src/c.rs"));
+        let layers = of(a);
+        let colours: Vec<Option<u32>> = layers.iter().map(|l| l.colour).collect();
+        let (feat, fix) = (crate::strata::Change::Feat, crate::strata::Change::Fix);
+        let want = [None, Some(crate::strata::colour(Some(feat), 1.)), Some(crate::strata::colour(Some(fix), 0.))];
+        assert_eq!(colours, want);
+        let (bottom, top) = (s.blocks[a].min[1], s.blocks[a].max[1]);
+        assert_eq!(layers[0].y[0], bottom);
+        for pair in layers.windows(2) {
+            assert!(pair[1].y[0] >= pair[0].y[1] && pair[0].y[1] > pair[0].y[0], "{pair:?}");
+        }
+        assert_eq!(layers[2].y[1], top, "its roof is its top slab's");
+        assert!(of(b).is_empty() && of(c).is_empty(), "lit and no commits: whole");
     }
 
     /// A city of few files has large lots: its buildings are towers on streets, not slabs. A
@@ -782,7 +855,8 @@ mod tests {
         let big: Vec<(String, u64)> = (0..5_000).map(|i| (format!("d{}/f{i}.rs", i % 7), u64::MAX)).collect();
         let s = scene(&plan(&big), &[], 1.6, &View::default());
         let tallest = s.blocks.iter().filter(|b| b.kind == Kind::Building).map(|b| b.max[1] - b.min[1]);
-        assert!((tallest.fold(0., f32::max) - TALLEST * LEVELS as f32 * LEVEL).abs() < 1e-5);
+        // 5,000 files of 120 levels are more than a city draws: 20 each, the roof the top slab's.
+        assert!((tallest.fold(0., f32::max) - TALLEST * (STUB + 19. * LEVEL + SLAB)).abs() < 1e-5);
     }
 
     #[test]

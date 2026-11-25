@@ -30,7 +30,7 @@ use ottospace_core::scene::{self, Camera, Kind, Layout, Scene, View};
 use ottospace_core::settings::expand_home;
 use ottospace_core::stats::rank;
 use ottospace_core::tasks::{Group, TaskId};
-use ottospace_core::{status_bar, theme};
+use ottospace_core::{status_bar, strata, theme};
 
 use crate::city_gpu::{Boxes, Gpu, Picture};
 use crate::home::Floor;
@@ -246,7 +246,7 @@ fn exclude_for(dir: &Path, setting: &[(String, Vec<String>)]) -> Vec<String> {
 struct Kept {
     lines: HashMap<String, (u64, u64)>,
     committed: Option<(String, Arc<HashMap<String, (u64, u64)>>)>,
-    log: Option<(String, Arc<HashMap<String, u32>>, Instant)>,
+    log: Option<(String, Arc<strata::History>, Instant)>,
 }
 
 /// The plan of the checkout at `dir` (`checkout_files`), less the folders `exclude` leaves out
@@ -273,7 +273,7 @@ fn read(
     let kept_log = kept_log.map(|(_, commits, _)| commits.clone());
     // The log runs beside the lines' count: two gits at once, the first picture sooner.
     let (lined, log) = std::thread::scope(|scope| {
-        let log = kept_log.is_none().then(|| scope.spawn(|| commits(&top, head.as_deref(), late, gone)));
+        let log = kept_log.is_none().then(|| scope.spawn(|| history(&top, head.as_deref(), late, gone)));
         let lined = count_lines(&top, files, head.as_ref(), kept, late, gone);
         (lined, log.and_then(|log| log.join().ok()))
     });
@@ -389,23 +389,24 @@ fn lines(path: &Path) -> u64 {
 }
 
 /// The commits of the past year (at most `COMMITS`) that touched each file of the checkout at
-/// `top`, from one `git log`, read-only and hardened as the file list. None if git fails or the
-/// read's limit (`late`) comes first: every building is then a stub. Paths are the checkout's
-/// own (a folder inside a larger repository: relative to it). Never fetches a missing object (a
-/// partial clone). With it, whether git said all (else its newest commits, cut at `LOG_BYTES`).
-fn commits(top: &Path, head: Option<&str>, late: Instant, gone: &dyn Fn() -> bool) -> (HashMap<String, u32>, bool) {
-    let Some(head) = head else { return (HashMap::new(), false) };
+/// `top`, each with its time and kind (`strata`), from one `git log`, read-only and hardened as
+/// the file list. None if git fails or the read's limit (`late`) comes first: every building is
+/// then a stub. Paths are the checkout's own (a folder inside a larger repository: relative to
+/// it). Never fetches a missing object (a partial clone). With it, whether git said all (else
+/// its newest commits, cut at `LOG_BYTES`).
+fn history(top: &Path, head: Option<&str>, late: Instant, gone: &dyn Fn() -> bool) -> (strata::History, bool) {
+    let Some(head) = head else { return (strata::History::default(), false) };
     let mut log = crate::child::git_read(top);
     log.args(["log", "--since=12.months", "-n", COMMITS, "--no-renames", "--root", "--relative", "--name-only"]);
-    log.args(["-z", "--format=%x01", "--no-show-signature", "--no-color", head, "--", "."]);
+    log.args(["-z", "--format=%x01%ct%x09%s", "--no-show-signature", "--no-color", head, "--", "."]);
     log.env("GIT_NO_LAZY_FETCH", "1");
     match crate::child::run_until(log, late.saturating_duration_since(Instant::now()), LOG_BYTES, gone) {
-        Ok(said) if said.ok => (atlas::touched(&said.out), true),
+        Ok(said) if said.ok => (strata::history(&said.out), true),
         // Cut at `LOG_BYTES`: its last path may be cut too (`src/a` of `src/abc`), so it is dropped.
         Ok(said) if said.out.len() as u64 >= LOG_BYTES => {
-            (atlas::touched(&said.out[..said.out.rfind('\0').map_or(0, |at| at + 1)]), false)
+            (strata::history(&said.out[..said.out.rfind('\0').map_or(0, |at| at + 1)]), false)
         }
-        _ => (HashMap::new(), false),
+        _ => (strata::History::default(), false),
     }
 }
 
@@ -3403,7 +3404,7 @@ mod tests {
             let by_git = at.as_deref().and_then(|at| committed_lines(&top, at, late, no)).unwrap_or_default();
             let by_git = (by_git.values().map(|(_, lines)| lines).sum::<u64>(), ms(started));
             let started = Instant::now();
-            let commits = commits(&top, at.as_deref(), Instant::now() + TIMEOUT, no).0.len();
+            let commits = history(&top, at.as_deref(), Instant::now() + TIMEOUT, no).0.files.len();
             let logged = ms(started);
             println!(
                 "{} files, {places:?} places in {all:.1} ms (again {again:.1}): list {listed:.1}, {lines} lines \
