@@ -17418,7 +17418,7 @@ fn a_tab_folds_out_to_another_display_and_back_in() {
 }
 
 /// Each window's green button fills its own display: a tab out's never the main window's, the
-/// main window's never the tab out's. ⌃⌘F, the window with the keyboard. A test run moves no window.
+/// main window's never the tab out's. A test run moves no window.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_tab_outs_green_button_fills_its_own_window_and_the_main_ones_its_own() {
@@ -17454,12 +17454,13 @@ fn a_tab_outs_green_button_fills_its_own_window_and_the_main_ones_its_own() {
     filled(&otto, true, false);
     otto.call(json!({"cmd": "zoom_press"}));
     assert_eq!(filled(&otto, false, false)["window"], window);
-    // ⌃⌘F with the keyboard in the tab out's window (it went with the tab): that window.
-    otto.user_key("cmd-ctrl-f");
+    // Both on, then the tab folded back in: its window goes, its fill with it; the main one's stays.
+    otto.call(json!({"cmd": "zoom_press", "tab": out}));
     filled(&otto, false, true);
-    // Folded back in: its window goes, its fill with it; the main window's never came on.
+    otto.call(json!({"cmd": "zoom_press"}));
+    filled(&otto, true, true);
     let state = otto.call(json!({"cmd": "key", "keys": "cmd-shift-o", "as": "user"}));
-    assert_eq!((&state["out"], &state["state"]["fill_display"]), (&json!([]), &json!(false)), "{state}");
+    assert_eq!((&state["out"], &state["state"]["fill_display"]), (&json!([]), &json!(true)), "{state}");
     assert_eq!(state["windows"].as_array().map(Vec::len), Some(1), "{state}");
 }
 

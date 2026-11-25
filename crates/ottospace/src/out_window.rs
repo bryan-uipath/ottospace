@@ -42,7 +42,8 @@ impl Workspace {
     pub(crate) fn sync_out_windows(&mut self, cx: &mut Context<Self>) {
         let out = self.model.tabs_out();
         self.out_frames.retain(|tab, _| out.iter().any(|(id, _)| id == tab));
-        self.out_filled.retain(|tab, _| self.model.fills_out(*tab));
+        // Kept while out: a fill turned off still finds the frame to go back to.
+        self.out_filled.retain(|tab, _| out.iter().any(|(id, _)| id == tab));
         for (tab, handle) in std::mem::take(&mut self.out_windows) {
             if out.iter().any(|(id, _)| *id == tab) {
                 self.out_windows.push((tab, handle));
@@ -111,10 +112,11 @@ impl Workspace {
         if !self.hosting {
             return;
         }
+        let handle = self.out_windows.iter().find(|(id, _)| *id == tab).and_then(|(_, handle)| *handle);
+        // Read before the bars: AppKit may push the window under a menu bar that comes back.
+        let left = handle.and_then(|handle| out_placement(handle, cx)).map(|at| at.window);
         ottospace_mac::window::hide_bars(self.model.fills_any());
-        let Some(handle) = self.out_windows.iter().find(|(id, _)| *id == tab).and_then(|(_, handle)| *handle) else {
-            return;
-        };
+        let Some(handle) = handle else { return };
         // Not in this update: GPUI drops the resize AppKit reports while the app is borrowed.
         cx.spawn(async move |this, cx| {
             let Ok(Some(view)) = handle.update(cx, |_, window, _| crate::ns_view(window).map(|view| view as usize))
@@ -135,7 +137,7 @@ impl Workspace {
                     (false, Some((before, filled))) => {
                         this.out_filled.remove(&tab);
                         let screens = ottospace_mac::recovery::screens();
-                        Some(fill::back(at.window, filled, before, &screens.visible, screens.main))
+                        Some(fill::back(left.unwrap_or(at.window), filled, before, &screens.visible, screens.main))
                     }
                     _ => None,
                 });
@@ -146,13 +148,28 @@ impl Workspace {
         .detach();
     }
 
-    /// Ends tab out `tab`'s mode when its window no longer has its display's frame: dragged,
-    /// zoomed, or moved by the system.
-    fn out_fill_holds(&mut self, tab: u32, window: &Window) -> bool {
-        let Some((_, filled)) = self.out_filled.get(&tab).filter(|_| self.model.fills_out(tab)) else { return true };
-        // SAFETY: GPUI's own view, on the main thread.
-        let at = crate::ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
-        at.is_none_or(|at| fill::holds(at.window, *filled))
+    /// Whether tab out `tab`'s window, at `at`, still has its display's frame while it fills:
+    /// not dragged, zoomed, moved by the system, or its display changed under it.
+    fn out_fill_holds(&self, tab: u32, at: Option<ottospace_mac::window::Placement>) -> bool {
+        let set = self.out_filled.contains_key(&tab) && self.model.fills_out(tab);
+        !set || at.is_none_or(|at| fill::holds(at.window, fill::frame(at.screen, at.safe_top)))
+    }
+
+    /// Each tab out filling its display whose window no longer has its frame: its mode ends.
+    pub(crate) fn out_fills_hold(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let filled: Vec<u32> = self.out_filled.keys().copied().filter(|tab| self.model.fills_out(*tab)).collect();
+        for tab in filled {
+            let handle = self.out_windows.iter().find(|(id, _)| *id == tab).and_then(|(_, handle)| *handle);
+            let at = handle.and_then(|handle| out_placement(handle, cx));
+            if !self.out_fill_holds(tab, at) {
+                self.dispatch(Action::FillEnded { out: Some(tab) }, Origin::System, window, cx);
+            }
+        }
+    }
+
+    /// The tab out whose window `handle` is, if it is one.
+    pub(crate) fn out_of(&self, handle: AnyWindowHandle) -> Option<u32> {
+        self.out_windows.iter().find(|(_, open)| *open == Some(handle)).map(|(tab, _)| *tab)
     }
 
     /// The window of tab out `tab`: its "From" strip over its panes, its workspace's rail on the
@@ -352,7 +369,9 @@ fn open(ws: WeakEntity<Workspace>, tab: u32, frame: ottospace_core::ax::Frame, q
             });
             let filled = ws.clone();
             let bounds = cx.observe_window_bounds(window, move |_: &mut OutWindow, window, cx| {
-                let holds = filled.update(cx, |ws, _| ws.out_fill_holds(tab, window));
+                // SAFETY: GPUI's own view, on the main thread.
+                let at = crate::ns_view(window).and_then(|view| unsafe { ottospace_mac::window::placement(view) });
+                let holds = filled.update(cx, |ws, _| ws.out_fill_holds(tab, at));
                 if matches!(holds, Ok(false)) {
                     in_main(&filled, Action::FillEnded { out: Some(tab) }, Origin::System, cx);
                 }
@@ -400,6 +419,13 @@ fn open(ws: WeakEntity<Workspace>, tab: u32, frame: ottospace_core::ax::Frame, q
         }
         cx.notify();
     });
+}
+
+/// Where tab out window `handle` is, read now.
+fn out_placement(handle: AnyWindowHandle, cx: &mut App) -> Option<ottospace_mac::window::Placement> {
+    let view = handle.update(cx, |_, window, _| crate::ns_view(window)).ok()??;
+    // SAFETY: the window's own view, open; the main thread.
+    unsafe { ottospace_mac::window::placement(view) }
 }
 
 /// `action` from a tab out's window (the user's, or what its window did), carried out against the

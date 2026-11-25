@@ -1673,9 +1673,14 @@ impl Workspace {
                     }
                     // The green button, Window ▸ Zoom or a title bar double-click: only the user's hand.
                     // The window zoomed fills its display: the main one or a tab out's.
+                    // SAFETY: GPUI's own view, on the main thread.
+                    let main = ns_view(window).map(|view| unsafe { ottospace_mac::window::number(view) });
                     if let Some(zoomed) = ottospace_mac::window::take_zoom() {
                         let out = this.out_frames.iter().find(|(_, (_, _, n))| *n == zoomed).map(|(tab, _)| *tab);
-                        this.dispatch(Action::FillWindow { out }, Origin::User, window, cx);
+                        // A window gone since (its tab folded in) fills nothing.
+                        if out.is_some() || main == Some(zoomed) {
+                            this.dispatch(Action::FillWindow { out }, Origin::User, window, cx);
+                        }
                     }
                     if hotkey::take_press() {
                         this.key_used(Binding::ReturnKey);
@@ -1752,6 +1757,7 @@ impl Workspace {
                         // A display that changed moves no window: looked at, not told.
                         if ticks.every(30, 15) {
                             this.fill_holds(window, cx);
+                            this.out_fills_hold(window, cx);
                         }
                         for (pane, content, outer, kept) in this.sync_layout(window, cx, ticks.every(30, 15)) {
                             if drawn && this.model.wants_changed(pane, content, outer, kept) {
@@ -9677,9 +9683,10 @@ impl Workspace {
             }))
             // As the green button: `zoom_asks` turns it into Fill the Whole Display.
             .on_action(cx.listener(|_, _: &ZoomWindow, window, _| window.zoom_window()))
-            // The window with the keyboard: the main one or a tab out's.
+            // The window it was pressed in: the main one or a tab out's.
             .on_action(cx.listener(|this, _: &FillDisplay, window, cx| {
-                this.dispatch(Action::FillDisplay, this.input, window, cx);
+                let out = this.out_of(Window::window_handle(window));
+                this.dispatch(Action::FillWindow { out }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &Quit, window, cx| this.ask_quit(window, cx)))
             .on_action(cx.listener(|this, _: &ShowKeys, window, cx| {
