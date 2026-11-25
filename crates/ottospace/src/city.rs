@@ -308,7 +308,7 @@ struct Key {
     /// How far through its rise, in thousandths: 1000 standing.
     rise: u16,
     /// The camera's view, as bits: yaw, pitch, zoom, pan.
-    view: [u32; 5],
+    view: [u32; 6],
     /// How far below the picture's middle the fitted city's is, as bits (`scene::LOWER`).
     lower: u32,
     /// `city_folder_colors`: folder name to colour name.
@@ -325,8 +325,8 @@ struct Key {
 
 impl Key {
     fn view(&self) -> View {
-        let [yaw, pitch, zoom, x, z] = self.view.map(f32::from_bits);
-        View { yaw, pitch, zoom, pan: [x, z] }
+        let [yaw, pitch, zoom, x, z, lift] = self.view.map(f32::from_bits);
+        View { yaw, pitch, zoom, pan: [x, z], lift }
     }
 }
 
@@ -339,7 +339,7 @@ impl Key {
     /// What its layout depends on (`scene::Layout`): not its camera, rise or motion. A camera
     /// move lays nothing out again.
     fn laid(&self) -> Key {
-        Key { rise: 1000, view: [0; 5], moving: false, detail_at: 0, calm: false, live: false, ..self.clone() }
+        Key { rise: 1000, view: [0; 6], moving: false, detail_at: 0, calm: false, live: false, ..self.clone() }
     }
 
     /// Rendered at half size while it moves or rises: a quarter of the GPU's work, the copy out
@@ -1295,7 +1295,7 @@ impl Workspace {
                 }
                 let place = held.places.entry(floor).or_default();
                 place.since.get_or_insert_with(Instant::now);
-                let view = [view.yaw, view.pitch, view.zoom, view.pan[0], view.pan[1]].map(f32::to_bits);
+                let view = [view.yaw, view.pitch, view.zoom, view.pan[0], view.pan[1], view.lift].map(f32::to_bits);
                 // `developer.city_frame`: where the fitted city's middle sits, a share of the height.
                 let frame = crate::config::live().developer.city_frame;
                 let lower = frame.filter(|f| (0.3..=0.8).contains(f)).map_or(scene::LOWER, |f| f - 0.5);
@@ -1432,6 +1432,7 @@ impl Workspace {
             pitch: lerp(from.pitch, to.pitch),
             zoom: lerp(from.zoom, to.zoom),
             pan: [lerp(from.pan[0], to.pan[0]), lerp(from.pan[1], to.pan[1])],
+            lift: lerp(from.lift, to.lift),
         }
         .clamped()
     }
@@ -1497,15 +1498,12 @@ impl Workspace {
         if drag.moving {
             let step = match drag.button {
                 MouseButton::Middle => {
-                    let (Some(a), Some(b)) = (
-                        self.city_ground(drag.floor, drag.at, drag.last),
-                        self.city_ground(drag.floor, drag.at, e.position),
-                    ) else {
+                    let Some(step) = self.city_pan(drag.floor, drag.at, drag.last, e.position - drag.last) else {
                         drag.last = e.position;
                         self.city_drag = Some(drag);
                         return;
                     };
-                    CameraStep::Pan { dx: a[0] - b[0], dz: a[1] - b[1] }
+                    step
                 }
                 _ => CameraStep::Orbit { yaw: -dx * ORBIT_PER_POINT, pitch: dy * ORBIT_PER_POINT },
             };
@@ -1550,9 +1548,7 @@ impl Workspace {
                 } else if e.modifiers.platform {
                     about(self).map(|about| CameraStep::Zoom { factor: ZOOM_PER_POINT.powf(-dy), about })
                 } else {
-                    let a = self.city_ground(floor, at, e.position);
-                    let b = self.city_ground(floor, at, e.position + d);
-                    a.zip(b).map(|(a, b)| CameraStep::Pan { dx: a[0] - b[0], dz: a[1] - b[1] })
+                    self.city_pan(floor, at, e.position, d)
                 }
             }
         };
@@ -1560,6 +1556,18 @@ impl Workspace {
             self.city_stepped(at, step, window, cx);
             cx.stop_propagation();
         }
+    }
+
+    /// A pan by `by` (points) from `from`: across, the ground under the pointer follows it; up and
+    /// down, the picture slides as far (`View::lift`), the perspective kept.
+    fn city_pan(&self, floor: Floor, at: At, from: Point<Pixels>, by: Point<Pixels>) -> Option<CameraStep> {
+        let (_, bounds, _) = self.city_camera(floor, at)?;
+        let up = -f32::from(by.y) / f32::from(bounds.size.height);
+        let across = point(by.x, px(0.));
+        let a = self.city_ground(floor, at, from);
+        let b = self.city_ground(floor, at, from + across);
+        let [dx, dz] = a.zip(b).map_or([0., 0.], |(a, b)| [a[0] - b[0], a[1] - b[1]]);
+        Some(CameraStep::Pan { dx, dz, up })
     }
 
     /// The point a zoom keeps where it is: under `position`, in plan units from the city's middle;
@@ -1677,7 +1685,8 @@ impl Workspace {
         snapshot["small"] = small.map(|(floor, _)| on(*floor)).collect::<Vec<_>>().into();
         // Its camera, as the core keeps it, and whether a drag of one is in flight.
         let v = self.model.city_view(*at);
-        snapshot["view"] = serde_json::json!({ "yaw": v.yaw, "pitch": v.pitch, "zoom": v.zoom, "pan": v.pan });
+        snapshot["view"] =
+            serde_json::json!({ "yaw": v.yaw, "pitch": v.pitch, "zoom": v.zoom, "pan": v.pan, "lift": v.lift });
         snapshot["grabbed"] = self.model.camera_grabbed().into();
         snapshot["spin"] = serde_json::json!({ "running": self.city_spin.is_some(), "result": self.city_spun });
         snapshot
@@ -2880,7 +2889,7 @@ mod tests {
             size: (w, h),
             glass: true,
             rise: 1000,
-            view: [0; 5],
+            view: [0; 6],
             lower: scene::LOWER.to_bits(),
             folders: Vec::new(),
             moving: false,
@@ -2902,7 +2911,8 @@ mod tests {
         drop(Boxes::new(&fitted, true));
         let boxes_ms = ms(t);
         drop(layout);
-        let set = |key: &mut Key, v: View| key.view = [v.yaw, v.pitch, v.zoom, v.pan[0], v.pan[1]].map(f32::to_bits);
+        let set =
+            |key: &mut Key, v: View| key.view = [v.yaw, v.pitch, v.zoom, v.pan[0], v.pan[1], v.lift].map(f32::to_bits);
         let mut last = Layouts::new();
         let mut view = View::default();
         set(&mut key, view);
@@ -3057,7 +3067,7 @@ mod tests {
             size: (1600, 1000),
             glass: true,
             rise: 1000,
-            view: [0; 5],
+            view: [0; 6],
             lower: scene::LOWER.to_bits(),
             folders: Vec::new(),
             moving: false,
@@ -3072,7 +3082,7 @@ mod tests {
         let (mut most, mut moved, mut drawn) = (0usize, 0f32, Vec::new());
         for frame in 0..200 {
             view.zoom = 0.985f32.powi(frame);
-            key.view = [view.yaw, view.pitch, view.zoom, view.pan[0], view.pan[1]].map(f32::to_bits);
+            key.view = [view.yaw, view.pitch, view.zoom, view.pan[0], view.pan[1], view.lift].map(f32::to_bits);
             let (made, next) = make(&gpu, &key, &plan, &mut last, detail.take(), None, Instant::now(), None).unwrap();
             detail = Some(next);
             let rects: Vec<[f32; 4]> =

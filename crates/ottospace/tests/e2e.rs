@@ -18873,6 +18873,10 @@ fn the_users_pointer_moves_the_citys_camera() {
     let panned = view(&otto);
     assert!(panned["pan"] != fitted["pan"] && panned["zoom"] == fitted["zoom"], "{panned}");
     assert_eq!(city(&otto)["grabbed"], json!(false));
+    // Up and down: the picture slides as far (a share of its height), the ground stays.
+    drag("middle", [0., -b[3] / 4.], true);
+    let lifted = view(&otto);
+    assert!((num(&lifted, "lift") - 0.25).abs() < 0.01 && lifted["pan"] == panned["pan"], "{lifted}");
     otto.wait_for("the picture again", |o| (city(o)["renders"].as_u64() > Some(renders)).then_some(()));
     // The wheel's lines zoom in, about the pointer, no nearer than the clamp.
     otto.call(json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dy": 3, "as": "user"}));

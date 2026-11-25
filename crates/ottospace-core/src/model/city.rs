@@ -122,10 +122,12 @@ pub enum CameraStep {
         yaw: f32,
         pitch: f32,
     },
-    /// The point looked at moved over the plan, in plan units.
+    /// The point looked at moved over the plan, in plan units, and the picture slid up by `up`,
+    /// a share of its height.
     Pan {
         dx: f32,
         dz: f32,
+        up: f32,
     },
     /// Nearer by `factor` (under 1: in), keeping `about` (plan units from the city's middle).
     Zoom {
@@ -437,7 +439,7 @@ impl Model {
         let view = match step {
             CameraStep::Orbit { yaw, pitch } => now.orbited(yaw, pitch),
             CameraStep::Spin => now.orbited(SPIN_DEGREES, 0.),
-            CameraStep::Pan { dx, dz } => now.panned(dx, dz),
+            CameraStep::Pan { dx, dz, up } => now.panned(dx, dz, up),
             CameraStep::Zoom { factor, about } => now.zoomed(factor, about),
             CameraStep::Grab => {
                 let folder_was = self.cameras.views.get(&key).copied();
@@ -1076,7 +1078,7 @@ src/main.rs:9:loop
         assert_eq!((turned.yaw, turned.pitch), (View::default().yaw + 30., crate::scene::PITCH_RANGE.1));
         let near = step(&mut m, CameraStep::Zoom { factor: 0.001, about: [0., 0.] }, Origin::User).unwrap();
         assert_eq!(near.zoom, crate::scene::ZOOM_RANGE.0);
-        let moved = step(&mut m, CameraStep::Pan { dx: 5., dz: f32::NAN }, Origin::User).unwrap();
+        let moved = step(&mut m, CameraStep::Pan { dx: 5., dz: f32::NAN, up: f32::INFINITY }, Origin::User).unwrap();
         assert!(moved.sound() && moved.pan[0] > 0., "{moved:?}");
         // Another tab and back: the same view. A new file list keeps it too (it is the tab's).
         m.update(Action::SpaceOpen { space: Owner::Home });
@@ -1180,7 +1182,7 @@ src/main.rs:9:loop
         let go = |m: &mut Model, step| drop(m.update(Action::CityCamera { at, step }));
         go(&mut m, CameraStep::Grab);
         go(&mut m, CameraStep::Orbit { yaw: 40., pitch: -5. });
-        go(&mut m, CameraStep::Pan { dx: 0.2, dz: 0.1 });
+        go(&mut m, CameraStep::Pan { dx: 0.2, dz: 0.1, up: 0.1 });
         assert!(m.camera_grabbed());
         go(&mut m, CameraStep::Cancel);
         assert_eq!((m.city_view(at), m.camera_grabbed()), (View::default(), false));
