@@ -19010,6 +19010,16 @@ fn typing_is_timed_from_key_to_painted_echo() {
 /// A made-up repository's city under `features`, spun once round: the app, its folders (the
 /// caller removes them), the camera before the spin and the spin's result.
 fn city_spun(name: &str, features: &str) -> (Otto, PathBuf, PathBuf, Value, Value) {
+    let (otto, root, home) = city_shown(name, features);
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    let before = city(&otto)["view"].clone();
+    otto.call(json!({"cmd": "city_spin"}));
+    let spun = otto.wait_for("the spin", |o| Some(city(o)["spin"]["result"].clone()).filter(|r| !r.is_null()));
+    (otto, root, home, before, spun)
+}
+
+/// A small repository's city on show, with `features`: the app, its temp root and home.
+fn city_shown(name: &str, features: &str) -> (Otto, PathBuf, PathBuf) {
     let root = support::temp(&format!("ottospace-e2e-{name}-{}", std::process::id()));
     let app = root.join("repos/app");
     std::fs::create_dir_all(&app).unwrap();
@@ -19030,10 +19040,7 @@ fn city_spun(name: &str, features: &str) -> (Otto, PathBuf, PathBuf, Value, Valu
     otto.call(json!({"cmd": "close"}));
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
     otto.wait_for("a city", |o| Some(city(o)).filter(|c| !c["picture"].is_null()));
-    let before = city(&otto)["view"].clone();
-    otto.call(json!({"cmd": "city_spin"}));
-    let spun = otto.wait_for("the spin", |o| Some(city(o)["spin"]["result"].clone()).filter(|r| !r.is_null()));
-    (otto, root, home, before, spun)
+    (otto, root, home)
 }
 
 /// With `city_live_layer` the city is drawn on a layer of its own under the window: a spin counts
@@ -19046,6 +19053,28 @@ fn a_live_layer_spins_the_city_and_counts_its_presents() {
     assert_eq!((spun["done"].clone(), spun["live"].clone()), (json!(true), json!(true)), "{spun}");
     assert!(spun["frames"].as_u64().unwrap() >= 200 && spun["render_p50"].as_f64().unwrap() > 0., "{spun}");
     assert_eq!(city(&otto)["view"], before);
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
+/// On a live layer the city's picture shows as soon as made, before GPUI's next frame: the hovered
+/// beam GPUI draws over it moves with a turn in the very frame that asks for its picture.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_live_layers_hovered_beam_turns_with_the_frame_that_asks() {
+    let (otto, root, home) = city_shown("city-live-beam", "code_city,city_live_layer");
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    let numbers = |v: &Value| v.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect::<Vec<_>>();
+    let spot = otto.wait_for("a building", |o| Some(city(o)["spots"]["file"].clone()).filter(|s| !s.is_null()));
+    let p = numbers(&spot);
+    otto.call(json!({"cmd": "mouse", "action": "move", "x": p[0], "y": p[1], "as": "user"}));
+    let beam = otto.wait_for("a hovered beam", |o| Some(city(o)["hovered"]["beam"].clone()).filter(|b| !b.is_null()));
+    // ⌥ and a trackpad's scroll turn the camera; the reply's frame is the one that asks.
+    let turn = json!({"cmd": "mouse", "action": "wheel", "x": p[0], "y": p[1], "dx": 2, "dy": 0, "precise": true,
+        "modifiers": ["alt"], "as": "user"});
+    let turned = otto.call(turn)["city"]["hovered"]["beam"].clone();
+    assert!(!turned.is_null() && turned != beam, "the beam moved with the turn: {beam} then {turned}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);

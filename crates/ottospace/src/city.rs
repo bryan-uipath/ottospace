@@ -2078,6 +2078,16 @@ fn paint(
     let mut glimmer = std::mem::take(&mut place.glimmer);
     let (waited, fade, first_ms, laid) = (place.waited, place.fade, place.first_ms, place.since);
     let drawn = &mut *drawn;
+    // A live picture is on its layer as soon as made, before GPUI's next frame: what GPUI draws
+    // over it takes the camera this frame asked for, which the layer shows at the same refresh.
+    let of = drawn.places.get(&floor);
+    let asked = of.and_then(|place| place.asked.as_ref()).map(Key::view);
+    let key = of.and_then(|place| drawn.picture(place)).map(|made| made.key.clone());
+    if let Some(made) = key.and_then(|key| drawn.pictures.get_mut(&key)).filter(|made| made.live) {
+        if let (Some(view), Some(fit), Some(camera)) = (asked, made.scene.fit, made.scene.camera) {
+            made.scene.camera = Some(fit.camera(&view, camera.aspect));
+        }
+    }
     let made = drawn.places.get(&floor).and_then(|place| drawn.picture(place));
     // A frame of the rise rendered too slowly: no rise for this city, its standing picture fades in.
     // The GPU's time: the layout (made once, before the first frame) and names (none while it
