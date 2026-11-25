@@ -1777,6 +1777,12 @@ pub enum Action {
         workbook: WorkbookId,
         tab: Option<usize>,
     },
+    /// Start typing tab `tab`'s name in place (default: the tab on show): Rename in its right
+    /// click's menu, a double-click on its title, Rename Tab. `MarkSubmit` keeps it (empty: the
+    /// automatic title again), `MarkCancel` does not. The user's alone.
+    TabEdit {
+        tab: Option<u32>,
+    },
     /// Delete a workbook, or (`tab`) one tab of it.
     WorkbookRemove {
         workbook: WorkbookId,
@@ -2636,6 +2642,7 @@ impl Action {
                 | Action::WorkbookSaveAll { .. }
                 | Action::WorkbookOpen { .. }
                 | Action::WorkbookEdit { .. }
+                | Action::TabEdit { .. }
                 | Action::TaskTalk { .. }
                 | Action::TaskCard { .. }
                 | Action::SessionOpen { .. }
@@ -2692,6 +2699,7 @@ impl Action {
             | Action::WorkbookSave { .. }
             | Action::WorkbookSaveAll { .. }
             | Action::WorkbookEdit { .. }
+            | Action::TabEdit { .. }
             // So is a new worktree's branch.
             | Action::WorktreeEdit { .. }
             // And the clone dialog's line.
@@ -3413,6 +3421,7 @@ impl Action {
             | Action::WorkbookSaveAll { .. }
             | Action::WorkbookOpen { .. }
             | Action::WorkbookEdit { .. }
+            | Action::TabEdit { .. }
             | Action::WorkbookRemove { .. }
             | Action::WorkbookFold { .. }
             | Action::WorkbookKeep { .. }
@@ -4055,6 +4064,10 @@ pub struct Tab {
     /// its empty state is the city of.
     #[serde(skip)]
     pub(crate) folder: Option<String>,
+    /// Named by the user (`TabRename`): the automatic title their name hides, kept up to date and
+    /// shown again when the name is cleared. None: `title` is the automatic one.
+    #[serde(skip)]
+    pub(crate) auto: Option<String>,
 }
 
 /// Where `TabPlace` puts a tab: at the end of a space's tabs, or just before another tab, in
@@ -4074,6 +4087,7 @@ mod filed;
 pub mod focus;
 pub mod rail;
 pub mod spaces;
+mod tab_name;
 pub use spaces::{Glyph, HOME, HOME_TAB, Owner, Space};
 
 mod agent;
@@ -4801,6 +4815,7 @@ impl Default for Model {
             focused: None,
             display: None,
             folder: None,
+            auto: None,
         };
         model.tabs.push(home);
         model
@@ -5143,6 +5158,19 @@ impl Model {
                 if matches!(self.mark_input, Some(MarkInput::Workbook { .. })) =>
             {
                 Some(workbook::USERS_ALONE)
+            }
+            // A tab's name is the user's: only they start, type or keep one.
+            Action::TabEdit { .. } => Some(tab_name::USERS_ALONE),
+            Action::FieldEdit { .. }
+            | Action::MarkSubmit
+            | Action::MarkType { .. }
+            | Action::MarkBackspace
+            | Action::MarkCancel
+            | Action::MarkPrefix
+            | Action::MarkEdit { .. }
+                if matches!(self.mark_input, Some(MarkInput::Tab { .. })) =>
+            {
+                Some(tab_name::USERS_ALONE)
             }
             // A new worktree runs git in the user's repository: only their +, keys and ↵ make one,
             // and only the shell says it is made.
@@ -5591,6 +5619,7 @@ impl Model {
             | Action::AppsFilter { on: true }
             | Action::MarkEdit { .. }
             | Action::WorkbookEdit { .. }
+            | Action::TabEdit { .. }
             | Action::WorktreeEdit { .. }
             // A click on a pane, an app's among them, or files dropped on one.
             | Action::Focus { .. }
@@ -5708,6 +5737,7 @@ impl Model {
         self.follow_space(origin, drawer_keys);
         self.settle_brief();
         self.settle_row_menu();
+        self.settle_tab_name();
         self.settle_reorder();
         self.settle_bug(&mut effects);
         self.settle_goto();
@@ -6355,7 +6385,7 @@ impl Model {
                         self.park_active();
                         self.push_tab_of(Owner::Home);
                     }
-                    let named = self.layout.is_none() || self.tabs[self.active].title.starts_with("Tab ");
+                    let named = self.layout.is_none() || self.tabs[self.active].auto_title().starts_with("Tab ");
                     // A tab its terminal fills (no pane, or one empty one) is that checkout's,
                     // after the terminal too.
                     let fills = self.layout.as_ref().is_none_or(|layout| layout.leaves().len() == 1 && empty);
@@ -6367,7 +6397,7 @@ impl Model {
                             tab.folder = Some(path);
                         }
                         if named {
-                            tab.title = name;
+                            tab.set_auto(name);
                         }
                     }
                 }
@@ -6615,7 +6645,7 @@ impl Model {
             // To the field that has the keyboard: more than one can be open (the draft's title in
             // the right bar beside a note, a filter or a mark's name).
             Action::FieldEdit { edit } => match self.field().map(|(of, _)| of) {
-                Some("mark" | "workbook" | "worktree") => {
+                Some("mark" | "workbook" | "tab" | "worktree") => {
                     if let Some(text) = self.mark_input.as_mut().and_then(MarkInput::text_mut) {
                         text.apply(edit);
                     }
@@ -7655,6 +7685,7 @@ impl Model {
             }
             Action::WorkbookOpen { workbook, tab, home } => self.workbook_open(workbook, tab, home, effects),
             Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
+            Action::TabEdit { tab } => self.tab_edit(tab),
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
             Action::WorkbookFold { workbook } => self.workbook_fold(workbook),
             Action::WorkbookKeep { workbook } => self.workbook_keep(workbook),
@@ -8178,7 +8209,10 @@ impl Model {
         {
             self.rail_focus = Some(zones::RailFocus::Left(Section::Tasks));
         }
-        let marking = !matches!(self.mark_input, None | Some(MarkInput::Workbook { .. } | MarkInput::Worktree { .. }));
+        let marking = !matches!(
+            self.mark_input,
+            None | Some(MarkInput::Workbook { .. } | MarkInput::Tab { .. } | MarkInput::Worktree { .. })
+        );
         if marking && !self.features.on(Feature::Marks) {
             self.mark_input = None;
         }
@@ -10429,6 +10463,7 @@ impl Model {
         match &self.mark_input {
             Some(MarkInput::Rename { text, .. }) => return Some(("mark", text)),
             Some(MarkInput::Workbook { text, .. }) => return Some(("workbook", text)),
+            Some(MarkInput::Tab { text, .. }) => return Some(("tab", text)),
             Some(MarkInput::Worktree { text, .. }) => return Some(("worktree", text)),
             _ => {}
         }
@@ -10470,6 +10505,10 @@ impl Model {
                 Some(MarkInput::Workbook { text, .. }) => Some(text),
                 _ => None,
             },
+            "tab" => match &self.mark_input {
+                Some(MarkInput::Tab { text, .. }) => Some(text),
+                _ => None,
+            },
             _ => self.compose.as_ref(),
         }
     }
@@ -10486,6 +10525,7 @@ impl Model {
         // letter is over the filter, not in it.
         let of = match self.mode() {
             Mode::Mark if matches!(self.mark_input, Some(MarkInput::Workbook { .. })) => "workbook",
+            Mode::Mark if matches!(self.mark_input, Some(MarkInput::Tab { .. })) => "tab",
             Mode::Mark if matches!(self.mark_input, Some(MarkInput::Worktree { .. })) => "worktree",
             Mode::Mark => "mark",
             Mode::Pick => "picker",
@@ -10636,7 +10676,10 @@ impl Model {
 
     /// The lowest "Tab n" no tab has: closing "Tab 5" and opening one gives "Tab 5" again.
     pub(crate) fn free_title(&self) -> String {
-        let taken = |n: &u32| self.tabs.iter().any(|t| t.title == format!("Tab {n}"));
+        // Also one under the user's name: clearing it brings it back.
+        let taken = |n: &u32| {
+            self.tabs.iter().any(|t| [t.title.as_str(), t.auto_title()].contains(&format!("Tab {n}").as_str()))
+        };
         format!("Tab {}", (1..).find(|n| !taken(n)).unwrap_or(self.next_tab))
     }
 
@@ -10647,7 +10690,16 @@ impl Model {
         let title = self.free_title();
         self.add_space(&of);
         let at = self.space_end(&of);
-        let tab = Tab { id: self.next_tab, title, space: of, layout: None, focused: None, display: None, folder: None };
+        let tab = Tab {
+            id: self.next_tab,
+            title,
+            space: of,
+            layout: None,
+            focused: None,
+            display: None,
+            folder: None,
+            auto: None,
+        };
         self.tabs.insert(at, tab);
         self.active = at;
     }
@@ -11905,6 +11957,7 @@ mod tests {
         Action::WorkbookSaveAll { .. },
         Action::WorkbookOpen { .. },
         Action::WorkbookEdit { .. },
+        Action::TabEdit { .. },
         Action::WorkbookRemove { .. },
         Action::WorkbookUndo,
         Action::WorkbookReopen { .. },
@@ -12333,6 +12386,7 @@ mod tests {
             Action::WorkbookSaveAll { uid: text(), cwds: Vec::new(), histories: Vec::new() },
             Action::WorkbookOpen { workbook: 1, tab: None, home: None },
             Action::WorkbookEdit { workbook: 1, tab: None },
+            Action::TabEdit { tab: None },
             Action::WorkbookRemove { workbook: 1, tab: None },
             Action::WorkbookFold { workbook: 1 },
             Action::WorkbookKeep { workbook: 1 },
@@ -13063,6 +13117,7 @@ mod tests {
                         Some(focus::SHELLS_ALONE)
                     }
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
+                    Action::TabEdit { .. } => Some(tab_name::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),
@@ -20619,6 +20674,7 @@ mod tests {
                         Some(focus::SHELLS_ALONE)
                     }
                     _ if action.feature() == Some(Feature::ZoomOut) => Some(zoom::USERS_ALONE),
+                    Action::TabEdit { .. } => Some(tab_name::USERS_ALONE),
                     Action::TaskDone { .. } | Action::TaskLater { .. } | Action::DoneUndo => Some(finish::USERS_ALONE),
                     Action::DoneNewTask => Some(finish::NEW_TASK_USERS),
                     Action::QuickOpen { .. } | Action::QuickPill { .. } => Some(quick::QUICK_USERS),

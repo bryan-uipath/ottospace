@@ -14,7 +14,8 @@ use serde::Serialize;
 use crate::features::Feature;
 use crate::layout::Rect;
 use crate::list::ListRow;
-use crate::model::{Action, Kind, Model, Owner};
+use crate::marks::MarkInput;
+use crate::model::{Action, HOME_TAB, Kind, Model, Owner};
 use crate::workbook::WorkbookId;
 
 /// Why a client's request that takes the keyboard waits: the user's keys are in a row's menu.
@@ -49,6 +50,9 @@ pub enum Item {
     /// Re-sort by size: its app's slots there pair their windows again.
     SlotResort,
     SlotClear,
+    /// A tab closed, as its × does; or folded out to another display (`multi_monitor` on).
+    Close,
+    FoldOut,
 }
 
 impl Serialize for Item {
@@ -77,6 +81,8 @@ impl Item {
             Item::SlotSwap(_) => "slot_swap",
             Item::SlotResort => "slot_resort",
             Item::SlotClear => "slot_clear",
+            Item::Close => "close",
+            Item::FoldOut => "fold_out",
         }
     }
 
@@ -99,6 +105,8 @@ impl Item {
             Item::SlotSwap(_) => "Swap with…",
             Item::SlotResort => "Re-sort by size",
             Item::SlotClear => "Clear slot",
+            Item::Close => "Close",
+            Item::FoldOut => "Fold out",
         }
     }
 }
@@ -114,6 +122,8 @@ pub enum MenuOf {
     ReposAdd,
     /// An app pane's or a slot's ⋯ (`slots` on).
     Pane(crate::model::PaneId),
+    /// A tab of the tab row, by its id: a right click on it.
+    Tab(u32),
 }
 
 impl From<ListRow> for MenuOf {
@@ -171,9 +181,14 @@ impl Model {
             // A linked worktree, never a repository's own folder.
             MenuOf::Row(ListRow::Repo(path)) if self.linked_worktree(path).is_some() => &[Item::DeleteWorktree],
             MenuOf::Row(row) => row_items(row),
-            // On the top row: Keep, while it is temporary.
-            MenuOf::Space(id) if !self.workbooks.is_kept(*id) => &[Item::Keep],
-            MenuOf::Space(_) => &[],
+            // On the top row: Rename, and Keep while it is temporary.
+            MenuOf::Space(id) if !self.workbooks.is_kept(*id) => &[Item::Rename, Item::Keep],
+            MenuOf::Space(_) => &[Item::Rename],
+            // A tab out has its Fold back in where its × is.
+            MenuOf::Tab(id) if self.features.on(Feature::MultiMonitor) && !self.is_out(*id) => {
+                &[Item::Rename, Item::FoldOut, Item::Close]
+            }
+            MenuOf::Tab(_) => &[Item::Rename, Item::Close],
             MenuOf::ReposAdd => &[Item::LocalFolder, Item::FromGitHub],
             MenuOf::Pane(_) if !self.features.on(Feature::Slots) => &[],
             // A slot's acts, with Swap and Re-sort among its app's; an app pane's: keep it as one.
@@ -239,6 +254,12 @@ impl Model {
             MenuOf::ReposAdd => self.sidebar == Some(crate::model::Section::Repos) && !self.repo_dirs.fixed,
             // On the tab on show.
             MenuOf::Pane(id) => self.layout.as_ref().is_some_and(|layout| layout.leaves().contains(id)),
+            // On the row of the space on show; never Home's own, nor Decisions'.
+            MenuOf::Tab(id) => self.space_tabs(self.shown_space()).iter().any(|at| {
+                self.tabs
+                    .get(*at)
+                    .is_some_and(|tab| tab.id == *id && tab.id != HOME_TAB && tab.space != Owner::Decisions)
+            }),
         };
         there && !self.menu_items(of).is_empty()
     }
@@ -303,6 +324,13 @@ impl Model {
             (MenuOf::Pane(pane), Item::SlotGiveBack) => return Some(Action::SlotGiveBack { pane: *pane }),
             (MenuOf::Pane(pane), Item::SlotSwap(with)) => return Some(Action::SlotSwap { pane: *pane, with: *with }),
             (MenuOf::Pane(pane), Item::SlotResort) => return Some(Action::SlotResort { pane: *pane }),
+            (MenuOf::Tab(tab), Item::Rename) => return Some(Action::TabEdit { tab: Some(*tab) }),
+            (MenuOf::Tab(tab), Item::FoldOut) => return Some(Action::TabOut { tab: Some(*tab) }),
+            // The shell closes it as its × does: asking first while a program runs there.
+            (MenuOf::Tab(tab), Item::Close) => {
+                let index = self.tabs.iter().position(|open| open.id == *tab);
+                return Some(Action::CloseTab { index });
+            }
             (MenuOf::Row(ListRow::Workbook(id)) | MenuOf::Space(id), _) => (*id, None),
             (MenuOf::Row(ListRow::WorkbookTab(id, at)), _) => (*id, Some(*at)),
             _ => return None,
@@ -323,9 +351,19 @@ impl Model {
             self.row_menu = self.row_menu.take().filter(|_| index.is_none());
             return;
         };
-        self.row_menu = None;
+        let top = self.row_menu.take().is_some_and(|menu| matches!(menu.row, MenuOf::Space(_)));
         match action {
-            Action::WorkbookEdit { workbook, tab } => self.workbook_edit(workbook, tab),
+            Action::WorkbookEdit { workbook, tab } => {
+                self.workbook_edit(workbook, tab);
+                // Typed in its item on the top row, where it was right-clicked.
+                if let Some(MarkInput::Workbook { top: on, .. }) = &mut self.mark_input {
+                    *on = top;
+                }
+            }
+            Action::TabEdit { tab } => self.tab_edit(tab),
+            Action::TabOut { tab } => self.tab_out(tab, effects),
+            // The shell asks, as the ×'s click does (`ask_close_tab`).
+            Action::CloseTab { .. } => {}
             Action::WorkbookRemove { workbook, tab } => self.workbook_remove(workbook, tab),
             Action::WorkbookKeep { workbook } => self.workbook_keep(workbook),
             action @ (Action::ListenPause { .. } | Action::ListenResume { .. }) => self.listen_act(action, effects),
@@ -579,22 +617,53 @@ mod tests {
         assert_eq!(items(&m), [Item::Rename, Item::Delete]);
     }
 
-    /// A temporary workspace's item on the top row has a … too: Keep. Kept or off the row, none.
+    /// A workspace's item on the top row has a menu too: Rename, and Keep while temporary. Off
+    /// the row, none.
     #[test]
-    fn a_temporary_workspaces_item_on_the_top_row_offers_keep() {
+    fn a_workspaces_item_on_the_top_row_offers_rename_and_keep_while_temporary() {
         let mut m = Model::default();
         m.update(Action::WorkbookNew { uid: UID.into() });
         m.update(Action::RowMenu { row: MenuOf::Space(1), dots: DOTS, keys: true });
         let items = |m: &Model| m.row_menu().map(|(_, items)| items.to_vec()).unwrap_or_default();
-        assert_eq!(items(&m), [Item::Keep]);
-        m.update(Action::RowMenuChoose { index: None });
+        assert_eq!(items(&m), [Item::Rename, Item::Keep]);
+        m.update(Action::RowMenuChoose { index: Some(1) });
         assert!(m.workbooks.is_kept(1) && m.row_menu().is_none());
         m.update(Action::RowMenu { row: MenuOf::Space(1), dots: DOTS, keys: true });
-        assert!(m.row_menu().is_none());
+        assert_eq!(items(&m), [Item::Rename]);
+        // Rename types the name in the item on the top row.
+        m.update(Action::RowMenuChoose { index: None });
+        assert!(matches!(m.mark_input, Some(MarkInput::Workbook { workbook: 1, tab: None, top: true, .. })));
+        m.update(Action::MarkCancel);
         // Off the row (a client's × leaves it listed): no menu there.
         m.update(Action::WorkbookNew { uid: UID_2.into() });
         m.update(Action::SpaceHide { index: None }.sent_by(Origin::Socket));
         m.update(Action::RowMenu { row: MenuOf::Space(2), dots: DOTS, keys: true });
+        assert!(m.row_menu().is_none());
+    }
+
+    /// A right click on a tab: Rename, Fold out (`multi_monitor` on), Close as its × does.
+    #[test]
+    fn a_tabs_menu_renames_folds_out_or_closes_it() {
+        let mut m = Model::default();
+        m.update(Action::Open { kind: Kind::Terminal, axis: Right, beside: None });
+        m.update(Action::NewTab);
+        let (first, second) = (m.tabs[m.active - 1].id, m.tabs[m.active].id);
+        let items = |m: &Model| m.row_menu().map(|(_, items)| items.to_vec()).unwrap_or_default();
+        m.update(Action::RowMenu { row: MenuOf::Tab(first), dots: DOTS, keys: true });
+        assert_eq!(items(&m), [Item::Rename, Item::FoldOut, Item::Close]);
+        assert_eq!(m.row_menu_action(Some(2)), Some(Action::CloseTab { index: Some(m.active - 1) }));
+        assert_eq!(m.row_menu_action(Some(1)), Some(Action::TabOut { tab: Some(first) }));
+        m.update(Action::RowMenuChoose { index: None });
+        assert!(matches!(m.mark_input, Some(MarkInput::Tab { tab, .. }) if tab == first));
+        m.update(Action::MarkCancel);
+        // The flag off: no Fold out.
+        let features = m.features.with(Feature::MultiMonitor, false);
+        m.update(Action::SetFeatures { features });
+        m.update(Action::RowMenu { row: MenuOf::Tab(second), dots: DOTS, keys: false });
+        assert_eq!(items(&m), [Item::Rename, Item::Close]);
+        m.update(Action::RowMenuClose);
+        // Home's own tab, or one not on the row on show: none.
+        m.update(Action::RowMenu { row: MenuOf::Tab(HOME_TAB), dots: DOTS, keys: false });
         assert!(m.row_menu().is_none());
     }
 

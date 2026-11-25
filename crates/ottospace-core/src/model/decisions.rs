@@ -790,7 +790,7 @@ impl Model {
             run.tab = id;
         }
         if let Some(tab) = self.tabs.iter_mut().find(|tab| tab.id == id) {
-            tab.title = title;
+            tab.set_auto(title);
         }
     }
 }

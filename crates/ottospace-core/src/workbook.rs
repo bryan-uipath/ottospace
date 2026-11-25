@@ -1183,7 +1183,7 @@ impl Model {
         };
         let mut text = Field::new(&name, MAX_NAME);
         text.apply(Edit::SelectAll);
-        self.mark_input = Some(MarkInput::Workbook { workbook: id, tab, text });
+        self.mark_input = Some(MarkInput::Workbook { workbook: id, tab, text, top: false });
     }
 
     /// Keeps a typed name, unless it is empty once cleaned. Its open tab takes the name too: a
@@ -1201,7 +1201,7 @@ impl Model {
         // The empty tab a new one opened with has its name as its title: it takes the new name.
         let was = Some(book.name.clone()).filter(|_| book.tabs.is_empty());
         let of = Owner::Workbook { id };
-        let named = |open: &&mut Tab| open.space == of && Some(&open.title) == was.as_ref();
+        let named = |open: &&mut Tab| open.space == of && Some(open.auto_title()) == was.as_deref();
         let named = self.tabs.iter_mut().find(named).map(|open| open.id);
         let live = match tab {
             // One tab opens under the workbook's name: it keeps that title once a second is added.
@@ -1224,8 +1224,9 @@ impl Model {
             book.name = name.clone();
             self.workbooks.sort();
         }
+        // A tab's own title the user typed names its open tab as Rename Tab does.
         if let Some(open) = self.tabs.iter_mut().find(|open| Some(open.id) == live) {
-            open.title = name;
+            if tab.is_some() { open.rename(&name) } else { open.set_auto(name) }
         }
     }
 

@@ -321,7 +321,8 @@ impl Workspace {
             let line = div().px_2().flex().flex_wrap().gap_1().text_xs().text_color(rgb(theme::MUTED));
             line.child("No workspaces yet —").child(new)
         });
-        let typing = |id: WorkbookId, at: Option<usize>| matches!(&self.model.mark_input, Some(MarkInput::Workbook { workbook, tab, .. }) if *workbook == id && *tab == at);
+        // Not one typed in its item on the top row.
+        let typing = |id: WorkbookId, at: Option<usize>| matches!(&self.model.mark_input, Some(MarkInput::Workbook { workbook, tab, top: false, .. }) if *workbook == id && *tab == at);
         // The leading mark: filled while it is open, a ring when it is not.
         let dot = |open: bool| {
             let dot = div().flex_none().size(px(8.)).rounded_full();

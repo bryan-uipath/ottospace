@@ -171,6 +171,9 @@ pub struct SavedTab {
     /// Where the user placed its tile on the zoomed-out canvas (`zoom_out`): its corner.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub placed: Option<[f32; 2]>,
+    /// Named by the user: its title is their name, and this the automatic one under it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub auto: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -405,18 +408,20 @@ impl Model {
                 (saved.tab, *last) = (Some(records.len()), None);
             }
             records.push(record);
-            links.push((book, marked, settings, space, self.placed.get(&tab.id).copied()));
+            let auto = tab.auto.as_deref().map(|title| marks::kept_title(title, 256));
+            links.push((book, marked, settings, space, self.placed.get(&tab.id).copied(), auto));
         }
         workbook::fit_history(&mut records);
         let tabs = records.into_iter().zip(links);
         let tabs = tabs
-            .map(|(tab, (workbook, marks, settings, space, placed))| SavedTab {
+            .map(|(tab, (workbook, marks, settings, space, placed, auto))| SavedTab {
                 tab,
                 workbook,
                 marks,
                 settings,
                 space,
                 placed,
+                auto,
             })
             .collect();
         let spaces: Vec<SavedSpace> = spaces.into_iter().map(|(.., saved)| saved).collect();
@@ -612,6 +617,11 @@ impl Model {
             // Its tile where the user placed it; a corner not snapped is not read.
             if let Some(at) = saved.placed.filter(|at| crate::model::canvas::snapped(*at) == Some(*at)) {
                 self.placed.insert(tab, at);
+            }
+            // The user's name stays theirs: the automatic title goes back under it.
+            let auto = saved.auto.as_deref().map(|title| marks::kept_title(title, 256));
+            if let Some(open) = self.tabs.iter_mut().find(|open| open.id == tab) {
+                open.auto = auto;
             }
             built.push((tab, panes));
         }
@@ -874,6 +884,21 @@ mod tests {
         assert_eq!(back.placed.values().copied().collect::<Vec<_>>(), [[-2., 0.5]]);
     }
 
+    #[test]
+    fn a_tab_the_user_named_keeps_its_name_and_its_automatic_title() {
+        let mut m = workspace();
+        let id = m.tabs[m.active].id;
+        let auto = m.tabs[m.active].title.clone();
+        m.tab_rename(id, "the plan");
+        let file = parse(&write(&m.layout_file(&[], &[], 0))).unwrap();
+        let (mut back, _) = restored(&m, file, &[], false);
+        let at = back.tabs.iter().position(|tab| tab.title == "the plan").expect("named tab restored");
+        assert_eq!(back.tabs[at].auto_title(), auto);
+        let id = back.tabs[at].id;
+        back.tab_rename(id, "");
+        assert_eq!(back.tabs[at].title, auto);
+    }
+
     /// A fresh model with `m`'s tasks and workspaces, and the file of `m` restored into it.
     fn restored(m: &Model, file: Layout, gone: &[&str], launch: bool) -> (Model, Vec<Effect>) {
         let mut fresh = Model::default();
@@ -1027,6 +1052,7 @@ mod tests {
             settings: None,
             space: None,
             placed: None,
+            auto: None,
         };
         let none = Vec::new;
         file.tabs = vec![

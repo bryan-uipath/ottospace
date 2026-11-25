@@ -47,6 +47,7 @@ ottospace            # opens on the Repos list
 | New workspace | + on the top row, or in the Workspaces section's header |
 | Hide the task or workspace on show | ⌘⌃W, or its × on the top row. Its row in Tasks or Workspaces opens it again |
 | Close the tab and its panes | ⌘⇧W |
+| Rename a tab | Right click it ▸ Rename, or double-click its title, or ⌘⇧P ▸ Rename Tab: type, ↵. Empty gives the automatic name back |
 | Tab out to its own window on another display, and back in (`multi_monitor` flag) | ⌘⇧O; or Fold back in on its tab or in its window's strip. A workspace's only tab leaves an empty one behind until it folds back in |
 | Every tab of the workspace at once, as tiles (`zoom_out` flag) | ⌘⇧\\; arrows or H J K L select, ↵ or a click goes in, Esc or ⌘⇧\\ back |
 | Zoomed out: zoom, pan, fit | A pinch, ⌘-scroll or a wheel zooms, two-finger scroll or a drag pans; ⌘= ⌘- ⌘0 |
@@ -121,7 +122,7 @@ workspace; tabs of nothing (a dismissed task's, a client's) go to the workspace 
 | Update a tab of it after changing it | ⌘⇧S again on that tab. Undo on a toast (six seconds) |
 | Open it | Workspaces, click it. Or ⌘⌃E, ↵. Its saved tabs open in order; one already open is kept. None saved: one empty tab |
 | See, open, rename or remove one of its tabs | ▸ on its row (⌘⌃E: space), then the tab's row: click opens it; its … has Rename, Remove |
-| Rename or delete it | Point at its row: … opens a menu with Rename, Delete. Or ⌘⌃E, then `r`, `x`. Undo on a toast (six seconds), or `u`, puts a deleted one back |
+| Rename or delete it | Point at its row: … opens a menu with Rename, Delete; or right click its item on the top row ▸ Rename. Or ⌘⌃E, then `r`, `x`. Undo on a toast (six seconds), or `u`, puts a deleted one back |
 
 A saved tab keeps the splits, each app, and each terminal's directory, last 500 lines and the command
 running in it. Opened, a terminal shows those lines above its prompt with the command typed on

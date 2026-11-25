@@ -53,6 +53,7 @@ pub fn app_menus(features: &ottospace_core::features::Features) -> Vec<Menu> {
             name: "File".into(),
             items: vec![
                 item("New Tab", NewTab),
+                item("Rename Tab", crate::commands::RenameTab),
                 item("Move Tab to…", MoveTabToTask),
                 item("Save Tab as Workspace", SaveWorkbook),
                 item("Add Tab to Workspace…", AddTabToWorkbook),

@@ -7293,10 +7293,9 @@ impl Workspace {
                     let row = ottospace_core::list::ListRow::Repo(checkout.path.clone());
                     cx.listener(move |this, e: &MouseDownEvent, window, cx| {
                         cx.stop_propagation();
-                        this.row_menu_at = Some(e.position);
                         // Where each shell is now: a worktree a terminal is in is not deleted.
                         this.tell_terminals();
-                        this.open_row_menu(row.clone().into(), false, window, cx);
+                        this.open_row_menu_at(row.clone().into(), e.position, window, cx);
                     })
                 })
                 .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| {
@@ -8120,6 +8119,9 @@ impl Workspace {
             matches!(dot, ottospace_core::listen::Dot::Space(of)
             if !shown.iter().any(|(_, space)| space.of == *of))
         });
+        // The one name typed in an item on the top row, drawn once.
+        let typed = matches!(&self.model.mark_input, Some(MarkInput::Workbook { top: true, .. }));
+        let mut field = typed.then(|| self.render_field("name", cx));
         let spaces = shown.into_iter().map(|(place, space)| {
             let of = space.of.clone();
             // The pane being heard is in this space, selected or not: a red dot at its corner.
@@ -8239,13 +8241,22 @@ impl Workspace {
                 _ => None,
             };
             let to = of.clone();
+            // A workspace's name typed in its item (its right click's Rename).
+            let book = match of {
+                Owner::Workbook { id } => Some(id),
+                _ => None,
+            };
+            let renaming = book.is_some_and(|id| {
+                matches!(&self.model.mark_input,
+                    Some(MarkInput::Workbook { workbook, tab: None, top: true, .. }) if *workbook == id)
+            });
             let dragged = reorder::DraggedItem { item: ReorderItem::Space { of: of.clone() }, place };
             let bar = bar.filter(|(at, _)| *at == place).map(|(_, after)| reorder::bar(&self.controls, true, after));
             div()
                 .id(("space", place))
                 .group("space")
-                // Home's is not carried: nothing goes before it.
-                .when(of != Owner::Home, |d| {
+                // Home's is not carried: nothing goes before it. Nor one whose name is typed.
+                .when(of != Owner::Home && !renaming, |d| {
                     d.on_drag(dragged, |_, _, _, cx| cx.new(|_| gpui::EmptyView)).on_mouse_down(
                         MouseButton::Left,
                         cx.listener(|this, e: &MouseDownEvent, _, _| this.reorder_from = Some(e.position)),
@@ -8283,9 +8294,12 @@ impl Workspace {
                 .child(mark(&self.marks, Mark::Space(place)))
                 .children(heard)
                 .children(lead)
-                .children((!small).then(|| {
-                    let name = cut_text(title).flex_1();
-                    if temporary { name.text_color(rgb(theme::MUTED)).italic() } else { name }
+                .children((!small || renaming).then(|| match if renaming { field.take() } else { None } {
+                    Some(field) => div().flex().flex_1().min_w_0().text_color(rgb(theme::MARK)).child(field),
+                    None => {
+                        let name = cut_text(title).flex_1();
+                        if temporary { name.text_color(rgb(theme::MUTED)).italic() } else { name }
+                    }
                 }))
                 .children(
                     (count > 1 && !small)
@@ -8295,6 +8309,16 @@ impl Workspace {
                 .children(hide.filter(|_| !small))
                 .child(self.controls.mark(format!("space:{place}")))
                 .children(bar)
+                // A workspace's right click: its menu at the pointer (Rename, Keep while temporary).
+                .when_some(book, |d, id| {
+                    d.on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_row_menu_at(MenuOf::Space(id), e.position, window, cx);
+                        }),
+                    )
+                })
                 // A tab dropped on a space moves there.
                 .drag_over::<DraggedTab>(|style, _, _, _| style.bg(rgb(theme::SELECTED)))
                 .on_drop(cx.listener(move |this, dragged: &DraggedTab, window, cx| {
@@ -8302,7 +8326,9 @@ impl Workspace {
                     this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
                 }))
                 .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::SpaceClick { index: place }, this.input, window, cx);
+                    if !renaming {
+                        this.dispatch(Action::SpaceClick { index: place }, this.input, window, cx);
+                    }
                 }))
         });
         // The spaces left off for room: their count; a click goes on to the next space.
@@ -8478,7 +8504,9 @@ impl Workspace {
     fn render_space_tabs(&self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
         let of = self.model.shown_space().clone();
         let places = self.model.space_tabs(&of);
-        if places.len() < 2 {
+        // One tab: no strip, unless its name is being typed (Rename Tab).
+        let renaming = matches!(self.model.mark_input, Some(MarkInput::Tab { .. }));
+        if places.len() < 2 && !renaming {
             // Back on this row (e.g. from Home), its tab on show scrolls into view again.
             self.tabs_shown.set(None);
             return None;
@@ -8505,6 +8533,8 @@ impl Workspace {
                 let (active, id) = (place == main, tab.id);
                 let out = self.model.is_out(id);
                 let title = SharedString::from(tab.title.clone());
+                // Its name being typed: the field in its title's place, and no drag (a drag selects text).
+                let renaming = matches!(&self.model.mark_input, Some(MarkInput::Tab { tab, .. }) if *tab == id);
                 div()
                     .id(("tab", tab.id))
                     // A pane dropped on a tab moves there; a tab dropped on one goes before it.
@@ -8518,8 +8548,10 @@ impl Workspace {
                         let at = TabAt::Before(id);
                         this.dispatch(Action::TabPlace { tab: Some(dragged.0), at }, this.input, window, cx);
                     }))
-                    .on_drag(DraggedTab(id), move |_, offset, _, cx| {
-                        cx.new(|_| DragChip { label: title.clone(), offset })
+                    .when(!renaming, |d| {
+                        d.on_drag(DraggedTab(id), move |_, offset, _, cx| {
+                            cx.new(|_| DragChip { label: title.clone(), offset })
+                        })
                     })
                     .on_drop(cx.listener(move |this, dragged: &DraggedPane, window, cx| {
                         this.dispatch(Action::MovePane { pane: Some(dragged.0), tab: place }, this.input, window, cx);
@@ -8527,6 +8559,8 @@ impl Workspace {
                     .relative()
                     .h_full()
                     .min_w(px(MIN_TAB))
+                    // Room for the name being typed: a narrow tab cut it (shots).
+                    .when(renaming, |d| d.min_w(px(MAX_SPACE)))
                     .max_w(px(MAX_SPACE))
                     // At its narrowest it clips, never paints over the next tab.
                     .overflow_hidden()
@@ -8567,7 +8601,15 @@ impl Workspace {
                         let icon = svg().path("icons/display-out.svg").size(px(12.)).flex_none();
                         d.child(icon.text_color(rgb(colour)))
                     })
-                    .child(cut_text(tab.title.clone()).flex_1())
+                    .child(match renaming {
+                        true => div()
+                            .flex()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(rgb(theme::MARK))
+                            .child(self.render_field("name", cx)),
+                        false => cut_text(tab.title.clone()).flex_1(),
+                    })
                     .child(self.controls.mark(format!("tab:{}", tab.id)))
                     .when(out, |d| d.child(self.fold_in_button(id, cx)))
                     .when(!out, |d| {
@@ -8587,7 +8629,20 @@ impl Workspace {
                                 })),
                         )
                     })
-                    .on_click(cx.listener(move |this, _, window, cx| this.select_tab(id, window, cx)))
+                    // A right click: its menu at the pointer (Rename, Fold out, Close).
+                    .on_mouse_down(
+                        MouseButton::Right,
+                        cx.listener(move |this, e: &MouseDownEvent, window, cx| {
+                            cx.stop_propagation();
+                            this.open_row_menu_at(MenuOf::Tab(id), e.position, window, cx);
+                        }),
+                    )
+                    // A double-click on it: its name typed in place.
+                    .on_click(cx.listener(move |this, e: &ClickEvent, window, cx| match e.click_count() {
+                        _ if renaming => {}
+                        2 => drop(this.dispatch(Action::TabEdit { tab: Some(id) }, this.input, window, cx)),
+                        _ => this.select_tab(id, window, cx),
+                    }))
             });
         // Tabs past the row's width scroll across, under the overflow motif.
         let row = div()
@@ -8651,7 +8706,7 @@ impl Workspace {
             }
             Mode::Sneak => ("", "esc"),
             Mode::Mark => match self.model.mark_input {
-                Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. }) => ("", ""),
+                Some(MarkInput::Rename { .. } | MarkInput::Workbook { .. } | MarkInput::Tab { .. }) => ("", ""),
                 Some(MarkInput::SetKey { .. }) => ("LETTER", "a letter for the mark · ⌫ for none · esc cancels"),
                 Some(MarkInput::Worktree { .. }) => ("", "↵ add · esc cancels"),
                 _ => ("GO TO", "a mark's letter · esc cancels"),
@@ -9551,6 +9606,9 @@ impl Workspace {
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| {
                 this.ask_close_tab(None, window, cx);
+            }))
+            .on_action(cx.listener(|this, _: &crate::commands::RenameTab, window, cx| {
+                this.dispatch(Action::TabEdit { tab: None }, this.input, window, cx);
             }))
             .on_action(cx.listener(|this, _: &FoldTab, window, cx| match this.on(Feature::MultiMonitor) {
                 true => drop(this.dispatch(Action::TabOut { tab: None }, this.input, window, cx)),

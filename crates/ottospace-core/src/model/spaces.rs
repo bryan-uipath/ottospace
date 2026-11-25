@@ -705,6 +705,7 @@ impl Model {
                 focused: None,
                 display: None,
                 folder: None,
+                auto: None,
             };
             self.tabs.push(tab);
         }
