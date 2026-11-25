@@ -1,10 +1,63 @@
 # Code city: detail as you zoom in (design)
 
 The owner, 2026-11-23: "when we zoom in, if we can show more detail (like the internals of files,
-kind of like code city)". This is the file-level zoom already in `plan.md` ("Inside a file"),
-now driven by how near the camera is rather than only by a double click.
+kind of like code city)"; 2026-11-24: "LoD makes sense", "the challenge is making things stable
+and avoiding jump when transitioning lods", "lod applies to in files too". One mechanism, one
+ladder: folder block → file building → the file's parts. Each level appears as the camera nears.
 
-## What appears at which zoom
+## The ladder (built: `ottospace-core::lod`)
+
+- **One layout for every level.** The plan is laid out once; a level only shows or hides boxes
+  inside an outline that was there already. A box's parent is the plinth of the nearest folder
+  that holds it (a folder of one child has none). Nothing is file-specific: a box with children
+  opens, a leaf has no level, so a file's parts are one more rung (their parent the building).
+- **Closed, a box stands for what it hides:** raised by its leaves' heights above it, mean by
+  area (one solid block the size of the folder's ground, as tall as its files are on average:
+  the silhouette changes least), in a lit file's colour if it hides one. An agent at a hidden
+  file is at that box (its icon, its beam); hover over it names the folder.
+- **Per box, by size on screen, with hysteresis.** A box opens when its children's lots would
+  be 3 px a side (`OPEN_PX`), closes under 2 px (`CLOSE_PX`). The size is taken by the distance
+  from the eye to the point looked at, widened by the box's distance from that point on the plan:
+  turning round that point changes no level. A box changes at most once in 300 ms (`HOLD_MS`);
+  a change that waits is made when it may, with pictures asked for until then.
+- **No jump:** an opening box's children grow out of its closed top over 200 ms (`FADE_MS`)
+  while it sinks to its plinth; closing, the reverse. At once under Reduce Motion.
+- **Tested** (core): no box moves or resizes on the plan at any level or moment of a fade; every
+  box lies inside its parent; a full turn changes no level; a camera wobbling in and out changes a
+  box at most twice and never within the hold; children start inside their closed box; a closed
+  box hiding a lit file is lit.
+- Thresholds were measured: 6 / 4 px merged half of a 9,500-file city at a fitted 2560×1500
+  view (5,306 of 10,392 boxes drawn); 3 / 2 px keeps 80% (8,350) and still draws 28,138 of 618,858
+  at 600,000 files.
+
+## The file's parts (decided 2026-11-24, not built)
+
+| Choice | Decision |
+|---|---|
+| Where symbols come from | tree-sitter. The grammars are already linked for the viewer's highlighting (`syntax.rs`): Rust, TypeScript, TSX, JavaScript, Python, Go, JSON, TOML, YAML, Markdown and 13 more. No new dependency, licence, cooldown or binary size; the shell crate, as today (`ottospace-core` stays pure: it gets parts as data, `(kind, line span)`, never a name in the state) |
+| First languages | Rust, TypeScript/TSX/JavaScript, Python, Go; Markdown headings; JSON/YAML top-level keys |
+| A language with no grammar, a parse error or a timeout | the plain building: no approximation |
+| Kinds and colours | a fixed set: function/method, type (struct, enum, trait, interface, class), test, comment/doc, import/use, other. Each a stable colour clear of the folder colours and of amber ("needs you"), told apart by more than hue (a legend on hover; parts in source order, bottom to top) |
+| Size | lines: a part's share of its building |
+| When read | only files near the camera (their building opening, the rule above), off the main thread, at most 1 MB a file, never in excluded folders, never the network |
+| Cache | by content: git's blob id for a tracked, unmodified file (free from the index: nothing read to know a parse is still good), a hash of the contents otherwise; with the grammar's and query's version. In memory always; on disk under ottospace's home only the outline (kind, line span, symbol name), 0600, bounded with eviction, never the text; a test run writes it only inside its own `OTTOSPACE_HOME` |
+| An agent's edit | lights what it touched at the level on show: the part whose line span holds the edit's lines (the diff a tool event carries), else the building, else the closed folder. A read lights the same way, quieter (the read flash); a search sweeps as today; in the task's colour for the lit rule's time |
+
+Queries: Rust `function_item`, `struct_item`/`enum_item`/`trait_item`/`type_item`, `impl_item`
+(its functions nested), `mod_item`, a function with `#[test]` or in `mod tests` as test,
+`line_comment`/`block_comment` runs as comment, `use_declaration`; TypeScript/JavaScript
+`function_declaration`, `class_declaration` (methods nested), `interface_declaration`,
+`type_alias_declaration`, `enum_declaration`, `import_statement`, `describe`/`it`/`test` calls as
+test; Python `function_definition`, `class_definition`, `import_statement`, `test_`-named
+functions; Go `function_declaration`, `method_declaration`, `type_declaration`, `Test`-named
+functions; Markdown `atx_heading`.
+
+Measured (release, this Mac): tree-sitter parses a 2,000-line Rust file (36 KB) in 3.3 ms and a
+1,600-line TypeScript one in 2.9 ms; hashing it takes 0.007 ms. The 9,500-file fixture (about 7 KB
+a file) would take about 6 s to parse whole, plus about 0.45 s to read; with the blob-id cache a
+reopen parses nothing. #481's line counts should use the same key: counted once per blob.
+
+## Earlier notes (kept for the parts' layout; the size thresholds above replace the table)
 
 Level of detail follows each thing's size on screen, the rule names already use (`city_labels`:
 40 points to 45% of the view):

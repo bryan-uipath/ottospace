@@ -23,6 +23,7 @@ use ottospace_core::city_colours::{self, FolderColours};
 use ottospace_core::city_filter;
 use ottospace_core::city_labels::{self, Candidate, Tier};
 use ottospace_core::empty::{self, Backdrop};
+use ottospace_core::lod;
 use ottospace_core::model::Origin;
 use ottospace_core::model::city::{At, CameraStep, Glimpse, SPIN_STEPS, Who};
 use ottospace_core::scene::{self, Camera, Kind, Layout, Scene, View};
@@ -314,6 +315,10 @@ struct Key {
     folders: Vec<(String, String)>,
     /// The user's drag (or a reset's ease) moves its camera: rendered at half size, unnamed.
     moving: bool,
+    /// While its level of detail changes (`Made::settling`), the frame it is drawn for (a 16 ms
+    /// step); 0 at rest. Under Reduce Motion (`calm`) a level changes at once.
+    detail_at: u64,
+    calm: bool,
 }
 
 impl Key {
@@ -332,7 +337,7 @@ impl Key {
     /// What its layout depends on (`scene::Layout`): not its camera, rise or motion. A camera
     /// move lays nothing out again.
     fn laid(&self) -> Key {
-        Key { rise: 1000, view: [0; 5], moving: false, ..self.clone() }
+        Key { rise: 1000, view: [0; 5], moving: false, detail_at: 0, calm: false, ..self.clone() }
     }
 
     /// Rendered at half size while it moves or rises: a quarter of the GPU's work, the copy out
@@ -374,6 +379,10 @@ struct Made {
     /// (`Drawn::waits`).
     made_at: Instant,
     painted: bool,
+    /// Its levels of detail (`lod`): the ladder, and whether a level still changes (or waits to),
+    /// so more pictures are asked for until it settles.
+    tree: Arc<lod::Tree>,
+    settling: bool,
 }
 
 /// One empty place's city, as the last frame drew it.
@@ -606,16 +615,25 @@ impl Painter {
         // The layouts made and their colours, by what they depend on, the newest last: a rise's
         // frames and a camera's moves lay one out once (two places of one checkout, two sizes).
         let mut last: Layouts = Vec::new();
+        let mut details = Details::new();
         let bell = Arc::new(Bell::default());
         let ring = bell.clone();
         let (jobs, made) = latest_each(
             |job: &PaintJob| job.0,
-            move |(_, key, plan): &PaintJob| {
+            move |(floor, key, plan): &PaintJob| {
                 let mut gpu = lock_gpu(&held);
                 let opened = gpu.get_or_insert_with(open_gpu);
                 // A panic in the GPU's code fails this picture, and the GPU is opened again next time.
                 let picture = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    opened.as_ref().map_err(Clone::clone).and_then(|gpu| make(gpu, key, plan, &mut last))
+                    opened.as_ref().map_err(Clone::clone).and_then(|gpu| {
+                        let detail = details.remove(&(*floor, key.plan));
+                        let made = make(gpu, key, plan, &mut last, detail);
+                        made.map(|(made, detail)| {
+                            details.retain(|(of, _), _| of != floor);
+                            details.insert((*floor, key.plan), detail);
+                            made
+                        })
+                    })
                 }));
                 picture.unwrap_or_else(|_| {
                     *gpu = None;
@@ -672,8 +690,12 @@ impl Bell {
     }
 }
 
-/// Layouts kept, newest last, with their folders' colours and boxes: by `Key::laid`.
-type Layouts = Vec<(Key, Layout, Vec<Option<(u32, u32)>>, Arc<Boxes>)>;
+/// Layouts kept, newest last, with their folders' colours, boxes and ladder: by `Key::laid`.
+type Layouts = Vec<(Key, Layout, Vec<Option<(u32, u32)>>, Arc<Boxes>, Arc<lod::Tree>)>;
+
+/// Each place's levels of detail, by its plan: its own camera's, kept across a new lit file or
+/// colour (the boxes' order is the plan's).
+type Details = HashMap<(Floor, usize), lod::Detail>;
 
 /// Layouts kept for camera moves: a place or two of one checkout, at their sizes.
 const KEPT_LAYOUTS: usize = 4;
@@ -683,13 +705,19 @@ const KEPT_LAYOUTS: usize = 4;
 pub(crate) const WHEELING: Duration = Duration::from_millis(150);
 
 /// The scene of `plan` and its picture, on the picture's thread.
-fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<Made, String> {
+fn make(
+    gpu: &Gpu,
+    key: &Key,
+    plan: &Arc<Atlas>,
+    last: &mut Layouts,
+    detail: Option<lod::Detail>,
+) -> Result<(Made, lod::Detail), String> {
     let started = Instant::now();
     let (w, h) = key.size;
     let laid = key.laid();
     let kept = last.iter().position(|(was, ..)| *was == laid).map(|at| last.remove(at));
-    let (layout, tints, boxes) = match kept {
-        Some((_, layout, tints, boxes)) => (layout, tints, Some(boxes)),
+    let (layout, tints, boxes, tree) = match kept {
+        Some((_, layout, tints, boxes, tree)) => (layout, tints, Some(boxes), Some(tree)),
         None => {
             let lit: Vec<(&str, u32)> = key.lit.iter().map(|(id, colour)| (id.as_str(), *colour)).collect();
             let layout = scene::layout(plan, &lit, w as f32 / h as f32, f32::from_bits(key.lower));
@@ -697,7 +725,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
             let user = key.folders.iter().cloned().collect();
             let rule = FolderColours::new(&user).unwrap_or_else(|_| FolderColours::built_in());
             let tints = city_colours::tints(plan, &layout.blocks, &rule);
-            (layout, tints, None)
+            (layout, tints, None, None)
         }
     };
     let mut scene = layout.scene(&key.view());
@@ -706,7 +734,14 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
         scene.tints = tints.clone();
         Arc::new(Boxes::new(&scene, key.glass))
     });
-    last.push((laid, layout, tints, boxes.clone()));
+    let tree = tree.unwrap_or_else(|| Arc::new(lod::Tree::new(plan, &layout.blocks)));
+    // Its levels of detail for this camera: boxes too small on screen stand for their contents.
+    let (now, fade) = (crate::loop_ms(), if key.calm { 0 } else { lod::FADE_MS });
+    let camera = scene.camera.ok_or("no camera")?;
+    let (detail, waits) = tree.select(&camera, h as f32, now, detail.as_ref());
+    (scene.shown, scene.glow) = tree.apply(&mut scene.blocks, &detail, now, fade);
+    let settling = waits || tree.changing(&detail, now, fade);
+    last.push((laid, layout, tints, boxes.clone(), tree.clone()));
     if last.len() > KEPT_LAYOUTS {
         last.remove(0);
     }
@@ -714,16 +749,18 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     let (rw, rh) = key.render_size();
     let Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us } =
         gpu.render_boxes(&scene, &boxes, rw, rh, f32::from(key.rise) / 1000.)?;
-    let camera = scene.camera.ok_or("no camera")?;
     let made_at = Instant::now();
     let image = image::RgbaImage::from_raw(width, height, bgra).ok_or("a picture of the wrong size")?;
     let image = Arc::new(RenderImage::new([image::Frame::new(image)]));
     // Where a picture's time goes, for the bench (`scripts/bench`'s city motion): numbers only.
     let image_us = made_at.elapsed().as_micros() as u64;
-    let fields = serde_json::json!({ "scene_us": scene_us, "prep_us": prep_us, "boxes_us": boxes_us, "alloc_us": alloc_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": rw, "h": rh });
+    let drawn = scene.shown.iter().filter(|s| **s).count();
+    let fields = serde_json::json!({ "boxes": drawn, "scene_us": scene_us, "prep_us": prep_us, "boxes_us": boxes_us, "alloc_us": alloc_us, "gpu_us": gpu_us, "copy_us": copy_us, "image_us": image_us, "rise": key.rise, "w": rw, "h": rh });
     crate::trace::record("city_picture", fields);
     // Each lit building's bounds, and the middle of its top (never hidden).
-    let lit = (scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Lit(_))))
+    let lit = (scene.blocks.iter().enumerate())
+        .filter(|(i, b)| matches!(b.kind, Kind::Lit(_)) && scene.is_shown(*i))
+        .map(|(_, b)| b)
         .filter_map(|b| {
             let [x, y, w, h] = camera.bounds(b)?;
             let (tx, ty) = camera.project(b.top())?;
@@ -735,7 +772,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     let rising = key.rise < 1000 || key.moving;
     let marks_at = Instant::now();
     let marks: Vec<Mark> = (scene.blocks.iter().enumerate())
-        .filter(|_| !rising)
+        .filter(|(i, _)| !rising && scene.is_shown(*i))
         .filter_map(|(i, b)| {
             let place = b.place?;
             let tier = match b.kind {
@@ -756,7 +793,7 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
     let groups = plan.places.iter().filter(|p| p.group).count();
     let render_us = started.elapsed().as_micros() as u64;
     let (places, plan, used) = (plan.places.len(), plan.clone(), Instant::now());
-    Ok(Made {
+    let made = Made {
         key: key.clone(),
         image,
         lit,
@@ -770,7 +807,10 @@ fn make(gpu: &Gpu, key: &Key, plan: &Arc<Atlas>, last: &mut Layouts) -> Result<M
         used,
         made_at: used,
         painted: false,
-    })
+        tree,
+        settling,
+    };
+    Ok((made, detail))
 }
 
 impl Drawn {
@@ -984,15 +1024,22 @@ impl Workspace {
             .flat_map(|place| [place.asked.clone(), place.newest.clone(), place.shown.clone()])
             .flatten()
             .collect();
-        // A frame of a rise is never kept.
+        // A frame of a rise or of a level of detail changing is never kept; nor a picture of
+        // another view of a city on show (its levels of detail may be stale by now).
+        let passing = |key: &Key, made: &Made| {
+            let other_view = |u: &Key| u.dir == key.dir && u.size == key.size && u.view != key.view;
+            key.rise < 1000 || made.settling || used.iter().any(other_view)
+        };
         let mut unused: Vec<(Instant, Key)> = (drawn.pictures.iter())
-            .filter(|(key, _)| !used.contains(*key) && key.rise == 1000)
+            .filter(|(key, made)| !used.contains(*key) && !passing(key, made))
             .map(|(key, made)| (made.used, key.clone()))
             .collect();
         // The newest few stay: a tab shown again paints its city at once, with no fade.
         unused.sort_by(|a, b| b.0.cmp(&a.0));
-        let rises: Vec<Key> =
-            drawn.pictures.keys().filter(|key| key.rise < 1000 && !used.contains(*key)).cloned().collect();
+        let rises: Vec<Key> = (drawn.pictures.iter())
+            .filter(|(key, made)| !used.contains(*key) && passing(key, made))
+            .map(|(key, _)| key.clone())
+            .collect();
         for key in unused.into_iter().skip(KEPT_PICTURES).map(|(_, key)| key).chain(rises) {
             if let Some(old) = drawn.pictures.remove(&key) {
                 drawn.retired.push(old.image);
@@ -1101,6 +1148,13 @@ impl Workspace {
                 // Pixels, as the window draws them: the picture is never scaled.
                 let scale = window.scale_factor();
                 let size = |v: f32| (v * scale).round() as u32;
+                // A level of detail still changing: a picture each frame until it settles.
+                let settling =
+                    held.places.get(&floor).and_then(|place| held.picture(place)).is_some_and(|m| m.settling);
+                let detail_at = if settling { crate::loop_ms() / 16 + 1 } else { 0 };
+                if settling {
+                    window.request_animation_frame();
+                }
                 let place = held.places.entry(floor).or_default();
                 // A city that became too small, or large enough: the frame after shows its lattice.
                 if place.measured && place.small != small {
@@ -1123,6 +1177,8 @@ impl Workspace {
                     folders: crate::config::live().city_folder_colors.clone().unwrap_or_default().into_iter().collect(),
                     glass: !crate::config::live().developer.city_opaque,
                     moving,
+                    detail_at,
+                    calm: crate::dial::calm(),
                 });
                 key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
                 // Another folder in the same place (the main window's tab switched): its own first
@@ -1871,8 +1927,12 @@ fn paint(
     };
     // Each lit building's beam, steady and thin in its task's colour (a hovered one's over it).
     let mut lit_beams = Vec::new();
-    for (i, block) in made.scene.blocks.iter().enumerate() {
-        let Kind::Lit(colour) = block.kind else { continue };
+    for (i, block) in made.scene.blocks.iter().enumerate().filter(|(i, _)| made.scene.is_shown(*i)) {
+        // A lit file's, or a closed folder's standing for one.
+        let colour = match (block.kind, made.scene.glows(i)) {
+            (Kind::Lit(colour), _) | (_, Some(colour)) => colour,
+            _ => continue,
+        };
         let Some((foot, end)) = beam_of(i) else { continue };
         if let Some((end, _)) = fit_beam(foot, end, None, bounds, clear) {
             paint_beam(window, foot, end, Hsla::from(rgb(colour)).opacity(0.85), 1., 2., false);
@@ -1934,6 +1994,20 @@ fn paint(
 
 /// The box of the atlas place `id` in a picture's scene: a building, or a folder's plinth.
 fn block_of(made: &Made, id: &str) -> Option<usize> {
+    shown_for(made, box_of(made, id)?)
+}
+
+/// The box drawn for box `i`: itself, or the closed box it is inside (`lod`).
+fn shown_for(made: &Made, mut i: usize) -> Option<usize> {
+    while !made.scene.is_shown(i) {
+        i = made.tree.parent(i)?;
+    }
+    Some(i)
+}
+
+/// The box of the atlas place `id`, drawn or not: an effect keeps it, and is drawn on whatever
+/// box stands for it then (`shown_for`).
+fn box_of(made: &Made, id: &str) -> Option<usize> {
     let at = made.plan.places.iter().position(|place| place.id == id)?;
     made.scene.blocks.iter().position(|block| block.place == Some(at))
 }
@@ -1954,10 +2028,10 @@ fn glance(
     let (now, calm) = (Instant::now(), crate::dial::calm());
     // A folder with no plinth of its own (its one child stands for it): its buildings'.
     let blocks_of = |path: &str| -> Vec<usize> {
-        let one = block_of(made, path);
+        let one = box_of(made, path);
         let under = |id: &str| id.strip_prefix(path).is_some_and(|rest| rest.starts_with('/'));
         let inside = (made.plan.places.iter().filter(|place| !place.group && under(&place.id)))
-            .filter_map(|place| block_of(made, &place.id));
+            .filter_map(|place| box_of(made, &place.id));
         one.map_or_else(|| inside.collect(), |one| vec![one])
     };
     g.effects.retain(|e| now.checked_duration_since(e.since).is_none_or(|d| d < e.play.length()));
@@ -1977,7 +2051,7 @@ fn glance(
             }
             // A result names files: its paths exactly (a folder's buildings only for a scope).
             let mut blocks: Vec<usize> = match play {
-                Play::Found => paths.iter().filter_map(|path| block_of(made, path)).collect(),
+                Play::Found => paths.iter().filter_map(|path| box_of(made, path)).collect(),
                 _ => paths.iter().flat_map(|path| blocks_of(path)).collect(),
             };
             blocks.sort_unstable();
@@ -2041,7 +2115,11 @@ fn glance(
         let Some(run) = now.checked_duration_since(e.since) else { continue };
         let t = (run.as_secs_f32() / e.play.length().as_secs_f32()).min(1.);
         let colour = Hsla::from(rgb(e.colour));
-        let faces = e.blocks.iter().filter_map(|i| face(*i)).chain(ground().filter(|_| e.whole));
+        // Each on the box drawn for it now: a file inside a closed folder lights that folder.
+        let mut drawn: Vec<usize> = e.blocks.iter().filter_map(|i| shown_for(made, *i)).collect();
+        drawn.sort_unstable();
+        drawn.dedup();
+        let faces = drawn.iter().filter_map(|i| face(*i)).chain(ground().filter(|_| e.whole));
         for f in faces {
             match e.play {
                 Play::Flash => fill_face(&f, colour.opacity(0.6 * (1. - t)), window),
@@ -2059,7 +2137,7 @@ fn glance(
         if e.play == Play::Found {
             // Buildings only: a lit one has its beam already, a folder none.
             let building = |i: usize| made.scene.blocks.get(i).is_some_and(|b| b.kind == Kind::Building);
-            for &i in e.blocks.iter().filter(|i| building(**i)) {
+            for &i in drawn.iter().filter(|i| building(**i)) {
                 let Some((foot, end)) = made.scene.beam(i) else { continue };
                 let (Some(foot), Some(end)) = (to_window(foot), to_window(end)) else { continue };
                 if let Some((end, _)) = fit_beam(foot, end, None, bounds, clear) {
@@ -2530,6 +2608,8 @@ mod tests {
             lower: scene::LOWER.to_bits(),
             folders: Vec::new(),
             moving: false,
+            detail_at: 0,
+            calm: false,
         };
         // The one-off stages apart: layout, folder colours, boxes (as `make` does them once).
         let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
@@ -2551,7 +2631,7 @@ mod tests {
         set(&mut key, view);
         let skip = crate::trace::jsonl().lines().count();
         let at_rest = Instant::now();
-        let first = make(gpu, &key, plan, &mut last).unwrap();
+        let (first, mut detail) = make(gpu, &key, plan, &mut last, None).unwrap();
         let rest_ms = ms(at_rest);
         let blocks = first.scene.blocks.len();
         let districts = first.scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).count();
@@ -2594,16 +2674,24 @@ mod tests {
         // GPU bytes kept: instances, and the targets of the half-size picture (4× colour and depth,
         // resolve, read buffer).
         let (hw, hh) = (u64::from(w / 2), u64::from(h / 2));
-        let gpu_mb = (blocks as u64 * 64 + hw * hh * 4 * (4 + 4 + 1 + 1)) as f64 / 1048576.;
+        // Of the boxes drawn (`lod`), not all of them.
+        let shown = first.scene.blocks.iter().enumerate().filter(|(i, _)| first.scene.is_shown(*i)).count();
+        let gpu_mb = (shown as u64 * 64 + hw * hh * 4 * (4 + 4 + 1 + 1)) as f64 / 1048576.;
         let mut stages: HashMap<&str, Vec<f64>> = HashMap::new();
         let mut kept = Some(first);
+        let (mut flips, mut drawn) = (0usize, Vec::new());
         key.moving = true;
         for _ in 0..240 {
             view = view.orbited(1.5, 0.);
             set(&mut key, view);
             let started = Instant::now();
-            let made = make(gpu, &key, plan, &mut last).unwrap();
+            let (made, next) = make(gpu, &key, plan, &mut last, Some(detail)).unwrap();
+            detail = next;
             let total = ms(started);
+            // Boxes shown or hidden by a level of detail since the last picture: none in a turn.
+            let was = kept.as_ref().map(|k| &k.scene.shown);
+            flips += was.map_or(0, |was| was.iter().zip(&made.scene.shown).filter(|(a, b)| a != b).count());
+            drawn.push(made.scene.shown.iter().filter(|s| **s).count());
             // The picture it replaces is let go, as `read_city` retires it.
             let dropped = Instant::now();
             drop(kept.replace(made));
@@ -2634,7 +2722,7 @@ mod tests {
         for _ in 0..60 {
             view = view.orbited(1.5, 0.);
             set(&mut key, view);
-            drop(make(gpu, &key, plan, &mut last).unwrap());
+            detail = make(gpu, &key, plan, &mut last, Some(detail)).unwrap().1;
         }
         let trace = crate::trace::jsonl();
         let opaque: Vec<f64> = (trace.lines().skip(skip))
@@ -2661,6 +2749,11 @@ mod tests {
             under(2.),
             under(4.)
         );
+        drawn.sort_unstable();
+        println!(
+            "turn: boxes drawn {} of {blocks} (median); boxes shown or hidden by a level change during it: {flips}",
+            drawn.get(drawn.len() / 2).copied().unwrap_or(0)
+        );
         println!("turn: 240 pictures at {}×{} (half size), ms", w / 2, h / 2);
         println!("| stage | mean | p50 | p95 | p99 | max | over 16.7 | over 33 |");
         println!("|---|---|---|---|---|---|---|---|");
@@ -2669,6 +2762,77 @@ mod tests {
                 print_stage(name, v);
             }
         }
+    }
+
+    /// A slow zoom from the whole city to a few files, a frame each 16 ms, as levels of detail
+    /// open: how many boxes each frame shows or hides, and that no box moves or resizes on the
+    /// plan (only heights change). `CITY_PICTURE`: a folder for four of its frames as BMPs.
+    /// `cargo test -p ottospace --release -- --ignored a_zoom_opens_detail --nocapture`.
+    #[test]
+    #[ignore = "needs a GPU; prints counts"]
+    fn a_zoom_opens_detail() {
+        let gpu = Gpu::new().expect("a GPU");
+        let plan = Arc::new(atlas::atlas(&atlas::repo(&made_up_repo(60_000, 8_160, 9))));
+        let mut key = Key {
+            dir: "made-up".into(),
+            plan: 1,
+            lit: Vec::new(),
+            size: (1600, 1000),
+            glass: true,
+            rise: 1000,
+            view: [0; 5],
+            lower: scene::LOWER.to_bits(),
+            folders: Vec::new(),
+            moving: false,
+            detail_at: 0,
+            calm: false,
+        };
+        let mut last = Layouts::new();
+        let mut detail = None;
+        let mut view = View::default();
+        let (mut was, mut first): (Option<Vec<bool>>, Option<Vec<[f32; 4]>>) = (None, None);
+        let (mut most, mut moved, mut drawn) = (0usize, 0f32, Vec::new());
+        for frame in 0..200 {
+            view.zoom = 0.985f32.powi(frame);
+            key.view = [view.yaw, view.pitch, view.zoom, view.pan[0], view.pan[1]].map(f32::to_bits);
+            let (made, next) = make(&gpu, &key, &plan, &mut last, detail.take()).unwrap();
+            detail = Some(next);
+            let rects: Vec<[f32; 4]> =
+                made.scene.blocks.iter().map(|b| [b.min[0], b.min[2], b.max[0], b.max[2]]).collect();
+            let first = first.get_or_insert_with(|| rects.clone());
+            moved = moved.max(
+                rects
+                    .iter()
+                    .zip(first.iter())
+                    .map(|(a, b)| (0..4).map(|k| (a[k] - b[k]).abs()).fold(0., f32::max))
+                    .fold(0., f32::max),
+            );
+            if let Some(was) = &was {
+                most = most.max(was.iter().zip(&made.scene.shown).filter(|(a, b)| a != b).count());
+            }
+            drawn.push(made.scene.shown.iter().filter(|s| **s).count());
+            if let (true, Some(dir)) = ([0, 80, 140, 199].contains(&frame), std::env::var_os("CITY_PICTURE")) {
+                let (w, h) = key.render_size();
+                let bgra = made.image.as_bytes(0).unwrap().to_vec();
+                let picture =
+                    Picture { width: w, height: h, bgra, gpu_us: 0, copy_us: 0, prep_us: 0, boxes_us: 0, alloc_us: 0 };
+                std::fs::write(
+                    Path::new(&dir).join(format!("zoom-{frame:03}.bmp")),
+                    crate::city_gpu::tests::bmp(&picture),
+                )
+                .unwrap();
+            }
+            was = Some(made.scene.shown.clone());
+            std::thread::sleep(Duration::from_millis(16));
+        }
+        println!(
+            "zoom 1 → {:.3}, 200 frames: boxes drawn {} → {} of {}; most boxes shown or hidden in one frame {most}; largest move of any box on the plan {moved}",
+            view.zoom,
+            drawn[0],
+            drawn[199],
+            first.map_or(0, |f| f.len())
+        );
+        assert_eq!(moved, 0.);
     }
 
     /// How long a checkout's read takes, for the design note's costs. `CITY_BENCH`: folders,

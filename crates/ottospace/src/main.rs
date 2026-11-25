@@ -9022,7 +9022,7 @@ fn now_ms() -> u64 {
 }
 
 /// The main loop's clock (`cadence`): ms since it was first read. Monotonic, unlike `now_ms`.
-fn loop_ms() -> u64 {
+pub(crate) fn loop_ms() -> u64 {
     static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
     START.get_or_init(Instant::now).elapsed().as_millis() as u64
 }
