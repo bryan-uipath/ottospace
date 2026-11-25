@@ -92,6 +92,13 @@ Design: [docs/ai/e2e-reliability.md](ai/e2e-reliability.md).
 - `ottospace ctl '{"cmd":"trace"}'` reads the trace of any running app. `OTTOSPACE_TRACE=1` also
   writes it to `~/.ottospace/trace.jsonl` on a panic or on `kill -USR1`.
 
+### A quiet code city
+
+`ottospace city-replay <session.jsonl> [--dir <checkout>]` replays a Claude Code session's file
+through the live chat's path (`Wire::read`, the model's `city_at`, the plan's placing) and prints,
+for each call, where the agent's icon floats, what is lit, the reads and searches glimpsed, and
+why a call gave the city nothing. Read-only. See `docs/ai/code-city/agents-live.md`.
+
 ## Screenshots and recordings
 
 Every pull request shows evidence (AGENTS.md, "Pull requests"). `scripts/shot` takes the pictures:

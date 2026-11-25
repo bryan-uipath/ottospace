@@ -142,7 +142,7 @@ pub(crate) fn small(path: &Path, most: u64) -> Option<String> {
 }
 
 /// An RFC 3339 UTC time in Unix milliseconds, e.g. `2026-11-12T10:44:00.123Z` → 1794480240123.
-pub(crate) fn parse_time(text: &str) -> Option<u64> {
+pub fn parse_time(text: &str) -> Option<u64> {
     let text = text.strip_suffix('Z')?;
     let (date, time) = text.split_once('T')?;
     let mut date = date.split('-').map(|p| p.parse::<u64>().ok());

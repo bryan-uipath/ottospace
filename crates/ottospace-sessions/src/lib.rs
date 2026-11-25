@@ -11,7 +11,7 @@ mod cache;
 pub mod claude;
 pub mod codex;
 pub mod git;
-mod jsonl;
+pub mod jsonl;
 pub mod report;
 pub mod snapshot;
 pub mod station;

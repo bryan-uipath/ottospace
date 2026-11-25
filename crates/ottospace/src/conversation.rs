@@ -2654,20 +2654,6 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
             }
             Event::Started { session, model, mode }
         }
-        Said::TurnStarted => Event::TurnStarted,
-        Said::TextDelta { text: t } => Event::TextDelta { text: text(&t) },
-        Said::Text { text: t } => Event::Text { text: text(&t) },
-        Said::ToolStart { id, parent, tool, station, label, detail, diff, gist } => {
-            Event::ToolStart { id, parent, tool, station, label, detail: text(&detail), diff, gist }
-        }
-        Said::ToolEnd { id, failed, output } => {
-            Event::ToolEnd { id, failed, output: Some(text(&output)).filter(|output| !output.is_empty()) }
-        }
-        Said::Subtask { id, description } => Event::Subtask { id, description: text(&description) },
-        Said::SubtaskEnded { status, summary } => Event::SubtaskEnded { status, summary: text(&summary) },
-        Said::Note { text: t } => Event::Note { text: text(&t) },
-        Said::DeniedBy { tool, by } => Event::DeniedBy { tool, by },
-        Said::ModelFallback { from, to } => Event::ModelFallback { from, to },
         // Past `MAX_CARDS` waiting, denied at once: no request is left waiting unseen.
         Said::Permission { ticket, tool, label, detail, .. } if native.tickets.len() >= MAX_CARDS => {
             let answer = Answer::Deny { message: Some("Too many requests at once: ask again.".into()) };
@@ -2686,6 +2672,29 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
             let (n, _) = native.tickets.remove(at);
             Event::PermissionClosed { ticket: n }
         }
+        said => return event_of(said, details),
+    })
+}
+
+/// A runner's event as the core's, of those that need no process: a live chat's and a replay's
+/// (`city_replay`). `None`: nothing the drawer shows, or one only a process answers.
+pub(crate) fn event_of(said: Said, details: bool) -> Option<Event> {
+    let text = |u: &ottospace_agents::Untrusted| Text::new(u.text());
+    Some(match said {
+        Said::TurnStarted => Event::TurnStarted,
+        Said::TextDelta { text: t } => Event::TextDelta { text: text(&t) },
+        Said::Text { text: t } => Event::Text { text: text(&t) },
+        Said::ToolStart { id, parent, tool, station, label, detail, diff, gist } => {
+            Event::ToolStart { id, parent, tool, station, label, detail: text(&detail), diff, gist }
+        }
+        Said::ToolEnd { id, failed, output } => {
+            Event::ToolEnd { id, failed, output: Some(text(&output)).filter(|output| !output.is_empty()) }
+        }
+        Said::Subtask { id, description } => Event::Subtask { id, description: text(&description) },
+        Said::SubtaskEnded { status, summary } => Event::SubtaskEnded { status, summary: text(&summary) },
+        Said::Note { text: t } => Event::Note { text: text(&t) },
+        Said::DeniedBy { tool, by } => Event::DeniedBy { tool, by },
+        Said::ModelFallback { from, to } => Event::ModelFallback { from, to },
         Said::AutoDenied { tool, label, reason, detail } => {
             Event::AutoDenied { tool, label, reason: reason.into(), detail: text(&detail) }
         }
@@ -2701,6 +2710,7 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
         Said::Unknown { kind } if kind == "system.hook_started" => Event::Hook,
         Said::Unknown { kind } if ottospace_agents::is_quiet(&kind) => return None,
         Said::Unknown { kind } => Event::Unknown { kind },
+        Said::Started { .. } | Said::Permission { .. } | Said::PermissionClosed { .. } => return None,
     })
 }
 
