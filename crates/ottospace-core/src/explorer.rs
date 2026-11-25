@@ -59,6 +59,11 @@ pub struct Row {
     pub cut: bool,
 }
 
+/// A file git says is changed since the last commit, or added: it has a diff to show (`review`).
+pub fn diffable(row: &Row) -> bool {
+    !row.dir && !row.link && matches!(row.mark, Some(Mark::Modified | Mark::Added))
+}
+
 impl Row {
     pub fn name(&self) -> &str {
         self.path.rsplit('/').next().unwrap_or(&self.path)

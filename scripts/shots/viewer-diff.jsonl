@@ -1,0 +1,23 @@
+# Review (`review` flag): D on a changed file in the File Explorer opens its diff since the last
+# commit beside: inline, numbered on both sides, the unchanged run between hunks folded; ]c to the next hunk.
+{"env":{"OTTOSPACE_FEATURES":"review"}}
+{"write": "repos/notes/src/store.rs", "text": "//! A made-up store of notes.\n\nuse std::collections::BTreeMap;\n\npub struct Store {\n    notes: BTreeMap<u32, String>,\n    next: u32,\n}\n\nimpl Store {\n    pub fn new() -> Self {\n        Store { notes: BTreeMap::new(), next: 1 }\n    }\n\n    pub fn add(&mut self, text: &str) -> u32 {\n        let id = self.next;\n        self.notes.insert(id, text.to_string());\n        self.next += 1;\n        id\n    }\n\n    pub fn get(&self, id: u32) -> Option<&str> {\n        self.notes.get(&id).map(String::as_str)\n    }\n\n    pub fn len(&self) -> usize {\n        self.notes.len()\n    }\n\n    pub fn is_empty(&self) -> bool {\n        self.notes.is_empty()\n    }\n\n    pub fn clear(&mut self) {\n        self.notes.clear();\n    }\n\n    pub fn ids(&self) -> Vec<u32> {\n        self.notes.keys().copied().collect()\n    }\n\n    pub fn remove(&mut self, id: u32) -> bool {\n        self.notes.remove(&id).is_some()\n    }\n}\n"}
+{"write": "repos/notes/README.md", "text": "# Notes\n\nA made-up store.\n"}
+{"commit":"repos/notes"}
+{"write": "repos/notes/src/store.rs", "text": "//! A made-up store of notes.\n\nuse std::collections::BTreeMap;\n\npub struct Store {\n    notes: BTreeMap<u32, String>,\n    next: u32,\n}\n\nimpl Store {\n    pub fn new() -> Self {\n        Store { notes: BTreeMap::new(), next: 1 }\n    }\n\n    /// Adds a note, trimmed; an empty one is none.\n    pub fn add(&mut self, text: &str) -> Option<u32> {\n        let text = text.trim();\n        if text.is_empty() {\n            return None;\n        }\n        let id = self.next;\n        self.notes.insert(id, text.to_string());\n        self.next += 1;\n        Some(id)\n    }\n\n    pub fn get(&self, id: u32) -> Option<&str> {\n        self.notes.get(&id).map(String::as_str)\n    }\n\n    pub fn len(&self) -> usize {\n        self.notes.len()\n    }\n\n    pub fn is_empty(&self) -> bool {\n        self.notes.is_empty()\n    }\n\n    pub fn clear(&mut self) {\n        self.notes.clear();\n    }\n\n    pub fn ids(&self) -> Vec<u32> {\n        self.notes.keys().copied().collect()\n    }\n\n    pub fn remove(&mut self, id: u32) -> Option<String> {\n        self.notes.remove(&id)\n    }\n}\n"}
+{"cmd":"repo_add","path":"{ROOT}/repos/notes"}
+{"until":"repos_bar.0"}
+{"cmd":"open_repo","path":"{ROOT}/repos/notes"}
+{"cmd":"close"}
+{"cmd":"key","keys":"cmd-shift-x","as":"user"}
+{"until":"explorers.2.marked","is":1}
+{"cmd":"key","keys":"right","as":"user"}
+{"until":"explorers.2.rows","is":3}
+{"cmd":"key","keys":"down shift-d","as":"user"}
+{"until":"viewers.3.body","is":"diff"}
+{"settle":500}
+{"cmd":"mouse","action":"move","x":-50,"y":-50,"as":"user"}
+{"shot":"diff"}
+{"cmd":"key","keys":"] c","as":"user"}
+{"settle":300}
+{"shot":"next-hunk"}

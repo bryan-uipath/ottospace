@@ -64,6 +64,7 @@ pub mod prs;
 pub mod rank;
 pub mod repos;
 pub mod restore;
+pub mod review;
 pub mod row_menu;
 pub mod rules;
 pub mod runner;

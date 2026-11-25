@@ -1256,6 +1256,14 @@ says so.
   any folder outside the checkout read.
 - A row's right click: **Open**, **Open below**, **Reveal in Finder** (your click only), **Copy
   path**; on a folder **Open terminal here**.
+- With the `review` flag, **D** on a changed file (`M` or `A`), or **Open diff** in its right
+  click: its change since the last commit in the viewer beside, which takes the keyboard. Inline:
+  each line's number on the old and the new side, `+` and `−` on a green or red tint, colours by
+  the file's kind; the unchanged lines between hunks folded (`⋯ 40 unchanged lines · @@ -12 +14`).
+  `]c` and `[c` go to the next and previous hunk; the header says `· diff`; it reads again when the
+  file changes. `git diff HEAD` with a fixed argv, hardened as the explorer's, in a checkout Repos
+  lists; at most 10,000 rows. D on an unchanged file is a letter, as without the flag. ↵ on it
+  shows the file again. The state has the rows and hunks, never a line.
 - The state has its shape (rows, selected, open folders), never a name.
 
 ## App panes
@@ -1615,6 +1623,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `zoom_out` | Experimental | off | Zoom out (⌘⇧\\): Every tab of the workspace on show at once, as tiles on a grid |
 | `decision_sources` | Experimental | off | Decisions from any source: Agents and routines file decisions over the socket (Slack, Jira, a session): they wait to be sorted |
 | `city_live_layer` | Experimental | off | Code city on a live layer: The code city drawn straight to a layer of its own under the window's content, a new picture each display refresh (with code_city) |
+| `review` | Experimental | off | Review a change: A changed file's diff in the viewer: D on it in the explorer, ]c and [c between its hunks |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,

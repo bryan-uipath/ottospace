@@ -20,6 +20,8 @@ use gpui::{
     SharedString, StyledText, UniformListScrollHandle, Window, canvas, div, img, point, prelude::*, px, rgb,
     uniform_list,
 };
+use ottospace_core::diff::Sign;
+use ottospace_core::review;
 use ottospace_core::terminal::CellPoint;
 use ottospace_core::viewer::{self, MAX_BYTES, MAX_IMAGE_BYTES, Read, Shows, Viewer};
 use ottospace_core::{Action, Axis, Origin, PaneId, theme};
@@ -49,6 +51,8 @@ enum Body {
     /// Each line, and its coloured runs (`highlight`), by byte within it; or by its grammar.
     Lines(Rc<Vec<String>>, Rc<Vec<Vec<Mark>>>, Option<Rc<Colours>>),
     Picture(Rc<Picture>),
+    /// A diff's rows (`review`), and each row's coloured runs by the lexer.
+    Diff(Rc<review::Patch>, Rc<Vec<Vec<Mark>>>),
 }
 
 /// What a read thread hands back: the outcome, and the bytes a picture is drawn from or the text.
@@ -59,11 +63,16 @@ enum Loaded {
     Markdown(Vec<Block>),
     Lines(Vec<String>, Vec<Vec<Mark>>, Option<Colours>),
     Picture(Picture),
+    Diff(review::Patch, Vec<Vec<Mark>>),
 }
 
 /// A viewer pane's file as the shell holds it.
 pub struct FileView {
     path: String,
+    /// Shows the file's change since the last commit (`Viewer::diff`), read from git.
+    diff: bool,
+    /// The checkouts git may be asked about (`status_bar::reads_changes`).
+    roots: Vec<String>,
     body: Body,
     reading: Option<Receiver<(Read, Option<Loaded>, Stamp)>>,
     /// What the file was when last read; a change seen since, and when it was first seen.
@@ -87,9 +96,11 @@ pub struct FileView {
 }
 
 impl FileView {
-    fn new(path: String, shows: Shows) -> Self {
+    fn new(path: String, shows: Shows, diff: bool, roots: Vec<String>) -> Self {
         let mut view = FileView {
             path,
+            diff,
+            roots,
             body: Body::None,
             reading: None,
             stamp: None,
@@ -112,6 +123,17 @@ impl FileView {
     fn read(&mut self, shows: Shows) {
         let (send, read) = channel();
         let path = self.path.clone();
+        if self.diff {
+            let roots = self.roots.clone();
+            std::thread::spawn(move || {
+                let at = diff_stamp(&path);
+                let (read, loaded) = read_diff(&path, &roots);
+                let _ = send.send((read, loaded, at));
+                ottospace_mac::wake::post();
+            });
+            self.reading = Some(read);
+            return;
+        }
         std::thread::spawn(move || {
             // Before the read: a write during it changes the stamp, and the next look reads again.
             let at = stamp(&path);
@@ -156,7 +178,7 @@ impl FileView {
     /// The scroll handle of what is drawn: a list keeps its offset in a plain one, shared.
     fn handle(&self) -> ScrollHandle {
         match self.body {
-            Body::Lines(..) => self.lines.0.borrow().base_handle.clone(),
+            Body::Lines(..) | Body::Diff(..) => self.lines.0.borrow().base_handle.clone(),
             _ => self.scroll.clone(),
         }
     }
@@ -209,6 +231,60 @@ fn read_file(path: &Path, shows: Shows) -> (Read, Option<Loaded>) {
     }
 }
 
+/// How long git may take over one file's diff, and the most it may write.
+const DIFF_TIME: Duration = Duration::from_secs(5);
+const DIFF_BYTES: u64 = MAX_BYTES;
+
+/// The change to the file at `path` since the last commit (`git diff HEAD`, hardened by
+/// `child::git_read`), parsed, its lines coloured by the lexer: only in a checkout Repos lists.
+fn read_diff(path: &str, roots: &[String]) -> (Read, Option<Loaded>) {
+    let Some(real) = fs::canonicalize(path).ok() else { return (Read::Missing, None) };
+    // Its checkout from git's own files, resolved, checked before any git runs.
+    let top = real.parent().and_then(crate::repos::checkout_of).and_then(|(top, _)| top.canonicalize().ok());
+    let top = top.and_then(|top| top.to_str().map(str::to_string));
+    let Some(top) = top.filter(|top| ottospace_core::status_bar::reads_changes(top, roots)) else {
+        return (Read::Unreadable, None);
+    };
+    let Some(rel) = real.strip_prefix(&top).ok().map(|rel| rel.to_string_lossy().into_owned()) else {
+        return (Read::Unreadable, None);
+    };
+    // A fixed argv; the path a literal pathspec, never a pattern.
+    let mut diff = crate::child::git_read(Path::new(&top));
+    diff.env("GIT_LITERAL_PATHSPECS", "1");
+    diff.args(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", "HEAD", "--"]).arg(&rel);
+    // Past the cap git is stopped: too large, never "no change". A git that failed: unread.
+    let said = match crate::child::run(diff, DIFF_TIME, DIFF_BYTES) {
+        Ok(said) if said.out.len() as u64 >= DIFF_BYTES => return (Read::TooLarge { bytes: DIFF_BYTES }, None),
+        Ok(said) if said.ok => said,
+        _ => return (Read::Unreadable, None),
+    };
+    let patch = review::parse(&said.out);
+    if patch.binary {
+        return (Read::Binary, None);
+    }
+    // No line changed: none at all, or only its mode, or a new empty file.
+    if patch.rows.is_empty() {
+        return (Read::NoChange, None);
+    }
+    // One line a row (a hunk's start an empty one), coloured as the file's kind.
+    let text: Vec<&str> = (patch.rows.iter())
+        .map(|row| match row {
+            review::Row::Line { text, .. } => text.as_str(),
+            review::Row::Hunk { .. } => "",
+        })
+        .collect();
+    let text = text.join("\n");
+    let marks = highlight::by_line(&text, &highlight::marks(extension(path), &text));
+    let read = Read::Diff {
+        rows: patch.rows.len() as u32,
+        hunks: patch.hunks(),
+        added: patch.added,
+        removed: patch.removed,
+        cut: patch.cut,
+    };
+    (read, Some(Loaded::Diff(patch, marks)))
+}
+
 /// The extension of the file at `path`: `rs` of `src/main.rs`, empty for none.
 fn extension(path: &str) -> &str {
     Path::new(path).extension().and_then(|ext| ext.to_str()).unwrap_or("")
@@ -218,6 +294,14 @@ fn extension(path: &str) -> &str {
 fn line_count(text: &str) -> u32 {
     let lines = text.split('\n').count() - usize::from(text.ends_with('\n') || text.is_empty());
     lines.min(u32::MAX as usize) as u32
+}
+
+/// A diff view's stamp: its file's, and its checkout's `HEAD` log (`repos::head_log`), so a
+/// commit with the file untouched reads its diff again.
+fn diff_stamp(path: &str) -> Stamp {
+    let head =
+        Path::new(path).parent().and_then(crate::repos::checkout_of).and_then(|(top, _)| crate::repos::head_log(&top));
+    stamp(path).map(|(at, len, ino)| (at, len ^ head.unwrap_or(0).rotate_left(32), ino))
 }
 
 fn stamp(path: &str) -> Stamp {
@@ -282,27 +366,34 @@ impl Workspace {
     /// Each tick: a view for each viewer pane, the files read handed to the core, changes on
     /// disk read again once they settle, and the core told where each view on show is.
     pub(crate) fn sync_viewers(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let files: HashMap<PaneId, (String, Shows)> = self
+        let files: HashMap<PaneId, (String, Shows, bool)> = self
             .model
             .viewers
             .iter()
             .filter_map(|(id, view)| match &self.model.pane(*id)?.kind {
-                ottospace_core::Kind::File { path } => Some((*id, (path.clone(), view.shows))),
+                ottospace_core::Kind::File { path } => Some((*id, (path.clone(), view.shows, view.diff))),
                 _ => None,
             })
             .collect();
         // Pictures of viewers closed or reused since (`forget_viewer`), and those replaced below.
         let mut retired = std::mem::take(&mut self.retired_pictures);
         self.viewers.retain(|id, view| {
-            let kept = files.get(id).is_some_and(|(path, _)| *path == view.path);
+            // A file's view and its diff's are two: one going to the other is read again.
+            let kept = files.get(id).is_some_and(|(path, _, diff)| *path == view.path && *diff == view.diff);
             if !kept {
                 retired.extend(view.frames());
             }
             kept
         });
         let mut actions = Vec::new();
-        for (id, (path, shows)) in &files {
-            let view = self.viewers.entry(*id).or_insert_with(|| FileView::new(path.clone(), *shows));
+        // The checkouts Repos lists now: a diff read again asks git only of these.
+        let roots = if files.values().any(|(.., diff)| *diff) { self.model.checkout_roots() } else { Vec::new() };
+        for (id, (path, shows, diff)) in &files {
+            let view =
+                self.viewers.entry(*id).or_insert_with(|| FileView::new(path.clone(), *shows, *diff, roots.clone()));
+            if *diff {
+                view.roots.clone_from(&roots);
+            }
             if let Some(Ok((read, loaded, at))) = view.reading.as_ref().map(Receiver::try_recv) {
                 view.reading = None;
                 view.stamp = at;
@@ -318,6 +409,7 @@ impl Workspace {
                         view.began = Instant::now();
                         Body::Picture(Rc::new(picture))
                     }
+                    Some(Loaded::Diff(patch, marks)) => Body::Diff(Rc::new(patch), Rc::new(marks)),
                     // The read thread made any text lines or markdown.
                     Some(Loaded::Text(_)) | None => Body::None,
                 };
@@ -341,9 +433,9 @@ impl Workspace {
             if view.reading.is_none() && view.looking.is_none() && view.looked.elapsed() >= every {
                 view.looked = Instant::now();
                 let (send, looking) = channel();
-                let path = path.clone();
+                let (path, diff) = (path.clone(), view.diff);
                 std::thread::spawn(move || {
-                    let _ = send.send(stamp(&path));
+                    let _ = send.send(if diff { diff_stamp(&path) } else { stamp(&path) });
                     ottospace_mac::wake::nudge();
                 });
                 view.looking = Some(looking);
@@ -538,7 +630,8 @@ impl Workspace {
                 ));
             }
             Read::Broken => return said("This picture could not be read".into()),
-            Read::Shown { .. } => view.map(|view| &view.body),
+            Read::NoChange => return said("No line changed since the last commit".into()),
+            Read::Shown { .. } | Read::Diff { .. } => view.map(|view| &view.body),
             Read::Picture { .. } => match view {
                 Some(view) => return self.picture_body(id, view, cx),
                 None => return said("Reading…".into()),
@@ -638,6 +731,15 @@ impl Workspace {
                 .text_xs();
                 list.into_any_element()
             }
+            Some(Body::Diff(patch, marks)) => {
+                let list = diff_rows(id, patch.clone(), marks.clone())
+                    .track_scroll(view.map(|view| view.lines.clone()).unwrap_or_default())
+                    .size_full()
+                    .px_2()
+                    .font_family(crate::terminal::font_family())
+                    .text_xs();
+                list.into_any_element()
+            }
             _ => return said("Reading…".into()),
         };
         let handle = view.map(FileView::handle).unwrap_or_default();
@@ -668,6 +770,14 @@ impl Workspace {
                 "syntax": colours.as_ref().map(|colours| colours.lang().grammar().name),
                 "marked_rect": marked(id),
             }),
+            // A diff's rows and hunks, never a line.
+            Body::Diff(patch, _) => serde_json::json!({
+                "body": "diff",
+                "rows": patch.rows.len(),
+                "hunks": patch.hunks().len(),
+                "added": patch.added,
+                "removed": patch.removed,
+            }),
             // `frame`: the frame on show (an animation's), never its pixels.
             Body::Picture(picture) => serde_json::json!({
                 "body": "image",
@@ -679,6 +789,93 @@ impl Workspace {
             self.viewers.iter().map(|(id, view)| (id.to_string(), drawn(*id, view))).collect();
         serde_json::Value::Object(all)
     }
+}
+
+/// A diff's rows (`review`): a hunk's start says the unchanged lines folded before it; a line
+/// its numbers on each side, its sign, and its text coloured, on a tint of added or removed.
+fn diff_rows(id: PaneId, patch: Rc<review::Patch>, marks: Rc<Vec<Vec<Mark>>>) -> gpui::UniformList {
+    let most = (patch.rows.iter())
+        .filter_map(|row| match row {
+            review::Row::Line { old, new, .. } => (*old).max(*new),
+            review::Row::Hunk { .. } => None,
+        })
+        .max()
+        .unwrap_or(1);
+    let width = px(most.to_string().len() as f32 * 7. + 8.);
+    // A cut patch ends with a row that says so.
+    let count = patch.rows.len() + usize::from(patch.cut);
+    uniform_list(ElementId::Name(format!("viewer-diff:{id}").into()), count, move |range, _, _| {
+        range
+            .map(|at| match patch.rows.get(at) {
+                None => div()
+                    .h(px(LINE))
+                    .px_2()
+                    .text_color(rgb(theme::MUTED))
+                    .child(format!("Cut at {} rows: open the file in a terminal for the rest", review::MAX_ROWS)),
+                Some(row) => match row {
+                    review::Row::Hunk { skipped, old, new } => {
+                        let said = match skipped {
+                            0 => format!("@@ -{old} +{new}"),
+                            1 => format!("⋯ 1 unchanged line · @@ -{old} +{new}"),
+                            n => format!("⋯ {n} unchanged lines · @@ -{old} +{new}"),
+                        };
+                        div()
+                            .h(px(LINE))
+                            .min_w(gpui::relative(1.))
+                            .flex()
+                            .items_center()
+                            .px_2()
+                            .bg(rgb(theme::RAISED))
+                            .text_color(rgb(theme::MUTED))
+                            .whitespace_nowrap()
+                            .child(SharedString::from(said))
+                    }
+                    review::Row::Line { sign, old, new, text } => {
+                        let line: String = text.chars().take(MAX_DRAWN).collect();
+                        let runs = marks.get(at).map_or(Vec::new(), |marks| highlight::within(marks, &line));
+                        let styles: Vec<_> = runs
+                            .into_iter()
+                            .map(|(range, token)| {
+                                let colour = rgb(highlight::colour(token)).into();
+                                (range, HighlightStyle { color: Some(colour), ..Default::default() })
+                            })
+                            .collect();
+                        // The drawer's diff cards' marks and colours.
+                        let (mark, tint) = match sign {
+                            Sign::Added => ("+", Some(theme::PICK)),
+                            Sign::Removed => ("−", Some(theme::ERROR)),
+                            _ => (" ", None),
+                        };
+                        let number = |n: &Option<u32>| {
+                            div()
+                                .flex_none()
+                                .w(width)
+                                .text_right()
+                                .text_color(rgb(theme::MUTED))
+                                .child(SharedString::from(n.map(|n| n.to_string()).unwrap_or_default()))
+                        };
+                        div()
+                            .h(px(LINE))
+                            .min_w(gpui::relative(1.))
+                            .flex()
+                            .gap_2()
+                            .whitespace_nowrap()
+                            .when_some(tint, |row, tint| row.bg(gpui::Hsla::from(rgb(tint)).opacity(0.12)))
+                            .child(number(old))
+                            .child(number(new))
+                            .child(
+                                div().flex_none().w(px(8.)).text_color(rgb(tint.unwrap_or(theme::MUTED))).child(mark),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(theme::TEXT))
+                                    .child(StyledText::new(SharedString::from(line)).with_highlights(styles)),
+                            )
+                    }
+                },
+            })
+            .collect()
+    })
 }
 
 /// The foot under a picture: its size and zoom, an animation's control.

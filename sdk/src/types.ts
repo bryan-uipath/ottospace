@@ -187,6 +187,7 @@ export type Feature =
   | "decisions"
   | "code_city"
   | "city_live_layer"
+  | "review"
   | "session_waits"
   | "projects"
   | "terminal_tasks"
@@ -309,7 +310,11 @@ export type ViewerRead =
   | { status: "too_large"; bytes: number }
   | { status: "not_file" }
   | { status: "binary" }
-  | { status: "unreadable" };
+  | { status: "unreadable" }
+  /** A diff view's change since the last commit: its rows, the row each hunk starts at, lines added and removed, cut past its cap. */
+  | { status: "diff"; rows: number; hunks: number[]; added: number; removed: number; cut: boolean }
+  /** A diff view of a file with no change since the last commit (or none git could read). */
+  | { status: "no_change" };
 
 /** A file viewer's view, by pane id. */
 export interface Viewer {
@@ -333,6 +338,8 @@ export interface Viewer {
   pan: [number, number];
   /** An animation plays or stands on its first frame; null: as Reduce Motion says. */
   playing: boolean | null;
+  /** Shows the file's change since the last commit, not the file (`review`): `top` is a row. */
+  diff: boolean;
 }
 
 /** An explorer pane's shape: its rows, the row selected, folders open and being read, rows git marks. */
@@ -349,7 +356,7 @@ export interface ExplorerShape {
 
 /** A file viewer as drawn, by pane id: never its text. */
 export interface ViewerDrawn {
-  body: "markdown" | "lines" | "image" | null;
+  body: "markdown" | "lines" | "image" | "diff" | null;
   /** A markdown file's blocks by kind, and its links that open. */
   shape?: { blocks: Record<string, number>; links: { web: number; file: number } };
   lines?: number;
@@ -381,6 +388,11 @@ export interface ViewerDrawn {
     | null;
   /** A test run's: where the first marked line is drawn, while it shows. */
   marked_rect?: Rect | null;
+  /** A diff's rows, hunks and lines added and removed, never a line. */
+  rows?: number;
+  hunks?: number;
+  added?: number;
+  removed?: number;
   /** A picture's frames, and the one on show (an animation's), never its pixels. */
   frames?: number;
   frame?: number;
@@ -1463,7 +1475,7 @@ export interface RowMenu {
   items: {
     item: "rename" | "delete" | "remove" | "keep" | "pause" | "resume" | "delete_worktree" | "local_folder" | "from_github"
       | "slot_keep" | "slot_edit" | "slot_look_again" | "slot_give_back" | "slot_swap" | "slot_resort" | "slot_clear"
-      | "close" | "fold_out" | "explorer_here" | "open" | "open_below" | "reveal" | "copy_path" | "terminal_here";
+      | "close" | "fold_out" | "explorer_here" | "open" | "open_diff" | "open_below" | "reveal" | "copy_path" | "terminal_here";
     label: string;
     why: string | null;
     rect: Rect | null;

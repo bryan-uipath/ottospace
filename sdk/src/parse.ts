@@ -561,7 +561,17 @@ function viewerRead(value: unknown, at: string): ViewerRead {
     return { status: "picture", ...size(), frames: num(o.frames, `${at}.frames`), bytes: num(o.bytes, `${at}.bytes`) };
   }
   if (o.status === "too_many_pixels") return { status: "too_many_pixels", ...size(), frames: num(o.frames, `${at}.frames`) };
-  const bare = ["reading", "missing", "not_file", "binary", "unreadable", "broken"] as const;
+  if (o.status === "diff") {
+    return {
+      status: "diff",
+      rows: num(o.rows, `${at}.rows`),
+      hunks: list(num)(o.hunks, `${at}.hunks`),
+      added: num(o.added, `${at}.added`),
+      removed: num(o.removed, `${at}.removed`),
+      cut: bool(o.cut, `${at}.cut`),
+    };
+  }
+  const bare = ["reading", "missing", "not_file", "binary", "unreadable", "broken", "no_change"] as const;
   return { status: oneOf(bare, "what the viewer read")(o.status, `${at}.status`) };
 }
 
@@ -577,6 +587,7 @@ function viewer(value: unknown, at: string): Viewer {
     zoom: orNull(num)(o.zoom, `${at}.zoom`),
     pan: pair(o.pan, `${at}.pan`),
     playing: orNull(bool)(o.playing, `${at}.playing`),
+    diff: bool(o.diff, `${at}.diff`),
   };
   if (o.opener !== undefined) view.opener = num(o.opener, `${at}.opener`);
   if (o.marked !== undefined) {
@@ -602,8 +613,11 @@ function explorerShape(value: unknown, at: string): ExplorerShape {
 function viewerDrawn(value: unknown, at: string): ViewerDrawn {
   const o = fields(value, at);
   const drawn: ViewerDrawn = {
-    body: orNull(oneOf(["markdown", "lines", "image"] as const, "a viewer's body"))(o.body, `${at}.body`),
+    body: orNull(oneOf(["markdown", "lines", "image", "diff"] as const, "a viewer's body"))(o.body, `${at}.body`),
   };
+  for (const key of ["rows", "hunks", "added", "removed"] as const) {
+    if (o[key] !== undefined) drawn[key] = num(o[key], `${at}.${key}`);
+  }
   if (o.shape !== undefined) {
     const shape = fields(o.shape, `${at}.shape`);
     const links = fields(shape.links, `${at}.shape.links`);
@@ -1830,7 +1844,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 
 function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
-  if (value === "multi_monitor") return value;
+  if (value === "multi_monitor" || value === "review") return value;
   if (value === "overlay_panels" || value === "decisions" || value === "code_city" || value === "city_live_layer") return value;
   if (value === "session_waits" || value === "projects" || value === "terminal_tasks" || value === "zoom_out" || value === "decision_sources") return value;
   throw wrong(at, "a feature", value);
@@ -2136,7 +2150,7 @@ function rowMenu(value: unknown, at: string): RowMenu {
     const kinds = [
       "rename", "delete", "remove", "keep", "pause", "resume", "delete_worktree", "local_folder", "from_github",
       "slot_keep", "slot_edit", "slot_look_again", "slot_give_back", "slot_swap", "slot_resort", "slot_clear",
-      "close", "fold_out", "explorer_here", "open", "open_below", "reveal", "copy_path", "terminal_here",
+      "close", "fold_out", "explorer_here", "open", "open_diff", "open_below", "reveal", "copy_path", "terminal_here",
     ] as const;
     const known = kinds.find((k) => k === kind);
     if (known === undefined) throw wrong(`${at}.item`, "a menu item", kind);

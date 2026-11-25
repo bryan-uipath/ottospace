@@ -6894,6 +6894,10 @@ impl Workspace {
             // A window with no title says whose it is.
             Kind::App { title, name, .. } if title.is_empty() => name.clone(),
             Kind::App { title, .. } => title.clone(),
+            // A diff view says so: `main.rs · diff`.
+            Kind::File { path } if self.model.viewer(pane.id).is_some_and(|view| view.diff) => {
+                format!("{} · diff", viewer::name_and_dir(path).0)
+            }
             Kind::File { path } => viewer::name_and_dir(path).0,
             Kind::Explorer { root } => viewer::name_and_dir(root).0,
             Kind::Decision => ottospace_core::model::decisions::NAME.into(),

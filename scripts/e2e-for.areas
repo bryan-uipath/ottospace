@@ -94,10 +94,10 @@ broad: a_test_runs_window_is_the_size_asked_and_no_larger_than_its_screen
 /src/(.*/)?(pick|apps|new_window|slot|slots|slot_panes|slot_icon|pop_ups|offers|rules|hosted|dialog|app_wheel|same_title)(\.rs|/)   picker|apps_section|app_pane|slot|new_window|_window_floats|an_offer_splits|offer_chips|told_apart_in_the_offer_list
 /src/(.*/)?(agent_mode|ax|ax_debug|inspect|inspector)(\.rs|/)                agent_mode|inspector|sneak_labels_an_apps
 /src/(.*/)?mcp(\.rs|/)|^crates/ottospace/tests/fixtures/mcp-tools\.json$   mcp_server|a_task_agents_pass
-/src/(.*/)?(viewer|viewer_picture|markdown|highlight|syntax|text_runs)(\.rs|/)|^crates/ottospace/tests/fixtures/(markdown|code)/   viewer|markdown|a_code_file|cmd_click|native_conversation|tool_rows|gif
+/src/(.*/)?(viewer|viewer_picture|markdown|highlight|syntax|text_runs)(\.rs|/)|^crates/ottospace/tests/fixtures/(markdown|code)/   viewer|markdown|a_code_file|cmd_click|native_conversation|tool_rows|gif|diff
 /src/(.*/)?(displays|out_window|display|fill)(\.rs|/)                        display|folds|draws_on
 /src/(.*/)?(palette|menus|row_menu|fuzz|commands|goto)(\.rs|/)               palette|command|done_row|go_to|right_click|renamed_in_place
-/src/(.*/)?(explorer|explorer_pane)(\.rs|/)                                    explorer|worktree
+/src/(.*/)?(explorer|explorer_pane|review)(\.rs|/)                                    explorer|worktree
 /src/(.*/)?tab_name(\.rs|/)                                                 renamed_in_place|tab_strip|workbook
 /src/(.*/)?(key_use|keycaps|empty)(\.rs|/)                                   key|caps|empty
 /src/(.*/)?(settings|config|features)(\.rs|/)                                settings|feature|font|marks_file|projects_section
