@@ -618,6 +618,14 @@ impl Workspace {
         self.button_of("talk", name, label, tip)
     }
 
+    /// An action of the header's controls row: the secondary button, one style for all.
+    pub(crate) fn talk_action(&self, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
+        ui::button(name, ui::Button::Secondary(label.to_string().into()), ui::State::Rest)
+            .child(self.controls.mark(format!("talk:{name}")))
+            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+    }
+
     /// `talk_button`, its control `<of>:<name>`: the Decisions card's are `decision:…`.
     pub(crate) fn button_of(&self, of: &str, name: &'static str, label: &str, tip: &'static str) -> Stateful<Div> {
         ui::button(name, ui::Button::Ghost(ui::Face::Label(label.to_string().into())), ui::State::Rest)
@@ -677,9 +685,8 @@ impl Workspace {
         ran.or_else(|| self.model.agent_dir(subject)).or(moved).or(dir).or_else(home)
     }
 
-    /// The drawer's foot: the agent's model, a mode that lets it act unasked, and where it runs:
-    /// its repository, its worktree, its folder (`Model::where_at`; each whole on hover). Muted;
-    /// a mode that asks for nothing in the warning colour. Stays once the agent ended.
+    /// The drawer's foot: the agent's model and a mode that lets it act unasked. Muted; a mode
+    /// that asks for nothing in the warning colour. Where it runs is the header's (`talk_where`).
     fn agent_foot(&self, subject: &Subject, width: f32) -> Option<Div> {
         let line = self.agent_line(subject);
         let color = if line.bypass { theme::SNEAK } else { theme::MUTED };
@@ -687,25 +694,37 @@ impl Workspace {
         let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
         let worktree = dir.as_deref().and_then(|dir| self.model.worktree_at(dir));
         let short = dir.as_deref().map(|dir| talk::short_dir(dir, home.as_deref(), worktree));
-        let place = dir.as_deref().map(|dir| self.model.where_at(dir, home.as_deref()));
-        let tip = place.as_ref().map(|place| gpui::SharedString::from(place.full.clone()));
-        // The drawer's width less the foot's padding: `cut_text` needs a width to cut in.
-        let foot = div().id("talk-foot").flex_none().flex().gap_2().px_3().pb_1().w(px(width)).text_xs();
-        let foot = foot
-            .text_color(rgb(color))
-            .when_some(tip, |foot, tip| foot.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))));
         let text = line.foot?;
-        // The model and mode, then where: the repository and worktree whole, the folder cut first.
         let rest = match short.filter(|short| text.ends_with(short.as_str())) {
             Some(short) => text[..text.len() - short.len()].trim_end_matches(" · ").to_string(),
             None => text,
         };
-        let (names, path) = place.map_or((Vec::new(), None), |place| (vec![place.repo, place.worktree], place.path));
-        let names = names.into_iter().flatten().map(|name| div().flex_none().child(name));
-        // The folder gives way first: the model and mode, the repository and worktree stay.
-        let path = path.map(|path| div().flex_1().min_w_0().truncate().child(path));
-        let rest = (!rest.is_empty()).then(|| div().flex_none().child(rest));
-        Some(div().child(foot.children(rest).children(names).children(path)))
+        let foot = div().id("talk-foot").flex_none().px_3().pb_1().w(px(width)).text_xs().text_color(rgb(color));
+        (!rest.is_empty()).then(|| div().child(foot.truncate().child(rest)))
+    }
+
+    /// Under the title: where the agent runs, repository › worktree › folder (`Model::where_at`),
+    /// quiet; the folder gives way first, each part whole on hover.
+    fn talk_where(&self, subject: &Subject) -> Option<Stateful<Div>> {
+        let dir = self.agent_dir(subject)?;
+        let home = std::env::var("HOME").ok().filter(|home| !home.is_empty());
+        let place = self.model.where_at(&dir, home.as_deref());
+        let tip: gpui::SharedString = place.full.clone().into();
+        let sep = || div().flex_none().text_color(rgb(theme::BORDER_STRONG)).child("›");
+        let names = [place.repo, place.worktree].into_iter().flatten().map(|name| div().flex_none().child(name));
+        let mut parts: Vec<AnyElement> = Vec::new();
+        for part in names
+            .map(IntoElement::into_any_element)
+            .chain(place.path.map(|path| div().flex_1().min_w_0().truncate().child(path).into_any_element()))
+        {
+            if !parts.is_empty() {
+                parts.push(sep().into_any_element());
+            }
+            parts.push(part);
+        }
+        let row = div().id("talk-where").h(px(16.)).flex().items_center().gap_1().min_w_0().text_xs();
+        let row = row.text_color(rgb(theme::MUTED)).children(parts).children(self.watch_chip(subject));
+        Some(row.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
     }
 
     /// The conversation's header: state, title, Chat | Terminal, then what can be done.
@@ -725,13 +744,12 @@ impl Workspace {
             (None, Subject::Task(_)) => return None,
         };
         let runs = self.model.agent_runs(subject);
-        let muted = |text: String| div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(text);
         let line = self.agent_line(subject);
         let facts: gpui::SharedString =
             line.facts.iter().map(|(name, value)| format!("{name}: {value}")).collect::<Vec<_>>().join("\n").into();
         let brief = shown.filter(|task| !task.materials.is_empty()).map(|task| {
             let (task, on) = (task.id, self.model.brief == Some(task.id));
-            self.talk_button("talk-brief", if on { "Agent" } else { "Brief" }, "The task's brief, or its agent")
+            self.talk_action("talk-brief", if on { "Agent" } else { "Brief" }, "The task's brief, or its agent")
                 .on_click(cx.listener(move |this, _, window, cx| {
                     let action = if on { Action::BriefClose } else { Action::BriefShow { id: task } };
                     this.dispatch(action, this.input, window, cx);
@@ -742,7 +760,7 @@ impl Workspace {
             // Only a listed session can be adopted: not with the Tasks section closed, nor hidden.
             Subject::Session { runner, id } if self.model.session_listed(runner, id) => {
                 let (runner, id) = (runner.clone(), id.clone());
-                Some(self.talk_button("talk-adopt", "Track", "Track as a task").on_click(cx.listener(
+                Some(self.talk_action("talk-adopt", "Track", "Track as a task").on_click(cx.listener(
                     move |this, _, window, cx| {
                         let adopt = Action::SessionAdopt { runner: runner.clone(), id: id.clone() };
                         this.dispatch(adopt, this.input, window, cx);
@@ -751,28 +769,42 @@ impl Workspace {
             }
             _ => None,
         };
-        // Natively, Stop is the composer's while a turn runs (`composer_button`); in a terminal, here.
+        // Stop in Done's slot while the agent works: natively the turn (esc esc), in a terminal the agent.
         let terminal = self.model.talk_view(subject) != ottospace_core::transcript::View::Native;
-        let stop = (runs && terminal && !self.model.is_ending(subject)).then(|| {
-            let id = subject.clone();
-            self.talk_button("talk-stop", "Stop", "End this conversation's agent")
-                .text_color(rgb(theme::ERROR))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.dispatch(Action::TaskStop { id: id.clone() }, this.input, window, cx);
-                }))
-        });
+        let turn = self.model.composer_button() == Some(ottospace_core::model::chat::Primary::Stop);
+        let stop = match () {
+            _ if turn => {
+                Some(self.talk_action("chat-stop", "Stop", "Stop this turn; the session goes on (esc esc)").on_click(
+                    cx.listener(|this, _, window, cx| {
+                        drop(this.dispatch(Action::TalkInterrupt, this.input, window, cx))
+                    }),
+                ))
+            }
+            _ if runs && terminal && !self.model.is_ending(subject) => {
+                let id = subject.clone();
+                Some(self.talk_action("talk-stop", "Stop", "End this conversation's agent").on_click(cx.listener(
+                    move |this, _, window, cx| {
+                        this.dispatch(Action::TaskStop { id: id.clone() }, this.input, window, cx);
+                    },
+                )))
+            }
+            _ => None,
+        };
+        // Later, then Stop or Done in one slot: nothing shifts as a turn starts or ends.
+        let mut finish = self.finish_buttons(subject, cx);
+        let done = finish.pop_if(|_| self.model.finish(subject).is_some_and(|b| b.done));
         // The agent goes on, its rail item with it.
         let close = self.drawer_collapse("talk:talk-close", cx);
-        // Its own row: the title in full, on two lines at most, the rest on hover with the facts.
+        // One line, the rest on hover with the facts.
         let tip: gpui::SharedString = match facts.is_empty() {
             true => title.clone().into(),
             false => format!("{title}\n{facts}").into(),
         };
         let title_row = div()
+            .h(px(28.))
             .flex()
-            .items_start()
+            .items_center()
             .gap_2()
-            .pt_1p5()
             .child(match shown.and_then(|task| self.task_badge(task.id, 18.)) {
                 Some(badge) => badge,
                 None => home::dot(color),
@@ -784,39 +816,25 @@ impl Workspace {
                     .flex_1()
                     .min_w_0()
                     .text_sm()
-                    .line_height(px(18.))
-                    // Two lines at most, also of a title with line breaks in it.
-                    .max_h(px(36.))
-                    .line_clamp(2)
-                    .text_ellipsis()
+                    .truncate()
                     .child(title)
                     .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
-            );
-        // Under it, what can be done, the slide buttons last.
+            )
+            .children(self.drawer_pull_button(cx))
+            .child(close);
+        // Chat · Terminal at the left, the actions at the right.
         let controls = div()
             .h(px(32.))
             .flex()
             .items_center()
             .gap_2()
-            // Where it runs, only when that is not its task's own folder: what it can see.
-            .children(line.folder.map(|folder| {
-                let tip: gpui::SharedString = format!("The agent runs in {folder}").into();
-                muted(folder)
-                    .id("talk-folder")
-                    .flex_shrink()
-                    .min_w_0()
-                    .truncate()
-                    .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
-            }))
-            .children(self.watch_chip(subject))
             .children(self.view_switch(subject, cx))
+            .child(div().flex_1())
             .children(brief)
             .children(adopt)
+            .children(finish)
             .children(stop)
-            .children(self.finish_buttons(subject, cx))
-            .child(div().flex_1())
-            .children(self.drawer_pull_button(cx))
-            .child(close);
+            .children(done);
         let header = div()
             .flex_none()
             .pl_3()
@@ -826,6 +844,7 @@ impl Workspace {
             .border_b_1()
             .border_color(rgb(theme::BORDER))
             .child(title_row)
+            .children(self.talk_where(subject))
             .child(controls);
         Some(header.id("drawer-head"))
     }

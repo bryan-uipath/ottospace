@@ -11,48 +11,18 @@ use crate::{Tooltip, Workspace};
 
 /// Done's green: never mistaken for Later.
 pub(crate) const DONE: u32 = 0x34c38f;
-const DONE_EDGE: u32 = 0x2c6e55;
 
 impl Workspace {
-    /// A bordered button of the header: `talk:<name>`.
-    fn finish_button(&self, name: &'static str, tip: &'static str, (text, edge): (u32, u32)) -> Stateful<Div> {
-        div()
-            .id(name)
-            .relative()
-            .flex_none()
-            .h(px(22.))
-            .px_2()
-            .flex()
-            .items_center()
-            .gap_1()
-            .rounded_md()
-            .border_1()
-            .border_color(rgb(edge))
-            .cursor_pointer()
-            .text_xs()
-            .text_color(rgb(text))
-            .hover(|s| s.bg(rgb(theme::SELECTED)))
-            .child(self.controls.mark(format!("talk:{name}")))
-            .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.into()))))
-            // The press must not reach the drawer, which takes the keyboard on a press.
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-    }
-
     /// Later, then ✓ Done, at the header's right, as the core says for its agent now.
     pub(crate) fn finish_buttons(&self, subject: &Subject, cx: &mut Context<Self>) -> Vec<Stateful<Div>> {
         let (Some(buttons), Some(id)) = (self.model.finish(subject), subject.task()) else { return Vec::new() };
         let mut out = Vec::new();
         if buttons.later {
-            let later = self.finish_button(
-                "talk-later",
-                "Stop the agent; resume it from Tasks (⌘W)",
-                (theme::TEXT, theme::BORDER_STRONG),
-            );
-            out.push(later.child("Later").on_click(cx.listener(move |this, _, window, cx| this.later(id, window, cx))));
+            let later = self.talk_action("talk-later", "Later", "Stop the agent; resume it from Tasks (⌘W)");
+            out.push(later.on_click(cx.listener(move |this, _, window, cx| this.later(id, window, cx))));
         }
         if buttons.done {
-            let done = self.finish_button("talk-done", "The task is finished (⌘↵)", (DONE, DONE_EDGE));
-            let done = done.font_weight(gpui::FontWeight::MEDIUM).child("✓").child("Done");
+            let done = self.talk_action("talk-done", "✓ Done", "The task is finished (⌘↵)").text_color(rgb(DONE));
             out.push(done.on_click(cx.listener(move |this, _, window, cx| this.done(id, window, cx))));
         }
         out

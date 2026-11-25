@@ -2408,14 +2408,9 @@ impl Workspace {
         let open = chat.transcript.live || self.model.shown_draft_chat().is_some();
         let field =
             (open && (!card || chat.deny) && editing.is_none()).then(|| self.render_field_of("talk", placeholder, cx));
+        // Stop is the header's, in Done's slot (`talk_header`).
         let button = self.model.composer_button().and_then(|primary| match primary {
-            Primary::Stop => Some(
-                self.talk_button("chat-stop", "Stop", "Stop this turn; the session goes on (esc esc)")
-                    .text_color(rgb(theme::ERROR))
-                    .on_click(cx.listener(|this, _, window, cx| {
-                        drop(this.dispatch(Action::TalkInterrupt, this.input, window, cx))
-                    })),
-            ),
+            Primary::Stop => None,
             Primary::Resume | Primary::Start => self.start_button(cx),
         });
         let btw = self.btw_button(subject, cx);
