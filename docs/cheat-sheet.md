@@ -161,6 +161,7 @@ Key Counts forgets it.
 | Change the default agent | ⌘N, Tab to the @agent picker, ↓ to one, ⌥↵ |
 | Start a task in a new worktree | ⌘N in a repository's workspace, type a line, ⌥⌘N (or `new worktree`), ↵: git makes a branch named for the task and its agent starts there. A name taken: the notice says so and the task waits in the checkout |
 | Add a task for later | ⌘N, type a line, ⌘⇧↵ |
+| Show the agent a picture | Copy it (⌘⌃⇧4 for a screenshot), then ⌘V in the new-task box or the conversation's box: a chip; ↵ sends it with the message |
 | Say more than a title | ⌘N, the title, then ⇧↵ or ⌥↵ and more lines: its agent is asked them after the title |
 | See what ↵ will do, and the tags | The one line under the box says it (`↵ starts @codex in app on main · ⌘⇧↵ later · Esc`); "? tags" or ⌘/ shows the tags, ⌘/ again every key |
 | Start a task where the box was opened | It always is: switch space with the box open and it says "This task goes to A · Switch to B"; ↵ starts it in A, Switch (or ⌘N) sends it to B |

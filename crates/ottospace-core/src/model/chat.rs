@@ -947,9 +947,9 @@ impl Model {
             }
             Action::ImagePaste { id, kind } => self.paste_image(&id, &kind, effects),
             Action::ImageRemove { id } => {
-                self.compose_images.retain(|image| image.id != id);
+                self.compose_images.retain(|image| image.id() != id);
                 if let Some(chat) = self.shown_chat_mut() {
-                    chat.images.retain(|image| image.id != id);
+                    chat.images.retain(|image| image.id() != id);
                 }
             }
             // Not delivered (its agent had ended): first in its queue again, held for the user's ↵
@@ -1755,7 +1755,7 @@ mod tests {
         let mut m = two_live();
         let one = first(&m);
         let image = |n: u8| Pasted::new(&format!("{n:016x}"), "png").unwrap_or_else(|| panic!("{n}"));
-        let paste = |n: u8| Action::ImagePaste { id: image(n).id, kind: "png".into() };
+        let paste = |n: u8| Action::ImagePaste { id: image(n).id().into(), kind: "png".into() };
         assert_eq!(m.refusal(&paste(1), Origin::Socket), Some(super::USERS_ALONE));
         // Not a name the shell makes: nothing.
         assert_eq!(m.update(Action::ImagePaste { id: "../../etc".into(), kind: "png".into() }), []);
@@ -1775,7 +1775,10 @@ mod tests {
             [Effect::Notice { text: super::TOO_MANY_IMAGES.into() }, Effect::ImagesDrop { images: vec![image(7)] }]
         );
         // × on a chip: gone, and its file.
-        assert_eq!(m.update(Action::ImageRemove { id: image(2).id }), [Effect::ImagesDrop { images: vec![image(2)] }]);
+        assert_eq!(
+            m.update(Action::ImageRemove { id: image(2).id().into() }),
+            [Effect::ImagesDrop { images: vec![image(2)] }]
+        );
     }
 
     /// A runner that takes a message mid-turn gets "send now" in the turn; Claude Code's is off

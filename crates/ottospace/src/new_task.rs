@@ -478,8 +478,8 @@ impl Workspace {
         let dir = crate::config::images_dir();
         let chip = |(n, image): (usize, &ottospace_core::tasks::Pasted)| {
             let thumb = dir.as_ref().map(|dir| gpui::img(dir.join(image.file())).size(px(16.)).rounded_sm());
-            let remove = Action::ImageRemove { id: image.id.clone() };
-            let x = self.pill_off(format!("{mark}-off:{}", image.id), Some(format!("{mark}:{n}")), remove, cx);
+            let remove = Action::ImageRemove { id: image.id().into() };
+            let x = self.pill_off(format!("{mark}-off:{}", image.id()), Some(format!("{mark}:{n}")), remove, cx);
             ui::chip(format!("Image {}", n + 1), None).children(thumb).child(x).into_any_element()
         };
         images.iter().enumerate().map(chip).collect()

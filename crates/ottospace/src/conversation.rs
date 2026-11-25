@@ -353,7 +353,8 @@ impl Workspace {
     /// left out.
     pub(crate) fn images_of(&self, pasted: &[ottospace_core::tasks::Pasted]) -> Vec<ottospace_agents::Image> {
         let Some(dir) = crate::config::images_dir() else { return Vec::new() };
-        pasted.iter().filter_map(|image| ottospace_agents::Image::load(&dir.join(image.file())).ok()).collect()
+        let path = |image| image_file(&dir, image);
+        pasted.iter().filter_map(|image| ottospace_agents::Image::load(&path(image)?).ok()).collect()
     }
 
     /// The image on the clipboard, for the message being written: saved under a name made here
@@ -377,7 +378,7 @@ impl Workspace {
             self.error = Some(format!("The image could not be kept: {err}"));
             return true;
         }
-        let paste = Action::ImagePaste { id: pasted.id, kind: pasted.kind };
+        let paste = Action::ImagePaste { id: pasted.id().into(), kind: pasted.kind().into() };
         drop(self.dispatch(paste, self.input, window, cx));
         true
     }
@@ -386,7 +387,9 @@ impl Workspace {
     pub(crate) fn drop_images(&self, images: &[ottospace_core::tasks::Pasted]) {
         let Some(dir) = crate::config::images_dir() else { return };
         for image in images.iter().filter(|image| !self.model.holds_image(image)) {
-            let _ = std::fs::remove_file(dir.join(image.file()));
+            if let Some(path) = image_file(&dir, image) {
+                let _ = std::fs::remove_file(path);
+            }
         }
     }
 
@@ -2675,6 +2678,16 @@ fn translate(native: &mut Native, said: Said, details: bool) -> Option<Event> {
 /// Reads a local image for a thumbnail, off the main thread: inside the repository once its
 /// links are resolved, a regular file of at most `MAX_THUMB`, a PNG, JPEG, GIF or WebP by its
 /// first bytes. Never a URL: nothing is fetched.
+/// The file of a pasted image in `dir`, checked again here: its name is one component ottospace
+/// makes (`Pasted::new`), the path's folder is `dir` itself, and it is a regular file there, not a
+/// symlink (never followed, to read or to remove). `None`: none such.
+pub(crate) fn image_file(dir: &Path, image: &ottospace_core::tasks::Pasted) -> Option<std::path::PathBuf> {
+    let image = ottospace_core::tasks::Pasted::new(image.id(), image.kind())?;
+    let path = dir.join(image.file());
+    let meta = std::fs::symlink_metadata(&path).ok()?;
+    (path.parent() == Some(dir) && meta.file_type().is_file()).then_some(path)
+}
+
 pub(crate) fn read_thumb(path: String, repo: Option<String>) -> Thumb {
     let (send, read) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -2866,6 +2879,29 @@ const TABLE_CHAR: f32 = 7.6;
 
 #[cfg(test)]
 mod tests {
+
+    /// A pasted image's file is only a regular file named as ottospace names one, in the folder
+    /// itself: a symlink planted there (to a file outside) is neither read nor removed through.
+    #[test]
+    fn an_image_file_is_never_a_symlink_or_outside_its_folder() {
+        struct Dir(std::path::PathBuf);
+        impl Drop for Dir {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_dir_all(&self.0);
+            }
+        }
+        let root = Dir(std::env::temp_dir().join(format!("ottospace-images-{}", std::process::id())));
+        let (dir, outside) = (root.0.join("images"), root.0.join("secret.txt"));
+        std::fs::create_dir_all(&dir).expect("a folder");
+        std::fs::write(&outside, "made-up").expect("a file");
+        let image = |id: &str| ottospace_core::tasks::Pasted::new(id, "png").expect("a name");
+        std::fs::write(dir.join("00000000000000a1.png"), [0x89, b'P', b'N', b'G']).expect("an image");
+        std::os::unix::fs::symlink(&outside, dir.join("00000000000000a2.png")).expect("a symlink");
+        assert_eq!(super::image_file(&dir, &image("00000000000000a1")), Some(dir.join("00000000000000a1.png")));
+        assert_eq!(super::image_file(&dir, &image("00000000000000a2")), None, "a symlink");
+        assert_eq!(super::image_file(&dir, &image("00000000000000a3")), None, "none there");
+        assert!(outside.exists());
+    }
     use super::*;
 
     #[test]

@@ -452,7 +452,11 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    now, Edit, ×) and each goes on its own, in order, once the agent is done; a question it asks
    comes first, and after your Stop they wait for your ↵. ⌘↵ sends now: into the turn where the
    runner takes that, else (Claude Code, for now) the turn stops and it goes first. They are kept
-   with the task over a restart. Stop sits at the composer's
+   with the task over a restart. ⌘V with an image on the clipboard (a screenshot copied) attaches
+   it to the message being written, here or in the new-task box: a chip with its thumbnail and ×;
+   at most 5; it goes to the agent with the message (Claude Code in Chat view; elsewhere the box
+   says it takes none). Each is kept privately in `~/.ottospace/images` until it is sent (from the
+   new-task box: until its task is done), then removed. Stop sits at the composer's
    right: it, or Esc Esc, ends the turn and the session goes on. No turn, no Stop. Once the agent
    ended (or was stopped: nothing starts on its session until its process is gone), Resume
    session (or Start agent) takes that place. A stop and the resume after it are one thin

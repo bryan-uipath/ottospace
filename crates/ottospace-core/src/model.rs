@@ -16080,15 +16080,15 @@ mod tests {
         m.conversation_view = crate::transcript::View::Native;
         let image = Pasted::new("00000000000000a1", "png").unwrap_or_else(|| panic!());
         m.update(Action::OpenCompose { text: "fix the zoom".into() });
-        m.update(Action::ImagePaste { id: image.id.clone(), kind: "png".into() });
+        m.update(Action::ImagePaste { id: image.id().into(), kind: "png".into() });
         m.update(Action::ComposeSubmit { open: false });
         assert_eq!(m.tasks.list[0].images, [image.clone()]);
         let state = serde_json::json!(m.tasks.list[0]).to_string();
-        assert!(state.contains("\"images\":1") && !state.contains(&image.id), "{state}");
+        assert!(state.contains("\"images\":1") && !state.contains(image.id()), "{state}");
         m.conversation_view = crate::transcript::View::Terminal;
         m.update(Action::OpenCompose { text: "more".into() });
         let other = Pasted::new("00000000000000a2", "png").unwrap_or_else(|| panic!());
-        let refused = m.update(Action::ImagePaste { id: other.id.clone(), kind: "png".into() });
+        let refused = m.update(Action::ImagePaste { id: other.id().into(), kind: "png".into() });
         let said = Effect::Notice { text: chat::IMAGES_NOT_HERE.into() };
         assert_eq!(refused, [said, Effect::ImagesDrop { images: vec![other] }]);
     }

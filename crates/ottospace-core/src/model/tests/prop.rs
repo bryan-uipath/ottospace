@@ -6142,7 +6142,7 @@ impl Run {
                 Effect::ImagesDrop { images } => {
                     for image in images {
                         ensure!(
-                            crate::tasks::Pasted::new(&image.id, &image.kind).as_ref() == Some(image),
+                            crate::tasks::Pasted::new(image.id(), image.kind()).as_ref() == Some(image),
                             "dropped {image:?}"
                         );
                         ensure!(!m.images_held.contains(image), "{action:?} dropped {image:?}, still held");
