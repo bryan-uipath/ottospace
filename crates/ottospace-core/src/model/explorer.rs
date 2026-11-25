@@ -142,8 +142,8 @@ impl Model {
     /// A click on row `at` of explorer `pane`: selected; a folder turns, a file opens in the
     /// viewer beside (the same one for the next file).
     pub(super) fn explorer_click(&mut self, pane: PaneId, at: usize, effects: &mut Vec<Effect>) {
-        // A click lands only on a drawn pane: one on another tab would bring that tab up.
-        if !self.layout.as_ref().is_some_and(|layout| layout.leaves().contains(&pane)) {
+        // A click lands only on a drawn pane (any window's): one on a hidden tab would bring it up.
+        if !self.shown_panes().contains(&pane) {
             return;
         }
         let Some(explorer) = self.explorers.get_mut(&pane) else { return };
@@ -385,5 +385,34 @@ mod tests {
         assert_eq!(names(&m, id).len(), 3);
         let state = serde_json::to_string(&m).unwrap_or_default();
         assert!(!state.contains("README") && !state.contains("build.rs"), "{state}");
+    }
+
+    /// A click on an explorer in the main window while the keyboard is in a tab out still lands;
+    /// one on a hidden tab does nothing (seed 2900).
+    #[test]
+    fn a_click_lands_on_an_explorer_in_any_window_not_on_a_hidden_tab() {
+        use crate::{ax::Frame, model::displays::Display};
+        let (mut m, id) = opened();
+        let displays = ["left", "right"].map(|uid| Display {
+            uid: uid.into(),
+            frame: Frame::new(if uid == "left" { 0. } else { 1728. }, 0., 1728., 1117.),
+            scale: 2.,
+        });
+        m.update(
+            Action::SetDisplays { displays: displays.to_vec(), main: Some("left".into()) }.sent_by(Origin::System),
+        );
+        let tab = m.tabs[m.active].id;
+        m.update(Action::NewTab);
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        m.update(Action::TabOut { tab: None });
+        assert_eq!(m.tabs[m.main_at()].id, tab, "the explorer's tab is in the main window");
+        assert!(!m.layout.as_ref().is_some_and(|l| l.leaves().contains(&id)), "the keyboard is out");
+        let src = Effect::ListDir { pane: id, root: ROOT.into(), dir: "src".into() };
+        assert!(m.update(Action::ExplorerClick { pane: id, row: 0 }.sent_by(Origin::Socket)).contains(&src));
+        // Its tab hidden: nothing.
+        m.update(Action::TabIn { tab: None });
+        m.update(Action::NewTab);
+        let effects = m.update(Action::ExplorerClick { pane: id, row: 1 }.sent_by(Origin::Socket));
+        assert!(effects.is_empty() && m.tabs[m.active].id != tab, "{effects:?}");
     }
 }
