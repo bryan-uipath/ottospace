@@ -166,7 +166,7 @@ A small script printed the variable and tried to connect.
 - **On screen.** The robot in an app pane's header (`agent:<pane>`): glyph, `Off`/`See`/`Act`, caret;
   muted at Off, dimmed with no task, the app's blue at See, amber at Act; the pane's header line
   (`theme::focus_line`'s) in the level's colour at See and at Act. A click, ⌘⌃V, the palette (Agent Mode…, Agent Mode: Off / See / See and Act) or a label
-  (`agent:<pane>`, `agent-item:<n>`). See and act's item says "Pressing arrives later": it grants
+  (`agent:<pane>`, `agent-item:<n>`). See and act's item says "Pressing controls comes later": it grants
   what See does. Every use and refusal is a row in the task's conversation (`Notice::AppUsed`) and a
   use of the dial's twelfth station, Apps. Not yet: the pulse while a read runs, the tip's "read 4 s
   ago", a row for a terminal-view conversation (it has no transcript).
