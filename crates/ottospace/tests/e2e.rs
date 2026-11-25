@@ -19123,6 +19123,31 @@ fn a_double_click_on_the_city_opens_a_file_or_a_folder() {
     assert!(["src", "docs"].iter().any(|d| cwd.as_deref() == Some(&in_app(d))), "{panes:?}");
 }
 
+/// On a live layer a turn's first frame draws its overlays with the turned camera, before its
+/// picture: the names, placed by the picture's own camera, wait for the next one, not left behind.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_live_layers_names_wait_out_a_turn_not_left_behind() {
+    let (otto, root, home) = city_shown("city-live-names", "code_city,city_live_layer");
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    let named = |c: &Value| c["names"].as_array().is_some_and(|n| !n.is_empty());
+    let rest = otto.wait_for("names", |o| Some(city(o)).filter(named));
+    let n = |v: &Value| v.as_f64().unwrap();
+    let b = &rest["bounds"];
+    // Low and to the left: clear of the hints, which take the wheel.
+    let (x, y) = (n(&b[0]) + n(&b[2]) * 0.2, n(&b[1]) + n(&b[3]) * 0.9);
+    let turn = json!({"cmd": "mouse", "action": "wheel", "x": x, "y": y, "dx": 6, "dy": 0, "precise": true,
+        "modifiers": ["alt"], "as": "user"});
+    let reply = otto.call(turn)["city"].clone();
+    assert_ne!(reply["view"], rest["view"], "it turned");
+    assert_eq!(reply["names"], json!([]), "none at the old camera's places: {}", reply["names"]);
+    // At rest again, named again.
+    otto.wait_for("names again", |o| Some(city(o)).filter(named));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,
 /// inside the picture, again after a zoom. The user's pointer on a folder's ground outlines its
 /// top face and hangs its label by its near edge or the pointer; on a building, a beam a share of

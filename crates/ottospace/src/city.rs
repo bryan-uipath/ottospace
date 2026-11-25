@@ -2303,6 +2303,7 @@ fn paint(
     (place.beacon, place.window) = (None, Some(window.window_handle().window_id()));
     place.lit_beams.clear();
     let (bounds, hovered, pointer) = (place.bounds, place.hovered, place.pointer);
+    let asked_view = place.asked.as_ref().map(|key| key.view);
     let was = std::mem::take(&mut place.icons);
     let mut glimmer = std::mem::take(&mut place.glimmer);
     let (waited, fade, first_ms, laid) = (place.waited, place.fade, place.first_ms, place.since);
@@ -2387,7 +2388,11 @@ fn paint(
         [f32::from(o.x), f32::from(o.y), f32::from(b.size.width), f32::from(b.size.height)]
     };
     let avoid: Vec<[f32; 4]> = (hints.size.width > px(0.)).then(|| local(clear)).into_iter().collect();
+    // A live picture drawn over with a camera that moved on (`with_asked_camera`): its names are
+    // where its own camera put them, so none until the next picture, as while the camera moves.
+    let moved = made.live && asked_view.is_some_and(|view| view != made.key.view);
     let mut marks: Vec<(&Mark, [f32; 4])> = (made.marks.iter())
+        .filter(|_| !moved)
         .filter(|m| !m.text.contains(char::is_control))
         .map(|m| (m, [m.bounds[0] * w, m.bounds[1] * h, m.bounds[2] * w, m.bounds[3] * h]))
         .filter(|(_, b)| city_labels::sized(*b, [w, h]))
