@@ -702,8 +702,9 @@ impl Workspace {
         };
         let (names, path) = place.map_or((Vec::new(), None), |place| (vec![place.repo, place.worktree], place.path));
         let names = names.into_iter().flatten().map(|name| div().flex_none().child(name));
-        let path = path.map(|path| div().min_w_0().flex_shrink().truncate().child(path));
-        let rest = (!rest.is_empty()).then(|| crate::cut_text(rest).flex_1());
+        // The folder gives way first: the model and mode, the repository and worktree stay.
+        let path = path.map(|path| div().flex_1().min_w_0().truncate().child(path));
+        let rest = (!rest.is_empty()).then(|| div().flex_none().child(rest));
         Some(div().child(foot.children(rest).children(names).children(path)))
     }
 
