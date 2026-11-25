@@ -12,7 +12,13 @@ type Done = extern "C" fn(*mut c_void, bool, *const c_char);
 unsafe extern "C" {
     fn ottospace_listen_status(locale: *const c_char) -> i32;
     fn ottospace_listen_install(locale: *const c_char, done: Done, context: *mut c_void);
-    fn ottospace_listen_new(locale: *const c_char, rate: f64, callback: Callback, context: *mut c_void) -> *mut c_void;
+    fn ottospace_listen_new(
+        locale: *const c_char,
+        rate: f64,
+        callback: Callback,
+        context: *mut c_void,
+        why: *mut i32,
+    ) -> *mut c_void;
     fn ottospace_listen_feed(handle: *mut c_void, samples: *const f32, n: isize);
     fn ottospace_listen_finish(handle: *mut c_void);
 }
@@ -103,18 +109,86 @@ extern "C" fn heard(context: *mut c_void, kind: i32, text: *const c_char, start:
     }
 }
 
+/// Why a recogniser did not start: the shim's step that failed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NotStarted {
+    /// Below macOS 26, or built without its SDK.
+    Absent,
+    /// No language of the system's has a model.
+    NoLanguage,
+    /// The model is supported but not installed, being downloaded, or not supported.
+    NotInstalled,
+    Downloading,
+    ModelUnsupported,
+    /// The transcriber takes no audio format.
+    NoFormat,
+    /// The sample rate given is no audio format.
+    BadRate,
+    /// A code this side does not know.
+    Other(i32),
+}
+
+impl NotStarted {
+    fn from_code(code: i32) -> Self {
+        match code {
+            1 => Self::Absent,
+            2 => Self::NoLanguage,
+            3 => Self::NotInstalled,
+            4 => Self::Downloading,
+            5 => Self::ModelUnsupported,
+            6 => Self::NoFormat,
+            7 => Self::BadRate,
+            other => Self::Other(other),
+        }
+    }
+
+    /// For the event log: `no_format`.
+    pub fn code(self) -> String {
+        match self {
+            Self::Absent => "absent".into(),
+            Self::NoLanguage => "no_language".into(),
+            Self::NotInstalled => "not_installed".into(),
+            Self::Downloading => "downloading".into(),
+            Self::ModelUnsupported => "model_unsupported".into(),
+            Self::NoFormat => "no_format".into(),
+            Self::BadRate => "bad_rate".into(),
+            Self::Other(code) => format!("code_{code}"),
+        }
+    }
+}
+
+impl std::fmt::Display for NotStarted {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Absent => write!(f, "this build has no speech recogniser"),
+            Self::NoLanguage => write!(f, "no language of the system's has a speech model"),
+            Self::NotInstalled => write!(f, "the speech model is not installed"),
+            Self::Downloading => write!(f, "the speech model is still downloading"),
+            Self::ModelUnsupported => write!(f, "the speech model is not supported"),
+            Self::NoFormat => write!(f, "the speech model takes no audio format"),
+            Self::BadRate => write!(f, "the sound's rate is no audio format"),
+            Self::Other(code) => write!(f, "step {code}"),
+        }
+    }
+}
+
 impl Recogniser {
-    /// A recogniser of `rate` Hz mono samples in `locale` (or the system's). None: the model is not
-    /// installed, or there is no recogniser here.
-    pub fn new(locale: Option<&str>, rate: f64, on: impl Fn(Heard) + Send + Sync + 'static) -> Option<Self> {
+    /// A recogniser of `rate` Hz mono samples in `locale` (or the system's), or the step that
+    /// failed (`NotStarted`).
+    pub fn new(
+        locale: Option<&str>,
+        rate: f64,
+        on: impl Fn(Heard) + Send + Sync + 'static,
+    ) -> Result<Self, NotStarted> {
         let sink: *mut Sink = Box::into_raw(Box::new(Box::new(on)));
         let locale = c_locale(locale);
-        let handle = unsafe { ottospace_listen_new(ptr(&locale), rate, heard, sink.cast()) };
+        let mut why = 0;
+        let handle = unsafe { ottospace_listen_new(ptr(&locale), rate, heard, sink.cast(), &mut why) };
         if handle.is_null() {
             drop(unsafe { Box::from_raw(sink) });
-            return None;
+            return Err(NotStarted::from_code(why));
         }
-        Some(Recogniser { handle })
+        Ok(Recogniser { handle })
     }
 
     pub fn feed(&self, samples: &[f32]) {

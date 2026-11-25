@@ -56,6 +56,13 @@ private func chosen(_ name: String?) async -> Locale? {
     }
     return nil
 }
+
+/// `locale` reserved for this app: until it is, the system says its model is only `supported`,
+/// even with it on disk, and installs it for no one. Idempotent; at most 5 per app.
+@available(macOS 26, *)
+private func reserve(_ locale: Locale) async {
+    _ = try? await AssetInventory.reserve(locale: locale)
+}
 #endif
 
 /// 0: no recogniser here (below macOS 26, or built without its SDK). 1: supported, its model not
@@ -98,6 +105,7 @@ public func ottospace_listen_install(
                 guard let locale = await chosen(name) else {
                     return say("this language is not supported") { done(context, false, $0) }
                 }
+                await reserve(locale)
                 let module = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
                 if let request = try await AssetInventory.assetInstallationRequest(supporting: [module]) {
                     try await request.downloadAndInstall()
@@ -166,23 +174,36 @@ final class Recogniser: @unchecked Sendable {
 /// A new recogniser for `locale` (or the system's), its results to `callback` with `context`, on a
 /// thread of its own: `kind` 0 a line (`text`, `start_ms`, `end_ms`, `final`), 1 an error (`text`),
 /// 2 finished. Null: no recogniser here, or its model is not installed.
+/// Null with `why` set when it cannot start. 1: no recogniser here (below macOS 26, or built
+/// without its SDK). 2: no supported language. 3, 4, 5: the model is supported but not installed,
+/// downloading, or unsupported. 6: no audio format the transcriber takes. 7: `sampleRate` is no format.
 @_cdecl("ottospace_listen_new")
 public func ottospace_listen_new(
     _ locale: UnsafePointer<CChar>?, _ sampleRate: Double, _ callback: ListenCallback,
-    _ context: UnsafeMutableRawPointer?
+    _ context: UnsafeMutableRawPointer?, _ why: UnsafeMutablePointer<Int32>?
 ) -> UnsafeMutableRawPointer? {
+    why?.pointee = 1
     #if OTTOSPACE_SPEECH_SDK
     if #available(macOS 26, *) {
         let name = named(locale)
         let raw = UInt(bitPattern: context)
-        let made: Recogniser? = blocking {
-            guard let locale = await chosen(name) else { return nil }
+        let (made, failed): (Recogniser?, Int32) = blocking {
+            guard let locale = await chosen(name) else { return (nil, 2) }
+            await reserve(locale)
             let transcriber = SpeechTranscriber(locale: locale, preset: .timeIndexedProgressiveTranscription)
-            guard await AssetInventory.status(forModules: [transcriber]) == .installed,
-                let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]),
+            switch await AssetInventory.status(forModules: [transcriber]) {
+            case .installed: break
+            case .supported: return (nil, 3)
+            case .downloading: return (nil, 4)
+            default: return (nil, 5)
+            }
+            guard let target = await SpeechAnalyzer.bestAvailableAudioFormat(compatibleWith: [transcriber]) else {
+                return (nil, 6)
+            }
+            guard
                 let source = AVAudioFormat(
                     commonFormat: .pcmFormatFloat32, sampleRate: sampleRate, channels: 1, interleaved: false)
-            else { return nil }
+            else { return (nil, 7) }
             let (stream, input) = AsyncStream<AnalyzerInput>.makeStream()
             let analyzer = SpeechAnalyzer(modules: [transcriber])
             let recogniser = Recogniser(input: input, source: source, target: target)
@@ -215,8 +236,9 @@ public func ottospace_listen_new(
                 await results.value
                 callback(context, 2, nil, 0, 0, true)
             }
-            return recogniser
+            return (recogniser, 0)
         }
+        why?.pointee = failed
         // Kept for `finish` to let go of. The analyzer finishes when its input does.
         guard let made else { return nil }
         return Unmanaged.passRetained(Box(made)).toOpaque()
