@@ -8559,6 +8559,8 @@ impl Workspace {
                     .relative()
                     .h_full()
                     .min_w(px(MIN_TAB))
+                    // Room for the name being typed: a narrow tab cut it (shots).
+                    .when(renaming, |d| d.min_w(px(MAX_SPACE)))
                     .max_w(px(MAX_SPACE))
                     // At its narrowest it clips, never paints over the next tab.
                     .overflow_hidden()

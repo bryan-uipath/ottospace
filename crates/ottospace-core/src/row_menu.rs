@@ -81,6 +81,8 @@ impl Item {
             Item::SlotSwap(_) => "slot_swap",
             Item::SlotResort => "slot_resort",
             Item::SlotClear => "slot_clear",
+            Item::Close => "close",
+            Item::FoldOut => "fold_out",
         }
     }
 
