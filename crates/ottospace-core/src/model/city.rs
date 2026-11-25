@@ -1152,6 +1152,11 @@ src/main.rs:9:loop
         assert_eq!((m.active, m.empty_places().contains(&hidden)), (shown, false));
         let At::Pane(pane) = hidden else { panic!() };
         assert_eq!(m.pane(pane).map(|p| p.kind.clone()), Some(Kind::Empty));
+        // While the key reference has the keyboard, it waits, as any pane action.
+        let mut m = task_in_app();
+        m.update(Action::ToggleKeys);
+        assert_eq!(open(&mut m, at, "src/a.rs", false, Origin::User), None);
+        assert!(m.empty_places().contains(&at));
         // With the flag off, no city: nothing opens.
         let mut m = task_in_app();
         m.update(Action::SetFeatures { features: Features::default() }.sent_by(Origin::System));

@@ -2717,6 +2717,7 @@ impl Action {
                 | Action::NewEmptyTab
                 | Action::EditSettings
                 | Action::OpenFile { .. }
+                | Action::CityOpen { .. }
                 | Action::ProjectOpen { .. }
                 | Action::ViewerEdit { .. }
                 | Action::SelectTab { .. }
