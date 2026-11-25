@@ -1183,7 +1183,6 @@ struct Workspace {
     controls: sneak::Controls,
     /// Where the agent chip's line was last painted; none while it is the badge alone.
     chip_line: Rc<Cell<Option<Bounds<Pixels>>>>,
-    /// The shown dial's moving parts: view state, stepped each frame it is drawn.
     /// The working lines' sweep (`ui::shimmer`): frames while one is drawn.
     sweep: ui::Sweep,
     /// The seal, fold and land of the user's Done, while it plays.
@@ -1794,6 +1793,10 @@ impl Workspace {
                         // The header's time goes on while an agent runs.
                         let runs = this.model.talk.as_ref().is_some_and(|t| t.open && this.model.agent_runs(&t.task));
                         if runs && ticks.every(30, 0) {
+                            cx.notify();
+                        }
+                        // The lights' timer goes on while a station is lit, also in a session only watched.
+                        if ticks.every(60, 0) && this.lights_lit() {
                             cx.notify();
                         }
                         if ticks.every(60, 0) {

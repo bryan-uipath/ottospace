@@ -333,9 +333,8 @@ Design note: `docs/ai/attention/plan.md`.
   once granted, finds no window. In an app-window run (`OTTOSPACE_HOST_ONLY`, no user to grant a
   level) `ax_tree` reads the canary's pane as before. See `docs/ai/agent-mode.md`.
 - `OTTOSPACE_REDUCE_MOTION` (read only under `OTTOSPACE_E2E`) stands for the system's Reduce Motion
-  in the dial and Done's seal. The state's `counts.dial_frames` counts the frames the dial asked for because
-  something in it moves: none at rest. `counts.seal_frames` and `counts.seal_spark_frames` do the
-  same for Done's seal, fold and land (`seal.rs`), and `counts.repo_pulse_frames` for a Repos
+  in Done's seal. `counts.seal_frames` and `counts.seal_spark_frames` count the frames Done's seal,
+  fold and land (`seal.rs`), and `counts.repo_pulse_frames` for a Repos
   dot's commit pulse; `counts.repo_pulses` counts the pulses (none under Reduce Motion);
   `counts.overlay_frames` for a side overlay's slide out of its rail and back (`overlays.rs`);
   `counts.zoom_frames` for zoom-out's zoom both ways (`zoom.rs`);

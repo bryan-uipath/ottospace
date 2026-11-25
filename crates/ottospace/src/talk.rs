@@ -810,7 +810,9 @@ impl Workspace {
             false => format!("{title}\n{facts}").into(),
         };
         // The lights' row has the picture; without it, the badge leads the title.
-        let lights = self.talk_lights(subject, cx);
+        // Not over the brief or the editor: they take the conversation's place.
+        let covered = self.model.editor_shown() || (self.model.brief.is_some() && self.model.brief == subject.task());
+        let lights = (!covered).then(|| self.talk_lights(subject, cx)).flatten();
         let badge = match shown.and_then(|task| self.task_badge(task.id, 18.)) {
             Some(badge) => badge,
             None => home::dot(color),
@@ -861,7 +863,7 @@ impl Workspace {
             .children(self.talk_where(subject))
             .children(lights)
             .child(controls)
-            .children(self.context_bar(subject));
+            .children((!covered).then(|| self.context_bar(subject)).flatten());
         Some(header.id("drawer-head"))
     }
 
@@ -953,7 +955,6 @@ impl Workspace {
         let talk = self.model.talk.as_ref().filter(|talk| talk.open || ghost)?;
         let header = self.talk_header(&talk.task, cx)?;
         let brief = self.model.brief.is_some() && self.model.brief == talk.task.task();
-        // The dial is the conversation's: not over the brief, nor over the editor.
         let editor = self.model.editor_shown();
         // Not the brief or the editor: a fold drops them, the conversation would show in their place.
         if !brief && !editor {

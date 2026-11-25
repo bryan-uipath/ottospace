@@ -321,8 +321,9 @@ impl Workspace {
                     .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
             )
         });
-        let number = context_words(&dial)
-            .map(|words| div().flex_none().pl_1().text_xs().text_color(rgb(theme::level(dial.level))).child(words));
+        let number = context_words(&dial).map(|words| {
+            div().min_w_0().truncate().pl_1().text_xs().text_color(rgb(theme::level(dial.level))).child(words)
+        });
         let row = div().flex().items_center().justify_between().gap(px(2.)).min_w_0().children(lights).children(number);
         let column = div().flex_1().min_w_0().flex().flex_col().gap(px(5.)).child(status).child(row);
         Some(div().py_1().flex().items_center().gap_2().child(picture).child(column))
@@ -330,17 +331,20 @@ impl Workspace {
 
     /// The context bar: 3 points on the header's bottom edge, the share of the context used in
     /// its level's colour; its hover says the tokens. None before the runner says a context.
+    /// Tokens with no window yet (`8k tokens`): the track and its hover, no fill.
     pub(crate) fn context_bar(&self, subject: &Subject) -> Option<Stateful<Div>> {
         let dial = self.dial_of(subject)?;
-        let used = dial.context?;
-        let tip: gpui::SharedString = match &dial.ring {
-            Some(ring) => format!("Context {}% · {ring}", (used * 100.).round()).into(),
-            None => format!("Context {}%", (used * 100.).round()).into(),
+        let tip: gpui::SharedString = match (&dial.ring, dial.context) {
+            (Some(ring), _) => ring.clone().into(),
+            (None, Some(used)) => format!("Context {}%", (used * 100.).round()).into(),
+            (None, None) => return None,
         };
-        let fill = div().h_full().w(relative(used.clamp(0., 1.))).bg(rgb(match dial.level {
-            Level::Calm => theme::BORDER_STRONG,
-            level => theme::level(level),
-        }));
+        let fill = dial.context.map(|used| {
+            div().h_full().w(relative(used.clamp(0., 1.))).bg(rgb(match dial.level {
+                Level::Calm => theme::BORDER_STRONG,
+                level => theme::level(level),
+            }))
+        });
         Some(
             div()
                 .id("talk-context")
@@ -350,10 +354,18 @@ impl Workspace {
                 .bottom(px(-1.))
                 .h(px(CONTEXT_BAR))
                 .bg(rgb(theme::BORDER))
-                .child(fill)
+                .children(fill)
                 .child(self.controls.mark("talk:context".to_string()))
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
         )
+    }
+
+    /// True while the open conversation's lights show a station lit: its timer needs a tick.
+    pub(crate) fn lights_lit(&self) -> bool {
+        let Some(subject) = self.model.talk.as_ref().filter(|talk| talk.open).map(|talk| &talk.task) else {
+            return false;
+        };
+        self.dial_of(subject).filter(|_| !self.model.dial_collapsed(subject)).is_some_and(|dial| dial.lit)
     }
 
     /// What the state reply says of a conversation's dial: its structure and counts.
