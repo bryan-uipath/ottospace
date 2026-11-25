@@ -2379,6 +2379,11 @@ impl Workspace {
             _ if ending => ("Stopping…", ""),
             _ if card && chat.deny => ("Why deny it?", "↵ denies with this message · esc back to the request"),
             _ if card => ("", ""),
+            // No task keeps a queue: ↵ goes into the turn.
+            _ if chat.transcript.turn.is_some() && subject.task().is_none() => (
+                "Write the next message",
+                if chat.armed { "esc again stops" } else { "↵ sends into the turn · esc esc stops" },
+            ),
             // ↵ queues; ⌘↵ sends now: into the turn, or after stopping it (the runner's capability).
             _ if chat.transcript.turn.is_some() && self.model.send_now_stops(subject) => (
                 "Write the next message",

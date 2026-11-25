@@ -231,9 +231,9 @@ const CLAUDE: RunnerSpec = RunnerSpec {
         // Probe 2026-11-18 (2.1.327): `control_request` `side_question`, mid-turn and while a
         // `can_use_tool` waits; no tools, nothing written to the session. Undocumented.
         side_question: true,
-        // Unconfirmed: 2.1.331's binary names a message queue (`priority` now / next / later,
-        // `queued_command`), never probed here. Off until a probe pins it (docs/ai/agent-runners.md).
-        mid_turn: false,
+        // Probe 2026-11-25 (2.1.332): a user line sent mid-turn reaches the model at the next tool
+        // boundary, one `result` for both; with no call left it is a turn of its own after.
+        mid_turn: true,
         images: true,
     },
     // `sessions/<pid>.json` names the process; each record carries the `cwd` the agent is in.
