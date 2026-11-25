@@ -1736,6 +1736,13 @@ const MAKERS: &[Make] = &[
         };
         Action::CityCamera { at, step }
     },
+    |g| {
+        // An empty place on show, mostly; a path of its checkout, sometimes not a plain one.
+        let places = g.m.empty_places();
+        let at = g.one_of(&places, |g| crate::model::city::At::Pane(g.pane()));
+        let id = ["src/a.rs", "src", "docs/b.md/", "../x", "", "/etc"][g.rng.below(6)].to_string();
+        Action::CityOpen { at, id, folder: g.rng.coin() }
+    },
     |g| Action::BugPress { at: g.point() },
     |g| Action::BugDrag { to: g.point() },
     |g| Action::BugRelease { at: g.point() },

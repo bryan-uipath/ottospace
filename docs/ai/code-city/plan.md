@@ -209,6 +209,14 @@ Windows). It replaces the 2D plan this note first recommended.
   boxes, farthest first, writing no depth, so the order is fixed and nothing flickers as a camera
   moves. `developer.city_opaque` draws them solid, for comparing.
 
+**Double-click** (the owner's word, 2026-11-24: "double-click on a file to open the file, or
+double-click on a folder to open the folder"): on a building, its file in a viewer
+(`Action::OpenFile`, as Go to opens one); on a district, its folder in a terminal (as a Repos
+row opens a checkout); in the empty pane the city is in, or its tab. The core decides
+(`Action::CityOpen`, `model::city`): only the user's (a client's is refused, as the camera's),
+only a plain path inside the checkout (no `..`, `.`, empty part or `/` first), only where a
+city is on show. A single click and a drag keep turning the camera.
+
 Why not paths (the "Oblique" alternative this note first named): GPUI has no depth buffer, so
 every building would be three paths painted back to front each frame, 15,000 paths at 5,000
 files; a rendered picture costs one image a frame however large the city.
