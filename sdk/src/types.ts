@@ -2462,10 +2462,10 @@ export interface Snapshot {
      */
     native: { chats: Record<string, NativeChat>; opened: ("web" | "file")[] };
     /**
-     * Of the conversation the drawer is on: `foot`, the line at its foot (the model in short, a
-     * mode that lets the agent act unasked and the folder it runs in, in short:
-     * `haiku-5.5 · auto · ~/code/app`), `bypass` (that mode asks for
-     * nothing), `folder` (in the header only when not its task's own) and `facts`, the title's
+     * Of the conversation the drawer is on: `foot` (the model in short, a mode that lets the
+     * agent act unasked and the folder it runs in, in short: `haiku-5.5 · auto · ~/code/app`; the
+     * drawer's foot draws it without the folder), `bypass` (that mode asks for nothing), `folder`
+     * (where it runs when not its task's own; no longer drawn) and `facts`, the title's
      * hover as [name, value] pairs. `model` and `mode` are untrusted labels.
      */
     line: AgentLine | null;

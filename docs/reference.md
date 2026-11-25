@@ -335,7 +335,7 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    [dial](#the-agent-dial). Drag its left edge to make it wider or narrower. Opening a conversation, or a click on a tab, while a new
    task is half written puts the line aside: the box gets it back when it opens again.
 5. **Done, Later.** At the header's right: **Later**, then a green **✓ Done**, once the agent
-   idles. While a turn runs there is no Done: the composer's Stop (or Esc Esc) stops that turn,
+   idles. While a turn runs there is no Done: Stop in its place (or Esc Esc) stops that turn,
    the one stop button; in the terminal view, its Stop. Done (also ⌘↵ in the
    conversation) makes the task done and stops its agent; the drawer folds into its rail and the
    task leaves the rail, its workspace stays on the top row. In about 0.8 s, no sound: the drawer
@@ -457,10 +457,10 @@ Other keys go to the focused terminal. ⌃ sends control codes, ⌥ is Meta.
    it to the message being written, here or in the new-task box: a chip with its thumbnail and ×;
    at most 5; it goes to the agent with the message (Claude Code in Chat view; elsewhere the box
    says it takes none). Each is kept privately in `~/.ottospace/images` until it is sent (from the
-   new-task box: until its task is done), then removed. Stop sits at the composer's
-   right: it, or Esc Esc, ends the turn and the session goes on. No turn, no Stop. Once the agent
+   new-task box: until its task is done), then removed. Stop sits in the header, in
+   Done's place: it, or Esc Esc, ends the turn and the session goes on. No turn, no Stop. Once the agent
    ended (or was stopped: nothing starts on its session until its process is gone), Resume
-   session (or Start agent) takes that place. A stop and the resume after it are one thin
+   session (or Start agent) is at the composer's right. A stop and the resume after it are one thin
    divider (`stopped · resumed`) in the same conversation; "Earlier turns are in its file" only
    when its turns are not on show. Lines no rule reads are a small mark at the end (`? 2`): its
    hover and click say what they were. Hook lines (`system.hook_*`) are read on purpose by nothing. A permission request is a card in place of the composer: the

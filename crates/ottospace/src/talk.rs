@@ -722,7 +722,7 @@ impl Workspace {
             }
             parts.push(part);
         }
-        let row = div().id("talk-where").h(px(16.)).flex().items_center().gap_1().min_w_0().text_xs();
+        let row = div().id("talk-where").h(px(18.)).flex().items_center().gap_1().min_w_0().text_xs();
         let row = row.text_color(rgb(theme::MUTED)).children(parts).children(self.watch_chip(subject));
         Some(row.tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))))
     }
@@ -771,7 +771,9 @@ impl Workspace {
         };
         // Stop in Done's slot while the agent works: natively the turn (esc esc), in a terminal the agent.
         let terminal = self.model.talk_view(subject) != ottospace_core::transcript::View::Native;
-        let turn = self.model.composer_button() == Some(ottospace_core::model::chat::Primary::Stop);
+        // The open conversation's turn: not another's under a fading seal (`render_seal`).
+        let open = self.model.talk.as_ref().is_some_and(|talk| talk.task == *subject);
+        let turn = open && self.model.composer_button() == Some(ottospace_core::model::chat::Primary::Stop);
         let stop = match () {
             _ if turn => {
                 Some(self.talk_action("chat-stop", "Stop", "Stop this turn; the session goes on (esc esc)").on_click(
@@ -817,7 +819,8 @@ impl Workspace {
                     .min_w_0()
                     .text_sm()
                     .truncate()
-                    .child(title)
+                    // One line, also of a title with line breaks in it.
+                    .child(title.replace('\n', " "))
                     .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone())))),
             )
             .children(self.drawer_pull_button(cx))

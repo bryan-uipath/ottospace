@@ -15381,7 +15381,7 @@ fn a_stopped_agent_resumes_as_one_conversation() {
         let chat = chat(o);
         (chat["transcript"]["turn"].is_null() && chat["replies"].as_array()?.len() == 1).then_some(())
     });
-    // No turn: no Stop anywhere. A turn: Stop at the composer, none in the header.
+    // No turn: no Stop anywhere. A turn: the turn's Stop (`chat-stop`), not the agent's.
     assert!(!ids(&otto).iter().any(|id| id == "talk:chat-stop" || id == "talk:talk-stop"), "{:?}", ids(&otto));
     otto.user_click(at(otto.control("talk"), 0.5, 0.5));
     otto.user_key("g o space o n enter");

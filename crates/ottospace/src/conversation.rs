@@ -2415,7 +2415,8 @@ impl Workspace {
         });
         let btw = self.btw_button(subject, cx);
         // A card waits and no turn to stop: nothing to write and nothing to say, so no empty strip.
-        if field.is_none() && editing.is_none() && hint.is_empty() && button.is_none() && btw.is_none() {
+        let queued = !self.model.queue_of(subject).is_empty();
+        if field.is_none() && editing.is_none() && hint.is_empty() && button.is_none() && btw.is_none() && !queued {
             return div();
         }
         // The foot: the hint, and "btw" at its end.
