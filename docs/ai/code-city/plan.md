@@ -32,7 +32,7 @@ rectangle in fractions of the plan.
 |---|---|---|
 | `id` | the node's own, for good | what a place, a link, an activity or a beacon names |
 | `label` | what is written on it | never in the state or the logs |
-| `footprint` | sizes a leaf on the plan | **slow measures only**: a change reflows. Already coarse (the source's size classes) |
+| `footprint` | sizes a leaf on the plan | **slow measures only**: a change reflows. Rounded up a step (a file: its lines) |
 | `height` | a second measure, 0 to 1 | drawn only, moves nothing: **fast measures go here** (or on shade), never on footprint |
 | `children` | in layout order | a source that keeps old before new keeps old in place |
 | links (beside the tree; proposed, not in the code) | two ids and a weight | the layout does not read them; drawn for one node at a time |
@@ -49,10 +49,11 @@ child boundary nearest the middle of the group's weight, each half again; the cu
 the longer side (as if the plan were 1.6 wide to 1 tall, whatever the window: a resize
 stretches the map and never rearranges it). Two things make it stable:
 
-1. **Coarse weights.** A leaf's footprint is a size class (a file: 1 unit up to 2 KB, doubling
-   to 64 units at 128 KB). A group weighs its children's sum **rounded up a step** (4, 5, 6 or 7
-   times a power of two: 100 → 112). So an edit seldom changes any weight, and a group that
-   gains a child most times weighs the same from outside: nothing outside it moves.
+1. **Coarse weights.** A leaf's footprint is its measure **rounded up a step** (4, 5, 6 or 7
+   times a power of two: 100 → 112; a file: its lines, the owner's word 2026-11-24, at most
+   65,536). A group weighs its children's sum rounded up a step too. So an edit seldom changes
+   any weight, and a group that gains a child most times weighs the same from outside: nothing
+   outside it moves.
 2. **Free ground.** The room up to the step (at most a fifth of a group, a tenth on average) is
    left empty at the group's end. While the children do not reach a half, the cut is the half
    itself: ground is halved, not stretched. A new last child lands in the ground.
@@ -69,11 +70,19 @@ changes each, shrunk on failure):
 
 Measured (same test file, `cargo test -p ottospace-core atlas -- --nocapture`):
 
-| One change | Other leaves that move | Same, with exact (unrounded) group weights |
+| One change (about 400 files, 1 to 4,000 lines) | Other leaves that move | Same, with exact (unrounded) group weights |
 |---|---|---|
-| An edit: a file a tenth larger | none 99.3% of the time; 0.04% on average | 0.7% on average |
-| A new file anywhere (about 400 files) | 16% on average | 100% |
+| An edit: a line added | none 86% of the time; 0.8% on average | — |
+| An edit: ten lines added | none 51% of the time; 3.7% on average | — |
+| An edit: a file a tenth longer | none 55% of the time; 3.5% on average | 45% on average |
+| A new file anywhere | 24% on average | 100% |
 | A new last thing that fits its group's ground | none 57% of the time; 3% of its own group on average, always the last few; none outside the group | — |
+
+Lines are less steady than the size classes of bytes they replaced (1 unit up to 2 KB, doubling
+to 64 at 128 KB: an edit of a tenth moved none 99.3% of the time, a new file 16%), and closer to
+the owner's city (area by lines). Measured, as lines: powers of two (a class a doubling) move
+none 94% of the time for a line, 89% for a tenth, but a file's area is then up to half wrong;
+exact lines move something on every edit (5% on average for a line).
 
 Compared:
 
@@ -104,11 +113,12 @@ Windows). It replaces the 2D plan this note first recommended.
 - **The scene is the core's** (`ottospace-core::scene`, pure, unit-tested): the ground; each
   district a plate standing on its parent's, stepped as the owner's city steps its own
   (`TIER_LIFT` 13, 8, 4.6, 2.6, 1.7, then 1.1, in a tower's sixtieths, at three quarters); each
-  file a box on its district, its height the owner's `buildingHeight` (`2 + 6·log2(1 + lines/10)`,
-  2 to 60), lines guessed as bytes / 32 (lines would mean reading every file). Footprint stays
-  the size class: the owner's city sizes a file by its lines too, and churn-based height is
-  slice 6. In a city of few files (under about 400) the lots are large, so the tallest building
-  is at least 2.5 lot sides and streets a tenth of one: towers on streets, not slabs.
+  file a box on its district, its footprint by its lines and its height by its commits, as the
+  owner's city's strata stack them (the owner's word, 2026-11-24): a level (1.6 of its units,
+  where its tallest tower of lines is 60) for each commit of the past year, at most 120; a file
+  with none a stub (0.4). In a city of few files (under about 400) the lots are large, so a
+  tower of lines (60) is at least 2.5 lot sides and streets a tenth of one: towers on streets,
+  not slabs.
 - **Districts read as blocks** (the owner's word, 2026-11-20: "see folders as 'blocks' /
   elevated districts"). Rules, each tested: a folder of more than one child is a district (one
   child: none of its own, as the owner's city; `src/main/java` is one plate), a tier above the
@@ -259,17 +269,30 @@ person is only nearer.
 
 - **Tree**: folders, then files, each by name: as a file explorer lists them, so the map and
   the explorer read alike. The id is the path from the repository's root.
-- **Footprint: bytes**, not lines. Bytes come from one `stat` per file with no read; lines need
-  every file read. Size classes cap at 128 KB, so one large asset is not the city.
-- **Height: churn** (commits that touched the file, from one `git log --name-only`, capped).
-  Proposed, not read yet.
+- **Footprint: lines**, as the owner's city (`text.split('\n').length`: `a\nb\n` is 3), rounded
+  up a step, at most 65,536. git counts what the commit checked out tracks, in its own code, a
+  blob once (`git diff --numstat` from the empty tree to `HEAD`, with `ls-tree -l` for each
+  blob's size; kept by commit, a limit of its own), and a counted file gets one more line, as
+  the owner's city counts (exact for a file that ends in a new line). A file whose size on disk
+  is not its blob's (edited, LFS, line endings), one git does not track, or one git calls binary
+  by its attributes is read here, no further than 65,536 lines or 4 MB, kept by its size.
+  Nothing diffs the working tree (a repository's filters would run). Binary (a NUL in its first
+  8,000 bytes): 0 lines, the least lot. Measured, a dev build, a 20,000-file made-up tree of
+  6.4M lines: git 0.4 to 0.6 s, reading every file 3.6 to 4.1 s cold.
+- **Height: commits** of the past year that touched the file, as the owner's city counts them
+  (`--since=12.months`, at most 20,000 commits), from one `git log --no-renames --name-only -z`
+  (no `--numstat`: measured 10 to 60 times slower, 11 to 14 s a year on two repositories of
+  6,000 to 9,500 files, where `--name-only` took under 1 s). A rename starts a file's count
+  again, as the owner's city. No history (no commit yet, git failed, the read's limit reached):
+  every building a stub.
 - **The file list**: one `git ls-files -z --cached --others --exclude-standard` in the task's
   folder (tracked files and new ones, never an ignored one), then one `stat` each, on a thread of its own. The
   argv is fixed and hardened as the status bar's (`child::git_read`: no hooks, fsmonitor, pager,
   system config or prompt), and runs only in a checkout the person listed in Repos
   (`status_bar::reads_changes`: a repository's config can run programs). Nothing leaves the machine.
-- **Limits**: 60 seconds, 64 MB of names, 600,000 files (20,000, 4 MB and 10 s before the
-  large-city measurement). Past any of them there is no city, and
+- **Limits**: 60 seconds for the list, 10 more for the lines (the log has what is left, else no
+  heights), 64 MB of names, 600,000 files (20,000, 4 MB and 10 s before the large-city
+  measurement), 32 MB of log. Past any of the others there is no city, and
   the lattice stays: half a city would put files in other places than the whole one.
 - **Coupling** (proposed): files changed in the same commits, from the same one `git log`
   (`--name-only`, the last 500 commits, commits over 30 files skipped: a rename sweep couples
@@ -436,7 +459,7 @@ issue waiting on them; for code, the task working in that folder asks a question
 | 3 | The exact file of a call, shell-side, so a lit building is never a guess (question 3) | |
 | 4 | Agent markers and trails; the task's "needs you" as a beacon on its district | |
 | 5 | Coupling for the hovered building (one `git log`); hover itself is 2b | |
-| 6 | Height from churn | |
+| 6 | Height from commits (the owner's word, 2026-11-24: footprint by lines too) | built |
 | 7 | The camera in the core (a view from an `Action`), eased in the shell, Reduce Motion | built: the user's pointer (2026-11-20); following navigation proposed |
 | 8 | The explorer pane (file-viewer.md, D), then the map beside it and the camera following it | needs D |
 | 9 | Inside a file: markdown headings first | |
@@ -448,7 +471,7 @@ issue waiting on them; for code, the task working in that folder asks a question
 1. **Where is the backdrop?** Built: every empty tab and pane with a folder (2026-11-20). A
    workspace with panes shows it only in its empty panes. Should the map
    also be a pane of its own, or show through the gaps, or replace Home's lattice (question 6)?
-2. **Bytes or lines** for the footprint? Bytes are free; lines read every file.
+2. **Bytes or lines** for the footprint? Answered 2026-11-24: lines, as the owner's city.
 3. **Exact paths.** Lighting by the last two path parts can light two files of one name
    (`a/mod.rs`, `b/mod.rs` do not clash; `x/a/mod.rs` and `y/a/mod.rs` do). May the shell keep
    a call's path relative to the task's folder, in memory, never in the state?

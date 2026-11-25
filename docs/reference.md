@@ -1753,10 +1753,10 @@ of one folder and size share one picture, and a folder's files are read once for
 In the city a folder is a district, a plinth standing on its parent's, its top edge lit,
 a street apart from its neighbours and a shade lighter per tier (a folder with one
 child is none of its own: `src/main/java` is one district), a file a building on it, of glass (its faces see-through, its edges whole), in its folder's
-colour, its ground sized by its size class (1 up to 2 KB, doubling to 128 KB) and its
-height by its length. A file is where it was the last time: the same files give
-the same plan, an edit that keeps a file's size class moves nothing, and a new file most times
-moves only its own folder
+colour, its ground sized by its lines and its height by the commits of the past year that
+touched it (a level each, at most 120; none: a stub). A file is where it was the last time: the
+same files give the same plan, most edits of a line or two move nothing (a file's lines count in
+steps: 100 to 112 is one), and a new file most times moves only its own folder
 (design and numbers: [code-city/plan.md](ai/code-city/plan.md)). A building's colour is its
 nearest folder's with a named colour (`city_folder_colors`, over built-in ones: `docs` green,
 `tests` violet, `src` blue, `crates` teal and more), else its top-level folder's own, from its

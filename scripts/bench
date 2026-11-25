@@ -338,7 +338,13 @@ def city(binary, scratch, files):
         inst.ok({"cmd": "open_repo", "path": tree})
         start = time.perf_counter()
         inst.ok({"cmd": "close"})
-        inst.wait("the city", lambda: shot.path_get(inst.state(), "city.picture") is not None, timeout=60)
+        try:
+            inst.wait("the city", lambda: shot.path_get(inst.state(), "city.picture") is not None, timeout=60)
+        except shot.Failed:
+            # Which: no read came yet (slow), a read came with no city (a limit), or no picture.
+            s = inst.state()
+            say(f"city of {files} files: reads {shot.path_get(s, 'counts.city_reads')}, city {s.get('city')}")
+            raise
         return (time.perf_counter() - start) * 1000
     finally:
         inst.close()
