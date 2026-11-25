@@ -2,7 +2,7 @@
 //! rows the viewer draws, and the steps between its hunks. Pure: the shell runs git and draws;
 //! the model holds the hunks' rows, never a line's text. Design: `docs/ai/review/plan.md`.
 
-pub use crate::diff::Sign;
+use crate::diff::Sign;
 
 /// The most rows a patch keeps: past them it is cut, and says so.
 pub const MAX_ROWS: usize = 10_000;
@@ -81,12 +81,10 @@ pub fn parse(text: &str) -> Patch {
         };
         let row = match sign {
             Sign::Removed => {
-                patch.removed += 1;
                 old += 1;
                 Row::Line { sign, old: Some(old - 1), new: None, text: rest.to_string() }
             }
             Sign::Added => {
-                patch.added += 1;
                 new += 1;
                 Row::Line { sign, old: None, new: Some(new - 1), text: rest.to_string() }
             }
@@ -96,9 +94,16 @@ pub fn parse(text: &str) -> Patch {
             }
         };
         next_new = new;
+        // Counted as kept: a cut patch's counts are of the rows it shows.
+        let counts = match sign {
+            Sign::Added => (1, 0),
+            Sign::Removed => (0, 1),
+            _ => (0, 0),
+        };
         if !push(&mut patch, row) {
             break;
         }
+        (patch.added, patch.removed) = (patch.added + counts.0, patch.removed + counts.1);
     }
     patch
 }
@@ -207,7 +212,7 @@ index 1111111..2222222 100644
         assert_eq!(parse(&two).rows.len(), parse(EDIT).rows.len());
         let huge = format!("diff --git a/a b/a\n@@ -1 +1,{n} @@\n{}", "+x\n".repeat(MAX_ROWS + 5), n = MAX_ROWS + 5);
         let cut = parse(&huge);
-        assert_eq!((cut.rows.len(), cut.cut), (MAX_ROWS, true));
+        assert_eq!((cut.rows.len(), cut.cut, cut.added), (MAX_ROWS, true, MAX_ROWS as u32 - 1), "the rows it keeps");
         assert_eq!(parse("not a patch\n+looks like one\n"), Patch::default());
         assert_eq!((hunk_header("@@ -a +2 @@"), hunk_header("@@ -1 +2,x @@")), (None, None));
     }

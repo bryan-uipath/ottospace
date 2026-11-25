@@ -888,7 +888,9 @@ impl Model {
                 RecordKind::App { bundle: bundle.clone(), name: name.clone(), title: String::new(), extra }
             }
             Kind::File { path } => {
-                RecordKind::File { path: path.clone(), top: self.viewer(pane.id).map_or(0, |v| v.top) }
+                // A diff view's top is a row, no line of its file: kept as its file, at the top.
+                let top = self.viewer(pane.id).filter(|v| !v.diff).map_or(0, |v| v.top);
+                RecordKind::File { path: path.clone(), top }
             }
             Kind::Explorer { root } => RecordKind::Explorer { root: root.clone() },
         };

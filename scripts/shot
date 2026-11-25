@@ -144,7 +144,9 @@ def commit_all(root, rel):
     at = os.path.join(root, rel)
     if os.path.commonpath([os.path.realpath(root), os.path.realpath(at)]) != os.path.realpath(root):
         raise Failed(f"commit outside the instance: {rel}")
-    env = {**os.environ, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+    # None of the caller's git: no repository, index or identity it points at, no config of its own.
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
+    env.update({"GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"})
     git = lambda *args: subprocess.run(["git", "-C", at, *args], check=True, env=env, capture_output=True)
     if not os.path.isdir(os.path.join(at, ".git")):
         git("init", "-q", "-b", "main")

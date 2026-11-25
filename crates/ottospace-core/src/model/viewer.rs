@@ -54,12 +54,14 @@ impl Model {
         self.viewers.iter().find_map(mine)
     }
 
-    /// A viewer of `path` in `from`'s tab: `from` itself first.
+    /// A viewer of `path` in `from`'s tab: `from` itself first. Never a diff view: its rows are
+    /// no file's lines.
     fn viewer_of(&self, path: &str, from: PaneId) -> Option<PaneId> {
         let tab = self.tab_of(from)?;
         let shows = |id: &PaneId| {
             self.pane(*id).is_some_and(|pane| matches!(&pane.kind, Kind::File { path: p } if p == path))
                 && self.tab_of(*id) == Some(tab)
+                && !self.viewers.get(id).is_some_and(|view| view.diff)
         };
         Some(from).filter(shows).or_else(|| self.viewers.keys().copied().find(shows))
     }
@@ -304,6 +306,15 @@ impl Model {
             })
             .collect();
         self.viewers.retain(|id, _| files.iter().any(|(file, _)| file == id));
+        // `review` turned off: a diff view shows its file.
+        if !self.features.on(crate::features::Feature::Review) {
+            for (id, view) in self.viewers.iter_mut().filter(|(_, view)| view.diff) {
+                if let Some((_, path)) = files.iter().find(|(file, _)| file == id) {
+                    *view = Viewer::new(path, 0, view.opener);
+                    effects.push(Effect::ViewFile { pane: *id });
+                }
+            }
+        }
         for (id, path) in &files {
             if !self.viewers.contains_key(id) {
                 self.viewers.insert(*id, Viewer::new(path, 0, None));
@@ -634,5 +645,23 @@ mod tests {
         assert_eq!((effects, m.viewer(id).map(|v| v.diff)), (vec![Effect::ViewFile { pane: id }], Some(false)));
         m.update(Action::Focus { pane: id });
         assert!(m.keyboard_viewer() == Some(id) && !m.viewer_takes("]"), "a file's view has no hunks");
+        // At lines, a diff view is not the file's view: one of its own opens for them.
+        m.update(Action::OpenDiff { path: SRC.into(), beside: Some(from) });
+        let panes = m.panes.len();
+        m.update(Action::OpenFile {
+            path: SRC.into(),
+            axis: Axis::Right,
+            beside: Some(from),
+            reuse: false,
+            at: Lines::new(40, 40),
+        });
+        assert_eq!((m.panes.len(), m.viewer(id).map(|v| (v.diff, v.marked))), (panes + 1, Some((true, None))));
+        // A diff view is kept as its file at the top; `review` turned off, it shows its file.
+        m.update(Action::ViewerScrolled { pane: id, top: 30, most: 40, page: 20 }.sent_by(Origin::System));
+        let kept = m.layout_file(&[], &[], 0);
+        assert!(format!("{kept:?}").contains(&format!("File {{ path: \"{SRC}\", top: 0 }}")), "{kept:?}");
+        let effects = m.update(Action::SetFeatures { features: crate::features::Features::default() });
+        assert!(effects.contains(&Effect::ViewFile { pane: id }));
+        assert_eq!(m.viewer(id).map(|v| (v.diff, v.top)), Some((false, 0)));
     }
 }

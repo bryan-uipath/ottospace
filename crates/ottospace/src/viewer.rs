@@ -20,6 +20,7 @@ use gpui::{
     SharedString, StyledText, UniformListScrollHandle, Window, canvas, div, img, point, prelude::*, px, rgb,
     uniform_list,
 };
+use ottospace_core::diff::Sign;
 use ottospace_core::review;
 use ottospace_core::terminal::CellPoint;
 use ottospace_core::viewer::{self, MAX_BYTES, MAX_IMAGE_BYTES, Read, Shows, Viewer};
@@ -125,7 +126,7 @@ impl FileView {
         if self.diff {
             let roots = self.roots.clone();
             std::thread::spawn(move || {
-                let at = stamp(&path);
+                let at = diff_stamp(&path);
                 let (read, loaded) = read_diff(&path, &roots);
                 let _ = send.send((read, loaded, at));
                 ottospace_mac::wake::post();
@@ -238,28 +239,30 @@ const DIFF_BYTES: u64 = MAX_BYTES;
 /// `child::git_read`), parsed, its lines coloured by the lexer: only in a checkout Repos lists.
 fn read_diff(path: &str, roots: &[String]) -> (Read, Option<Loaded>) {
     let Some(real) = fs::canonicalize(path).ok() else { return (Read::Missing, None) };
-    let Some(dir) = real.parent() else { return (Read::NoChange, None) };
-    let mut top = crate::child::git_read(dir);
-    top.args(["rev-parse", "--show-toplevel"]);
-    let top =
-        crate::child::run(top, DIFF_TIME, 4096).ok().filter(|said| said.ok).map(|said| said.out.trim().to_string());
+    // Its checkout from git's own files, resolved, checked before any git runs.
+    let top = real.parent().and_then(crate::repos::checkout_of).and_then(|(top, _)| top.canonicalize().ok());
+    let top = top.and_then(|top| top.to_str().map(str::to_string));
     let Some(top) = top.filter(|top| ottospace_core::status_bar::reads_changes(top, roots)) else {
-        return (Read::NoChange, None);
+        return (Read::Unreadable, None);
     };
     let Some(rel) = real.strip_prefix(&top).ok().map(|rel| rel.to_string_lossy().into_owned()) else {
-        return (Read::NoChange, None);
+        return (Read::Unreadable, None);
     };
     // A fixed argv; the path a literal pathspec, never a pattern.
     let mut diff = crate::child::git_read(Path::new(&top));
     diff.env("GIT_LITERAL_PATHSPECS", "1");
     diff.args(["diff", "--no-color", "--no-ext-diff", "--no-textconv", "-U3", "HEAD", "--"]).arg(&rel);
-    let Some(said) = crate::child::run(diff, DIFF_TIME, DIFF_BYTES).ok().filter(|said| said.ok) else {
-        return (Read::NoChange, None);
+    // Past the cap git is stopped: too large, never "no change". A git that failed: unread.
+    let said = match crate::child::run(diff, DIFF_TIME, DIFF_BYTES) {
+        Ok(said) if said.out.len() as u64 >= DIFF_BYTES => return (Read::TooLarge { bytes: DIFF_BYTES }, None),
+        Ok(said) if said.ok => said,
+        _ => return (Read::Unreadable, None),
     };
     let patch = review::parse(&said.out);
     if patch.binary {
         return (Read::Binary, None);
     }
+    // No line changed: none at all, or only its mode, or a new empty file.
     if patch.rows.is_empty() {
         return (Read::NoChange, None);
     }
@@ -291,6 +294,14 @@ fn extension(path: &str) -> &str {
 fn line_count(text: &str) -> u32 {
     let lines = text.split('\n').count() - usize::from(text.ends_with('\n') || text.is_empty());
     lines.min(u32::MAX as usize) as u32
+}
+
+/// A diff view's stamp: its file's, and its checkout's `HEAD` log (`repos::head_log`), so a
+/// commit with the file untouched reads its diff again.
+fn diff_stamp(path: &str) -> Stamp {
+    let head =
+        Path::new(path).parent().and_then(crate::repos::checkout_of).and_then(|(top, _)| crate::repos::head_log(&top));
+    stamp(path).map(|(at, len, ino)| (at, len ^ head.unwrap_or(0).rotate_left(32), ino))
 }
 
 fn stamp(path: &str) -> Stamp {
@@ -375,10 +386,14 @@ impl Workspace {
             kept
         });
         let mut actions = Vec::new();
-        let roots = self.model.checkout_roots();
+        // The checkouts Repos lists now: a diff read again asks git only of these.
+        let roots = if files.values().any(|(.., diff)| *diff) { self.model.checkout_roots() } else { Vec::new() };
         for (id, (path, shows, diff)) in &files {
             let view =
                 self.viewers.entry(*id).or_insert_with(|| FileView::new(path.clone(), *shows, *diff, roots.clone()));
+            if *diff {
+                view.roots.clone_from(&roots);
+            }
             if let Some(Ok((read, loaded, at))) = view.reading.as_ref().map(Receiver::try_recv) {
                 view.reading = None;
                 view.stamp = at;
@@ -418,9 +433,9 @@ impl Workspace {
             if view.reading.is_none() && view.looking.is_none() && view.looked.elapsed() >= every {
                 view.looked = Instant::now();
                 let (send, looking) = channel();
-                let path = path.clone();
+                let (path, diff) = (path.clone(), view.diff);
                 std::thread::spawn(move || {
-                    let _ = send.send(stamp(&path));
+                    let _ = send.send(if diff { diff_stamp(&path) } else { stamp(&path) });
                     ottospace_mac::wake::nudge();
                 });
                 view.looking = Some(looking);
@@ -615,7 +630,7 @@ impl Workspace {
                 ));
             }
             Read::Broken => return said("This picture could not be read".into()),
-            Read::NoChange => return said("No change since the last commit".into()),
+            Read::NoChange => return said("No line changed since the last commit".into()),
             Read::Shown { .. } | Read::Diff { .. } => view.map(|view| &view.body),
             Read::Picture { .. } => match view {
                 Some(view) => return self.picture_body(id, view, cx),
@@ -787,66 +802,77 @@ fn diff_rows(id: PaneId, patch: Rc<review::Patch>, marks: Rc<Vec<Vec<Mark>>>) ->
         .max()
         .unwrap_or(1);
     let width = px(most.to_string().len() as f32 * 7. + 8.);
-    uniform_list(ElementId::Name(format!("viewer-diff:{id}").into()), patch.rows.len(), move |range, _, _| {
+    // A cut patch ends with a row that says so.
+    let count = patch.rows.len() + usize::from(patch.cut);
+    uniform_list(ElementId::Name(format!("viewer-diff:{id}").into()), count, move |range, _, _| {
         range
-            .map(|at| match &patch.rows[at] {
-                review::Row::Hunk { skipped, old, new } => {
-                    let said = match skipped {
-                        0 => format!("@@ -{old} +{new}"),
-                        1 => format!("⋯ 1 unchanged line · @@ -{old} +{new}"),
-                        n => format!("⋯ {n} unchanged lines · @@ -{old} +{new}"),
-                    };
-                    div()
-                        .h(px(LINE))
-                        .min_w(gpui::relative(1.))
-                        .flex()
-                        .items_center()
-                        .px_2()
-                        .bg(rgb(theme::RAISED))
-                        .text_color(rgb(theme::MUTED))
-                        .whitespace_nowrap()
-                        .child(SharedString::from(said))
-                }
-                review::Row::Line { sign, old, new, text } => {
-                    let line: String = text.chars().take(MAX_DRAWN).collect();
-                    let runs = marks.get(at).map_or(Vec::new(), |marks| highlight::within(marks, &line));
-                    let styles: Vec<_> = runs
-                        .into_iter()
-                        .map(|(range, token)| {
-                            let colour = rgb(highlight::colour(token)).into();
-                            (range, HighlightStyle { color: Some(colour), ..Default::default() })
-                        })
-                        .collect();
-                    // The drawer's diff cards' marks and colours.
-                    let (mark, tint) = match sign {
-                        review::Sign::Added => ("+", Some(theme::PICK)),
-                        review::Sign::Removed => ("−", Some(theme::ERROR)),
-                        _ => (" ", None),
-                    };
-                    let number = |n: &Option<u32>| {
+            .map(|at| match patch.rows.get(at) {
+                None => div()
+                    .h(px(LINE))
+                    .px_2()
+                    .text_color(rgb(theme::MUTED))
+                    .child(format!("Cut at {} rows: open the file in a terminal for the rest", review::MAX_ROWS)),
+                Some(row) => match row {
+                    review::Row::Hunk { skipped, old, new } => {
+                        let said = match skipped {
+                            0 => format!("@@ -{old} +{new}"),
+                            1 => format!("⋯ 1 unchanged line · @@ -{old} +{new}"),
+                            n => format!("⋯ {n} unchanged lines · @@ -{old} +{new}"),
+                        };
                         div()
-                            .flex_none()
-                            .w(width)
-                            .text_right()
+                            .h(px(LINE))
+                            .min_w(gpui::relative(1.))
+                            .flex()
+                            .items_center()
+                            .px_2()
+                            .bg(rgb(theme::RAISED))
                             .text_color(rgb(theme::MUTED))
-                            .child(SharedString::from(n.map(|n| n.to_string()).unwrap_or_default()))
-                    };
-                    div()
-                        .h(px(LINE))
-                        .min_w(gpui::relative(1.))
-                        .flex()
-                        .gap_2()
-                        .whitespace_nowrap()
-                        .when_some(tint, |row, tint| row.bg(gpui::Hsla::from(rgb(tint)).opacity(0.12)))
-                        .child(number(old))
-                        .child(number(new))
-                        .child(div().flex_none().w(px(8.)).text_color(rgb(tint.unwrap_or(theme::MUTED))).child(mark))
-                        .child(
+                            .whitespace_nowrap()
+                            .child(SharedString::from(said))
+                    }
+                    review::Row::Line { sign, old, new, text } => {
+                        let line: String = text.chars().take(MAX_DRAWN).collect();
+                        let runs = marks.get(at).map_or(Vec::new(), |marks| highlight::within(marks, &line));
+                        let styles: Vec<_> = runs
+                            .into_iter()
+                            .map(|(range, token)| {
+                                let colour = rgb(highlight::colour(token)).into();
+                                (range, HighlightStyle { color: Some(colour), ..Default::default() })
+                            })
+                            .collect();
+                        // The drawer's diff cards' marks and colours.
+                        let (mark, tint) = match sign {
+                            Sign::Added => ("+", Some(theme::PICK)),
+                            Sign::Removed => ("−", Some(theme::ERROR)),
+                            _ => (" ", None),
+                        };
+                        let number = |n: &Option<u32>| {
                             div()
-                                .text_color(rgb(theme::TEXT))
-                                .child(StyledText::new(SharedString::from(line)).with_highlights(styles)),
-                        )
-                }
+                                .flex_none()
+                                .w(width)
+                                .text_right()
+                                .text_color(rgb(theme::MUTED))
+                                .child(SharedString::from(n.map(|n| n.to_string()).unwrap_or_default()))
+                        };
+                        div()
+                            .h(px(LINE))
+                            .min_w(gpui::relative(1.))
+                            .flex()
+                            .gap_2()
+                            .whitespace_nowrap()
+                            .when_some(tint, |row, tint| row.bg(gpui::Hsla::from(rgb(tint)).opacity(0.12)))
+                            .child(number(old))
+                            .child(number(new))
+                            .child(
+                                div().flex_none().w(px(8.)).text_color(rgb(tint.unwrap_or(theme::MUTED))).child(mark),
+                            )
+                            .child(
+                                div()
+                                    .text_color(rgb(theme::TEXT))
+                                    .child(StyledText::new(SharedString::from(line)).with_highlights(styles)),
+                            )
+                    }
+                },
             })
             .collect()
     })
