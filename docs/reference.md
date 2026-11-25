@@ -1825,7 +1825,8 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   building has a steady, thinner beam in its task's colour. Over the hints, the hints win, and
   no beam is drawn over them. Hovering draws, and renders nothing again.
 - Its camera is yours to move, your pointer's only: drag with the middle button held (the
-  wheel, pressed) to pan; the mouse wheel zooms about the point under the pointer; a left drag
+  wheel, pressed) to pan: across, the ground under the pointer follows it; up and down, the
+  city slides straight up or down in the place as far (half the place's height at most); the mouse wheel zooms about the point under the pointer; a left drag
   (past a click: under 4 points is still a click, which focuses the pane) turns it round the
   point it looks at. On a trackpad, two-finger scroll pans, ⌥ with it turns, ⌘ with it zooms, and a pinch
   zooms about the pointer (ottospace hears it itself: GPUI 0.2.2 delivers none; not yet in a tab

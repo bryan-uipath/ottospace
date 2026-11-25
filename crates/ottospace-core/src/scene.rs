@@ -119,13 +119,15 @@ pub struct Scene {
 
 /// Where the user has turned, moved and zoomed the camera, from the fitted view: degrees round
 /// the plan from its front (yaw) and down from level (pitch), the distance as a share of the
-/// fitted one, and the point looked at, moved over the plan from the city's middle (plan units).
+/// fitted one, the point looked at, moved over the plan from the city's middle (plan units), and
+/// the picture slid up by `lift`, a share of its height (a vertical pan: the perspective kept).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct View {
     pub yaw: f32,
     pub pitch: f32,
     pub zoom: f32,
     pub pan: [f32; 2],
+    pub lift: f32,
 }
 
 /// Pitch is kept between these (degrees): never under the ground, never straight down.
@@ -133,10 +135,12 @@ pub const PITCH_RANGE: (f32, f32) = (12., 80.);
 /// Zoom is kept between these: near enough that a building of a small city fills the tab, and
 /// the fitted view (the whole city with its margin).
 pub const ZOOM_RANGE: (f32, f32) = (0.05, 1.);
+/// Lift is kept within this, either way: the point looked at stays in the picture.
+pub const LIFT_MAX: f32 = 0.5;
 
 impl Default for View {
     fn default() -> Self {
-        View { yaw: YAW, pitch: PITCH, zoom: 1., pan: [0., 0.] }
+        View { yaw: YAW, pitch: PITCH, zoom: 1., pan: [0., 0.], lift: 0. }
     }
 }
 
@@ -151,6 +155,7 @@ impl View {
             pitch: or(self.pitch, fitted.pitch).clamp(PITCH_RANGE.0, PITCH_RANGE.1),
             zoom: or(self.zoom, 1.).clamp(ZOOM_RANGE.0, ZOOM_RANGE.1),
             pan: [or(self.pan[0], 0.).clamp(-WIDE / 2., WIDE / 2.), or(self.pan[1], 0.).clamp(-0.5, 0.5)],
+            lift: or(self.lift, 0.).clamp(-LIFT_MAX, LIFT_MAX),
         }
     }
 
@@ -159,9 +164,9 @@ impl View {
         View { yaw: self.yaw + yaw, pitch: self.pitch + pitch, ..self }.clamped()
     }
 
-    /// The point looked at moved by `dx`, `dz` over the plan.
-    pub fn panned(self, dx: f32, dz: f32) -> View {
-        View { pan: [self.pan[0] + dx, self.pan[1] + dz], ..self }.clamped()
+    /// The point looked at moved by `dx`, `dz` over the plan, and the picture slid up by `up`.
+    pub fn panned(self, dx: f32, dz: f32, up: f32) -> View {
+        View { pan: [self.pan[0] + dx, self.pan[1] + dz], lift: self.lift + up, ..self }.clamped()
     }
 
     /// Nearer by `factor` (under 1: in), keeping `about` (a point of the plan, from the city's
@@ -175,7 +180,7 @@ impl View {
 
     /// Inside its clamps and finite: for the model's check.
     pub fn sound(&self) -> bool {
-        let all = [self.yaw, self.pitch, self.zoom, self.pan[0], self.pan[1]];
+        let all = [self.yaw, self.pitch, self.zoom, self.pan[0], self.pan[1], self.lift];
         all.iter().all(|v| v.is_finite()) && *self == self.clamped()
     }
 }
@@ -198,7 +203,9 @@ impl Fit {
         let target = [self.target[0] + view.pan[0], self.target[1], self.target[2] + view.pan[1]];
         let distance = self.distance * view.zoom;
         let eye = std::array::from_fn(|i| target[i] + back[i] * distance);
-        let (near, far, shift) = (distance / 50., distance + 4., self.lower);
+        // The point looked at stays in the picture whatever `lower` is (`developer.city_frame`).
+        let shift = (self.lower - view.lift).clamp(MARGIN - 0.5, 0.5 - MARGIN);
+        let (near, far) = (distance / 50., distance + 4.);
         Camera { eye, target, fov: FOV.to_radians(), aspect, near, far, shift }
     }
 }
@@ -415,15 +422,16 @@ pub struct Layout {
 }
 
 impl Layout {
-    /// The city seen from `view`: its boxes as laid out, cut down only for the fitted view (a
-    /// moved one cuts nothing: `clear_sight`). Nothing is laid out again.
+    /// The city seen from `view`: its boxes as laid out, cut down only for the fitted view, lifted
+    /// or not (a moved one cuts nothing: `clear_sight`). Nothing is laid out again.
     pub fn scene(&self, view: &View) -> Scene {
         let mut blocks = self.blocks.clone();
         let Some(fit) = self.fit else {
             return Scene { blocks, camera: None, fit: None, tints: Vec::new(), shown: Vec::new(), glow: Vec::new() };
         };
         let camera = fit.camera(view, self.aspect);
-        if *view == View::default() {
+        // A lift moves no eye: the same lines of sight.
+        if (View { lift: 0., ..*view }) == View::default() {
             clear_sight(&mut blocks, camera.eye, self.lit_floor);
         }
         Scene { blocks, camera: Some(camera), fit: Some(fit), tints: Vec::new(), shown: Vec::new(), glow: Vec::new() }
@@ -1017,8 +1025,10 @@ mod tests {
 
     #[test]
     fn a_hovering_agent_stays_in_the_picture_under_any_camera() {
-        let views = [View { zoom: 0.3, ..View::default() }, View { pitch: 80., ..View::default() }];
-        let panned = View { pan: [3., -2.], yaw: 70., ..View::default() };
+        let lifts = [-LIFT_MAX, LIFT_MAX].map(|lift| View { lift, ..View::default() });
+        let views =
+            [View { zoom: 0.3, ..View::default() }, View { pitch: 80., ..View::default() }].into_iter().chain(lifts);
+        let panned = View { pan: [3., -2.], yaw: 70., lift: 0.3, ..View::default() };
         for view in [View::default(), panned].into_iter().chain(views) {
             let s = scene(&many(), &[], 1.6, &view);
             let (x, y) = s.camera.unwrap().project(s.marks(&[None])[0].at).unwrap();
@@ -1062,7 +1072,7 @@ mod tests {
         let lit = [(lit_id.as_str(), 0xff0000)];
         let laid = layout(&atlas, &lit, 1.4, LOWER);
         let turned = View::default().orbited(50., -10.).zoomed(0.5, [0.1, 0.]);
-        let (a, b) = (laid.scene(&turned), laid.scene(&View::default().panned(0.2, 0.1)));
+        let (a, b) = (laid.scene(&turned), laid.scene(&View::default().panned(0.2, 0.1, 0.)));
         assert_eq!((&a.blocks, &b.blocks), (&laid.blocks, &laid.blocks));
         assert!(a.camera != b.camera);
         assert_eq!(laid.scene(&turned), scene(&atlas, &lit, 1.4, &turned));
@@ -1151,8 +1161,9 @@ mod tests {
         assert_eq!(View::default().orbited(0., -500.).pitch, PITCH_RANGE.0);
         assert_eq!(View::default().zoomed(1e-6, [0., 0.]).zoom, ZOOM_RANGE.0);
         assert_eq!(View::default().zoomed(1e6, [0., 0.]).zoom, ZOOM_RANGE.1);
-        assert_eq!(View::default().panned(9., -9.).pan, [WIDE / 2., -0.5]);
-        let nan = View { yaw: f32::NAN, pitch: f32::INFINITY, zoom: f32::NAN, pan: [f32::NAN, 1.] };
+        assert_eq!(View::default().panned(9., -9., 9.).pan, [WIDE / 2., -0.5]);
+        assert_eq!(View::default().panned(0., 0., -9.).lift, -LIFT_MAX);
+        let nan = View { yaw: f32::NAN, pitch: f32::INFINITY, zoom: f32::NAN, pan: [f32::NAN, 1.], lift: f32::NAN };
         assert_eq!(nan.clamped(), View { pan: [0., 0.5], ..View::default() });
         for v in [View::default(), v, nan.clamped(), View::default().zoomed(0.3, [0.2, 0.1])] {
             assert!(v.sound(), "{v:?}");
@@ -1174,9 +1185,42 @@ mod tests {
         assert!((x - 0.3).abs() < 1e-3 && (y - 0.6).abs() < 1e-3, "{x} {y}");
         // The ground under 0.3 moved to 0.5: the city follows the pointer.
         let to = before.ground(0.5, 0.6).unwrap();
-        let moved = View::default().panned(at[0] - to[0], at[1] - to[1]);
+        let moved = View::default().panned(at[0] - to[0], at[1] - to[1], 0.);
         let (x, y) = fit.camera(&moved, 1.6).project([at[0], 0., at[1]]).unwrap();
         assert!((x - 0.5).abs() < 1e-3 && (y - 0.6).abs() < 1e-3, "{x} {y}");
+    }
+
+    /// A lift slides the whole picture straight up by its share of the height, the perspective
+    /// kept; a zoom about a point keeps that point with a lift too, and the ground under the
+    /// pointer is the lifted picture's.
+    #[test]
+    fn a_lift_slides_the_picture_up_and_keeps_zoom_and_ground() {
+        let s = scene(&many(), &[], 1.6, &View::default());
+        let fit = s.fit.unwrap();
+        let lifted = View::default().panned(0., 0., 0.25);
+        let (before, after) = (fit.camera(&View::default(), 1.6), fit.camera(&lifted, 1.6));
+        for p in [[0.1, 0., 0.2], [1.2, 0.1, 0.8], fit.target] {
+            let ((x0, y0), (x1, y1)) = (before.project(p).unwrap(), after.project(p).unwrap());
+            assert!((x1 - x0).abs() < 1e-4 && (y0 - y1 - 0.25).abs() < 1e-4, "{p:?}: {y0} {y1}");
+        }
+        let at = after.ground(0.3, 0.4).unwrap();
+        let (x, y) = after.project([at[0], 0., at[1]]).unwrap();
+        assert!((x - 0.3).abs() < 1e-3 && (y - 0.4).abs() < 1e-3, "{x} {y}");
+        let near = lifted.zoomed(0.5, [at[0] - fit.target[0], at[1] - fit.target[2]]);
+        let (x, y) = fit.camera(&near, 1.6).project([at[0], 0., at[1]]).unwrap();
+        assert!((x - 0.3).abs() < 1e-3 && (y - 0.4).abs() < 1e-3, "{x} {y}");
+    }
+
+    /// At either lift, with the city framed high or low (`developer.city_frame`), the point looked
+    /// at stays in the picture.
+    #[test]
+    fn a_lift_keeps_the_point_looked_at_in_the_picture() {
+        let fit = scene(&many(), &[], 1.6, &View::default()).fit.unwrap();
+        for (lower, lift) in [(-0.2, LIFT_MAX), (0.3, -LIFT_MAX), (LOWER, LIFT_MAX), (LOWER, -LIFT_MAX)] {
+            let camera = Fit { lower, ..fit }.camera(&View { lift, ..View::default() }, 1.6);
+            let (_, y) = camera.project(camera.target).unwrap();
+            assert!((MARGIN - 1e-4..=1. - MARGIN + 1e-4).contains(&y), "{lower} {lift}: {y}");
+        }
     }
 
     /// The hit test holds from any view; a view the user moved cuts no building down.
@@ -1199,5 +1243,17 @@ mod tests {
         let plain = scene(&atlas, &[], 1.6, &turned);
         let cut = plain.blocks.iter().zip(&s.blocks).filter(|(a, b)| b.kind == Kind::Building && a.max[1] > b.max[1]);
         assert_eq!(cut.count(), 0);
+        // A lift alone moves no eye: what the fitted view cuts for a lit file, it cuts.
+        let (fitted, lifted) = (View::default(), View { lift: 0.3, ..View::default() });
+        let cuts = |id: &str| {
+            let fitted = scene(&atlas, &[(id, 1)], 1.6, &fitted).blocks;
+            // Moved a hair, it cuts nothing: any difference is the fitted view's cut.
+            let moved = View { pan: [1e-4, 0.], ..View::default() };
+            (fitted != scene(&atlas, &[(id, 1)], 1.6, &moved).blocks).then_some(fitted)
+        };
+        let (id, cut) = (atlas.places.iter().filter(|p| !p.group))
+            .find_map(|p| Some((p.id.clone(), cuts(&p.id)?)))
+            .expect("a lit file the fitted view cuts for");
+        assert_eq!(scene(&atlas, &[(&id, 1)], 1.6, &lifted).blocks, cut);
     }
 }

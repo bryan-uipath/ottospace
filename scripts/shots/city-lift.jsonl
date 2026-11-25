@@ -1,0 +1,19 @@
+# The code city's vertical pan (`code_city`): the fitted view; a middle drag up by 150 points (the
+# city slides up as far); then down past the fitted view. 400 made-up files in a repository's tab.
+{"env":{"OTTOSPACE_FEATURES":"code_city"}}
+{"tree":"repos/app","files":400}
+{"cmd":"repo_add","path":"{ROOT}/repos/app"}
+{"until":"repos_bar.0"}
+{"cmd":"section","section":"repos"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"close"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"until":"city.picture"}
+{"settle":800}
+{"shot":"fitted"}
+{"drag":{"rect":"city.bounds"},"at":[0.5,0.7],"by":[0,-150],"button":"middle"}
+{"settle":800}
+{"shot":"up"}
+{"drag":{"rect":"city.bounds"},"at":[0.5,0.3],"by":[0,300],"button":"middle"}
+{"settle":800}
+{"shot":"down"}

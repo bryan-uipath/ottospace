@@ -2115,6 +2115,8 @@ export interface CityView {
   pitch: number;
   zoom: number;
   pan: [number, number];
+  /** The picture slid up, a share of its height (a vertical pan). */
+  lift: number;
 }
 
 export interface CityHovered {

@@ -70,6 +70,9 @@ pub struct SavedCamera {
     pub pitch: f32,
     pub zoom: f32,
     pub pan: [f32; 2],
+    /// A file of a build before it: none.
+    #[serde(default)]
+    pub lift: f32,
 }
 
 /// At most this many cameras kept: the most recent folders' are enough.
@@ -452,6 +455,7 @@ impl Model {
                 pitch: v.pitch,
                 zoom: v.zoom,
                 pan: v.pan,
+                lift: v.lift,
             })
             .collect();
         let mut layout = Layout {
@@ -524,7 +528,7 @@ impl Model {
         self.repos_folded.clone_from(&layout.repos_folded);
         // A camera out of its clamps (a file edited by hand) is not kept.
         for c in &layout.cameras {
-            let view = crate::scene::View { yaw: c.yaw, pitch: c.pitch, zoom: c.zoom, pan: c.pan };
+            let view = crate::scene::View { yaw: c.yaw, pitch: c.pitch, zoom: c.zoom, pan: c.pan, lift: c.lift };
             if view.sound() {
                 self.cameras.views.insert(c.folder.clone(), view);
             }
@@ -824,11 +828,12 @@ mod tests {
     }
 
     /// A code city's camera the user moved is kept, by its folder, and comes back; a fitted
-    /// one is not written; one out of its clamps, or of what is not a path, is not read.
+    /// one is not written; one out of its clamps, or of what is not a path, is not read. One of
+    /// a file from before lifts has none.
     #[test]
     fn a_moved_city_camera_is_kept_by_its_folder() {
         let mut m = workspace();
-        let moved = crate::scene::View::default().orbited(40., -10.).zoomed(0.5, [0.1, 0.]);
+        let moved = crate::scene::View::default().orbited(40., -10.).zoomed(0.5, [0.1, 0.]).panned(0., 0., 0.2);
         m.cameras.views.insert("/code/app".into(), moved);
         m.cameras.views.insert("/code/web".into(), crate::scene::View::default());
         let file = m.layout_file(&[], &[], 0);
@@ -839,6 +844,10 @@ mod tests {
         let mut odd = file.clone();
         odd.cameras[0].pitch = 200.;
         assert!(restored(&m, odd, &[], false).0.cameras.views.is_empty(), "out of its clamps");
+        let mut older: serde_json::Value = serde_json::from_str(&write(&file)).unwrap();
+        older["cameras"][0].as_object_mut().unwrap().remove("lift").unwrap();
+        let older = parse(&older.to_string()).unwrap();
+        assert_eq!(older.cameras[0].lift, 0.);
         let mut odd = file;
         odd.cameras[0].folder = "app".into();
         assert!(odd.unsound().is_some(), "not a path");

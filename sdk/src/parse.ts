@@ -2675,6 +2675,7 @@ function cityView(value: unknown, at: string): CityView {
     pitch: num(o.pitch, `${at}.pitch`),
     zoom: num(o.zoom, `${at}.zoom`),
     pan: pair(o.pan, `${at}.pan`),
+    lift: num(o.lift, `${at}.lift`),
   };
 }
 
