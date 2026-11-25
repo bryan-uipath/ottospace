@@ -745,6 +745,10 @@ impl Workspace {
             }
             (None, Subject::Task(_)) => return None,
         };
+        // A sub-agent's view: its own header, the way back first.
+        if let Some(face) = self.model.chat(subject).and_then(|chat| chat.drilled()).cloned() {
+            return Some(self.drilled_header(subject, &title, &face, cx));
+        }
         let runs = self.model.agent_runs(subject);
         let line = self.agent_line(subject);
         let facts: gpui::SharedString =
@@ -865,6 +869,59 @@ impl Workspace {
             .child(controls)
             .children((!covered).then(|| self.context_bar(subject)).flatten());
         Some(header.id("drawer-head"))
+    }
+
+    /// The header over a sub-agent's own calls (canvas J7): Back, named for where it goes (the
+    /// parent sub-agent, else the conversation), then › its type; its task; its face and what it
+    /// does now; its own sub-agents' faces. Chat · Terminal, no actions: a runner stops whole turns.
+    fn drilled_header(
+        &self,
+        subject: &Subject,
+        title: &str,
+        face: &ottospace_core::transcript::Face,
+        cx: &mut Context<Self>,
+    ) -> Stateful<Div> {
+        let transcript = self.model.chat(subject).map(|chat| &chat.transcript);
+        let parent = face.parent.as_deref().and_then(|of| transcript?.face(of)).map(|parent| parent.kind.clone());
+        let back = self
+            .talk_action("talk-back", &format!("‹ {}", parent.as_deref().unwrap_or(title)), "Back up one level (esc)")
+            .max_w(px(200.))
+            .overflow_hidden()
+            .on_click(cx.listener(|this, _, window, cx| drop(this.dispatch(Action::TalkBack, this.input, window, cx))));
+        let muted = |text: String| div().flex_none().text_color(rgb(theme::MUTED)).child(text);
+        let kind = div().id("talk-title").flex_1().min_w_0().text_sm().truncate().child(face.kind.clone());
+        let title_row = div()
+            .h(px(28.))
+            .flex()
+            .items_center()
+            .gap_2()
+            .child(back)
+            .child(muted("›".into()))
+            .child(kind)
+            .children(self.drawer_pull_button(cx))
+            .child(self.drawer_collapse("talk:talk-close", cx));
+        let task = div().flex_1().min_w_0().truncate().child(format!("Task: {}", face.about));
+        let task = div().h(px(18.)).flex().items_center().text_xs().text_color(rgb(theme::MUTED)).child(task);
+        let status = transcript.and_then(|t| t.sub_status(&face.id)).unwrap_or_default();
+        let status = div().flex_1().min_w_0().truncate().text_xs().text_color(rgb(theme::TEXT)).child(status);
+        let picture = crate::dial::face_mark(face, 42.).id("talk-picture");
+        let row = div().py_1().flex().items_center().gap_2().child(picture).child(status);
+        let faces = self.faces_row(subject, Some(&face.id), cx);
+        let controls = div().h(px(32.)).flex().items_center().gap_2().children(self.view_switch(subject, cx));
+        div()
+            .flex_none()
+            .pl_3()
+            .pr_1()
+            .flex()
+            .flex_col()
+            .border_b_1()
+            .border_color(rgb(theme::BORDER))
+            .child(title_row)
+            .child(task)
+            .child(row)
+            .children(faces.map(|faces| div().pb_1().child(faces)))
+            .child(controls)
+            .id("drawer-head")
     }
 
     /// The conversation: the agent's terminal as it is drawn in a pane. Stage 1 of the one seam

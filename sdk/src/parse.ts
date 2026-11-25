@@ -1556,6 +1556,8 @@ function agentDial(value: unknown, at: string): AgentDial {
     collapsed: bool(o.collapsed, `${at}.collapsed`),
     faces: num(o.faces, `${at}.faces`),
     faces_more: num(o.faces_more, `${at}.faces_more`),
+    drilled: num(o.drilled, `${at}.drilled`),
+    switcher: bool(o.switcher, `${at}.switcher`),
   };
 }
 

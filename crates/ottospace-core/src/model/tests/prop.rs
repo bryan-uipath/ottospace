@@ -338,7 +338,8 @@ impl Gen<'_> {
     fn event(&mut self) -> Said {
         let text = Text::new(&self.name(WORDS));
         let id = self.rng.pick(&["a", "b"]).to_string();
-        let (tool, label) = ("Bash".to_string(), self.name(WORDS));
+        // Now and then a sub-agent's call: a face to drill into.
+        let (tool, label) = (self.rng.pick(&["Bash", "Bash", "Agent"]).to_string(), self.name(WORDS));
         match self.rng.below(16) {
             15 => match self.rng.below(5) {
                 0 => Said::Subtask { id: self.rng.coin().then_some(id), description: text },
@@ -360,7 +361,16 @@ impl Gen<'_> {
                 let station = self.rng.pick(&crate::activity::Station::DIAL);
                 let command = serde_json::json!({"command": text.text()});
                 let gist = self.rng.coin().then(|| crate::gist::claude("Bash", &command)).flatten();
-                Said::ToolStart { id, sub: self.rng.coin(), tool, station, label, detail: text, diff, gist }
+                Said::ToolStart {
+                    id,
+                    parent: self.rng.coin().then(|| self.rng.pick(&["a", "b"]).to_string()),
+                    tool,
+                    station,
+                    label,
+                    detail: text,
+                    diff,
+                    gist,
+                }
             }
             5 => Said::ToolEnd { id, failed: self.rng.coin(), output: self.rng.coin().then_some(text) },
             6 | 7 => {
@@ -2168,6 +2178,9 @@ const MAKERS: &[Make] = &[
     |g| Action::TalkResize { width: g.rng.pick(&[0., 400., 9e9, f32::NAN]) },
     |_| Action::TalkWide,
     |_| Action::DialToggle,
+    |g| Action::TalkDrill { id: g.rng.pick(&["a", "b", "x"]).to_string() },
+    |_| Action::TalkBack,
+    |g| Action::TalkFaces { open: g.rng.coin() },
     |_| Action::FillDisplay,
     OUT_MAKERS[0],
     OUT_MAKERS[1],
@@ -7281,8 +7294,8 @@ fn event_code(event: &Said) -> String {
         Said::TurnStarted => "Said::TurnStarted".into(),
         Said::TextDelta { text: t } => format!("Said::TextDelta {{ text: {} }}", text(t)),
         Said::Text { text: t } => format!("Said::Text {{ text: {} }}", text(t)),
-        Said::ToolStart { id, sub, tool, station, label, detail, diff, gist } => format!(
-            "Said::ToolStart {{ id: {id:?}.into(), sub: {sub}, tool: {tool:?}.into(), \
+        Said::ToolStart { id, parent, tool, station, label, detail, diff, gist } => format!(
+            "Said::ToolStart {{ id: {id:?}.into(), parent: {parent:?}.map(String::from), tool: {tool:?}.into(), \
              station: crate::activity::Station::{station:?}, label: {label:?}.into(), detail: {}, diff: {}, gist: {} }}",
             text(detail),
             match diff {

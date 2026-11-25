@@ -620,6 +620,12 @@ go, at a glance.
   message. Hover a light for its name and counts. Files is the agent's file tools only; Shell
   means any command (ottospace does not guess what it did); Network its web tools; MCP every MCP
   call, whatever its server.
+- **Sub-agents**: while the agent's sub-agents run, up to three faces under the picture (running
+  first, then the most recently active; dimmer once done), then "+n". Hover a face for its type,
+  task, state and time. A click on a face, or on a row of the list "+n" opens, shows that
+  sub-agent's own calls in the same drawer: Back (named for where it goes) or Esc returns, one
+  level at a time; there, the faces are that sub-agent's own, and there are no actions (Stop,
+  Later, Done act on the whole turn).
 - **Context**: the number at the lights' end from 70% (amber), with "compacts soon" from 90%
   (red); below, on the context bar's hover only. The context bar is the header's bottom edge,
   3 points, filled to the share used; its hover says the tokens.

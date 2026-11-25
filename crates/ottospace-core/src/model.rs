@@ -2261,6 +2261,17 @@ pub enum Action {
     TalkWide,
     /// Collapse the shown conversation's dial to its marker, or open it again: kept per task.
     DialToggle,
+    /// Show a sub-agent's own calls in the drawer, by its call's id (a face's click, a switcher
+    /// row). Only the user's.
+    TalkDrill {
+        id: String,
+    },
+    /// Up one level from a sub-agent's view (its Back, Esc): its parent sub-agent, else the agent.
+    TalkBack,
+    /// Open or close the list of all of the shown level's sub-agents ("+n").
+    TalkFaces {
+        open: bool,
+    },
     /// Put the window with the keyboard over its whole display, the menu bar and the Dock away
     /// while ottospace is in front; again: back as it was. Only the user's. The main window's is
     /// kept in `layout.json`: on at quit, on at start.
@@ -3069,6 +3080,9 @@ impl Action {
             | Action::TalkResize { .. }
             | Action::TalkWide
             | Action::DialToggle
+            | Action::TalkDrill { .. }
+            | Action::TalkBack
+            | Action::TalkFaces { .. }
             | Action::FillDisplay
             | Action::FillWindow { .. }
             | Action::FillEnded { .. }
@@ -3601,6 +3615,9 @@ impl Action {
             | Action::TalkKeys { .. }
             | Action::TalkResize { .. }
             | Action::DialToggle
+            | Action::TalkDrill { .. }
+            | Action::TalkBack
+            | Action::TalkFaces { .. }
             | Action::FillDisplay
             | Action::FillWindow { .. }
             | Action::FillEnded { .. }
@@ -5564,6 +5581,7 @@ impl Model {
             }
             // How the user keeps their drawer, and the layout file that keeps it.
             Action::DialToggle => Some(chat::DIAL_USERS),
+            Action::TalkDrill { .. } | Action::TalkBack | Action::TalkFaces { .. } => Some(chat::DRILL_USERS),
             Action::FillDisplay | Action::FillWindow { .. } => Some(crate::fill::USERS_ALONE),
             Action::CityCamera { .. } => Some(city::USERS_ALONE),
             Action::CityOpen { .. } => Some(city::OPEN_USERS),
@@ -8062,6 +8080,9 @@ impl Model {
             | Action::TalkDenyNote
             | Action::TalkEscape
             | Action::TalkInterrupt
+            | Action::TalkDrill { .. }
+            | Action::TalkBack
+            | Action::TalkFaces { .. }
             | Action::TalkView { .. }) => self.chat_act(action, effects),
             action @ (Action::DecisionsOpen
             | Action::DecisionsAsk { .. }
@@ -12284,6 +12305,9 @@ mod tests {
         Action::TalkResize { .. },
         Action::TalkWide,
         Action::DialToggle,
+        Action::TalkDrill { .. },
+        Action::TalkBack,
+        Action::TalkFaces { .. },
         Action::FillDisplay,
         Action::FillWindow { .. },
         Action::FillEnded { .. },
@@ -12742,6 +12766,9 @@ mod tests {
             Action::TalkResize { width: 400. },
             Action::TalkWide,
             Action::DialToggle,
+            Action::TalkDrill { id: "a".into() },
+            Action::TalkBack,
+            Action::TalkFaces { open: true },
             Action::FillDisplay,
             Action::FillWindow { out: Some(1) },
             Action::FillEnded { out: None },
@@ -13440,6 +13467,7 @@ mod tests {
                         Some(btw::RUNNERS_ALONE)
                     }
                     Action::DialToggle => Some(chat::DIAL_USERS),
+                    Action::TalkDrill { .. } | Action::TalkBack | Action::TalkFaces { .. } => Some(chat::DRILL_USERS),
                     Action::FillDisplay | Action::FillWindow { .. } => Some(crate::fill::USERS_ALONE),
                     Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => {
                         Some(displays::USERS_ALONE)
@@ -17888,7 +17916,7 @@ mod tests {
         assert!(!m.take_over_ready(&held));
         let tool = Event::ToolStart {
             id: "a".into(),
-            sub: false,
+            parent: None,
             tool: "Bash".into(),
             station: crate::activity::Station::Shell,
             label: "git".into(),
@@ -17917,7 +17945,7 @@ mod tests {
             Event::WatchFromStart,
             Event::ToolStart {
                 id: "a".into(),
-                sub: false,
+                parent: None,
                 tool: "Bash".into(),
                 station: crate::activity::Station::Shell,
                 label: "git".into(),
@@ -18442,8 +18470,16 @@ mod tests {
         assert_eq!(m.watch_target(), Some(target));
         let (id, tool, label) = ("a".to_string(), "Bash".to_string(), "git".to_string());
         let station = crate::activity::Station::Shell;
-        let call =
-            Event::ToolStart { id, sub: false, tool, station, label, detail: Text::default(), diff: None, gist: None };
+        let call = Event::ToolStart {
+            id,
+            parent: None,
+            tool,
+            station,
+            label,
+            detail: Text::default(),
+            diff: None,
+            gist: None,
+        };
         let events = vec![Event::WatchFromStart, Event::MessageElsewhere, call];
         m.update(Action::AgentEvents { task: task.clone(), events, at: NOW }.sent_by(Origin::System));
         let t = &m.chat(&task).expect("its past").transcript;
@@ -21207,6 +21243,7 @@ mod tests {
                         Some(btw::RUNNERS_ALONE)
                     }
                     Action::DialToggle => Some(chat::DIAL_USERS),
+                    Action::TalkDrill { .. } | Action::TalkBack | Action::TalkFaces { .. } => Some(chat::DRILL_USERS),
                     Action::FillDisplay | Action::FillWindow { .. } => Some(crate::fill::USERS_ALONE),
                     Action::TabOut { .. } | Action::TabIn { .. } | Action::KeyWindow { .. } => {
                         Some(displays::USERS_ALONE)

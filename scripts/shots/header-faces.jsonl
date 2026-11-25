@@ -8,3 +8,10 @@
 {"until":"drawer.native.chats.1.dial.stations.7.running","is":5}
 {"settle":800}
 {"shot":"faces"}
+{"click":"talk:face:0"}
+{"settle":500}
+{"shot":"drilled"}
+{"cmd":"key","keys":"escape","as":"user"}
+{"click":"talk:faces-more"}
+{"settle":500}
+{"shot":"switcher"}

@@ -153,6 +153,10 @@ export interface AgentDial {
   /** Sub-agent faces under the header's picture (at most 3, only while one runs), and how many more. */
   faces: number;
   faces_more: number;
+  /** How deep the drawer shows: 0 the agent, 1 a sub-agent's own calls, 2 one of its sub-agents'. */
+  drilled: number;
+  /** The list of the shown level's sub-agents ("+n") is open. */
+  switcher: boolean;
 }
 
 export type PaneId = number;

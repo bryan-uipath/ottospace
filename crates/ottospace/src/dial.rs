@@ -12,6 +12,7 @@ use gpui::{
 };
 use ottospace_core::activity::{Dial, Level, Pulse, Station};
 use ottospace_core::talk::Subject;
+use ottospace_core::transcript::Face;
 use ottospace_core::{Action, theme};
 
 use crate::{Tooltip, Workspace};
@@ -28,9 +29,10 @@ const PICTURE: f32 = 42.;
 /// A light's side, and its use bar's height.
 const LIGHT: f32 = 20.;
 const BAR: f32 = 2.;
-/// The faces under the picture: how many, and a face's side.
+/// The faces under the picture: how many, and a face's side; the list of them all, its width.
 const FACES: usize = 3;
 const FACE: f32 = 16.;
+const SWITCHER: f32 = 300.;
 /// The context bar's height, on the header's bottom edge.
 const CONTEXT_BAR: f32 = 3.;
 /// The tool stations, in the lights' order, each with its glyph.
@@ -86,6 +88,26 @@ pub(crate) fn calm() -> bool {
 
 /// The context's number at the lights' end: shown from 70%, "compacts soon" from 90%; below,
 /// on the bar's hover only.
+/// A sub-agent's face: its type's first letter in a ring of the Agents colour, dimmer once done.
+pub(crate) fn face_mark(face: &Face, side: f32) -> Div {
+    let hue = colour(theme::station(Station::Agents));
+    let running = face.ended.is_none();
+    let letter = face.kind.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
+    div()
+        .relative()
+        .flex_none()
+        .size(px(side))
+        .rounded_full()
+        .flex()
+        .items_center()
+        .justify_center()
+        .border_1()
+        .border_color(hue.opacity(if running { 1. } else { 0.4 }))
+        .text_size(px((side * 0.56).max(9.)))
+        .text_color(hue.opacity(if running { 1. } else { 0.5 }))
+        .child(letter)
+}
+
 fn context_words(dial: &Dial) -> Option<String> {
     let used = (dial.context? * 100.).round() as u32;
     match dial.level {
@@ -330,62 +352,103 @@ impl Workspace {
         let row = div().flex().items_center().justify_between().gap(px(2.)).min_w_0().children(lights).children(number);
         let column = div().flex_1().min_w_0().flex().flex_col().gap(px(5.)).child(status).child(row);
         let row = div().flex().items_center().gap_2().child(picture).child(column);
-        Some(div().py_1().flex().flex_col().gap_1().child(row).children(self.faces_row(subject)))
+        Some(div().py_1().flex().flex_col().gap_1().child(row).children(self.faces_row(subject, None, cx)))
     }
 
-    /// Under the picture while sub-agents run: a face each, at most `FACES` (running first, then
-    /// the most recently active), then "+n". A face's hover: its type, task, state and time; the
-    /// "+n"'s lists the rest.
-    fn faces_row(&self, subject: &Subject) -> Option<Div> {
-        let faces = self.model.chat(subject)?.transcript.faces();
+    /// Under the picture while the sub-agents of `level` (`None`: the agent's own) run: a face
+    /// each, at most `FACES` (running first, then the most recently active), then "+n". A face's
+    /// hover: its type, task, state and time; its click shows its own calls. "+n" opens the list
+    /// of them all, which floats under the row.
+    pub(crate) fn faces_row(&self, subject: &Subject, level: Option<&str>, cx: &mut Context<Self>) -> Option<Div> {
+        let chat = self.model.chat(subject)?;
+        let faces = chat.transcript.faces(level);
         if faces.is_empty() {
             return None;
         }
         let now = crate::now_ms();
-        let say = |face: &ottospace_core::transcript::Face| {
+        let say = move |face: &Face| {
             let (state, from) = match face.ended {
                 None => ("running", face.since),
                 Some(at) => ("done", at),
             };
             let time = ottospace_core::progress::duration(now.saturating_sub(from));
-            format!("{} · {} · {state} · {time}", face.kind, face.about)
+            (format!("{} · {}", face.kind, face.about), format!("{state} · {time}"))
         };
-        let hue = theme::station(Station::Agents);
         let shown = faces.iter().take(FACES).enumerate().map(|(at, face)| {
-            let running = face.ended.is_none();
-            let letter = face.kind.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_default();
-            let tip: gpui::SharedString = say(face).into();
-            div()
+            let (what, when) = say(face);
+            let tip: gpui::SharedString = format!("{what} · {when} · click to open").into();
+            face_mark(face, FACE)
                 .id(("talk-face", at))
-                .relative()
-                .flex_none()
-                .size(px(FACE))
-                .rounded_full()
-                .flex()
-                .items_center()
-                .justify_center()
-                .border_1()
-                .border_color(colour(hue).opacity(if running { 1. } else { 0.4 }))
-                .text_size(px(9.))
-                .text_color(colour(hue).opacity(if running { 1. } else { 0.5 }))
-                .child(letter)
+                .cursor_pointer()
                 .child(self.controls.mark(format!("talk:face:{at}")))
                 .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(Self::drill(face.id.clone(), cx))
         });
+        let shown: Vec<_> = shown.collect();
         let rest = faces.len().saturating_sub(FACES);
         let more = (rest > 0).then(|| {
-            let tip: gpui::SharedString = faces.iter().skip(FACES).map(say).collect::<Vec<_>>().join("\n").into();
+            let open = !chat.switcher;
             div()
                 .id("talk-faces-more")
                 .flex_none()
                 .px_1()
+                .rounded_sm()
+                .cursor_pointer()
                 .text_xs()
                 .text_color(rgb(theme::MUTED))
+                .hover(|s| s.bg(rgb(theme::SELECTED)))
                 .child(format!("+{rest}"))
                 .child(self.controls.mark("talk:faces-more".to_string()))
-                .tooltip(move |_, cx| AnyView::from(cx.new(|_| Tooltip(tip.clone()))))
+                .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(move |this, _, window, cx| {
+                    drop(this.dispatch(Action::TalkFaces { open }, this.input, window, cx))
+                }))
         });
-        Some(div().flex().items_center().gap_1().children(shown).children(more))
+        // The list of them all, over what is under it: nothing in the header moves.
+        let list = chat.switcher.then(|| {
+            let rows = faces.iter().enumerate().map(|(at, face)| {
+                let (what, when) = say(face);
+                div()
+                    .id(("talk-switch", at))
+                    .px_2()
+                    .py_1()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .hover(|s| s.bg(rgb(theme::SELECTED)))
+                    .child(face_mark(face, FACE))
+                    .child(div().flex_1().min_w_0().truncate().text_xs().text_color(rgb(theme::TEXT)).child(what))
+                    .child(div().flex_none().text_xs().text_color(rgb(theme::MUTED)).child(when))
+                    .child(self.controls.mark(format!("talk:switch:{at}")))
+                    .on_mouse_down(gpui::MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(Self::drill(face.id.clone(), cx))
+            });
+            let foot = div().px_2().py_1().text_xs().text_color(rgb(theme::MUTED)).child("Esc closes");
+            let list = div()
+                .absolute()
+                .top_full()
+                .left_0()
+                .mt_1()
+                .w(px(SWITCHER))
+                .py_1()
+                .rounded_md()
+                .border_1()
+                .border_color(rgb(theme::BORDER_STRONG))
+                .bg(rgb(theme::RAISED))
+                .children(rows)
+                .child(foot);
+            gpui::deferred(list)
+        });
+        Some(div().relative().flex().items_center().gap_1().children(shown).children(more).children(list))
+    }
+
+    /// A click that shows sub-agent `id`'s own calls, as whoever clicked.
+    fn drill(id: String, cx: &mut Context<Self>) -> impl Fn(&gpui::ClickEvent, &mut Window, &mut gpui::App) + 'static {
+        cx.listener(move |this: &mut Self, _: &gpui::ClickEvent, window, cx| {
+            drop(this.dispatch(Action::TalkDrill { id: id.clone() }, this.input, window, cx))
+        })
     }
 
     /// The context bar: 3 points on the header's bottom edge, the share of the context used in
@@ -434,11 +497,17 @@ impl Workspace {
         };
         let mut value = serde_json::to_value(&dial).unwrap_or_default();
         value["collapsed"] = self.model.dial_collapsed(subject).into();
-        // The faces under the picture: how many shown and how many more; never their words. None collapsed.
-        let open = !self.model.dial_collapsed(subject);
-        let faces = self.model.chat(subject).filter(|_| open).map(|chat| chat.transcript.faces().len()).unwrap_or(0);
+        // The faces of the level shown: how many shown and how many more; never their words. None
+        // with the agent's lights collapsed; a sub-agent's view always has its own.
+        let chat = self.model.chat(subject);
+        let level = chat.and_then(|chat| chat.drilled()).map(|face| face.id.clone());
+        let open = level.is_some() || !self.model.dial_collapsed(subject);
+        let faces = chat.filter(|_| open).map(|chat| chat.transcript.faces(level.as_deref()).len()).unwrap_or(0);
         value["faces"] = faces.min(FACES).into();
         value["faces_more"] = faces.saturating_sub(FACES).into();
+        // How deep the drawer shows (0: the agent; 1: a sub-agent's own calls), and its list open.
+        value["drilled"] = chat.map_or(0, |chat| chat.depth()).into();
+        value["switcher"] = chat.is_some_and(|chat| chat.switcher).into();
         // To three places: an f32 widened would say 0.9200000166893004.
         value["context"] = dial.context.map(|used| (f64::from(used) * 1000.).round() / 1000.).into();
         value
