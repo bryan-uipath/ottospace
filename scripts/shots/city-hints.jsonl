@@ -1,0 +1,12 @@
+# The hints' translucent backing over a large city painted as an image (no live layer): the
+# buildings under it dimmed, never hidden.
+{"env":{"OTTOSPACE_FEATURES":"code_city"}}
+{"tree":"repos/app","files":6000}
+{"cmd":"repo_add","path":"{ROOT}/repos/app"}
+{"until":"repos_bar.0"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"close"}
+{"cmd":"key","keys":"cmd-shift-r","as":"user"}
+{"until":"city.picture"}
+{"settle":2500}
+{"shot":"tab"}

@@ -109,7 +109,7 @@ const PULSE: Duration = Duration::from_millis(1600);
 const CLEAR: f32 = 12.;
 /// The hints' backing fades out over this many points, in this many layers: no edge to see.
 const FEATHER: f32 = 40.;
-const LAYERS: usize = 8;
+const LAYERS: usize = 16;
 
 /// What a folder's read was asked with: the folders git may run in, `city_exclude` as written
 /// (its keys resolved on the read's thread), and the files lit then, each with whether its call
@@ -2365,12 +2365,13 @@ fn paint(
     let first_ms = first_ms.or_else(|| laid.map(|laid| laid.elapsed().as_millis() as u64));
     let clear = hints.dilate(px(CLEAR));
     if hints.size.width > px(0.) {
-        // Faint wide pills under tighter ones: about 0.75 dark over the hints, nothing at the edge.
+        // Faint wide pills under tighter ones: about 0.5 dark over the hints, so the city dims
+        // there and still shows; nothing at the edge.
         for i in 0..=LAYERS {
             let d = FEATHER * (1. - i as f32 / LAYERS as f32);
             let pill = px(d) + hints.size.height / 2.;
             window.paint_quad(
-                fill(hints.dilate(px(d)), Hsla::from(rgb(theme::BACKGROUND)).opacity(0.14)).corner_radii(pill),
+                fill(hints.dilate(px(d)), Hsla::from(rgb(theme::BACKGROUND)).opacity(0.04)).corner_radii(pill),
             );
         }
     }
