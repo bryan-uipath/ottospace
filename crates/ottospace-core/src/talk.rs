@@ -59,6 +59,15 @@ pub struct Chip {
 /// The most characters of a call's label in the chip's line.
 pub const CHIP_LABEL: usize = 60;
 
+/// A call's label as the chip and the city show it: cleaned, on one line, cut to `CHIP_LABEL`.
+/// None when nothing is left.
+pub(crate) fn call_line(label: &str) -> Option<String> {
+    // Cut before it is cleaned, and after: a label may be long.
+    let label: String = label.chars().take(4 * CHIP_LABEL).collect();
+    let label = crate::transcript::clean(&label).replace('\n', " ");
+    Some(label.trim().chars().take(CHIP_LABEL).collect::<String>()).filter(|label| !label.is_empty())
+}
+
 /// The chip's line: the state's word, then what it waits on, cleaned and cut.
 pub fn chip_line(state: Pulse, label: Option<&str>) -> String {
     let word = match state {
@@ -68,11 +77,7 @@ pub fn chip_line(state: Pulse, label: Option<&str>) -> String {
         Pulse::Ended => "Ended",
         Pulse::Error => "Failed",
     };
-    // Cut before it is cleaned, and after: a label may be long.
-    let label = label.map(|label| label.chars().take(4 * CHIP_LABEL).collect::<String>());
-    let label = label.map(|label| crate::transcript::clean(&label).replace('\n', " "));
-    let label: Option<String> = label.map(|label| label.trim().chars().take(CHIP_LABEL).collect());
-    match label.filter(|label| !label.is_empty()) {
+    match label.and_then(call_line) {
         Some(label) if matches!(state, Pulse::Running | Pulse::NeedsYou) => format!("{word} · {label}"),
         _ => word.to_string(),
     }

@@ -13,7 +13,7 @@ use crate::layout::Axis;
 use crate::model::spaces::Owner;
 use crate::model::{Action, Effect, Model, Origin};
 use crate::scene::View;
-use crate::talk::Subject;
+use crate::talk::{self, Subject};
 use crate::tasks::TaskId;
 
 /// A file an agent is at, as its call names it (the last two parts of its path), and the
@@ -41,6 +41,11 @@ pub struct Agent<'a> {
     /// The sub-agents it runs now (a chat's `Agent`/`Task` calls not ended; none known for a
     /// session read from its file).
     pub subagents: usize,
+    /// The station of the call it runs now: its glyph at the icon, as on the dial.
+    pub station: Option<Station>,
+    /// That call as the sidebar says it (`talk::call_line` of a chat's `live_label`, a session's
+    /// `Found::doing`): agent text, drawn only, never in the state.
+    pub line: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -184,10 +189,19 @@ pub enum At {
     Pane(PaneId),
 }
 
-/// The file a session at work is at: its label, while its station is files (as serialized).
+/// A session's call's station, as its reader names it (a quiet one running sub-agents: `agents`).
+fn station_of(s: &crate::sessions::Found) -> Option<Station> {
+    s.station.as_deref().and_then(Station::named)
+}
+
+/// Its call as its Sessions row says it (`Found::doing`).
+fn line_of(s: &crate::sessions::Found) -> Option<String> {
+    s.doing().as_deref().and_then(talk::call_line)
+}
+
+/// The file a session at work is at: its label, while its station is files.
 fn file_of(s: &crate::sessions::Found) -> Option<&str> {
-    let file = s.station.as_deref().is_some_and(|station| station.eq_ignore_ascii_case(Station::Files.name()));
-    s.label.as_deref().filter(|_| file)
+    s.label.as_deref().filter(|_| station_of(s) == Some(Station::Files))
 }
 
 impl Model {
@@ -326,7 +340,9 @@ impl Model {
                 // At no file and no path named: over the file it just left, a while.
                 let at = at.or_else(|| transcript.file_held(now).filter(|_| near.is_empty()));
                 let (busy, subagents) = (transcript.calling(), transcript.subagents());
-                (*task, Agent { who: Who::Task(*task), colour: *colour, at, near, busy, subagents })
+                let (station, line) = (transcript.calling_station(), transcript.live_label().and_then(talk::call_line));
+                let who = Who::Task(*task);
+                (*task, Agent { who, colour: *colour, at, near, busy, subagents, station, line })
             })
             .collect();
         // A task whose agent runs in a terminal (Codex, or `conversation_view: terminal`) has no
@@ -346,6 +362,8 @@ impl Model {
                 near: Vec::new(),
                 busy: s.station.is_some(),
                 subagents: s.subagents,
+                station: station_of(s),
+                line: line_of(s),
             };
             (works && !chatted).then_some((task.id, agent, s))
         });
@@ -368,6 +386,8 @@ impl Model {
             near: Vec::new(),
             busy: s.station.is_some(),
             subagents: s.subagents,
+            station: station_of(s),
+            line: line_of(s),
         });
         // An agent CLI in one of our panes, working in this checkout, no session of it on show
         // here: by its process alone (no setting needed), hovering. A task's space: its own panes.
@@ -395,6 +415,8 @@ impl Model {
                 near: Vec::new(),
                 busy: false,
                 subagents: 0,
+                station: None,
+                line: None,
             });
         let agents: Vec<Agent> = tasks.into_iter().map(|(_, agent)| agent).chain(sessions).chain(in_panes).collect();
         // A session's file is lit too: in its task's colour if a task has it, else in none.
@@ -829,7 +851,16 @@ mod tests {
         let near = Vec::new();
         assert_eq!(
             city.agents,
-            vec![Agent { who, colour: None, at: Some("src/main.rs"), near, busy: true, subagents: 0 }]
+            vec![Agent {
+                who,
+                colour: None,
+                at: Some("src/main.rs"),
+                near,
+                busy: true,
+                subagents: 0,
+                station: Some(Station::Files),
+                line: Some("files · src/main.rs".into()),
+            }]
         );
         assert_eq!(city.lit, vec![Lit { label: "src/main.rs", colour: None, running: true }]);
         m.update(Action::SetSessions { found: vec![found(true, "shell", "cargo test")], day: 0 });
@@ -874,7 +905,10 @@ mod tests {
         };
         m.update(Action::SetSessions { found: vec![found], day: 0 }.sent_by(Origin::System));
         let city = city(&m).unwrap();
-        assert_eq!(city.agents.iter().map(|a| (a.at, a.subagents)).collect::<Vec<_>>(), [(None, 2)]);
+        assert_eq!(
+            city.agents.iter().map(|a| (a.at, a.subagents, a.station)).collect::<Vec<_>>(),
+            [(None, 2, Some(Station::Agents))]
+        );
         let lit: Vec<&str> = city.lit.iter().map(|lit| lit.label).collect();
         assert_eq!(lit, ["src/lib.rs", "docs/a.md"]);
     }
@@ -1074,6 +1108,24 @@ mod tests {
         let city = city(&m).unwrap();
         assert_eq!((city.agents[0].at, city.agents[0].near.clone()), (None, vec!["src".to_string()]));
         assert_eq!(city.lit.iter().map(|l| l.label).collect::<Vec<_>>(), ["src/lib.rs"]);
+    }
+
+    /// An agent carries the call it runs now as the sidebar says it: its station (the dial's
+    /// glyph) and its line (the agent chip's label, `talk::call_line`); none once it ends.
+    #[test]
+    fn an_agent_carries_its_calls_station_and_the_sidebars_line() {
+        let mut m = task_in_app();
+        events(&mut m, vec![Event::TurnStarted, call("s", Station::Shell, "cargo test")]);
+        let shown = city(&m).unwrap();
+        let chat = m.chat(&Subject::Task(1)).unwrap();
+        assert_eq!(
+            (shown.agents[0].station, shown.agents[0].line.as_deref()),
+            (Some(Station::Shell), Some("cargo test"))
+        );
+        assert_eq!(shown.agents[0].line, chat.transcript.live_label().and_then(talk::call_line), "the chip's");
+        events(&mut m, vec![end("s")]);
+        let ended = city(&m).unwrap();
+        assert_eq!((ended.agents[0].station, ended.agents[0].line.as_deref()), (None, None));
     }
 
     /// An agent counts the sub-agents it runs: its `Agent`/`Task` calls not ended (a sub-agent's

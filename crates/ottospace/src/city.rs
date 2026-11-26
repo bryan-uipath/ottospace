@@ -96,6 +96,9 @@ const KEPT_PICTURES: usize = 2;
 /// An agent's icon's side and the gap between icons fanned side by side, in points; an icon
 /// moving to another file glides over this long.
 const ICON: f32 = 22.;
+/// The station's dot at an icon's corner, and the height of its call's line under it, in points.
+const STATION: f32 = 12.;
+const CAPTION: f32 = 16.;
 const FAN_GAP: f32 = 4.;
 const GLIDE: Duration = Duration::from_millis(280);
 /// The most sub-agents drawn under an agent's icon, each a square this wide, this far apart.
@@ -733,6 +736,9 @@ struct Floating {
     busy: bool,
     /// The sub-agents it runs: small squares under its icon (`SUBS` at most, then `+n`).
     subagents: usize,
+    /// The call it runs: its station's glyph at the icon's corner, its line (the sidebar's) under it.
+    station: Option<ottospace_core::activity::Station>,
+    line: Option<String>,
 }
 
 /// An agent's icon as a paint drew it: its centre, where it glides to and since when (window
@@ -750,6 +756,10 @@ struct Icon {
     fan: (usize, usize),
     pulsing: bool,
     subagents: usize,
+    /// Its call's station (its glyph drawn at its corner where it fits), and where its call's
+    /// line was drawn (never its words).
+    station: Option<ottospace_core::activity::Station>,
+    caption: Option<Bounds<Pixels>>,
 }
 
 /// A hovered box's beacon as drawn: whether a file's, whether lit; a file's beam (foot and end)
@@ -1173,6 +1183,7 @@ impl Drawn {
                 serde_json::json!({
                     "task": i.task, "rect": rect(i.rect), "cone": i.cone, "fan": [i.fan.0, i.fan.1], "hovered": hovered,
                     "pulsing": i.pulsing, "subagents": i.subagents,
+                    "station": i.station.map(|station| station.id()), "caption": i.caption.map(rect),
                 })
             })
             .collect();
@@ -1416,27 +1427,39 @@ impl Workspace {
             .filter_map(|agent| {
                 let at = placed(plan.as_deref(), &folder, agent.at, &agent.near);
                 let (busy, subagents) = (agent.busy, agent.subagents);
+                let (station, line) = (agent.station, agent.line.clone());
                 Some(match agent.who {
                     Who::Task(task) => {
                         let subject = ottospace_core::talk::Subject::Task(task);
                         let mono = badges.iter().find(|(of, _)| *of == subject)?.1.clone();
                         let title = self.model.tasks.live(task)?.title.clone();
                         let (key, colour) = (format!("task:{task}"), theme::identity(agent.colour));
-                        Floating { task: Some(task), key, colour, mono, title, at, busy, subagents }
+                        Floating { task: Some(task), key, colour, mono, title, at, busy, subagents, station, line }
                     }
                     // An agent CLI in a pane, by its process: its runner's glyph, no title of its own.
                     Who::Pane { pane, runner } => {
                         let spec = ottospace_core::runner::RunnerId::named(runner)?.spec();
                         let (key, colour) = (format!("pane:{pane}"), theme::task(Group::Running));
                         let (mono, title) = (spec.glyph.to_string(), spec.display.to_string());
-                        Floating { task: None, key, colour, mono, title, at, busy, subagents }
+                        Floating { task: None, key, colour, mono, title, at, busy, subagents, station, line }
                     }
                     // A session no task has: its runner's glyph, in the colour of work going on.
                     Who::Session { runner, id, title } => {
                         let spec = ottospace_core::runner::RunnerId::named(runner)?.spec();
                         let title = title.unwrap_or(spec.display).to_string();
                         let (key, colour) = (format!("session:{runner}:{id}"), theme::task(Group::Running));
-                        Floating { task: None, key, colour, mono: spec.glyph.to_string(), title, at, busy, subagents }
+                        Floating {
+                            task: None,
+                            key,
+                            colour,
+                            mono: spec.glyph.to_string(),
+                            title,
+                            at,
+                            busy,
+                            subagents,
+                            station,
+                            line,
+                        }
                     }
                 })
             })
@@ -2921,6 +2944,33 @@ fn agents(
             let at = point(shown.x + px(row / 2. + 3.), rect.bottom() + px(3. + SUB / 2. - 7.));
             let _ = more.paint(at, px(14.), window, cx);
         }
+        // The call it runs: its station's glyph on the icon's corner, in its colour, as on the dial.
+        let glyph = agent.station.and_then(|station| Some((station, crate::dial::glyph(station)?)));
+        let dot = Bounds::centered_at(point(rect.right(), rect.top()), gpui::size(px(STATION), px(STATION)));
+        // Inside the picture and clear of the hints, as the icon is: else not drawn.
+        let room = bounds.contains(&dot.origin) && bounds.contains(&dot.bottom_right()) && !dot.intersects(&clear);
+        if let Some((station, glyph)) = glyph.filter(|_| room) {
+            let hue = Hsla::from(rgb(theme::station(station)));
+            window.paint_quad(
+                fill(dot, rgb(theme::SELECTED)).corner_radii(px(STATION / 2.)).border_widths(px(1.)).border_color(hue),
+            );
+            let sign = shape(glyph, hue, STATION * 0.6, window);
+            let at = point(dot.center().x - sign.width / 2., dot.center().y - px(STATION * 0.4));
+            let _ = sign.paint(at, px(STATION * 0.8), window, cx);
+        }
+        // Its line, the sidebar's, under it: alone in its place (not fanned), clear of the hints.
+        let caption = agent.line.as_deref().filter(|_| mark.fan.1 == 1).and_then(|line| {
+            let text = shape(line, Hsla::from(rgb(theme::TEXT)).opacity(0.85), theme::TEXT_XS, window);
+            let (top, pad) = (rect.bottom() + below + px(4.), px(4.));
+            let size = gpui::size(text.width + pad * 2., px(CAPTION));
+            let at = Bounds { origin: point(shown.x - size.width / 2., top), size };
+            let inside = bounds.contains(&at.origin) && bounds.contains(&at.bottom_right());
+            (inside && !at.intersects(&clear)).then(|| {
+                window.paint_quad(fill(at, Hsla::from(rgb(theme::SELECTED)).opacity(0.85)).corner_radii(px(4.)));
+                let _ = text.paint(point(at.left() + pad, top + px(1.)), px(CAPTION - 2.), window, cx);
+                at
+            })
+        });
         let subagents = agent.subagents;
         icons.push(Icon {
             task,
@@ -2934,6 +2984,8 @@ fn agents(
             fan: mark.fan,
             pulsing: pulse.is_some(),
             subagents,
+            station: agent.station,
+            caption,
         });
     }
     (icons, gliding, pulsing)

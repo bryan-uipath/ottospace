@@ -2134,6 +2134,10 @@ export interface CityAgent {
   pulsing: boolean;
   /** The sub-agents it runs (a chat's; none known for a session read from its file). */
   subagents: number;
+  /** The station of the call it runs (`shell`, `files`), its glyph drawn at the icon where it fits; null with none. */
+  station: Station | null;
+  /** Where its call's line (the sidebar's) was drawn under it, never its words; null when not drawn. */
+  caption: Rect | null;
 }
 
 export interface CityView {

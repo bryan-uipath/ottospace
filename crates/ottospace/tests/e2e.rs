@@ -19607,7 +19607,10 @@ fn a_quick_read_holds_its_building_then_lets_go() {
         let city = &state["city"];
         let lit = city["lit"].as_array().is_some_and(|l| l.len() == 1);
         let after = running("files") == Some(json!(0)) && running("shell") == Some(json!(1));
-        (after && lit && city["agents"][0]["cone"] == json!(true)).then(Instant::now)
+        let agent = &city["agents"][0];
+        // Its call as the sidebar says it: the shell's glyph at its corner, its line drawn under it.
+        let call = agent["station"] == json!("shell") && agent["caption"].is_array();
+        (after && lit && call && agent["cone"] == json!(true)).then(Instant::now)
     };
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
     let at = otto.wait_for("held over its file, its read ended", held);
@@ -19620,6 +19623,51 @@ fn a_quick_read_holds_its_building_then_lets_go() {
     assert!(held_for < Duration::from_secs(4), "let go in time: {held_for:?}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
+}
+
+/// A `claude` at work in the checkout floats on the city behind a tab's see-through terminal
+/// (`city_behind`), as on an empty tab's.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_session_floats_on_the_city_behind_a_terminal() {
+    let root = support::temp(&format!("ottospace-e2e-city-behind-session-{}", std::process::id()));
+    let app = root.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    git(&app, &["init", "-q"]);
+    std::fs::write(app.join("src/main.rs"), "x".repeat(3000)).unwrap();
+    let app = app.canonicalize().unwrap();
+    // Made-up records: a prompt, then a shell line that runs on. Held by this test's pid.
+    let claude = root.join("sessions/claude");
+    let id = "77777777-7777-4777-8777-777777777777";
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&app));
+    std::fs::create_dir_all(&project).unwrap();
+    let user = json!({"type": "user", "message": {"role": "user", "content": "made-up prompt"},
+        "timestamp": "2026-11-13T09:00:00.000Z", "cwd": app, "sessionId": id});
+    let bash = json!({"type": "tool_use", "id": "toolu_b", "name": "Bash", "input": {"command": "cargo test"}});
+    let call = json!({"type": "assistant", "message": {"id": "msg_1", "content": [bash]},
+        "timestamp": "2026-11-13T09:00:01.000Z", "cwd": app, "sessionId": id});
+    std::fs::write(project.join(format!("{id}.jsonl")), format!("{user}\n{call}\n")).unwrap();
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    let live = json!({"pid": std::process::id(), "sessionId": id, "status": "busy"});
+    std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
+    let settings = json!({"repos": [app], "restore_layout": false, "terminal_opacity": 0.8,
+        "session_dirs": {"claude": [claude]}});
+    let home = user_folder("city-behind-session", &settings.to_string());
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "code_city,city_behind")];
+    let otto = Otto::launch_with("city-behind-session", &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    otto.wait_for("the session on the city behind the terminal", |o| {
+        let c = city(o);
+        let behind = c["behind"].as_array().is_some_and(|b| !b.is_empty());
+        let session = c["agents"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|a| a["task"].is_null() && a["station"] == json!("shell")));
+        (behind && session).then_some(())
+    });
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
 }
 
 /// A `claude` in the user's own terminal (no task's) at work in a checkout floats on the city of a
