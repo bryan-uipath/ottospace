@@ -1905,7 +1905,14 @@ const MAKERS: &[Make] = &[
     |g| Action::SettingsRead {
         text: g
             .rng
-            .pick(&["", "{}", "{", r#"{"tasks_view": "project", "default_agent": "codex"}"#, r#"{"x": 1}"#])
+            .pick(&[
+                "",
+                "{}",
+                "{",
+                r#"{"tasks_view": "project", "default_agent": "codex"}"#,
+                r#"{"x": 1}"#,
+                r#"{"terminal_opacity": 0.85, "explorer_opacity": 0.1}"#,
+            ])
             .into(),
         written: g.rng.coin(),
     },
@@ -3002,6 +3009,13 @@ fn check(m: &Model) -> Result<(), String> {
             crate::model::city::At::Pane(pane) => m.tab_of(pane),
         };
         ensure!(tab != Some(crate::model::HOME_TAB), "a city on Home");
+    }
+    // A pane lets a city show only over its tab's city behind, and never under 0.6; an app pane never.
+    for pane in &m.panes {
+        let opacity = m.pane_opacity(pane.id);
+        let behind = m.city_behind().is_some() && m.tab_of(pane.id) == Some(m.tabs[m.main_at()].id);
+        let app = matches!(pane.kind, Kind::App { .. });
+        ensure!(opacity == 1. || (behind && !app && opacity >= 0.6), "pane {} at {opacity}", pane.id);
     }
     {
         let apps: Vec<PaneId> = m

@@ -53,3 +53,25 @@ agent icons and a short pulse on a building when an agent edits it. Viewers next
 3. Default opacity? Pick: 1.0 (off) until turned on; suggested value 0.85.
 4. Dim or blur under text? Pick: dim (cheap); blur only if dim reads poorly.
 5. Only the tab on show, or every tab's tile in the zoomed-out grid? Pick: on show first.
+
+## Decided (2026-11-25)
+
+The owner: "see-through terminal and explorer panes … along with making the shadow behind
+shortcuts transparent". Built as the picks say, with these changes:
+
+- **Panes:** terminals and the File Explorer pane (`explorer_opacity`, in place of
+  `viewer_opacity`). File viewers stay opaque for now: their body, rows and scroll fades paint
+  their own background in several places, so they are a slice of their own.
+- **Flag:** `city_behind` (Experimental, off), with `code_city`. With it on and both settings at
+  1, nothing is drawn behind: today's look and cost.
+- **Dim:** one quad. Over the tab, the window's background is painted opaque except over the body
+  of a see-through pane, where it is painted at that pane's opacity: the dark background is the
+  dim. Headers, borders, gaps and other panes stay opaque; an empty pane draws its own city in
+  front, as before. Terminal cells on the default background already draw no background, so the
+  city shows under the text, not only in gaps.
+- **Both paths:** an image painted under the panes, or the live layer (`city_live_layer`), the
+  tab's layer placed under every other layer so an empty pane's city stays over it.
+- **Cost:** proven by `a_tabs_city_shows_behind_its_terminal_and_explorer_and_streams_render_nothing`:
+  4000 lines streamed over the city render no new picture.
+- **Hints:** their backing over the city peaks at about 0.5 (was 0.75), so the city dims there
+  instead of disappearing.

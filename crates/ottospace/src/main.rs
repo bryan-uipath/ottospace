@@ -4069,7 +4069,8 @@ impl Workspace {
         // Read for the Tasks section, a session's space, the Repos section's dots and a code city's agents.
         // A session's space on show lists them as Tasks does: its watch and the counts need them.
         let tasks = self.model.sidebar == Some(Section::Tasks) || self.model.shows_session();
-        let city = self.model.empty_places().into_iter().any(|at| self.model.city_at(at).is_some());
+        let city = self.model.empty_places().into_iter().any(|at| self.model.city_at(at).is_some())
+            || self.model.city_behind().is_some();
         let open = tasks || self.model.sidebar == Some(Section::Repos) || city;
         // The agent CLIs our panes run, by their processes alone: a city's agents, no setting
         // needed. Read only while a city is on show; told only when they change.
@@ -9930,6 +9931,8 @@ impl Render for Workspace {
         let (zoom, covered) = self.render_zoom(window, cx);
         // The main window's tab: the live tree, unless the keyboard is in a tab out's window.
         let tree = self.model.tree_at(self.model.main_at()).filter(|_| !covered).map(|root| self.render_node(root, cx));
+        // Its city behind its panes (`city_behind`), under the tree.
+        let behind = tree.as_ref().and_then(|_| self.render_city_behind(cx));
         // Only while the tab on show has no panes. Its lines are built once and kept: a frame
         // that moves nothing (a terminal printing in another tab) only paints them again.
         let keep_out = self.home.borrow().keep_out();
@@ -10053,6 +10056,7 @@ impl Render for Workspace {
                                                     .relative()
                                                     .overflow_hidden()
                                                     .children(home)
+                                                    .children(behind)
                                                     .children(tree)
                                                     .child(self.zoom_area())
                                                     .children(zoom),

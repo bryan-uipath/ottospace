@@ -45,10 +45,11 @@ pub enum Feature {
     DecisionSources,
     CityLiveLayer,
     Review,
+    CityBehind,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 16] = [
+pub const ALL: [Feature; 17] = [
     Feature::Marks,
     Feature::AppsSection,
     Feature::Transcripts,
@@ -65,6 +66,7 @@ pub const ALL: [Feature; 16] = [
     Feature::DecisionSources,
     Feature::CityLiveLayer,
     Feature::Review,
+    Feature::CityBehind,
 ];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
@@ -90,6 +92,7 @@ impl Feature {
             Feature::DecisionSources => "decision_sources",
             Feature::CityLiveLayer => "city_live_layer",
             Feature::Review => "review",
+            Feature::CityBehind => "city_behind",
         }
     }
 
@@ -110,7 +113,8 @@ impl Feature {
             | Feature::ZoomOut
             | Feature::DecisionSources
             | Feature::CityLiveLayer
-            | Feature::Review => Stage::Experimental,
+            | Feature::Review
+            | Feature::CityBehind => Stage::Experimental,
         }
     }
 
@@ -138,6 +142,7 @@ impl Feature {
             Feature::DecisionSources => "Decisions from any source",
             Feature::CityLiveLayer => "Code city on a live layer",
             Feature::Review => "Review a change",
+            Feature::CityBehind => "Code city behind panes",
         }
     }
 
@@ -188,6 +193,9 @@ impl Feature {
             Feature::Review => {
                 "A changed file's diff in the viewer: D on it in the explorer, ]c and [c between its hunks"
             }
+            Feature::CityBehind => {
+                "A tab's city drawn behind its panes, seen through terminals and explorers at terminal_opacity and explorer_opacity (with code_city)"
+            }
         }
     }
 
@@ -214,6 +222,7 @@ impl Feature {
             Feature::DecisionSources => "feature off: decision_sources",
             Feature::CityLiveLayer => "feature off: city_live_layer",
             Feature::Review => "feature off: review",
+            Feature::CityBehind => "feature off: city_behind",
         }
     }
 }
@@ -347,7 +356,8 @@ mod tests {
                 Feature::ZoomOut,
                 Feature::DecisionSources,
                 Feature::CityLiveLayer,
-                Feature::Review
+                Feature::Review,
+                Feature::CityBehind
             ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
@@ -366,10 +376,11 @@ mod tests {
                 .with(Feature::ZoomOut, true)
                 .with(Feature::DecisionSources, true)
                 .with(Feature::CityLiveLayer, true)
-                .with(Feature::Review, true),
+                .with(Feature::Review, true)
+                .with(Feature::CityBehind, true),
             Features::all()
         );
-        let list = " review,city_live_layer,decision_sources,zoom_out,terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " city_behind,review,city_live_layer,decision_sources,zoom_out,terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
@@ -485,7 +496,8 @@ mod tests {
                     ("zoom_out", false),
                     ("decision_sources", false),
                     ("city_live_layer", false),
-                    ("review", false)
+                    ("review", false),
+                    ("city_behind", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -510,7 +522,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out, decision_sources, city_live_layer, review"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out, decision_sources, city_live_layer, review, city_behind"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

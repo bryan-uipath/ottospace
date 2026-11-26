@@ -158,6 +158,7 @@ function replyWith(overlay: unknown): Record<string, unknown> {
       first_ms: 140, read_us: 6200, view: { yaw: 34, pitch: 52, zoom: 1, pan: [0, 0], lift: 0 }, grabbed: false, spin: { running: false, result: null },
       agents: [{ task: 1, rect: [618, 0, 22, 22], cone: true, fan: [0, 1], hovered: false, pulsing: false, subagents: 0 }],
       glimmer: { flash: 0, sweep: 0, found: 0 },
+      behind: [{ pane: 1, opacity: 0.85 }],
     },
     typing: {
       running: false,

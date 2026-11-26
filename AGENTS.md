@@ -265,7 +265,8 @@ Design note: `docs/ai/attention/plan.md`.
     picture's colours had), `first_ms` (the place laid out to its first picture painted),
     `read_us` (the last file list's read), `agents` (each agent's icon drawn: `task` (null: a session no
     task has), `rect`, `cone` (it shines on a building), `fan` `[k, n]`, `hovered`, `pulsing` (a call of it runs), `subagents` (the sub-agents it runs)), `glimmer` (the reads' flashes, searches' sweeps and
-    found files' lights playing now: `flash`, `sweep`, `found`, counts), `spin` (`running`, and the last
+    found files' lights playing now: `flash`, `sweep`, `found`, counts), `behind` (drawn behind its
+    tab's panes, `city_behind`: each pane that lets it show, `pane` and `opacity`; null in front), `spin` (`running`, and the last
     spin's `result`: `steps`, `done`, `frames`, each frame's time from the one before as `mean`, `p50`,
     `p95`, `p99`, `max`, `over_16`, `over_33` (ms), `repeats` (frames with no new picture since the
     frame before: no new image painted, or with `city_live_layer` no present on the live layer), a

@@ -636,6 +636,8 @@ struct Place {
     hovered_agent: Option<String>,
     /// Its agents' reads and searches playing (`glimmer`).
     glimmer: Glimmer,
+    /// Behind its tab's panes (`city_behind`): no names, no hints, no pointer.
+    behind: bool,
 }
 
 /// A read's flash, a search's sweep, and the files a search's result named, lit: this long each.
@@ -1342,6 +1344,7 @@ impl Workspace {
     /// place, is painted at once.
     pub(crate) fn render_city(&self, floor: Floor, at: At, lattice: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let Some(mut city) = self.city_for(at) else { return lattice };
+        let behind = self.model.city_behind().is_some_and(|(of, _)| of == at);
         let view = self.eased_view(at, city.view);
         let easing = self.city_ease.get().is_some_and(|(of, ..)| of == at);
         // Its camera moving: the user's drag of it that has moved, a reset easing back, or a
@@ -1408,7 +1411,8 @@ impl Workspace {
                 if easing {
                     window.request_animation_frame();
                 }
-                let bounds = area(floor_bounds, hints.borrow().hints_at(floor));
+                let hints = if behind { Bounds::default() } else { hints.borrow().hints_at(floor) };
+                let bounds = area(floor_bounds, hints);
                 let mut held = drawn.borrow_mut();
                 // Too small for a city: the place's whole floor, not the part under the hints.
                 let room = (f32::from(floor_bounds.size.width), f32::from(floor_bounds.size.height));
@@ -1430,6 +1434,7 @@ impl Workspace {
                     window.refresh();
                 }
                 (place.bounds, place.small, place.measured, place.scale) = (bounds, small, true, scale);
+                place.behind = behind;
                 // Its live layer under GPUI's view, on its rectangle; the window transparent there.
                 let id = window.window_handle().window_id();
                 let in_main = window.window_handle() == main;
@@ -1446,9 +1451,11 @@ impl Workspace {
                     window.set_background_appearance(gpui::WindowBackgroundAppearance::Opaque);
                 }
                 if live && !held.live_views.contains_key(&floor) {
+                    // The tab's own under every other: an empty pane's city over the city behind it.
+                    let bottom = floor == Floor::Main;
                     // SAFETY: this window's own view, alive while it draws.
                     let made = crate::ns_view(window)
-                        .and_then(|view| unsafe { ottospace_mac::live_layer::LiveLayer::below(view) });
+                        .and_then(|view| unsafe { ottospace_mac::live_layer::LiveLayer::below(view, bottom) });
                     if let Some(layer) = made {
                         held.live_views.insert(floor, layer);
                     }
@@ -1537,11 +1544,19 @@ impl Workspace {
             },
             // The hints as this frame laid them out.
             move |_, drawn: Shared, window, cx| {
-                with_asked_camera(&drawn, floor, || {
-                    paint(&drawn, floor, home.borrow().hints_at(floor), &floating, &glimpses, window, cx)
-                })
+                let hints = if behind { Bounds::default() } else { home.borrow().hints_at(floor) };
+                with_asked_camera(&drawn, floor, || paint(&drawn, floor, hints, &floating, &glimpses, window, cx))
             },
         );
+        // Behind panes it takes no mouse.
+        if behind {
+            let picture = div().absolute().size_full().child(picture.absolute().size_full());
+            return if shows {
+                picture.into_any_element()
+            } else {
+                div().size_full().child(lattice).child(picture).into_any_element()
+            };
+        }
         // A press on an agent's icon: the user's own goes to its task (`Model::city_agent_click`).
         let picture = div().absolute().size_full().child(picture.absolute().size_full()).on_mouse_down(
             gpui::MouseButton::Left,
@@ -1801,7 +1816,9 @@ impl Workspace {
         let id = window.window_handle().window_id();
         let found = {
             let drawn = self.city_drawn.borrow();
-            let over = |(_, place): &(&Floor, &Place)| place.window == Some(id) && place.bounds.contains(&position);
+            let over = |(_, place): &(&Floor, &Place)| {
+                !place.behind && place.window == Some(id) && place.bounds.contains(&position)
+            };
             drawn.places.iter().find(over).map(|(floor, _)| *floor)
         };
         let Some(floor) = found.filter(|floor| self.input == Origin::User && !self.over_hints(*floor, position)) else {
@@ -1826,7 +1843,8 @@ impl Workspace {
         let mut changed = false;
         for floor in floors {
             let Some(place) = drawn.places.get(&floor) else { continue };
-            let pointer = (user && place.window == Some(id) && place.bounds.contains(&at)).then_some(at);
+            let pointer =
+                (user && !place.behind && place.window == Some(id) && place.bounds.contains(&at)).then_some(at);
             // An icon over the sky is no box: its name comes and goes by the icon under the pointer.
             let icon = |at: Option<Point<Pixels>>| {
                 at.and_then(|at| place.icons.iter().rev().position(|icon| icon.rect.contains(&at)))
@@ -1894,6 +1912,13 @@ impl Workspace {
             serde_json::json!({ "yaw": v.yaw, "pitch": v.pitch, "zoom": v.zoom, "pan": v.pan, "lift": v.lift });
         snapshot["grabbed"] = self.model.camera_grabbed().into();
         snapshot["spin"] = serde_json::json!({ "running": self.city_spin.is_some(), "result": self.city_spun });
+        // Behind its tab's panes: each that lets it show, at its opacity.
+        let leaves = self.model.tree_at(self.model.main_at()).map(|tree| tree.leaves()).unwrap_or_default();
+        let behind = self.model.city_behind().filter(|(of, _)| of == at).map(|_| {
+            let open = leaves.iter().map(|id| (*id, self.model.pane_opacity(*id))).filter(|(_, o)| *o < 1.);
+            open.map(|(pane, opacity)| serde_json::json!({ "pane": pane, "opacity": opacity })).collect::<Vec<_>>()
+        });
+        snapshot["behind"] = behind.into();
         snapshot
     }
 
@@ -2165,35 +2190,37 @@ fn background_around(drawn: Shared) -> AnyElement {
         |_, _, _| (),
         move |bounds, _, window, _| {
             let holes: Vec<Bounds<Pixels>> = drawn.borrow().live_shown.values().copied().collect();
-            let colour = Hsla::from(rgb(theme::BACKGROUND));
-            // Bands between the holes' top and bottom edges; in each, the spans no hole covers.
-            let mut ys: Vec<Pixels> = holes.iter().flat_map(|h| [h.top(), h.bottom()]).collect();
-            ys.extend([bounds.top(), bounds.bottom()]);
-            ys.sort_by(|a, b| f32::from(*a).total_cmp(&f32::from(*b)));
-            ys.dedup();
-            for band in ys.windows(2) {
-                let (top, bottom) = (band[0].max(bounds.top()), band[1].min(bounds.bottom()));
-                if bottom <= top {
-                    continue;
-                }
-                let mut covered: Vec<(Pixels, Pixels)> = (holes.iter())
-                    .filter(|h| h.top() <= top && h.bottom() >= bottom)
-                    .map(|h| (h.left(), h.right()))
-                    .collect();
-                covered.sort_by(|a, b| f32::from(a.0).total_cmp(&f32::from(b.0)));
-                let mut x = bounds.left();
-                for (left, right) in covered.into_iter().chain([(bounds.right(), bounds.right())]) {
-                    if left > x {
-                        window.paint_quad(fill(Bounds::from_corners(point(x, top), point(left, bottom)), colour));
-                    }
-                    x = x.max(right);
-                }
-            }
+            paint_around(bounds, &holes, Hsla::from(rgb(theme::BACKGROUND)), window);
         },
     )
     .absolute()
     .size_full()
     .into_any_element()
+}
+
+/// `colour` over `bounds` but its `holes`.
+fn paint_around(bounds: Bounds<Pixels>, holes: &[Bounds<Pixels>], colour: Hsla, window: &mut Window) {
+    // Bands between the holes' top and bottom edges; in each, the spans no hole covers.
+    let mut ys: Vec<Pixels> = holes.iter().flat_map(|h| [h.top(), h.bottom()]).collect();
+    ys.extend([bounds.top(), bounds.bottom()]);
+    ys.sort_by(|a, b| f32::from(*a).total_cmp(&f32::from(*b)));
+    ys.dedup();
+    for band in ys.windows(2) {
+        let (top, bottom) = (band[0].max(bounds.top()), band[1].min(bounds.bottom()));
+        if bottom <= top {
+            continue;
+        }
+        let mut covered: Vec<(Pixels, Pixels)> =
+            (holes.iter()).filter(|h| h.top() <= top && h.bottom() >= bottom).map(|h| (h.left(), h.right())).collect();
+        covered.sort_by(|a, b| f32::from(a.0).total_cmp(&f32::from(b.0)));
+        let mut x = bounds.left();
+        for (left, right) in covered.into_iter().chain([(bounds.right(), bounds.right())]) {
+            if left > x {
+                window.paint_quad(fill(Bounds::from_corners(point(x, top), point(left, bottom)), colour));
+            }
+            x = x.max(right);
+        }
+    }
 }
 
 impl Workspace {
@@ -2202,6 +2229,7 @@ impl Workspace {
     pub(crate) fn city_places(&self) -> Vec<At> {
         let mut places = self.model.empty_places();
         places.extend(self.city_under.map(|(pane, _)| At::Pane(pane)).filter(|at| !places.contains(at)));
+        places.extend(self.model.city_behind().map(|(at, _)| at));
         places
     }
 
@@ -2210,8 +2238,41 @@ impl Workspace {
         let under = |pane| self.city_under.filter(|(of, _)| *of == pane).and_then(|_| self.model.city_under(pane));
         self.model.city_at(at).or_else(|| match at {
             At::Pane(pane) => under(pane),
-            At::Tab(_) => None,
+            At::Tab(_) => self.model.city_behind().filter(|(of, _)| *of == at).map(|(_, city)| city),
         })
+    }
+
+    /// The city behind the main window's tab's panes (`city_behind`), and over it the window's
+    /// background: opaque, but over the body of a pane that lets the city show at that pane's
+    /// opacity (one quad: the dark background is the dim), and open over another place's live layer.
+    pub(crate) fn render_city_behind(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (at, _) = self.model.city_behind()?;
+        let leaves = self.model.tree_at(self.model.main_at())?.leaves();
+        let city = self.render_city(Floor::Main, at, div().into_any_element(), cx);
+        // Each body's bounds as this frame lays it out (set before this paints).
+        let open: Vec<(Rc<std::cell::Cell<Bounds<Pixels>>>, f32)> = (leaves.into_iter())
+            .map(|id| (id, self.model.pane_opacity(id)))
+            .filter(|(_, opacity)| *opacity < 1.)
+            .filter_map(|(id, opacity)| Some((self.cells.get(&id)?.clone(), opacity)))
+            .collect();
+        let drawn = self.city_drawn.clone();
+        let over = canvas(
+            |_, _, _| (),
+            move |bounds, _, window, _| {
+                let colour = Hsla::from(rgb(theme::BACKGROUND));
+                let bodies: Vec<(Bounds<Pixels>, f32)> =
+                    open.iter().map(|(at, opacity)| (at.get(), *opacity)).collect();
+                let drawn = drawn.borrow();
+                let others = (drawn.live_shown.iter()).filter(|(floor, _)| **floor != Floor::Main).map(|(_, b)| *b);
+                let holes: Vec<Bounds<Pixels>> = bodies.iter().map(|(b, _)| *b).chain(others).collect();
+                drop(drawn);
+                paint_around(bounds, &holes, colour, window);
+                for (body, opacity) in bodies {
+                    window.paint_quad(fill(body, colour.opacity(opacity)));
+                }
+            },
+        );
+        Some(div().absolute().size_full().child(city).child(over.absolute().size_full()).into_any_element())
     }
 
     /// The main window's background while a live layer made it transparent (`city_live_layer`):
@@ -2309,7 +2370,10 @@ fn paint(
     let kept: Vec<usize> = place.names.drain(..).map(|(key, ..)| key).collect();
     (place.beacon, place.window) = (None, Some(window.window_handle().window_id()));
     place.lit_beams.clear();
+    let behind = place.behind;
     let (bounds, hovered, pointer) = (place.bounds, place.hovered, place.pointer);
+    // Behind panes the pointer is theirs.
+    let (hovered, pointer) = if behind { (None, None) } else { (hovered, pointer) };
     let asked_view = place.asked.as_ref().map(|key| key.view);
     let was = std::mem::take(&mut place.icons);
     let mut glimmer = std::mem::take(&mut place.glimmer);
@@ -2399,6 +2463,8 @@ fn paint(
     // A live picture drawn over with a camera that moved on (`with_asked_camera`): its names are
     // where its own camera put them, so none until the next picture, as while the camera moves.
     let moved = made.live && asked_view.is_some_and(|view| view != made.key.view);
+    // Behind panes, no names: text under text is noise.
+    let moved = moved || behind;
     let mut marks: Vec<(&Mark, [f32; 4])> = (made.marks.iter())
         .filter(|_| !moved)
         .filter(|m| !m.text.contains(char::is_control))

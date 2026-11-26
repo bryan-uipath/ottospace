@@ -4539,6 +4539,9 @@ pub struct Model {
     /// How long an adopted session is quiet before its task needs the user. 0: never.
     #[serde(skip)]
     session_quiet_ms: u64,
+    /// `terminal_opacity` and `explorer_opacity`, kept in range (`Settings::opacity`).
+    #[serde(skip)]
+    opacity: (f32, f32),
     /// Sessions the user hid. Kept between runs only with `terminal_tasks` (its own file).
     #[serde(skip)]
     hidden: Vec<sessions::Hidden>,
@@ -4905,6 +4908,7 @@ impl Default for Model {
             pane_agents: Vec::new(),
             in_panes: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
+            opacity: (1., 1.),
             hidden: Vec::new(),
             cards_live: Vec::new(),
             hidden_peek: false,
@@ -11234,6 +11238,7 @@ impl Model {
         self.act(Action::TasksView { view: settings.tasks_view.unwrap_or_default() }, effects);
         self.act(Action::SessionsRange { range: settings.sessions_range.unwrap_or_default() }, effects);
         self.act(Action::SessionQuiet { ms: settings.quiet_ms() }, effects);
+        self.opacity = settings.opacity();
         // For app panes from now: a level set is kept.
         self.agent.default = settings.agent_mode.unwrap_or(crate::agent_mode::Level::Act);
         // The models are read only at start (`agent_models`).
