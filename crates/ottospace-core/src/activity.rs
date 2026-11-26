@@ -44,6 +44,29 @@ impl Station {
         Station::Other,
     ];
 
+    /// The station a session's reader names (`id`, any case: `shell`, `files`).
+    pub fn named(name: &str) -> Option<Station> {
+        Station::DIAL.into_iter().find(|station| station.id().eq_ignore_ascii_case(name))
+    }
+
+    /// Its id as the state and a session's reader write it (serde's: `shell`, `mcp`, `other`).
+    pub fn id(self) -> &'static str {
+        match self {
+            Station::You => "you",
+            Station::Model => "model",
+            Station::Memory => "memory",
+            Station::Files => "files",
+            Station::Shell => "shell",
+            Station::Network => "network",
+            Station::Mcp => "mcp",
+            Station::Apps => "apps",
+            Station::Agents => "agents",
+            Station::Skills => "skills",
+            Station::Hooks => "hooks",
+            Station::Other => "other",
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             Station::You => "You",
@@ -187,6 +210,11 @@ impl Activity {
     /// The id of the newest call on `station` that still runs.
     pub(crate) fn running_on(&self, station: Station) -> Option<&str> {
         self.running.iter().rev().find(|call| call.station == station).map(|call| call.id.as_str())
+    }
+
+    /// The station of the newest call that still runs.
+    pub(crate) fn running_station(&self) -> Option<Station> {
+        self.running.last().map(|call| call.station)
     }
 
     /// The label of the newest call that still runs.
@@ -559,6 +587,15 @@ impl Dial {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A station's id is its serde name, and names it back (a session's reader writes it).
+    #[test]
+    fn a_stations_id_is_its_serde_name_and_names_it() {
+        for station in Station::DIAL {
+            assert_eq!(serde_json::to_value(station).unwrap(), station.id());
+            assert_eq!(Station::named(station.id()), Some(station));
+        }
+    }
 
     /// Why, what is done, as it is then, when, and the lines: now, turns, the timer.
     type Case = (&'static str, Box<dyn Fn(&mut Activity)>, Is<'static>, u64, [Option<&'static str>; 3]);

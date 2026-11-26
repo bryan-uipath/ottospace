@@ -2689,6 +2689,8 @@ function cityAgent(value: unknown, at: string): CityAgent {
     hovered: bool(o.hovered, `${at}.hovered`),
     pulsing: bool(o.pulsing, `${at}.pulsing`),
     subagents: num(o.subagents, `${at}.subagents`),
+    station: orNull(str)(o.station, `${at}.station`),
+    caption: orNull(rect)(o.caption, `${at}.caption`),
   };
 }
 

@@ -646,6 +646,11 @@ impl Transcript {
         self.activity.pulse(&self.is())
     }
 
+    /// The station of its agent's newest call that runs now.
+    pub fn calling_station(&self) -> Option<Station> {
+        self.activity.running_station()
+    }
+
     /// A call of its agent runs now.
     pub fn calling(&self) -> bool {
         self.activity.running_label().is_some()

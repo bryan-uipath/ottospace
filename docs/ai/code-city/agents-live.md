@@ -52,7 +52,15 @@ a watched session never produces a glimpse, even for a `Read`.
    it is what the call is. That line is the sidebar's, never its own wording: a task's from
    `talk::chip_line` (the agent chip, "Working · part1/f49.rs"), a session's from `Found::doing`
    (the Sessions row, "shell · cargo test"), carried on `Agent` from `city_of`. Held as slice 3
-   holds; agent text, drawn only, never in the state.
+   holds; agent text, drawn only, never in the state. Built: the glyph and the line (4a); the
+   beam and the antenna to come.
+4b. **Terminal sessions as live as chats.** A session read from its file gives the city a
+   snapshot per poll (`Found`: the running call's station and label): no reads or searches
+   glimpsed, no hold, no named path; a 50 ms read between polls is never seen. Its file has every
+   call, input and result, as a chat's stream does (`city-replay` reads it through a chat's path).
+   For each session at work in a checkout whose city is on show, follow its file (as a watch
+   does, `conversation::Watch`, with each call's `detail` passed, not empty) into a transcript of
+   its own, and build its agent, lit files, glimpses and holds from that, as for a chat.
 5. **More is recognised.** `jq`, `diff` as reads; `p=x` assignments expanded in later words; `$(…)`
    read as commands; a path operand of any program (`duped report .`) a sweep of that place. The
    watch path passes the call's `detail`.

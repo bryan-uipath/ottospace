@@ -49,6 +49,11 @@ const LIGHTS: [(Station, &str); 9] = [
     (Station::Hooks, "↪"),
 ];
 
+/// A tool station's glyph, as its light shows it (the city's icon shows its agent's call by it).
+pub(crate) fn glyph(station: Station) -> Option<&'static str> {
+    LIGHTS.iter().find(|(of, _)| *of == station).map(|(_, glyph)| *glyph)
+}
+
 fn at(centre: Point<Pixels>, r: f32, angle: f32) -> Point<Pixels> {
     centre + point(px(r * angle.sin()), px(-r * angle.cos()))
 }
