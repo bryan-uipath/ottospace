@@ -19364,12 +19364,11 @@ fn a_citys_top_folders_are_named_on_their_plinths_and_turn_with_it() {
             "modifiers": ["alt"], "as": "user"});
         let reply = otto.call(turn)["city"].clone();
         assert!(!plinths(&reply).is_empty(), "{name}: none hidden while it turns: {reply}");
-        let renders = reply["renders"].as_u64();
-        let turned = otto.wait_for("the turn's picture", |o| {
-            Some(city(o)).filter(|c| c["renders"].as_u64() > renders && c["view"] != rest["view"])
+        // The turned picture's names: until it is made, the one shown still names the old places.
+        let turned = otto.wait_for(&format!("{name}: names moved with the camera"), |o| {
+            Some(city(o)).filter(|c| c["view"] != rest["view"] && plinths(c) != plinths(&rest))
         });
         assert!(!plinths(&turned).is_empty(), "{name}: named through the turn: {turned}");
-        assert_ne!(plinths(&turned), plinths(&rest), "{name}: moved with the camera");
         drop(otto);
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&home);

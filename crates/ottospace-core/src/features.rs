@@ -95,6 +95,7 @@ impl Feature {
             Feature::CityLiveLayer => "city_live_layer",
             Feature::Review => "review",
             Feature::CityBehind => "city_behind",
+            Feature::CityWallNames => "city_wall_names",
         }
     }
 
@@ -230,6 +231,7 @@ impl Feature {
             Feature::CityLiveLayer => "feature off: city_live_layer",
             Feature::Review => "feature off: review",
             Feature::CityBehind => "feature off: city_behind",
+            Feature::CityWallNames => "feature off: city_wall_names",
         }
     }
 }
