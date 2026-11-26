@@ -247,6 +247,44 @@ impl Model {
         self.city_of(At::Pane(pane))
     }
 
+    /// The main window's tab whose city is drawn behind its panes (`city_behind`): one with
+    /// panes, a folder, and a pane that lets the city show (`see_through` under 1).
+    pub fn behind_tab(&self) -> Option<u32> {
+        let on = self.features.on(Feature::CityBehind) && self.features.on(Feature::CodeCity);
+        let tree = self.tree_at(self.main_at()).filter(|_| on)?;
+        let tab = self.tabs.get(self.main_at())?.id;
+        self.empty_folder(At::Tab(tab))?;
+        tree.leaves().into_iter().any(|id| self.see_through(id) < 1.).then_some(tab)
+    }
+
+    /// The opacity a pane's kind asks for over a city: a terminal's and an explorer's as set,
+    /// every other 1 (an app pane is another app's window: nothing of ours is under it).
+    fn see_through(&self, id: PaneId) -> f32 {
+        match self.pane(id).map(|pane| &pane.kind) {
+            Some(crate::Kind::Terminal) => self.opacity.0,
+            Some(crate::Kind::Explorer { .. }) => self.opacity.1,
+            _ => 1.,
+        }
+    }
+
+    /// The city behind the main window's tab's panes, as its empty tab would draw it, and where.
+    pub fn city_behind(&self) -> Option<(At, City<'_>)> {
+        let at = At::Tab(self.behind_tab()?);
+        Some((at, self.city_of(at)?))
+    }
+
+    /// The panes of the tab whose city is behind them that let it show, with their opacity.
+    pub fn see_through_panes(&self) -> Vec<(PaneId, f32)> {
+        let Some(tree) = self.behind_tab().and_then(|_| self.tree_at(self.main_at())) else { return Vec::new() };
+        tree.leaves().into_iter().map(|id| (id, self.see_through(id))).filter(|(_, o)| *o < 1.).collect()
+    }
+
+    /// How opaque pane `id`'s background is: under 1 only over the city behind its tab.
+    pub fn pane_opacity(&self, id: PaneId) -> f32 {
+        let behind = self.behind_tab().is_some_and(|tab| self.tab_of(id) == Some(tab));
+        if behind { self.see_through(id) } else { 1. }
+    }
+
     fn city_of(&self, at: At) -> Option<City<'_>> {
         if !self.features.on(Feature::CodeCity) {
             return None;
@@ -471,7 +509,8 @@ impl Model {
             At::Tab(id) => tabs.contains(id),
             At::Pane(id) => panes.contains(id),
         });
-        for other in self.empty_places().into_iter().filter(|other| *other != at) {
+        let behind = self.behind_tab().map(At::Tab);
+        for other in self.empty_places().into_iter().chain(behind).filter(|other| *other != at) {
             if self.camera_of(other).as_deref() == Some(key.as_str()) {
                 let shown = self.city_view(other);
                 self.cameras.places.entry((other, key.clone())).or_insert(shown);
@@ -1310,6 +1349,46 @@ src/main.rs:9:loop
         let pane = m.focused.unwrap();
         assert!(m.city_at(At::Pane(pane)).is_none());
         assert_eq!(m.city_under(pane).map(|city| city.dir.to_string()), dir);
+    }
+
+    /// A tab's city behind its panes (`city_behind`): only while a terminal or an explorer in it
+    /// lets it show; its tab's camera; the other panes, and every pane with none behind, opaque.
+    #[test]
+    fn a_tabs_city_is_behind_its_panes_only_while_one_lets_it_show() {
+        let mut m = task_in_app();
+        let tab = m.tabs[m.main_at()].id;
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Terminal });
+        let terminal = m.focused.unwrap();
+        m.update(Action::Split { axis: Axis::Right, kind: Kind::Explorer { root: "/code/app".into() } });
+        let explorer = m.focused.unwrap();
+        m.update(Action::Split { axis: Axis::Down, kind: Kind::Empty });
+        let empty = m.focused.unwrap();
+        let settings = |m: &mut Model, text: &str| {
+            m.update(Action::SettingsRead { text: text.into(), written: true }.sent_by(Origin::System))
+        };
+        let opacities = |m: &Model| [terminal, explorer, empty].map(|pane| m.pane_opacity(pane));
+        // Opaque, as by default: nothing behind.
+        assert!(m.city_behind().is_none());
+        assert_eq!(opacities(&m), [1., 1., 1.]);
+        settings(&mut m, r#"{"terminal_opacity": 0.85, "explorer_opacity": 0.2}"#);
+        let (at, city) = m.city_behind().unwrap();
+        assert_eq!((at, city.dir), (At::Tab(tab), "/code/app"));
+        assert_eq!(city.view, m.city_view(At::Tab(tab)), "the tab's own camera");
+        assert_eq!(opacities(&m), [0.85, 0.6, 1.], "kept in range; an empty pane draws its own city");
+        assert_eq!(m.see_through_panes(), [(terminal, 0.85), (explorer, 0.6)]);
+        // The empty pane's city turns; the one behind stays where it was.
+        let behind = m.city_view(At::Tab(tab));
+        m.update(Action::CityCamera { at: At::Pane(empty), step: CameraStep::Orbit { yaw: 30., pitch: 0. } });
+        assert!(m.city_view(At::Pane(empty)) != behind);
+        assert_eq!(m.city_view(At::Tab(tab)), behind);
+        // Only the explorer lets it show: still behind.
+        settings(&mut m, r#"{"explorer_opacity": 0.9}"#);
+        assert_eq!(opacities(&m), [1., 0.9, 1.]);
+        assert!(m.city_behind().is_some());
+        // The flag off: none, all opaque.
+        m.update(Action::SetFeatures { features: m.features.with(Feature::CityBehind, false) }.sent_by(Origin::System));
+        assert!(m.city_behind().is_none());
+        assert_eq!(opacities(&m), [1., 1., 1.]);
     }
 
     /// A spin is a full turn, in motion all the way (half-size pictures, as a drag), and leaves

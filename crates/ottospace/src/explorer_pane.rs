@@ -414,7 +414,8 @@ impl Workspace {
             .size_full()
             .flex()
             .flex_col()
-            .bg(rgb(theme::BACKGROUND))
+            // Under 1, the city behind its tab shows through (`city_behind`).
+            .when(self.model.pane_opacity(id) == 1., |d| d.bg(rgb(theme::BACKGROUND)))
             .child(header)
             .child(body)
             .into_any_element()

@@ -1,0 +1,22 @@
+# A tab's city behind its panes (`city_behind`), painted as an image (no live layer): a terminal at
+# `terminal_opacity` 0.85 and an explorer at `explorer_opacity` 0.85, the city dimmed
+# under both; at 0.6 (the floor); then opaque (1.0) as today.
+{"env":{"OTTOSPACE_FEATURES":"code_city,city_behind"}}
+{"write":"home/settings.json","text":"{\"terminal_opacity\": 0.85, \"explorer_opacity\": 0.85}"}
+{"tree":"repos/app","files":1500}
+{"cmd":"repo_add","path":"{ROOT}/repos/app"}
+{"until":"repos_bar.0"}
+{"cmd":"open_repo","path":"{ROOT}/repos/app"}
+{"cmd":"type","pane":1,"text":"clear; for i in 1 2 3 4 5 6; do printf 'made-up line %s \\033[1;97mbright bold\\033[0m \\033[32mgreen\\033[0m \\033[44;97m blue cells \\033[0m\\n' $i; done; printf 'done\\n'\r"}
+{"cmd":"wait","pane":1,"pattern":"^done$"}
+{"cmd":"key","keys":"cmd-shift-x","as":"user"}
+{"until":"explorers.2.rows","exists":true}
+{"settle":3000}
+{"shot":"over-85"}
+{"write":"home/settings.json","text":"{\"repos\": [\"{ROOT}/repos/app\"], \"terminal_opacity\": 0.6, \"explorer_opacity\": 0.6}"}
+{"settle":1500}
+{"shot":"over-60"}
+{"write":"home/settings.json","text":"{\"repos\": [\"{ROOT}/repos/app\"], \"terminal_opacity\": 1, \"explorer_opacity\": 1}"}
+{"until":"city","is":null}
+{"settle":800}
+{"shot":"opaque"}

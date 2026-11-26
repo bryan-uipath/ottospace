@@ -18788,6 +18788,79 @@ fn a_city_rises_once_and_at_once_under_reduce_motion() {
 /// opens a terminal in its checkout, closed, the tab draws that checkout's city (and a worktree's
 /// row its worktree's). An empty pane there draws it too; two empty panes of one size share one
 /// picture, and the files are read once for both; a pane too small for a city keeps the lattice.
+/// A tab's city behind its panes (`city_behind`), as an image and on a live layer: seen through a
+/// terminal and an explorer at their opacities, unnamed, taking no pointer; a terminal streaming
+/// over it asks for no new picture; at opacity 1, none behind.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_tabs_city_shows_behind_its_terminal_and_explorer_and_streams_render_nothing() {
+    for features in ["code_city,city_behind", "code_city,city_behind,city_live_layer"] {
+        let root = support::temp(&format!("ottospace-e2e-city-behind-{}", std::process::id()));
+        let app = root.join("app");
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        git(&app, &["init", "-q"]);
+        for i in 0..40 {
+            std::fs::write(app.join(format!("src/f{i}.rs")), "x".repeat(200 + i * 50)).unwrap();
+        }
+        git(&app, &["add", "-A"]);
+        git(&app, &["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "files"]);
+        let app = app.canonicalize().unwrap().to_string_lossy().into_owned();
+        let settings = |terminal: f64, explorer: f64| {
+            json!({"repos": [app], "restore_layout": false, "terminal_opacity": terminal, "explorer_opacity": explorer})
+                .to_string()
+        };
+        let home = user_folder("city-behind", &settings(0.85, 0.7));
+        let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", features)];
+        let otto = Otto::launch_with("city-behind", &env);
+        let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+        let opacities = |c: &Value| {
+            let behind = c["behind"].as_array().cloned().unwrap_or_default();
+            behind
+                .iter()
+                .map(|b| (b["pane"].as_u64(), (b["opacity"].as_f64().unwrap_or(0.) * 100.).round()))
+                .collect::<Vec<_>>()
+        };
+        otto.call(json!({"cmd": "open_repo", "path": app}));
+        let shown = otto.wait_for("the city behind the terminal", |o| {
+            Some(city(o))
+                .filter(|c| c["on"] == json!("tab") && !c["picture"].is_null() && c["paints"].as_u64() > Some(0))
+        });
+        assert_eq!(opacities(&shown), [(Some(1), 85.)], "{features}: {shown}");
+        assert_eq!(shown["names"], json!([]), "{features}: no names behind panes");
+        // A pointer over a building behind the terminal is the terminal's: no hover, no zoom.
+        let spot = otto.wait_for("a building", |o| Some(city(o)["spots"]["file"].clone()).filter(|s| !s.is_null()));
+        let (x, y) = (spot[0].as_f64().unwrap(), spot[1].as_f64().unwrap());
+        otto.call(json!({"cmd": "mouse", "action": "move", "x": x, "y": y, "as": "user"}));
+        assert_eq!(city(&otto)["hovered"], Value::Null, "{features}");
+        let view = city(&otto)["view"].clone();
+        otto.call(json!({"cmd": "mouse", "action": "wheel", "x": x, "y": y, "dx": 0, "dy": 3, "as": "user"}));
+        assert_eq!(city(&otto)["view"], view, "{features}: the wheel there turns no camera");
+        // A terminal streaming over it: painted again, never rendered again.
+        // At rest first: its rise and levels of detail done.
+        let renders = otto.wait_for("the city at rest", |o| {
+            let before = city(o)["renders"].as_u64();
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            Some(before).filter(|before| *before == city(o)["renders"].as_u64())
+        });
+        otto.call(
+            json!({"cmd": "type", "pane": 1, "text": "for i in $(seq 1 4000); do echo line $i; done; echo streamed\r"}),
+        );
+        otto.call(json!({"cmd": "wait", "pane": 1, "pattern": "^streamed$", "timeout_ms": 40000}));
+        std::thread::sleep(std::time::Duration::from_millis(500));
+        assert_eq!(city(&otto)["renders"].as_u64(), renders, "{features}: a terminal's output renders no picture");
+        // An explorer beside it lets it show too, at its own opacity.
+        otto.user_key("cmd-shift-x");
+        let both = otto.wait_for("an explorer over it", |o| Some(city(o)).filter(|c| opacities(c).len() == 2));
+        assert_eq!(opacities(&both), [(Some(1), 85.), (Some(2), 70.)], "{features}");
+        // Opaque: none behind, as before the flag.
+        std::fs::write(home.join("settings.json"), settings(1., 1.)).unwrap();
+        otto.wait_for("no city behind", |o| Some(()).filter(|_| city(o).is_null()));
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
 /// Home has no folder: no city.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]

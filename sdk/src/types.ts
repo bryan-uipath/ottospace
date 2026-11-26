@@ -188,6 +188,7 @@ export type Feature =
   | "code_city"
   | "city_live_layer"
   | "review"
+  | "city_behind"
   | "session_waits"
   | "projects"
   | "terminal_tasks"
@@ -2039,6 +2040,13 @@ export interface CityDrawn {
   agents: CityAgent[];
   /** The reads' flashes, searches' sweeps and found files' lights playing now, by count. */
   glimmer: CityGlimmer | null;
+  /** Drawn behind its tab's panes (`city_behind`): each pane that lets it show, at its opacity. Null: in front. */
+  behind: CityBehind[] | null;
+}
+
+export interface CityBehind {
+  pane: PaneId;
+  opacity: number;
 }
 
 export interface CitySpin {

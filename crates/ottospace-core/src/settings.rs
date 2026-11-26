@@ -217,6 +217,12 @@ pub struct Settings {
     /// (`city_filter`).
     #[serde(default)]
     pub city_exclude: Option<std::collections::BTreeMap<String, Vec<String>>>,
+    /// How opaque a terminal's and an explorer's background are over their tab's city
+    /// (`city_behind`): 0.6 to 1 (`opacity`). Default: 1, no city behind.
+    #[serde(default)]
+    pub terminal_opacity: Option<f32>,
+    #[serde(default)]
+    pub explorer_opacity: Option<f32>,
     /// Feature flags by name, e.g. `{ "marks": true }`: see `features`. One not named keeps its default.
     #[serde(default)]
     pub features: std::collections::BTreeMap<String, bool>,
@@ -263,6 +269,9 @@ pub enum NotifyFor {
     All,
     Links,
 }
+
+/// How opaque a pane's background may be over the city behind its tab.
+pub const OPACITY: std::ops::RangeInclusive<f32> = 0.6..=1.;
 
 /// The default capture key. Not ⌃⌥Space: macOS gives that to "Select next source in Input menu".
 pub const CAPTURE_KEY: &str = "ctrl-alt-cmd-space";
@@ -533,6 +542,14 @@ impl Settings {
         self.calendar_workday.as_deref().and_then(crate::calendar::Workday::parse).unwrap_or_default()
     }
 
+    /// `terminal_opacity` and `explorer_opacity`, each kept in `OPACITY` (below it text loses
+    /// contrast on a lit city); not a number, or none: 1.
+    pub fn opacity(&self) -> (f32, f32) {
+        let kept =
+            |o: Option<f32>| o.filter(|o| o.is_finite()).map_or(1., |o| o.clamp(*OPACITY.start(), *OPACITY.end()));
+        (kept(self.terminal_opacity), kept(self.explorer_opacity))
+    }
+
     /// How long an adopted session is quiet before its task needs the user, in milliseconds:
     /// `session_quiet_minutes`, else 3 minutes. 0: never.
     pub fn quiet_ms(&self) -> u64 {
@@ -713,6 +730,9 @@ fn restart_keys(started: &Settings, now: &Settings) -> Vec<&'static str> {
         city_folder_colors: _,
         // The code city reads it for each read of a checkout.
         city_exclude: _,
+        // Told to the core again on each good read.
+        terminal_opacity: _,
+        explorer_opacity: _,
         // Told to the core again on each good read, as Features… writes them.
         features: _,
         paste_confirm: _,
@@ -1039,6 +1059,16 @@ mod tests {
             assert_eq!((up.cell_pixels(advance), down.cell_pixels(advance)), want, "{advance}");
         }
         assert!(Settings::parse(r#"{ "terminal": { "cell_width": "round" } }"#).is_err());
+    }
+
+    #[test]
+    fn pane_opacity_is_kept_between_six_tenths_and_one() {
+        let opacity = |text: &str| Settings::parse(text).unwrap().opacity();
+        assert_eq!(opacity("{}"), (1., 1.));
+        assert_eq!(opacity(r#"{ "terminal_opacity": 0.85, "explorer_opacity": 0.7 }"#), (0.85, 0.7));
+        assert_eq!(opacity(r#"{ "terminal_opacity": 0.1, "explorer_opacity": 4 }"#), (0.6, 1.));
+        let nan = Settings { terminal_opacity: Some(f32::NAN), ..Settings::default() };
+        assert_eq!(nan.opacity(), (1., 1.));
     }
 
     #[test]
@@ -1446,7 +1476,7 @@ mod tests {
             wrong,
             [
                 "features: \"apps_section\" must be true or false",
-                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out, decision_sources, city_live_layer, review"
+                "features: \"tabs\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out, decision_sources, city_live_layer, review, city_behind"
             ]
         );
         assert!(Settings::parse(r#"{"features": {"tabs": true}}"#).unwrap_err().contains("marks, apps_section"));
@@ -1470,7 +1500,8 @@ mod tests {
             .with(crate::features::Feature::ZoomOut, false)
             .with(crate::features::Feature::DecisionSources, false)
             .with(crate::features::Feature::CityLiveLayer, false)
-            .with(crate::features::Feature::Review, false);
+            .with(crate::features::Feature::Review, false)
+            .with(crate::features::Feature::CityBehind, false);
         assert_eq!(Settings::read(&set).0.features(), both);
         assert_eq!(with_feature("", "marks", false).unwrap(), "{\n  \"features\": {\n    \"marks\": false\n  }\n}\n");
         assert!(with_feature(r#"{"features": true}"#, "marks", true).unwrap_err().contains("not an object"));
