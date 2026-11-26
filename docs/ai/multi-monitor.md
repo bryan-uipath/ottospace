@@ -14,7 +14,8 @@ experiments table is still the list of things to measure) for the model and the 
 between windows, unplug and replug, behind `multi_monitor`. As built, and differing from below by
 the owner's later word: a display plugged in again **takes back** the tab an unplug folded in
 (unless the main window shows it then; the user's own fold in clears that); with two displays a
-second fold out swaps; a tab holding an app pane stays in the main window; the second window's
+second fold out swaps; a tab holding an app pane folds out too (§3's live window, placed over
+its pane in the window out; parked at the one global spot until §3's per-display parking); the second window's
 drawer and the focus arrows across displays wait (slices 4 and 6), and so does `layout.json`
 (a tab out folds in at the next start); a workspace's only tab folded out leaves an empty
 stand-in tab of its workspace in the main window, removed at the fold in if still empty and not

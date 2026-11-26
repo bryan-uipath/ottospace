@@ -17615,6 +17615,31 @@ fn the_only_tab_folded_out_leaves_an_empty_tab_until_it_folds_back_in() {
     assert_eq!(state["state"]["tabs"].as_array().map(Vec::len), Some(count), "{state}");
 }
 
+/// A tab with an app pane folds out like any other: its window out draws the pane, and the
+/// keyboard goes with it.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_tab_with_an_app_pane_folds_out() {
+    let otto = Otto::launch_with("tab-out-app", &[("OTTOSPACE_FEATURES", "multi_monitor")]);
+    let main = json!({"uid": "main", "frame": [0, 0, 1728, 1117]});
+    let other = json!({"uid": "other", "frame": [1728, 0, 1920, 1080], "scale": 1});
+    otto.call(json!({"cmd": "displays_set", "displays": [main, other], "main": "main"}));
+    otto.call(json!({"cmd": "split"}));
+    otto.call(json!({"cmd": "new_tab"}));
+    let state = otto.call(json!({"cmd": "app_fixture", "name": "Mail", "user": true}));
+    let tab = state["state"]["tabs"][1]["id"].as_u64().expect("the app's tab");
+    let pane = state["state"]["focused"].as_u64().expect("the app pane");
+    let state = otto.call(json!({"cmd": "key", "keys": "cmd-shift-o", "as": "user"}));
+    assert_eq!(state["out"], json!([{"tab": tab, "display": 1}]), "{state}");
+    assert_eq!(state["windows"][1]["key"], json!(true), "{state}");
+    // Its window out lays the app pane out.
+    otto.wait_for("the app pane drawn in the window out", |o| {
+        let state = o.call(json!({"cmd": "state"}));
+        let drawn = state["windows"][1]["frames"].as_u64().is_some_and(|n| n > 0);
+        state["bounds"][pane.to_string()][2].as_f64().filter(|w| drawn && *w > 1.0)
+    });
+}
+
 /// At rest the tick sleeps: each frame only for a moment after something happened, then about
 /// once a second for the slow looks. It wakes for what happens with no request: a terminal's
 /// output, seconds later, is drawn.

@@ -1879,8 +1879,9 @@ empty and not renamed, and the main window shows the tab again.
 - Closing a temporary workspace folds its tab out back in, and it cannot fold out while closing; its Undo brings it back as a tab (an empty stand-in tab goes).
 - Unplugging the display folds the tab back in; plugging the same display in again (by its UUID)
   takes it back, unless the main window shows it then. Folded in by you, it stays in.
-- Not yet: a tab holding an app pane stays in the main window (a notice says so), as does a
-  capture of a pane out; the focus arrows stop at a window's edge; a tab out folds in at the next
+- A tab holding an app pane folds out too: entered there, its window covers its pane in the
+  window out. Its parked window waits at the one parking spot, on the main display.
+- Not yet: a capture of a pane out; the focus arrows stop at a window's edge; a tab out folds in at the next
   start.
 - Only you fold a tab out or in: a client's ⌘⇧O is refused. The state's `displays`, `windows` and
   `out` say what is where.
