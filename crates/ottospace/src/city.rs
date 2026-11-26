@@ -776,7 +776,7 @@ struct Beacon {
     beam: Option<[f32; 4]>,
     outline: Option<[[f32; 2]; 4]>,
     label: Bounds<Pixels>,
-    /// A capped file's kind, named in its label (`city_kinds`).
+    /// A file's kind, named in its label (`city_kinds`).
     kind: Option<city_kinds::FileKind>,
 }
 
@@ -3099,8 +3099,8 @@ fn beacon(
         }
         None => bounds.size.width * (2. / 3.),
     };
-    // With `city_kinds`, a capped file's label leads with its cap's swatch and kind: the legend.
-    let kind = made.key.kinds.then(|| city_kinds::kind(&place.id)).flatten().filter(|_| !place.group && !lit);
+    // With `city_kinds`, a file's label leads with its kind's swatch and name: the caps' legend.
+    let kind = made.key.kinds.then(|| city_kinds::kind(&place.id)).flatten().filter(|_| !place.group);
     let tag = kind.map(|k| shape(k.name(), Hsla::from(rgb(theme::MUTED)).opacity(alpha), theme::TEXT_XS, window));
     let lead = tag.as_ref().map_or(px(0.), |tag| px(SWATCH + 4. + 8.) + tag.width);
     let most = (most - lead).max(px(40.));

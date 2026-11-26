@@ -6,7 +6,6 @@
 
 use std::collections::HashMap;
 
-use ottospace_core::city_kinds::FileKind;
 use ottospace_core::scene::{Block, Kind, Layer, Scene};
 use ottospace_core::theme;
 
@@ -251,6 +250,8 @@ pub struct Boxes {
     /// Each instance's block, and a stratum's slice of its height (`Scene::layers`).
     owner: Vec<u32>,
     layer: Vec<Option<[f32; 2]>>,
+    /// Where the stratum above starts (none: infinity): a cap goes on the highest one shown.
+    above: Vec<f32>,
     /// The scene's blocks, for a check that these are its boxes.
     blocks: usize,
     /// Indices into the instances: the solid ones, then the glass.
@@ -272,6 +273,7 @@ impl Boxes {
             base: Vec::new(),
             owner: Vec::new(),
             layer: Vec::new(),
+            above: Vec::new(),
             blocks: scene.blocks.len(),
             solid: Vec::new(),
             glass: Vec::new(),
@@ -286,11 +288,15 @@ impl Boxes {
                 .map(|l| (Some(l.y), l.colour.map(|c| (c, ottospace_core::palette::dim(c, 0xffffff))).or(tint(i))));
             let whole = std::iter::once((None, tint(i)));
             let parts: Vec<_> = if layers.is_empty() { whole.collect() } else { slices.collect() };
-            // Its cap on its top stratum only.
-            let top = layers.iter().map(|l| l.y[1]).fold(f32::MIN, f32::max);
-            let cap = scene.caps.get(i).copied().flatten().map(|kind| cap(b, kind));
-            for (y, colours) in parts {
-                let cap = cap.filter(|_| y.is_none_or(|y: [f32; 2]| y[1] >= top));
+            // Its cap's colour on each part; its height where it stands (`placed`).
+            let cap = scene.caps.get(i).copied().flatten().map(|kind| {
+                let [r, g, b] = rgb(kind.colour());
+                [r, g, b, 1.]
+            });
+            let starts = layers.iter().skip(1).map(|l| l.y[0]).chain([f32::INFINITY]);
+            let starts: Vec<f32> = if layers.is_empty() { vec![f32::INFINITY] } else { starts.collect() };
+            for ((y, colours), above) in parts.into_iter().zip(starts) {
+                boxes.above.push(above);
                 let at = boxes.base.len() as u32;
                 if see_through(b) {
                     boxes.glass.push(at)
@@ -698,6 +704,11 @@ impl Gpu {
             if let Some(y) = boxes.layer[*i as usize] {
                 (one[1], one[4]) = (y[0], y[1].min(b.max[1]));
             }
+            // A cap, on the highest part shown, as thick as the building now stands (a line of sight
+            // may cut it).
+            if one[20] > 0. {
+                one[20] = if boxes.above[*i as usize] >= b.max[1] { cap(b) } else { 0. };
+            }
             one
         };
         let data: Vec<f32> = solid.iter().chain(&clear).map(placed).flatten().collect();
@@ -850,12 +861,11 @@ fn instance(
     ]
 }
 
-/// A building's roof cap in `kind`'s colour: a thin slab, a quarter of its shorter side thick (it
-/// scales with the city's lots), at most a third of its height.
-fn cap(block: &Block, kind: FileKind) -> [f32; 4] {
+/// A building's roof cap's height: a thin slab, a quarter of its shorter side thick (it scales
+/// with the city's lots), at most a third of its height.
+fn cap(block: &Block) -> f32 {
     let side = (block.max[0] - block.min[0]).min(block.max[2] - block.min[2]);
-    let [r, g, b] = rgb(kind.colour());
-    [r, g, b, (side * 0.25).min((block.max[1] - block.min[1]) / 3.)]
+    (side * 0.25).min((block.max[1] - block.min[1]) / 3.)
 }
 
 fn bytes(values: &[f32]) -> Vec<u8> {
@@ -1033,6 +1043,11 @@ pub(crate) mod tests {
         assert_eq!(strongest([r, g, bl]), strongest([cr, cg, cb]), "{kind:?}: {:?}", [r, g, bl]);
         assert_ne!(pixel(&plain, roof), pixel(&capped, roof));
         assert_eq!(pixel(&plain, foot), pixel(&capped, foot), "the walls' foot keeps its folder's colour");
+        // Boxes made while a line of sight cut it to its floor still cap it standing whole.
+        let mut cut = scene.clone();
+        cut.blocks[i].max[1] = b.min[1];
+        let kept = gpu.render_boxes(&scene, &Boxes::new(&cut, false), w, h, 1., &[]).unwrap();
+        assert_eq!(pixel(&kept, roof), pixel(&capped, roof), "its cap as it stands now");
     }
 
     /// Kept targets and boxes draw what fresh ones do: a view, another size and view, then the
