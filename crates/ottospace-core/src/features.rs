@@ -47,10 +47,11 @@ pub enum Feature {
     Review,
     CityBehind,
     CityWallNames,
+    CityKinds,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 18] = [
+pub const ALL: [Feature; 19] = [
     Feature::Marks,
     Feature::AppsSection,
     Feature::Transcripts,
@@ -69,6 +70,7 @@ pub const ALL: [Feature; 18] = [
     Feature::Review,
     Feature::CityBehind,
     Feature::CityWallNames,
+    Feature::CityKinds,
 ];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
@@ -96,6 +98,7 @@ impl Feature {
             Feature::Review => "review",
             Feature::CityBehind => "city_behind",
             Feature::CityWallNames => "city_wall_names",
+            Feature::CityKinds => "city_kinds",
         }
     }
 
@@ -118,7 +121,8 @@ impl Feature {
             | Feature::CityLiveLayer
             | Feature::Review
             | Feature::CityBehind
-            | Feature::CityWallNames => Stage::Experimental,
+            | Feature::CityWallNames
+            | Feature::CityKinds => Stage::Experimental,
         }
     }
 
@@ -148,6 +152,7 @@ impl Feature {
             Feature::Review => "Review a change",
             Feature::CityBehind => "Code city behind panes",
             Feature::CityWallNames => "Folder names on the plinths",
+            Feature::CityKinds => "Roofs by kind of file",
         }
     }
 
@@ -204,6 +209,9 @@ impl Feature {
             Feature::CityWallNames => {
                 "The code city's top two folder tiers named on the wall of their plinth that faces the camera, drawn with the city (with code_city)"
             }
+            Feature::CityKinds => {
+                "A code city building's roof in its file's kind: code, test, docs, config or data; its walls keep its folder's colour (with code_city)"
+            }
         }
     }
 
@@ -232,6 +240,7 @@ impl Feature {
             Feature::Review => "feature off: review",
             Feature::CityBehind => "feature off: city_behind",
             Feature::CityWallNames => "feature off: city_wall_names",
+            Feature::CityKinds => "feature off: city_kinds",
         }
     }
 }
@@ -367,7 +376,8 @@ mod tests {
                 Feature::CityLiveLayer,
                 Feature::Review,
                 Feature::CityBehind,
-                Feature::CityWallNames
+                Feature::CityWallNames,
+                Feature::CityKinds
             ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
@@ -388,10 +398,11 @@ mod tests {
                 .with(Feature::CityLiveLayer, true)
                 .with(Feature::Review, true)
                 .with(Feature::CityBehind, true)
-                .with(Feature::CityWallNames, true),
+                .with(Feature::CityWallNames, true)
+                .with(Feature::CityKinds, true),
             Features::all()
         );
-        let list = " city_wall_names,city_behind,review,city_live_layer,decision_sources,zoom_out,terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " city_kinds,city_wall_names,city_behind,review,city_live_layer,decision_sources,zoom_out,terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
@@ -509,7 +520,8 @@ mod tests {
                     ("city_live_layer", false),
                     ("review", false),
                     ("city_behind", false),
-                    ("city_wall_names", false)
+                    ("city_wall_names", false),
+                    ("city_kinds", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -534,7 +546,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out, decision_sources, city_live_layer, review, city_behind, city_wall_names"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out, decision_sources, city_live_layer, review, city_behind, city_wall_names, city_kinds"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

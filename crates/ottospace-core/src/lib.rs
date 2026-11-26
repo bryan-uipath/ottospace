@@ -18,6 +18,7 @@ pub mod capture_model;
 pub mod cell_art;
 pub mod city_colours;
 pub mod city_filter;
+pub mod city_kinds;
 pub mod city_labels;
 pub mod city_replay;
 pub mod city_shell;

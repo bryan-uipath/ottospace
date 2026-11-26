@@ -190,6 +190,7 @@ export type Feature =
   | "review"
   | "city_behind"
   | "city_wall_names"
+  | "city_kinds"
   | "session_waits"
   | "projects"
   | "terminal_tasks"
@@ -2024,6 +2025,8 @@ export interface CityDrawn {
   lower: number | null;
   /** How many `city_folder_colors` the picture's colours had: null with none. */
   folder_colors: number | null;
+  /** How many buildings drawn each kind's roof cap (`city_kinds`): null with it off. */
+  kinds: CityKinds | null;
   /** The beam of the box under the user's pointer: a file's or a district's, lit, its label. */
   hovered: CityHovered | null;
   /** From the place laid out to its first picture painted (ms): null before. */
@@ -2158,6 +2161,19 @@ export interface CityHovered {
   outline: [number, number][] | null;
   /** Its label: beside the dot, or by the folder's near edge or the pointer. */
   beacon: Rect;
+  /** A capped file's kind, named in its label (`city_kinds`); null otherwise. */
+  kind: FileKind | null;
+}
+
+/** A file's kind, its building's roof cap (`city_kinds`). */
+export type FileKind = "code" | "test" | "docs" | "config" | "data";
+
+export interface CityKinds {
+  code: number;
+  test: number;
+  docs: number;
+  config: number;
+  data: number;
 }
 
 export interface CitySpots {

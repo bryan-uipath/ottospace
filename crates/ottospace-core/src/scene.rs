@@ -120,6 +120,8 @@ pub struct Scene {
     pub fit: Option<Fit>,
     /// Each block's top and edge colours by its folder (`city_colours::tints`); none: its kind's.
     pub tints: Vec<Option<(u32, u32)>>,
+    /// Each block's roof cap by its file's kind (`city_kinds::caps`). Empty: none.
+    pub caps: Vec<Option<crate::city_kinds::FileKind>>,
     /// Which blocks are drawn (`lod::Tree::apply`): a box inside a closed one is not. Empty: all.
     pub shown: Vec<bool>,
     /// The colour a closed box glows in for a lit file it hides (`lod::Tree::apply`). Empty: none.
@@ -462,6 +464,7 @@ impl Layout {
                 camera: None,
                 fit: None,
                 tints: Vec::new(),
+                caps: Vec::new(),
                 shown: Vec::new(),
                 glow: Vec::new(),
                 layers,
@@ -477,6 +480,7 @@ impl Layout {
             camera: Some(camera),
             fit: Some(fit),
             tints: Vec::new(),
+            caps: Vec::new(),
             shown: Vec::new(),
             glow: Vec::new(),
             layers,

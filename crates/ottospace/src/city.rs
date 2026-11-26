@@ -21,6 +21,7 @@ use ottospace_core::Action;
 use ottospace_core::atlas::{self, Atlas};
 use ottospace_core::city_colours::{self, FolderColours};
 use ottospace_core::city_filter;
+use ottospace_core::city_kinds;
 use ottospace_core::city_labels::{self, Candidate, Tier};
 use ottospace_core::city_walls::{self, Sign, WALL_TIERS};
 use ottospace_core::empty::{self, Backdrop};
@@ -82,6 +83,8 @@ const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const KEPT: usize = 8;
 /// Names are shaped for this many things at most, the largest: a few placed of each.
 const SHAPED: usize = 4 * city_labels::MOST;
+/// A hovered file's kind's swatch, points a side (`city_kinds`).
+const SWATCH: f32 = 8.;
 /// A beam's label sits this many points beside its dot; the hovered beam fades in over this long.
 const BESIDE: f32 = 6.;
 const FADE: Duration = Duration::from_millis(120);
@@ -527,6 +530,8 @@ struct Key {
     live: bool,
     /// The top tiers' names on their plinths (`city_wall_names`): the least em drawn, in pixels.
     walls: Option<u32>,
+    /// Roof caps by kind of file (`city_kinds`).
+    kinds: bool,
 }
 
 impl Key {
@@ -771,6 +776,8 @@ struct Beacon {
     beam: Option<[f32; 4]>,
     outline: Option<[[f32; 2]; 4]>,
     label: Bounds<Pixels>,
+    /// A capped file's kind, named in its label (`city_kinds`).
+    kind: Option<city_kinds::FileKind>,
 }
 
 /// The pictures made and what each empty place drew: for the state of a test run, no name or
@@ -1003,6 +1010,7 @@ fn make(
     // Its boxes' colours and delays, once a layout: a camera move only places them.
     let boxes = boxes.unwrap_or_else(|| {
         scene.tints = tints.clone();
+        scene.caps = if key.kinds { city_kinds::caps(plan, &scene.blocks) } else { Vec::new() };
         Arc::new(Boxes::new(&scene, key.glass))
     });
     let tree = tree.unwrap_or_else(|| Arc::new(lod::Tree::new(plan, &layout.blocks)));
@@ -1175,7 +1183,7 @@ impl Drawn {
             (made.iter().flat_map(|made| &made.lit)).map(|(_, (tx, ty))| [x + tx * w, y + ty * h]).collect();
         let beacon = place.and_then(|place| place.beacon);
         let hovered = beacon
-            .map(|b| serde_json::json!({ "file": b.file, "lit": b.lit, "beam": b.beam, "outline": b.outline, "beacon": rect(b.label) }));
+            .map(|b| serde_json::json!({ "file": b.file, "lit": b.lit, "beam": b.beam, "outline": b.outline, "beacon": rect(b.label), "kind": b.kind.map(|k| k.name()) }));
         let lit_beams = place.map(|place| place.lit_beams.clone()).unwrap_or_default();
         let agents: Vec<serde_json::Value> = (place.iter().flat_map(|place| &place.icons))
             .map(|i| {
@@ -1218,8 +1226,20 @@ impl Drawn {
             }),
             "lower": made.map(|made| f32::from_bits(made.key.lower)),
             "folder_colors": made.map(|made| made.key.folders.len()),
+            "kinds": made.filter(|made| made.key.kinds).map(kinds),
         })
     }
+}
+
+/// How many buildings drawn each kind's cap (`city_kinds`), by its name: never a path.
+fn kinds(made: &Made) -> serde_json::Value {
+    let caps = city_kinds::caps(&made.plan, &made.scene.blocks);
+    let shown = caps.iter().enumerate().filter(|(i, _)| made.scene.is_shown(*i));
+    let mut counts = serde_json::Map::new();
+    for kind in city_kinds::ALL {
+        counts.insert(kind.name().into(), shown.clone().filter(|(_, c)| **c == Some(kind)).count().into());
+    }
+    counts.into()
 }
 
 impl Workspace {
@@ -1472,6 +1492,7 @@ impl Workspace {
             (self.model.features.on(ottospace_core::features::Feature::CityLiveLayer), self.main_window);
         let targets = self.city_painter.live.clone();
         let walls = self.model.features.on(ottospace_core::features::Feature::CityWallNames);
+        let kinds = self.model.features.on(ottospace_core::features::Feature::CityKinds);
         let (home, hints) = (self.home.clone(), self.home.clone());
         let shows = {
             let drawn = drawn.borrow();
@@ -1575,6 +1596,7 @@ impl Workspace {
                     live,
                     // No smaller than the size GPUI named them in (`paint`).
                     walls: walls.then(|| (theme::TEXT_XS * scale).round() as u32),
+                    kinds,
                 });
                 key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
                 // Another folder in the same place (the main window's tab switched): its own first
@@ -3066,6 +3088,7 @@ fn beacon(
     let to_window = |(x, y): (f32, f32)| bounds.origin + point(px(x * w), px(y * h));
     // A folder: its outline, none if the camera cuts its top face (then its label by the pointer).
     let folder = matches!(block.kind, Kind::Plate(_));
+    let lit = matches!(block.kind, Kind::Lit(_));
     let outline = folder.then(|| made.scene.outline(i)).flatten().map(|o| o.map(to_window));
     let beam = if folder { None } else { Some(beam?) };
     // One line, as wide as the wider side of the dot allows (a folder's: two thirds of the city):
@@ -3076,7 +3099,11 @@ fn beacon(
         }
         None => bounds.size.width * (2. / 3.),
     };
-    let most = most.max(px(40.));
+    // With `city_kinds`, a capped file's label leads with its cap's swatch and kind: the legend.
+    let kind = made.key.kinds.then(|| city_kinds::kind(&place.id)).flatten().filter(|_| !place.group && !lit);
+    let tag = kind.map(|k| shape(k.name(), Hsla::from(rgb(theme::MUTED)).opacity(alpha), theme::TEXT_XS, window));
+    let lead = tag.as_ref().map_or(px(0.), |tag| px(SWATCH + 4. + 8.) + tag.width);
+    let most = (most - lead).max(px(40.));
     let mut text: String = place.id.chars().map(|c| if c.is_control() { '?' } else { c }).collect();
     let line = loop {
         let line = shape(&text, colour, theme::TEXT_XS, window);
@@ -3089,7 +3116,7 @@ fn beacon(
         let chars: Vec<char> = text.chars().collect();
         text = chars[..head].iter().chain(['…'].iter()).chain(&chars[count - tail..]).collect();
     };
-    let size = gpui::size(line.width + px(12.), px(18.));
+    let size = gpui::size(lead + line.width + px(12.), px(18.));
     let (label, beam, outline) = match beam {
         Some((foot, end)) => {
             let (end, label) = fit_beam(foot, end, Some(size), bounds, clear)?;
@@ -3122,8 +3149,16 @@ fn beacon(
     };
     let backing = Hsla::from(rgb(theme::BACKGROUND)).opacity(0.8 * alpha);
     window.paint_quad(fill(label, backing).corner_radii(px(theme::RADIUS_MD)));
-    let _ = line.paint(label.origin + point(px(6.), px(2.)), px(14.), window, cx);
-    Some(Beacon { file: !place.group, lit: matches!(block.kind, Kind::Lit(_)), beam, outline, label })
+    if let (Some(kind), Some(tag)) = (kind, &tag) {
+        let swatch = Bounds {
+            origin: label.origin + point(px(6.), px((18. - SWATCH) / 2.)),
+            size: gpui::size(px(SWATCH), px(SWATCH)),
+        };
+        window.paint_quad(fill(swatch, Hsla::from(rgb(kind.colour())).opacity(alpha)).corner_radii(px(2.)));
+        let _ = tag.paint(label.origin + point(px(6. + SWATCH + 4.), px(2.)), px(14.), window, cx);
+    }
+    let _ = line.paint(label.origin + point(px(6.) + lead, px(2.)), px(14.), window, cx);
+    Some(Beacon { file: !place.group, lit, beam, outline, label, kind })
 }
 
 #[cfg(test)]
@@ -3289,6 +3324,8 @@ mod tests {
             live: false,
             // `CITY_WALLS=1`: the top tiers named on their plinths (`city_wall_names`), at 2×.
             walls: std::env::var_os("CITY_WALLS").map(|_| 24),
+            // `CITY_KINDS=1`: roof caps by kind of file (`city_kinds`).
+            kinds: std::env::var_os("CITY_KINDS").is_some(),
         };
         // The one-off stages apart: layout, folder colours, boxes (as `make` does them once).
         let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
@@ -3300,6 +3337,11 @@ mod tests {
         let tints_ms = ms(t);
         let mut fitted = layout.scene(&View::default());
         fitted.tints = tints;
+        let t = Instant::now();
+        if key.kinds {
+            fitted.caps = city_kinds::caps(plan, &fitted.blocks);
+        }
+        let kinds_ms = ms(t);
         let t = Instant::now();
         drop(Boxes::new(&fitted, true));
         let boxes_ms = ms(t);
@@ -3414,7 +3456,7 @@ mod tests {
         stages.insert("gpu, no glass", opaque);
         println!("{blocks} boxes ({districts} districts, {} buildings)", buildings.len());
         println!(
-            "once (ms): layout {layout_ms:.1}, folder colours {tints_ms:.1}, boxes {boxes_ms:.1}; first picture at rest {rest_ms:.1} \
+            "once (ms): layout {layout_ms:.1}, folder colours {tints_ms:.1}, kinds {kinds_ms:.1}, boxes {boxes_ms:.1}; first picture at rest {rest_ms:.1} \
              (of it, what may be named {marks_ms:.1}); names placed {names_ms:.1} ({placed} of {} candidates)",
             candidates.len()
         );
@@ -3468,6 +3510,7 @@ mod tests {
             calm: false,
             live: false,
             walls: None,
+            kinds: false,
         };
         let mut last = Layouts::new();
         let mut detail = None;
