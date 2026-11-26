@@ -79,6 +79,7 @@ mod chat_select;
 mod child;
 mod city;
 mod city_gpu;
+mod city_replay;
 mod clipboard;
 mod clone;
 mod collect;
@@ -10217,6 +10218,10 @@ fn main() {
     // Hidden: the made-up full-screen program a timed run types into (`typing`).
     if args.get(1).is_some_and(|a| a == "typing-echo") {
         typing::echo_main();
+    }
+    // Hidden: a session's file replayed through the city's live path, to debug a quiet city.
+    if args.get(1).is_some_and(|a| a == "city-replay") {
+        city_replay::main(&args[2..]);
     }
     // Brings back windows stranded off screen; no app need run.
     if args.get(1).is_some_and(|a| a == "rescue") {

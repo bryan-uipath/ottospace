@@ -527,16 +527,7 @@ mod tests {
 
     /// A task started in the listed checkout `/code/app`, its workspace on show.
     fn task_in_app() -> Model {
-        let mut m = Model::default();
-        let app = Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![] };
-        m.update(Action::SetRepos { repos: vec![app] });
-        m.update(Action::RepoClick { path: "/code/app".into(), axis: Axis::Right });
-        m.update(Action::OpenCompose { text: "first".into() });
-        m.update(Action::ComposeEnter);
-        m.update(Action::AgentStarted { task: Subject::Task(1), session: None, at: 1 }.sent_by(Origin::System));
-        // The click opened a terminal there: closed, the tab is the floor.
-        m.update(Action::Close { pane: None });
-        m
+        crate::city_replay::Replay::new("/code/app", Features::all()).into_model()
     }
 
     fn events(m: &mut Model, events: Vec<Event>) {

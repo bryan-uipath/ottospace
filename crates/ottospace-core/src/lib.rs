@@ -19,6 +19,7 @@ pub mod cell_art;
 pub mod city_colours;
 pub mod city_filter;
 pub mod city_labels;
+pub mod city_replay;
 pub mod city_shell;
 pub mod clip;
 pub mod clone;

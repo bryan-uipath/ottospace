@@ -240,6 +240,27 @@ fn exclude_for(dir: &Path, setting: &[(String, Vec<String>)]) -> Vec<String> {
     city_filter::entries_for(&setting, |key| here.is_some() && resolved(key) == here)
 }
 
+/// The place of `plan` an agent floats over: the one file its label names (a label two files
+/// share, `a/src/main.rs` and `b/src/main.rs`: none), else the first path its shell line names
+/// (`near`) that is a building or a plinth. None: over the middle of the city.
+pub(crate) fn placed(plan: Option<&Atlas>, folder: &str, at: Option<&str>, near: &[String]) -> Option<String> {
+    let plan = plan?;
+    let at = at.and_then(|label| {
+        let mut places = plan.labelled(label, folder);
+        let one = places.next()?.id.clone();
+        places.next().is_none().then_some(one)
+    });
+    at.or_else(|| near.iter().find_map(|path| plan.places.iter().find(|place| place.id == *path)).map(|p| p.id.clone()))
+}
+
+/// The plan of the checkout at `dir` (canonical), as its city reads it, the settings'
+/// `city_exclude` left out: for `city-replay`.
+pub(crate) fn plan_of(dir: &Path) -> Option<Atlas> {
+    let roots = [dir.to_string_lossy().into_owned()];
+    let exclude: Exclude = crate::config::live().city_exclude.clone().unwrap_or_default().into_iter().collect();
+    read(dir, &roots, &exclude, &mut Kept::default(), &|| false)
+}
+
 /// What a checkout's last read found, so the next (its agents moved on) reads only what changed:
 /// each file's lines by its size in bytes, and the commits by the commit checked out.
 #[derive(Default)]
@@ -1343,21 +1364,7 @@ impl Workspace {
         let glimpses = std::mem::take(&mut city.glimpses);
         let floating: Vec<Floating> = (city.agents.iter())
             .filter_map(|agent| {
-                // A label two files share (`a/src/main.rs`, `b/src/main.rs`): at no known file.
-                let at = agent.at.and_then(|label| {
-                    let mut places = plan.as_ref()?.labelled(label, &folder);
-                    let one = places.next()?.id.clone();
-                    places.next().is_none().then_some(one)
-                });
-                // At no file, the first path its shell line names that is a building or a plinth.
-                let at = at.or_else(|| {
-                    let places = &plan.as_ref()?.places;
-                    agent
-                        .near
-                        .iter()
-                        .find_map(|path| places.iter().find(|place| place.id == *path))
-                        .map(|p| p.id.clone())
-                });
+                let at = placed(plan.as_deref(), &folder, agent.at, &agent.near);
                 let (busy, subagents) = (agent.busy, agent.subagents);
                 Some(match agent.who {
                     Who::Task(task) => {

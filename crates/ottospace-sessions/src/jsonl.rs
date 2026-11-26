@@ -165,7 +165,7 @@ pub(crate) fn parse_time(text: &str) -> Option<u64> {
 }
 
 /// A record's `timestamp` field in Unix milliseconds, or 0.
-pub(crate) fn time_of(record: &Value) -> u64 {
+pub fn time_of(record: &Value) -> u64 {
     record["timestamp"].as_str().and_then(parse_time).unwrap_or(0)
 }
 
