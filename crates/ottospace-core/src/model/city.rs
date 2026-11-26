@@ -229,7 +229,7 @@ impl Model {
     /// The city an empty place draws, with the flag on: the map of its folder. Lit: the files
     /// the agents are at now (`Activity::files`), each in its task's colour: in a task's space
     /// its tasks' (its own and those that joined it); elsewhere every task that works in that
-    /// folder (`task_worktree`, as the Repos section's dots).
+    /// folder (`task_worktree`, as the Repos section's dots); everywhere, the sessions no task has.
     pub fn city_at(&self, at: At) -> Option<City<'_>> {
         let empty = match at {
             At::Tab(id) => self.tabs.iter().position(|tab| tab.id == id).is_some_and(|i| self.tree_at(i).is_none()),
@@ -316,10 +316,9 @@ impl Model {
             .collect();
         tasks.extend(in_terminal);
         tasks.sort_by_key(|(task, _)| *task);
-        // A session no task has, at work in this checkout (as its Repos dot says): not in a task's space.
-        let free: Vec<&crate::sessions::Found> = (self.at_work.iter())
-            .filter(|s| own.is_none() && s.repo == dir && !self.tasks.adopted(&s.runner, &s.id))
-            .collect();
+        // A session no task has, at work in this checkout (as its Repos dot says), a task's space too.
+        let free: Vec<&crate::sessions::Found> =
+            (self.at_work.iter()).filter(|s| s.repo == dir && !self.tasks.adopted(&s.runner, &s.id)).collect();
         drawn.extend(free.iter().copied());
         let sessions = free.into_iter().map(|s| Agent {
             who: Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() },
@@ -331,10 +330,11 @@ impl Model {
         });
         // An agent CLI in one of our panes, working in this checkout, no session of it on show
         // here: by its process alone (no setting needed), hovering. A task's space: its own panes.
-        // Drawn: the session its pane runs (`in_panes`), or one of its runner in its folder.
-        let shown = |p: &crate::sessions::PaneAgent| {
-            let at = self.in_panes.iter().find(|at| at.pane == p.pane);
-            (drawn.iter()).any(|s| at.is_some_and(|at| at.id == s.id) || (s.runner == p.runner && s.cwd == p.cwd))
+        // Drawn: the session its pane runs (`in_panes`); its session not known, one of its runner
+        // in its folder. Another session in the same folder hides no known pane's.
+        let shown = |p: &crate::sessions::PaneAgent| match self.in_panes.iter().find(|at| at.pane == p.pane) {
+            Some(at) => drawn.iter().any(|s| s.id == at.id),
+            None => drawn.iter().any(|s| s.runner == p.runner && s.cwd == p.cwd),
         };
         // In this checkout, not one listed below it (a worktree inside it).
         let inside = |cwd: &str| self.checkout_at(cwd) == Some(dir);
@@ -756,7 +756,8 @@ mod tests {
     }
 
     /// A session no task has, at work in the checkout (a `claude` in the user's terminal): an
-    /// agent of the city at the file it reads, that file lit; not in a task's space; idle, gone.
+    /// agent of the city at the file it reads, that file lit, in a task's space of the checkout
+    /// too; idle, gone.
     #[test]
     fn a_session_in_a_terminal_floats_over_its_file() {
         let mut m = listed();
@@ -791,6 +792,16 @@ mod tests {
         assert_eq!(agents(&m), Some(vec![(0, None)]), "a shell line: at no file");
         m.update(Action::SetSessions { found: vec![found(false, "files", "src/main.rs")], day: 0 });
         assert_eq!(agents(&m), Some(vec![]));
+        // A task's space of the checkout: there too.
+        let mut m = task_in_app();
+        m.update(Action::SetSessions { found: vec![found(true, "files", "src/main.rs")], day: 0 });
+        let shown = m.empty_places().first().and_then(|at| m.city_at(*at));
+        let who = shown.map(|c| c.agents.iter().map(|a| a.who).collect::<Vec<_>>());
+        assert!(who.is_some_and(|w| w.contains(&Who::Session {
+            runner: "claude",
+            id: "s1",
+            title: Some("fix the loop")
+        })));
     }
 
     /// The owner's case: a `claude` in another terminal, its own file quiet while its sub-agents
@@ -952,6 +963,19 @@ mod tests {
         m.update(Action::SetSessions { found: vec![session], day: 0 });
         assert_eq!(who(&m).map(|w| w.len()), Some(1));
         assert!(who(&m).is_some_and(|w| w[0].starts_with("Session")), "{:?}", who(&m));
+        // Its pane known to run another session, idle: the one at work hides its icon no more.
+        let mine = crate::sessions::InPane {
+            pane,
+            runner: "claude".into(),
+            id: "s0".into(),
+            last_activity: Some(1),
+            waits_for: None,
+            cwd: Some("/code/app/src".into()),
+            busy: false,
+        };
+        m.update(Action::SessionsInPanes { found: vec![mine] }.sent_by(Origin::System));
+        assert_eq!(who(&m).map(|w| w.len()), Some(2), "{:?}", who(&m));
+        m.update(Action::SessionsInPanes { found: vec![] }.sent_by(Origin::System));
         m.update(Action::SetSessions { found: vec![], day: 0 });
         m.update(Action::PaneAgents { found: vec![found("/code/app")] }.sent_by(Origin::System));
         m.update(Action::Close { pane: Some(pane) });

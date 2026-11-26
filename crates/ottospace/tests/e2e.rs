@@ -19422,6 +19422,49 @@ fn a_terminal_session_waiting_on_its_subagent_floats_in_the_city_and_lights_its_
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A `claude` in the user's own terminal (no task's) at work in a checkout floats on the city of a
+/// task's space there too, over the file it reads, beside the task's own agent.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_session_floats_on_a_tasks_city_of_its_checkout() {
+    let extra = [("OTTOSPACE_FEATURES", "code_city"), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+    let (root, _, env) = native_setup("city-term-task", &[], &extra);
+    let app = root.join("repos/app");
+    git(&app, &["init", "-q"]);
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("src/main.rs"), "x".repeat(3000)).unwrap();
+    let app = app.canonicalize().unwrap();
+    // Made-up records: a prompt, then a read of `src/main.rs` that runs on. Held by this test's pid.
+    let claude = root.join("sessions/claude");
+    let id = "88888888-8888-4888-8888-888888888888";
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&app));
+    std::fs::create_dir_all(&project).unwrap();
+    let user = json!({"type": "user", "message": {"role": "user", "content": "made-up prompt"},
+        "timestamp": "2026-11-13T09:00:00.000Z", "cwd": app, "sessionId": id});
+    let read =
+        json!({"type": "tool_use", "id": "toolu_r", "name": "Read", "input": {"file_path": app.join("src/main.rs")}});
+    let call = json!({"type": "assistant", "message": {"id": "msg_1", "content": [read]},
+        "timestamp": "2026-11-13T09:00:01.000Z", "cwd": app, "sessionId": id});
+    std::fs::write(project.join(format!("{id}.jsonl")), format!("{user}\n{call}\n")).unwrap();
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    let live = json!({"pid": std::process::id(), "sessionId": id, "status": "busy"});
+    std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
+    let otto = launch_env("city-term-task", &env);
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    let agents = |o: &Otto| o.call(json!({"cmd": "state"}))["city"]["agents"].as_array().cloned();
+    // Both in one state: the terminal session over its file, beside the task's own agent.
+    otto.wait_for("the terminal session over its file, beside task 1", |o| {
+        let agents = agents(o)?;
+        let session = agents.iter().any(|a| a["task"].is_null() && a["cone"] == json!(true));
+        (session && agents.iter().any(|a| a["task"] == json!(1))).then_some(())
+    });
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A task started in another task's workspace joins its space, and its agent floats on that
 /// space's city while it works, as the space's own task's would.
 #[test]
