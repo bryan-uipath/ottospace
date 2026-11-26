@@ -30,8 +30,9 @@ it (the depth test), and it costs no GPUI shaping or layout per frame.
 - **GPUI.** With the flag on, GPUI names no folder of those tiers (`Mark`s of tier `Wall` are not
   made). Deeper folders, files, the hover's callout and beam, agents and the hints stay GPUI's.
 - **Privacy.** Names are drawn only. The state's `city.names` lists each one drawn on a plinth,
-  `plinth: true`, its em box's `rect` and `hidden` (a shown box between the camera and its middle:
-  `city_walls::hidden`, worked out only for a test run's state); never the name.
+  `plinth: true`, its em box's `rect` and `hidden` (a shown box, standing, between the camera and
+  its middle: a solid one hides it, a glass one dims it; `city_walls::hidden`, worked out only for
+  a test run's state); never the name.
 
 ## How
 

@@ -76,7 +76,10 @@ pub fn signs(scene: &Scene, wide: impl Fn(usize) -> Option<f32>, view: [f32; 2],
             let (l, r) = (seen(at(middle, across, -width / 2.))?, seen(at(middle, across, width / 2.))?);
             let (lo, hi) = (seen(at(middle, UP, -em / 2.))?, seen(at(middle, UP, em / 2.))?);
             let apart = |a: [f32; 2], b: [f32; 2]| ((a[0] - b[0]).powi(2) + (a[1] - b[1]).powi(2)).sqrt();
-            let (tall, wide_on_screen) = (apart(lo, hi), apart(l, r));
+            let tall = apart(lo, hi);
+            // Its width across its up on screen: a wall seen edge on runs its name along its up.
+            let (d, u) = ([r[0] - l[0], r[1] - l[1]], [(hi[0] - lo[0]) / tall, (hi[1] - lo[1]) / tall]);
+            let wide_on_screen = (d[0] * u[1] - d[1] * u[0]).abs();
             if tall < least || wide_on_screen < SQUEEZE * ratio * tall {
                 return None;
             }
@@ -94,8 +97,8 @@ pub fn signs(scene: &Scene, wide: impl Fn(usize) -> Option<f32>, view: [f32; 2],
     signs
 }
 
-/// Whether a shown box stands between the camera and the middle of `sign`: the renderer's depth
-/// test hides it there.
+/// Whether a shown box, standing (not a frame of its rise), is between the camera and the middle
+/// of `sign`: a solid one hides it there (the depth test), a glass one dims it.
 pub fn hidden(scene: &Scene, sign: &Sign) -> bool {
     let Some(camera) = scene.camera else { return false };
     let middle = at(at(sign.origin, sign.across, sign.width / 2.), UP, sign.em / 2.);
@@ -193,6 +196,9 @@ mod tests {
         // Seen from a corner: its short end faces it most, its long side holds the name.
         let s = seen(vec![thin], View { yaw: 60., ..View::default() });
         assert_eq!(signs(&s, |_| Some(5.), VIEW, 12.).iter().map(|s| s.normal).collect::<Vec<_>>(), [[0., 0., -1.]]);
+        // Nearly down its length: the long side's name runs along its up on screen, a sliver.
+        let s = seen(vec![thin], View { yaw: 89., ..View::default() });
+        assert_eq!(signs(&s, |_| Some(5.), VIEW, 12.), []);
     }
 
     #[test]

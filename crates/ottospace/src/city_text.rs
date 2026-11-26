@@ -17,7 +17,8 @@ const SPREAD: f32 = 6.;
 const TRACK: f32 = 0.05;
 /// The system font's weight (its `wght` axis, where it has one): semibold, to read small.
 const WEIGHT: f32 = 600.;
-/// Lines remembered, by text: past this many all are forgotten (their glyphs stay).
+/// Lines remembered, by text: past this many all are forgotten after a draw (`forget`); their
+/// glyphs stay.
 const LINES: usize = 4096;
 /// Per glyph: its quad's corner, its across and up sides (world), its atlas rect, its colour.
 pub(crate) const QUAD: usize = 17;
@@ -41,9 +42,9 @@ struct Cell {
     plane: [f32; 4],
 }
 
-/// A line shaped: each glyph and its pen's place (ems), and the line's width (ems).
+/// A line shaped: each glyph and its place from the pen's start (ems), and the line's width (ems).
 struct Line {
-    glyphs: Vec<(u16, f32)>,
+    glyphs: Vec<(u16, [f32; 2])>,
     width: f32,
 }
 
@@ -81,13 +82,18 @@ impl Text {
     /// `text`'s width in ems, its glyphs in the atlas; none if the font lacks one or the atlas is full.
     pub(crate) fn width(&mut self, text: &str) -> Option<f32> {
         if !self.lines.contains_key(text) {
-            if self.lines.len() >= LINES {
-                self.lines.clear();
-            }
             let line = self.shape(text);
             self.lines.insert(text.to_string(), line);
         }
         self.lines.get(text)?.as_ref().map(|line| line.width)
+    }
+
+    /// Past `LINES`, every line forgotten: after a picture's draw, so none it measured is lost
+    /// before its quads.
+    pub(crate) fn forget(&mut self) {
+        if self.lines.len() > LINES {
+            self.lines.clear();
+        }
     }
 
     fn shape(&mut self, text: &str) -> Option<Line> {
@@ -96,7 +102,8 @@ impl Text {
         let shaped = rustybuzz::shape(&self.face, &[], buffer);
         let per = 1. / self.face.units_per_em() as f32;
         let (mut pen, mut glyphs) = (0., Vec::new());
-        for (info, at) in shaped.glyph_infos().iter().zip(shaped.glyph_positions()) {
+        let infos = shaped.glyph_infos();
+        for (k, (info, at)) in infos.iter().zip(shaped.glyph_positions()).enumerate() {
             let id = u16::try_from(info.glyph_id).ok().filter(|id| *id != 0)?;
             // A glyph with no outline is a space, or not drawn: then neither is its line.
             let blank =
@@ -104,10 +111,12 @@ impl Text {
             if self.cell(id).is_none() && !blank {
                 return None;
             }
-            glyphs.push((id, pen + at.x_offset as f32 * per));
-            pen += at.x_advance as f32 * per + TRACK;
+            glyphs.push((id, [pen + at.x_offset as f32 * per, at.y_offset as f32 * per]));
+            // Tracked between letters, not between a letter and its marks (one cluster).
+            let next = infos.get(k + 1).is_some_and(|n| n.cluster != info.cluster);
+            pen += at.x_advance as f32 * per + if next { TRACK } else { 0. };
         }
-        Some(Line { glyphs, width: (pen - TRACK).max(0.) })
+        Some(Line { glyphs, width: pen })
     }
 
     /// Glyph `id`'s cell, rasterized into the atlas the first time.
@@ -157,9 +166,10 @@ impl Text {
         let Some(Some(line)) = self.lines.get(&label.text) else { return };
         let baseline = (1. - self.cap) / 2.;
         let at = |o: [f32; 3], d: [f32; 3], by: f32| -> [f32; 3] { std::array::from_fn(|i| o[i] + d[i] * by) };
-        for (id, x) in &line.glyphs {
+        for (id, [x, y]) in &line.glyphs {
             let Some(Some(Cell { uv, plane: [l, b, r, t] })) = self.cells.get(id) else { continue };
-            let corner = at(at(label.origin, label.across, (x + l) * label.em), label.up, (baseline + b) * label.em);
+            let corner =
+                at(at(label.origin, label.across, (x + l) * label.em), label.up, (baseline + y + b) * label.em);
             let across = label.across.map(|v| v * (r - l) * label.em);
             let up = label.up.map(|v| v * (t - b) * label.em);
             out.extend(corner.into_iter().chain(across).chain(up).chain(*uv).chain(label.colour));
@@ -282,6 +292,8 @@ mod tests {
         assert!(text.width("CRS").is_some() && text.cells.len() == glyphs, "no new glyph");
         assert!(text.width("A B").unwrap() > text.width("AB").unwrap(), "a space advances");
         assert_eq!(text.width("\u{10FFFD}"), None);
+        // A letter and its combining mark: one cluster, no tracking between them.
+        assert!(text.width("E\u{301}").unwrap() <= text.width("E").unwrap() + 1e-4);
         let label = Label {
             text: "SRC".into(),
             origin: [0.; 3],

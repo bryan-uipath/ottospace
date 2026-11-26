@@ -189,6 +189,7 @@ export type Feature =
   | "city_live_layer"
   | "review"
   | "city_behind"
+  | "city_wall_names"
   | "session_waits"
   | "projects"
   | "terminal_tasks"
@@ -2165,7 +2166,7 @@ export interface CityName {
   rect: Rect;
   /** Drawn by the city's renderer on its plinth's wall (`city_wall_names`), not by GPUI. */
   plinth: boolean;
-  /** A plinth's name a box stands in front of (its middle): the depth test hides it there. */
+  /** A plinth's name a standing box is in front of (its middle): a solid one hides it, a glass one dims it. */
   hidden: boolean;
 }
 

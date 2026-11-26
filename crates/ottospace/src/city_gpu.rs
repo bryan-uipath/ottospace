@@ -505,6 +505,7 @@ impl Gpu {
         if let Some(instances) = &text.instances {
             self.queue.write_buffer(instances, 0, &bytes_of);
         }
+        text.glyphs.forget();
         (data.len() / city_text::QUAD) as u32
     }
 

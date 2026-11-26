@@ -1845,7 +1845,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 
 function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
-  if (value === "multi_monitor" || value === "review" || value === "city_behind") return value;
+  if (value === "multi_monitor" || value === "review" || value === "city_behind" || value === "city_wall_names") return value;
   if (value === "overlay_panels" || value === "decisions" || value === "code_city" || value === "city_live_layer") return value;
   if (value === "session_waits" || value === "projects" || value === "terminal_tasks" || value === "zoom_out" || value === "decision_sources") return value;
   throw wrong(at, "a feature", value);
