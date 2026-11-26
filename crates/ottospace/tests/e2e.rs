@@ -19335,6 +19335,47 @@ fn a_live_citys_names_wait_out_a_turn_not_left_behind() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// With `city_wall_names` the top two folder tiers are named on their plinths, in the picture:
+/// reported as `plinth`, none of those tiers named by GPUI, none of the names in the state. A turn
+/// keeps them, moved with the camera, on the image path and on a live layer alike.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_citys_top_folders_are_named_on_their_plinths_and_turn_with_it() {
+    for (name, features) in
+        [("city-walls", "code_city,city_wall_names"), ("city-walls-live", "code_city,city_live_layer,city_wall_names")]
+    {
+        let (otto, root, home) = city_shown(name, features);
+        let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+        let plinths = |c: &Value| -> Vec<Value> {
+            let names = c["names"].as_array().cloned().unwrap_or_default();
+            names.into_iter().filter(|n| n["plinth"] == json!(true)).collect()
+        };
+        let rest = otto.wait_for("a name on a plinth", |o| Some(city(o)).filter(|c| !plinths(c).is_empty()));
+        let names = rest["names"].as_array().unwrap();
+        assert!(names.iter().all(|n| n["tier"] == "wall" || n["plinth"] == json!(false)), "{rest}");
+        assert!(names.iter().all(|n| n["tier"] != "wall" || n["plinth"] == json!(true)), "GPUI names no wall: {rest}");
+        assert!(plinths(&rest).iter().all(|n| n["hidden"].is_boolean() && n["rect"][3].as_f64() > Some(8.)), "{rest}");
+        assert!(!rest.to_string().contains("SRC"), "no name in the state: {rest}");
+        // A turn (⌥ and a trackpad's scroll): the reply's frame still has them, where it turned.
+        let n = |v: &Value| v.as_f64().unwrap();
+        let b = &rest["bounds"];
+        let (x, y) = (n(&b[0]) + n(&b[2]) * 0.2, n(&b[1]) + n(&b[3]) * 0.9);
+        let turn = json!({"cmd": "mouse", "action": "wheel", "x": x, "y": y, "dx": 6, "dy": 0, "precise": true,
+            "modifiers": ["alt"], "as": "user"});
+        let reply = otto.call(turn)["city"].clone();
+        assert!(!plinths(&reply).is_empty(), "{name}: none hidden while it turns: {reply}");
+        let renders = reply["renders"].as_u64();
+        let turned = otto.wait_for("the turn's picture", |o| {
+            Some(city(o)).filter(|c| c["renders"].as_u64() > renders && c["view"] != rest["view"])
+        });
+        assert!(!plinths(&turned).is_empty(), "{name}: named through the turn: {turned}");
+        assert_ne!(plinths(&turned), plinths(&rest), "{name}: moved with the camera");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
 /// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,
 /// inside the picture, again after a zoom. The user's pointer on a folder's ground outlines its
 /// top face and hangs its label by its near edge or the pointer; on a building, a beam a share of
@@ -19392,6 +19433,7 @@ fn a_citys_names_stay_apart_and_a_hovered_folder_is_outlined() {
     };
     let fitted = check(&first);
     assert!(first["names"].as_array().unwrap().iter().any(|n| n["tier"] == "wall"), "{first}");
+    assert!(first["names"].as_array().unwrap().iter().all(|n| n["plinth"] == json!(false)), "flag off: GPUI's");
     // The user's pointer on a folder's own ground (`spots`), then over a grid of the city: the
     // building whose beam is longest (one under the hints is lowered).
     let hover = |x: f64, y: f64| {

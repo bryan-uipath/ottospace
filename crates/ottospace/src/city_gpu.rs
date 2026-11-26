@@ -9,6 +9,8 @@ use std::collections::HashMap;
 use ottospace_core::scene::{Block, Kind, Layer, Scene};
 use ottospace_core::theme;
 
+use crate::city_text::{self, Label, Text};
+
 /// The picture, `width` × `height` pixels, BGRA, rows packed.
 pub struct Picture {
     pub width: u32,
@@ -125,6 +127,46 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
 }
 "#;
 
+/// Text in the world (`city_text`): a glyph's quad from its corner and sides, its field sampled,
+/// its edge smoothed over a screen pixel, fogged as the boxes are. Drawn over the solid boxes,
+/// depth tested, writing none; under the glass.
+const TEXT_SHADER: &str = r#"
+struct Frame { matrix: mat4x4<f32>, eye: vec4<f32>, fog: vec4<f32>, background: vec4<f32>, light: vec4<f32> };
+@group(0) @binding(0) var<uniform> frame: Frame;
+@group(1) @binding(0) var atlas: texture_2d<f32>;
+@group(1) @binding(1) var sampled: sampler;
+
+struct Out {
+    @builtin(position) at: vec4<f32>,
+    @location(0) uv: vec2<f32>,
+    @location(1) world: vec3<f32>,
+    @location(2) colour: vec4<f32>,
+};
+
+const QUAD = array<vec2<f32>, 6>(vec2(0., 0.), vec2(1., 0.), vec2(1., 1.), vec2(0., 0.), vec2(1., 1.), vec2(0., 1.));
+
+@vertex
+fn vs(@builtin(vertex_index) i: u32, @location(0) corner: vec3<f32>, @location(1) across: vec3<f32>, @location(2) up: vec3<f32>, @location(3) uv: vec4<f32>, @location(4) colour: vec4<f32>) -> Out {
+    let c = QUAD[i];
+    let world = corner + across * c.x + up * c.y;
+    var out: Out;
+    out.at = frame.matrix * vec4(world, 1.);
+    // The atlas's rows run down: a glyph's bottom is its rect's.
+    out.uv = vec2(mix(uv.x, uv.z, c.x), mix(uv.w, uv.y, c.y));
+    out.world = world;
+    out.colour = colour;
+    return out;
+}
+
+@fragment
+fn fs(in: Out) -> @location(0) vec4<f32> {
+    let d = textureSample(atlas, sampled, in.uv).r;
+    let w = max(fwidth(d) * 0.7, 1e-4);
+    let far = clamp((distance(in.world, frame.eye.xyz) - frame.fog.x) / (frame.fog.y - frame.fog.x), 0., 1.);
+    return vec4(mix(in.colour.rgb, frame.background.rgb, far * frame.fog.z), smoothstep(0.5 - w, 0.5 + w, d) * in.colour.a);
+}
+"#;
+
 fn rgb(hex: u32) -> [f32; 3] {
     let c = gpui::rgb(hex);
     [c.r, c.g, c.b]
@@ -160,8 +202,21 @@ pub struct Gpu {
     /// The frame's uniform (camera, eye, fog, background, light: 32 floats), bound once.
     uniform: wgpu::Buffer,
     group: wgpu::BindGroup,
+    layout: wgpu::BindGroupLayout,
     /// Kept from picture to picture: a camera move makes no texture or buffer.
     kept: std::cell::RefCell<Kept>,
+    /// Text's pipeline and atlas, made at the first line measured (`measure`); none: no font.
+    text: std::cell::RefCell<Option<Option<TextGpu>>>,
+}
+
+/// What draws text: its glyphs (`city_text`), pipeline, atlas and its bind group, and the glyphs'
+/// instance buffer, as large as the most yet.
+struct TextGpu {
+    glyphs: Text,
+    pipeline: wgpu::RenderPipeline,
+    atlas: wgpu::Texture,
+    group: wgpu::BindGroup,
+    instances: Option<wgpu::Buffer>,
 }
 
 /// The targets and read buffer of the last picture's size, and the instance buffer, as large as
@@ -321,7 +376,136 @@ impl Gpu {
             layout: &layout,
             entries: &[wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() }],
         });
-        Ok(Self { instance, device, queue, pipeline, glass, uniform, group, kept: Default::default() })
+        let (kept, text) = Default::default();
+        Ok(Self { instance, device, queue, pipeline, glass, uniform, group, layout, kept, text })
+    }
+
+    /// `text`'s width in ems as drawn (`city_text::Text::width`); none if it cannot be drawn.
+    pub(crate) fn measure(&self, text: &str) -> Option<f32> {
+        let mut made = self.text.borrow_mut();
+        let made = made.get_or_insert_with(|| Text::new().map(|glyphs| self.text_gpu(glyphs)));
+        made.as_mut()?.glyphs.width(text)
+    }
+
+    fn text_gpu(&self, glyphs: Text) -> TextGpu {
+        let device = &self.device;
+        let module = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("city text"),
+            source: wgpu::ShaderSource::Wgsl(TEXT_SHADER.into()),
+        });
+        let entry = |binding, ty| wgpu::BindGroupLayoutEntry {
+            binding,
+            visibility: wgpu::ShaderStages::FRAGMENT,
+            ty,
+            count: None,
+        };
+        let atlas_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[
+                entry(
+                    0,
+                    wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                ),
+                entry(1, wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering)),
+            ],
+        });
+        let layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: None,
+            bind_group_layouts: &[Some(&self.layout), Some(&atlas_layout)],
+            immediate_size: 0,
+        });
+        let attributes =
+            wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4];
+        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("city text"),
+            layout: Some(&layout),
+            vertex: wgpu::VertexState {
+                module: &module,
+                entry_point: Some("vs"),
+                compilation_options: Default::default(),
+                buffers: &[Some(wgpu::VertexBufferLayout {
+                    array_stride: (city_text::QUAD * 4) as u64,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &attributes,
+                })],
+            },
+            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+            depth_stencil: Some(wgpu::DepthStencilState {
+                format: DEPTH,
+                depth_write_enabled: Some(false),
+                depth_compare: Some(wgpu::CompareFunction::Less),
+                stencil: Default::default(),
+                bias: Default::default(),
+            }),
+            multisample: wgpu::MultisampleState { count: SAMPLES, ..Default::default() },
+            fragment: Some(wgpu::FragmentState {
+                module: &module,
+                entry_point: Some("fs"),
+                compilation_options: Default::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: FORMAT,
+                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            multiview_mask: None,
+            cache: None,
+        });
+        let atlas = device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("city glyphs"),
+            size: wgpu::Extent3d { width: city_text::ATLAS, height: city_text::ATLAS, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::R8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            ..Default::default()
+        });
+        let view = atlas.create_view(&Default::default());
+        let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &atlas_layout,
+            entries: &[
+                wgpu::BindGroupEntry { binding: 0, resource: wgpu::BindingResource::TextureView(&view) },
+                wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
+            ],
+        });
+        TextGpu { glyphs, pipeline, atlas, group, instances: None }
+    }
+
+    /// `labels`' glyphs as instances in the text's buffer, its atlas uploaded if it grew: how many.
+    fn text_instances(&self, labels: &[Label]) -> u32 {
+        let mut text = self.text.borrow_mut();
+        let Some(Some(text)) = text.as_mut().filter(|_| !labels.is_empty()) else { return 0 };
+        let mut data = Vec::new();
+        for label in labels {
+            text.glyphs.quads(label, &mut data);
+        }
+        if text.glyphs.dirty {
+            let size = wgpu::Extent3d { width: city_text::ATLAS, height: city_text::ATLAS, depth_or_array_layers: 1 };
+            let layout =
+                wgpu::TexelCopyBufferLayout { offset: 0, bytes_per_row: Some(city_text::ATLAS), rows_per_image: None };
+            self.queue.write_texture(text.atlas.as_image_copy(), &text.glyphs.pixels, layout, size);
+            text.glyphs.dirty = false;
+        }
+        let bytes_of = bytes(&data);
+        if text.instances.as_ref().is_none_or(|b| b.size() < bytes_of.len() as u64) {
+            text.instances =
+                Some(buffer(&self.device, &data, wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST));
+        }
+        if let Some(instances) = &text.instances {
+            self.queue.write_buffer(instances, 0, &bytes_of);
+        }
+        (data.len() / city_text::QUAD) as u32
     }
 
     /// One draw of a one-box city at 16×16, its picture dropped: the first picture shown pays no
@@ -329,14 +513,24 @@ impl Gpu {
     pub fn warm(&self) {
         let one = ottospace_core::atlas::atlas(&ottospace_core::atlas::repo(&[("a/b.rs".into(), 900)]));
         let scene = ottospace_core::scene::scene(&one, &[], 1., &ottospace_core::scene::View::default());
-        let warmed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.render(&scene, 16, 16, 1., true)));
+        let warmed =
+            std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.render(&scene, 16, 16, 1., true, &[])));
         drop(warmed);
     }
 
     /// `scene` as a picture `width` × `height` pixels, `rise` (0 to 1) of the way through its
-    /// buildings' rise (1: standing), its buildings of glass or not, or why there is none.
-    pub fn render(&self, scene: &Scene, width: u32, height: u32, rise: f32, glass: bool) -> Result<Picture, String> {
-        self.render_boxes(scene, &Boxes::new(scene, glass), width, height, rise)
+    /// buildings' rise (1: standing), its buildings of glass or not, `labels` written in it, or why
+    /// there is none.
+    pub(crate) fn render(
+        &self,
+        scene: &Scene,
+        width: u32,
+        height: u32,
+        rise: f32,
+        glass: bool,
+        labels: &[Label],
+    ) -> Result<Picture, String> {
+        self.render_boxes(scene, &Boxes::new(scene, glass), width, height, rise, labels)
     }
 
     /// A surface over a live layer's `CAMetalLayer` (`ottospace_mac::live_layer`), to draw to
@@ -367,12 +561,13 @@ impl Gpu {
     }
 
     /// `render_boxes`, drawn straight into `surface`'s next drawable and presented: no read back.
-    pub fn render_into(
+    pub(crate) fn render_into(
         &self,
         surface: &wgpu::Surface<'static>,
         scene: &Scene,
         boxes: &Boxes,
         rise: f32,
+        labels: &[Label],
     ) -> Result<Picture, String> {
         let frame = match surface.get_current_texture() {
             wgpu::CurrentSurfaceTexture::Success(frame) | wgpu::CurrentSurfaceTexture::Suboptimal(frame) => frame,
@@ -380,21 +575,22 @@ impl Gpu {
         };
         let (width, height) = (frame.texture.width(), frame.texture.height());
         let view = frame.texture.create_view(&Default::default());
-        let picture = self.checked(|| self.draw(scene, boxes, width, height, rise, Some(&view)))?;
+        let picture = self.checked(|| self.draw(scene, boxes, width, height, rise, labels, Some(&view)))?;
         self.queue.present(frame);
         Ok(picture)
     }
 
     /// `render`, of `scene`'s boxes as made already (`Boxes::new`): a camera move's picture.
-    pub fn render_boxes(
+    pub(crate) fn render_boxes(
         &self,
         scene: &Scene,
         boxes: &Boxes,
         width: u32,
         height: u32,
         rise: f32,
+        labels: &[Label],
     ) -> Result<Picture, String> {
-        self.checked(|| self.draw(scene, boxes, width, height, rise, None))
+        self.checked(|| self.draw(scene, boxes, width, height, rise, labels, None))
     }
 
     /// `draw` with the GPU's errors caught: a picture fails instead of wgpu panicking.
@@ -417,6 +613,7 @@ impl Gpu {
     }
 
     /// The picture, resolved into `into` (a live layer's drawable) or read back.
+    #[allow(clippy::too_many_arguments)] // A picture's scene, size, rise, text and target.
     fn draw(
         &self,
         scene: &Scene,
@@ -424,6 +621,7 @@ impl Gpu {
         width: u32,
         height: u32,
         rise: f32,
+        labels: &[Label],
         into: Option<&wgpu::TextureView>,
     ) -> Result<Picture, String> {
         if boxes.blocks != scene.blocks.len() {
@@ -502,6 +700,9 @@ impl Gpu {
         let (Some(t), Some(instances)) = (&kept.targets, &kept.instances) else { return Err("no targets".into()) };
         let (row, read) = (t.row, t.read.clone());
         self.queue.write_buffer(instances, 0, &bytes_of);
+        let glyphs = self.text_instances(labels);
+        let text = self.text.borrow();
+        let text = text.as_ref().and_then(Option::as_ref).filter(|_| glyphs > 0);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let [r, g, b] = bg.map(f64::from);
@@ -527,8 +728,17 @@ impl Gpu {
             });
             pass.set_pipeline(&self.pipeline);
             pass.set_bind_group(0, &self.group, &[]);
-            pass.set_vertex_buffer(0, instances.slice(..bytes_of.len() as u64));
+            let instances_all = instances.slice(..bytes_of.len() as u64);
+            pass.set_vertex_buffer(0, instances_all);
             pass.draw(0..36, 0..solid_count);
+            // Text over the solid boxes, under the glass.
+            if let Some(TextGpu { pipeline, group, instances: Some(instances), .. }) = text {
+                pass.set_pipeline(pipeline);
+                pass.set_bind_group(1, group, &[]);
+                pass.set_vertex_buffer(0, instances.slice(..u64::from(glyphs) * (city_text::QUAD * 4) as u64));
+                pass.draw(0..6, 0..glyphs);
+                pass.set_vertex_buffer(0, instances_all);
+            }
             pass.set_pipeline(&self.glass);
             pass.draw(0..36, solid_count..solid_count + clear.len() as u32);
         }
@@ -671,7 +881,7 @@ pub(crate) mod tests {
             let built = started.elapsed();
             let (w, h) = (1600, 1000);
             let started = std::time::Instant::now();
-            let picture = gpu.render(&scene, w, h, 1., true).unwrap();
+            let picture = gpu.render(&scene, w, h, 1., true, &[]).unwrap();
             let rendered = started.elapsed();
             println!(
                 "{count} files: layout {laid:.1?}, scene {built:.1?} ({} boxes), render and read back {w}×{h} {rendered:.1?}",
@@ -685,7 +895,7 @@ pub(crate) mod tests {
             let mut slowest = std::time::Duration::ZERO;
             for step in 0..=12 {
                 let frame = std::time::Instant::now();
-                let picture = gpu.render(&scene, w, h, step as f32 / 12., true).unwrap();
+                let picture = gpu.render(&scene, w, h, step as f32 / 12., true, &[]).unwrap();
                 slowest = slowest.max(frame.elapsed());
                 if let (6, Some(dir)) = (step, std::env::var_os("CITY_PICTURE")) {
                     std::fs::write(std::path::Path::new(&dir).join(format!("city-{count}-rising.bmp")), bmp(&picture))
@@ -719,7 +929,7 @@ pub(crate) mod tests {
                     let view = View::default().orbited(step as f32 * 3., (step % 7) as f32).zoomed(0.9, [0., 0.]);
                     let started = std::time::Instant::now();
                     let scene = ottospace_core::scene::scene(&plan, &[], w as f32 / h as f32, &view);
-                    drop(gpu.render(&scene, w, h, 1., true).unwrap());
+                    drop(gpu.render(&scene, w, h, 1., true, &[]).unwrap());
                     started.elapsed().as_secs_f64() * 1000.
                 })
                 .collect();
@@ -750,7 +960,7 @@ pub(crate) mod tests {
         let face = at((building.min[2] + building.max[2]) / 2.);
         for scale in [1, 2] {
             let (w, h) = (320 * scale, 200 * scale);
-            let p = gpu.render(&scene, w, h, 1., false).unwrap();
+            let p = gpu.render(&scene, w, h, 1., false, &[]).unwrap();
             let px = |v: f32, n: u32| (v * n as f32) as u32;
             let light = |(x, y): (f32, f32)| {
                 let at = ((px(y, h) * w + px(x, w)) * 4) as usize;
@@ -774,12 +984,76 @@ pub(crate) mod tests {
         let plan = atlas::atlas(&atlas::repo(&files));
         let turned = View::default().orbited(40., -10.);
         let scene = ottospace_core::scene::scene(&plan, &[], 1.6, &turned);
-        let fresh = gpu.render(&scene, 320, 200, 1., true).unwrap();
+        let fresh = gpu.render(&scene, 320, 200, 1., true, &[]).unwrap();
         let boxes = Boxes::new(&scene, true);
         let other = ottospace_core::scene::scene(&plan, &[], 1.6, &View::default());
-        drop(gpu.render_boxes(&other, &boxes, 160, 100, 1.).unwrap());
-        let kept = gpu.render_boxes(&scene, &boxes, 320, 200, 1.).unwrap();
+        drop(gpu.render_boxes(&other, &boxes, 160, 100, 1., &[]).unwrap());
+        let kept = gpu.render_boxes(&scene, &boxes, 320, 200, 1., &[]).unwrap();
         assert!(kept.bgra == fresh.bgra, "the kept picture differs");
+    }
+
+    /// A plinth's name is drawn on its wall, and a tower between it and the camera hides it: the
+    /// depth test. Light pixels (the name is white, fogged a little) over its's rect counted, with and without the tower. No GPU
+    /// or no font: nothing to check. `CITY_PICTURE=<dir>` writes both.
+    #[test]
+    fn a_name_on_a_wall_is_drawn_and_a_tower_in_front_hides_it() {
+        let Ok(gpu) = Gpu::new() else { return eprintln!("no GPU: skipped") };
+        let Some(wide) = gpu.measure("SRC") else { return eprintln!("no font: skipped") };
+        let plinth = Block {
+            min: [0.4, 0., 0.3],
+            max: [1.2, 0.06, 0.7],
+            kind: Kind::Plate(1),
+            place: Some(0),
+            district: Some(0),
+        };
+        let fit = ottospace_core::scene::Fit { distance: 1.5, target: [0.8, 0., 0.5], lower: 0. };
+        let seen = |blocks: Vec<Block>| Scene {
+            blocks,
+            camera: Some(fit.camera(&View::default(), 1.6)),
+            fit: Some(fit),
+            ..Scene::default()
+        };
+        let scene = seen(vec![plinth]);
+        let (w, h) = (640, 400);
+        let sign = ottospace_core::city_walls::signs(&scene, |_| Some(wide), [w as f32, h as f32], 12.)[0];
+        let label = || Label {
+            text: "SRC".into(),
+            origin: sign.origin,
+            across: sign.across,
+            up: [0., 1., 0.],
+            em: sign.em,
+            colour: [1.; 4],
+        };
+        let white = |scene: &Scene, name: &str| {
+            let p = gpu.render(scene, w, h, 1., false, &[label()]).unwrap();
+            if let Some(dir) = std::env::var_os("CITY_PICTURE") {
+                std::fs::write(std::path::Path::new(&dir).join(format!("wall-{name}.bmp")), bmp(&p)).unwrap();
+            }
+            let [x, y, rw, rh] = sign.rect.map(|v| v);
+            let (x0, y0) = ((x * w as f32) as u32, (y * h as f32) as u32);
+            let (x1, y1) = (((x + rw) * w as f32) as u32, ((y + rh) * h as f32) as u32);
+            (y0..y1.min(h))
+                .flat_map(|py| (x0..x1.min(w)).map(move |px| (px, py)))
+                .filter(|(px, py)| p.bgra[((py * w + px) * 4) as usize..][..3].iter().all(|c| *c > 150))
+                .count()
+        };
+        let drawn = white(&scene, "named");
+        assert!(drawn > 40, "the name drawn: {drawn} white pixels");
+        let camera = scene.camera.unwrap();
+        let middle: [f32; 3] =
+            std::array::from_fn(|i| sign.origin[i] + sign.across[i] * sign.width / 2. + [0., sign.em / 2., 0.][i]);
+        let to_eye: [f32; 3] = std::array::from_fn(|i| camera.eye[i] - middle[i]);
+        let on: [f32; 3] = std::array::from_fn(|i| middle[i] + to_eye[i] * 0.3);
+        let tower = Block {
+            min: [on[0] - 0.08, 0., on[2] - 0.02],
+            max: [on[0] + 0.08, 1., on[2] + 0.02],
+            kind: Kind::Building,
+            place: Some(1),
+            district: None,
+        };
+        let behind = seen(vec![plinth, tower]);
+        assert!(ottospace_core::city_walls::hidden(&behind, &sign));
+        assert_eq!(white(&behind, "hidden"), 0, "the tower hides it");
     }
 
     /// A 32-bit BMP, top row first: enough to look at a picture.

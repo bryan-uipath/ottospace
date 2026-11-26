@@ -2724,6 +2724,8 @@ function cityName(value: unknown, at: string): CityName {
   return {
     tier: oneOf(["wall", "folder", "file"] as const, "a city name's tier")(o.tier, `${at}.tier`),
     rect: rect(o.rect, `${at}.rect`),
+    plinth: bool(o.plinth, `${at}.plinth`),
+    hidden: bool(o.hidden, `${at}.hidden`),
   };
 }
 

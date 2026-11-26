@@ -250,19 +250,19 @@ fn terrace(depth: usize, lift: f32) -> f32 {
     (0..depth).map(|at| LIFTS.get(at).copied().unwrap_or(LIFT_MIN) * UNIT * lift).sum()
 }
 
-fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+pub(crate) fn sub(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[0] - b[0], a[1] - b[1], a[2] - b[2]]
 }
 
-fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
+pub(crate) fn dot(a: [f32; 3], b: [f32; 3]) -> f32 {
     a[0] * b[0] + a[1] * b[1] + a[2] * b[2]
 }
 
-fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
+pub(crate) fn cross(a: [f32; 3], b: [f32; 3]) -> [f32; 3] {
     [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]]
 }
 
-fn unit(a: [f32; 3]) -> [f32; 3] {
+pub(crate) fn unit(a: [f32; 3]) -> [f32; 3] {
     let length = dot(a, a).sqrt();
     [a[0] / length, a[1] / length, a[2] / length]
 }
@@ -281,7 +281,7 @@ impl Block {
     }
 
     /// Where the segment from `a` to `b` is inside this box, as shares of it (slab method).
-    fn crossed(&self, a: [f32; 3], b: [f32; 3]) -> Option<(f32, f32)> {
+    pub(crate) fn crossed(&self, a: [f32; 3], b: [f32; 3]) -> Option<(f32, f32)> {
         let (mut t0, mut t1) = (0f32, 1f32);
         for axis in 0..3 {
             let d = b[axis] - a[axis];

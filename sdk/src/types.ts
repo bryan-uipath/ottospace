@@ -2163,6 +2163,10 @@ export interface CitySpots {
 export interface CityName {
   tier: "wall" | "folder" | "file";
   rect: Rect;
+  /** Drawn by the city's renderer on its plinth's wall (`city_wall_names`), not by GPUI. */
+  plinth: boolean;
+  /** A plinth's name a box stands in front of (its middle): the depth test hides it there. */
+  hidden: boolean;
 }
 
 /** What the home screen drew, in window points. */

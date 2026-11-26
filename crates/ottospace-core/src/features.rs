@@ -46,10 +46,11 @@ pub enum Feature {
     CityLiveLayer,
     Review,
     CityBehind,
+    CityWallNames,
 }
 
 /// Every flag, in the order the docs and the palette list them.
-pub const ALL: [Feature; 17] = [
+pub const ALL: [Feature; 18] = [
     Feature::Marks,
     Feature::AppsSection,
     Feature::Transcripts,
@@ -67,6 +68,7 @@ pub const ALL: [Feature; 17] = [
     Feature::CityLiveLayer,
     Feature::Review,
     Feature::CityBehind,
+    Feature::CityWallNames,
 ];
 
 /// Flags whose feature is stable now: a setting of one is ignored, with a warning.
@@ -114,7 +116,8 @@ impl Feature {
             | Feature::DecisionSources
             | Feature::CityLiveLayer
             | Feature::Review
-            | Feature::CityBehind => Stage::Experimental,
+            | Feature::CityBehind
+            | Feature::CityWallNames => Stage::Experimental,
         }
     }
 
@@ -143,6 +146,7 @@ impl Feature {
             Feature::CityLiveLayer => "Code city on a live layer",
             Feature::Review => "Review a change",
             Feature::CityBehind => "Code city behind panes",
+            Feature::CityWallNames => "Folder names on the plinths",
         }
     }
 
@@ -195,6 +199,8 @@ impl Feature {
             }
             Feature::CityBehind => {
                 "A tab's city drawn behind its panes, seen through terminals and explorers at terminal_opacity and explorer_opacity (with code_city)"
+            Feature::CityWallNames => {
+                "The code city's top two folder tiers named on the wall of their plinth that faces the camera, drawn with the city (with code_city)"
             }
         }
     }
@@ -357,7 +363,8 @@ mod tests {
                 Feature::DecisionSources,
                 Feature::CityLiveLayer,
                 Feature::Review,
-                Feature::CityBehind
+                Feature::CityBehind,
+                Feature::CityWallNames
             ])
         );
         let three = Features::default().with(Feature::Marks, true).with(Feature::AppsSection, true);
@@ -377,10 +384,11 @@ mod tests {
                 .with(Feature::DecisionSources, true)
                 .with(Feature::CityLiveLayer, true)
                 .with(Feature::Review, true)
-                .with(Feature::CityBehind, true),
+                .with(Feature::CityBehind, true)
+                .with(Feature::CityWallNames, true),
             Features::all()
         );
-        let list = " city_behind,review,city_live_layer,decision_sources,zoom_out,terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
+        let list = " city_wall_names,city_behind,review,city_live_layer,decision_sources,zoom_out,terminal_tasks,projects,session_waits,code_city,decisions,overlay_panels,multi_monitor,agent_mode,slots,transcripts,apps_section,marks ";
         assert_eq!(Features::parse_list(list).unwrap(), Features::all());
         assert_eq!(Features::parse_list("").unwrap(), Features(Vec::new()));
         assert!(Features::parse_list("marks,tabs").unwrap_err().contains("marks, apps_section, transcripts, slots"));
@@ -497,7 +505,8 @@ mod tests {
                     ("decision_sources", false),
                     ("city_live_layer", false),
                     ("review", false),
-                    ("city_behind", false)
+                    ("city_behind", false),
+                    ("city_wall_names", false)
                 ]
             );
             assert_eq!(m.palette.as_ref().map(|p| p.matches()), Some(Vec::new()), "flags, not commands");
@@ -522,7 +531,7 @@ mod tests {
         assert_eq!(wrong("marks", &yes), None);
         assert_eq!(
             wrong("bookmarks", &yes).unwrap(),
-            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out, decision_sources, city_live_layer, review, city_behind"
+            "\"bookmarks\" is not a feature: the features are marks, apps_section, transcripts, slots, agent_mode, multi_monitor, overlay_panels, decisions, code_city, session_waits, projects, terminal_tasks, zoom_out, decision_sources, city_live_layer, review, city_behind, city_wall_names"
         );
         assert_eq!(wrong("marks", &serde_json::json!("on")).unwrap(), "\"marks\" must be true or false");
         assert!(retired("tabs", &["tabs"]).unwrap().contains("stable now") && retired("marks", RETIRED).is_none());

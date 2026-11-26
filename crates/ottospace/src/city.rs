@@ -22,6 +22,7 @@ use ottospace_core::atlas::{self, Atlas};
 use ottospace_core::city_colours::{self, FolderColours};
 use ottospace_core::city_filter;
 use ottospace_core::city_labels::{self, Candidate, Tier};
+use ottospace_core::city_walls::{self, Sign, WALL_TIERS};
 use ottospace_core::empty::{self, Backdrop};
 use ottospace_core::lod;
 use ottospace_core::model::Origin;
@@ -33,6 +34,7 @@ use ottospace_core::tasks::{Group, TaskId};
 use ottospace_core::{status_bar, strata, theme};
 
 use crate::city_gpu::{Boxes, Gpu, Picture};
+use crate::city_text::Label;
 use crate::home::Floor;
 use crate::{Workspace, rect};
 
@@ -78,9 +80,6 @@ const KEEP_LOG: Duration = Duration::from_secs(3600);
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /// Cities kept, by folder: a task's tab shown again draws at once.
 const KEPT: usize = 8;
-/// Folders of this tier and outer are named on their front wall (2: a folder of the root and
-/// the districts on it).
-const WALL_TIERS: usize = 2;
 /// Names are shaped for this many things at most, the largest: a few placed of each.
 const SHAPED: usize = 4 * city_labels::MOST;
 /// A beam's label sits this many points beside its dot; the hovered beam fades in over this long.
@@ -519,6 +518,8 @@ struct Key {
     calm: bool,
     /// Drawn straight to its place's live layer (`city_live_layer`), not read back as an image.
     live: bool,
+    /// The top tiers' names on their plinths (`city_wall_names`): the least em drawn, in pixels.
+    walls: Option<u32>,
 }
 
 impl Key {
@@ -537,7 +538,16 @@ impl Key {
     /// What its layout depends on (`scene::Layout`): not its camera, rise or motion. A camera
     /// move lays nothing out again.
     fn laid(&self) -> Key {
-        Key { rise: 1000, view: [0; 6], moving: false, detail_at: 0, calm: false, live: false, ..self.clone() }
+        Key {
+            rise: 1000,
+            view: [0; 6],
+            moving: false,
+            detail_at: 0,
+            calm: false,
+            live: false,
+            walls: None,
+            ..self.clone()
+        }
     }
 
     /// Rendered at half size while it moves or rises: a quarter of the GPU's work, the copy out
@@ -570,6 +580,8 @@ struct Made {
     image: Arc<RenderImage>,
     lit: Vec<([f32; 4], (f32, f32))>,
     marks: Vec<Mark>,
+    /// The names it drew on plinths (`city_wall_names`).
+    signs: Vec<Sign>,
     scene: Scene,
     plan: Arc<Atlas>,
     places: usize,
@@ -990,12 +1002,28 @@ fn make(
     if last.len() > KEPT_LAYOUTS {
         last.remove(0);
     }
+    // The top tiers' names on their plinths, in capitals, drawn in the picture: they turn with
+    // it, and a building in front hides them.
+    let name = |place: usize| {
+        let label = plan.places.get(place)?.label.to_uppercase();
+        (!label.contains(char::is_control)).then_some(label)
+    };
+    let signs = key.walls.map_or_else(Vec::new, |least| {
+        city_walls::signs(&scene, |place| gpu.measure(&name(place)?), [w as f32, h as f32], least as f32)
+    });
+    let [r, g, b] = [theme::MUTED >> 16, theme::MUTED >> 8, theme::MUTED].map(|c| (c & 0xff) as f32 / 255.);
+    let labels: Vec<Label> = (signs.iter())
+        .filter_map(|s| {
+            let (origin, across, up, em) = (s.origin, s.across, [0., 1., 0.], s.em);
+            Some(Label { text: name(s.place)?, origin, across, up, em, colour: [r, g, b, 1.] })
+        })
+        .collect();
     let scene_us = started.elapsed().as_micros() as u64;
     let (rw, rh) = key.render_size();
     let rise = f32::from(key.rise) / 1000.;
     let picture = match live {
-        Some(surface) => gpu.render_into(surface, &scene, &boxes, rise)?,
-        None => gpu.render_boxes(&scene, &boxes, rw, rh, rise)?,
+        Some(surface) => gpu.render_into(surface, &scene, &boxes, rise, &labels)?,
+        None => gpu.render_boxes(&scene, &boxes, rw, rh, rise, &labels)?,
     };
     let Picture { width, height, bgra, gpu_us, copy_us, prep_us, boxes_us, alloc_us } = picture;
     // The place spinning: its presents, waits and renders.
@@ -1039,6 +1067,8 @@ fn make(
         .filter_map(|(i, b)| {
             let place = b.place?;
             let tier = match b.kind {
+                // On their plinths, in the picture (`city_wall_names`).
+                Kind::Plate(tier) if tier <= WALL_TIERS && key.walls.is_some() => return None,
                 Kind::Plate(tier) if tier <= WALL_TIERS => Tier::Wall,
                 Kind::Plate(_) => Tier::Folder,
                 Kind::Building | Kind::Lit(_) => Tier::File,
@@ -1061,6 +1091,7 @@ fn make(
         image,
         lit,
         marks,
+        signs,
         scene,
         plan,
         places,
@@ -1146,9 +1177,17 @@ impl Drawn {
             Tier::Folder => "folder",
             Tier::File => "file",
         };
-        let names: Vec<_> = (place.iter().flat_map(|place| &place.names))
-            .map(|(_, t, r)| serde_json::json!({ "tier": tier(*t), "rect": rect(*r) }))
+        let mut names: Vec<_> = (place.iter().flat_map(|place| &place.names))
+            .map(
+                |(_, t, r)| serde_json::json!({ "tier": tier(*t), "rect": rect(*r), "plinth": false, "hidden": false }),
+            )
             .collect();
+        // Those on plinths, as the picture drew them: hidden where a box stands in front.
+        names.extend(made.iter().flat_map(|made| made.signs.iter().map(move |s| (made, s))).map(|(made, s)| {
+            let [rx, ry, rw, rh] = s.rect;
+            let at = [x + rx * w, y + ry * h, rw * w, rh * h];
+            serde_json::json!({ "tier": "wall", "rect": at, "plinth": true, "hidden": city_walls::hidden(&made.scene, s) })
+        }));
         serde_json::json!({
             "on": on(floor), "places": made.map(|made| made.places), "groups": made.map(|made| made.groups),
             "picture": made.map(|made| made.key.render_size()), "bounds": [x, y, w, h], "scale": scale,
@@ -1405,6 +1444,7 @@ impl Workspace {
         let (live_on, main) =
             (self.model.features.on(ottospace_core::features::Feature::CityLiveLayer), self.main_window);
         let targets = self.city_painter.live.clone();
+        let walls = self.model.features.on(ottospace_core::features::Feature::CityWallNames);
         let (home, hints) = (self.home.clone(), self.home.clone());
         let shows = {
             let drawn = drawn.borrow();
@@ -1506,6 +1546,8 @@ impl Workspace {
                     detail_at,
                     calm: crate::dial::calm(),
                     live,
+                    // No smaller than the size GPUI named them in (`paint`).
+                    walls: walls.then(|| (theme::TEXT_XS * scale).round() as u32),
                 });
                 key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
                 // Another folder in the same place (the main window's tab switched): its own first
@@ -3200,6 +3242,8 @@ mod tests {
             detail_at: 0,
             calm: false,
             live: false,
+            // `CITY_WALLS=1`: the top tiers named on their plinths (`city_wall_names`), at 2×.
+            walls: std::env::var_os("CITY_WALLS").map(|_| 24),
         };
         // The one-off stages apart: layout, folder colours, boxes (as `make` does them once).
         let ms = |t: Instant| t.elapsed().as_secs_f64() * 1e3;
@@ -3378,6 +3422,7 @@ mod tests {
             detail_at: 0,
             calm: false,
             live: false,
+            walls: None,
         };
         let mut last = Layouts::new();
         let mut detail = None;
