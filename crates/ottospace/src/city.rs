@@ -191,8 +191,8 @@ impl Reader {
         Self { jobs, reads, asked: HashMap::new(), wanted, held: HashMap::new(), came: 0, read_us: None }
     }
 
-    /// The folders on show, each with what it is asked with: one new, or whose roots or lit
-    /// files changed, is read (again). A folder no longer on show is forgotten, and read again
+    /// The folders on show, each with what it is asked with: one new, or whose roots changed or
+    /// that has a file lit anew, is read (again). A folder no longer on show is forgotten, and read again
     /// when it comes back.
     fn ask(&mut self, on_show: HashMap<String, Asked>) {
         // Published first: a read sent below must find its folder wanted.
@@ -200,7 +200,11 @@ impl Reader {
             *wanted = on_show.keys().cloned().collect();
         }
         for (dir, asked) in &on_show {
-            if self.asked.get(dir) != Some(asked) {
+            // A lit file let go (its hold over) made no file: only one lit anew, or ended, reads again.
+            let same = self.asked.get(dir).is_some_and(|was| {
+                (&was.0, &was.1) == (&asked.0, &asked.1) && asked.2.iter().all(|lit| was.2.contains(lit))
+            });
+            if !same {
                 let _ = self.jobs.send((dir.clone(), asked.0.clone(), asked.1.clone()));
             }
         }

@@ -9788,6 +9788,7 @@ impl Model {
             || self.calendar.due(now)
             || self.new_window.as_ref().is_some_and(|wait| wait.since + crate::new_window::WAIT_MS <= now)
             || self.filed.next_due().is_some_and(|at| at <= now)
+            || self.chats.iter().any(|chat| chat.transcript.held_until().is_some_and(|at| self.now < at && at <= now))
     }
 
     /// When `due` turns true next, but for the calendar's alerts: the shell looks at those on its

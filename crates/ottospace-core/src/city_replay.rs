@@ -42,6 +42,8 @@ impl Replay {
 
     /// The task's agent said `events` at `at` (ms).
     pub fn step(&mut self, events: Vec<Event>, at: u64) {
+        // Its clock at the record's time, as the shell's at each action: holds last as they did.
+        self.model.update(Action::Tick { now: at }.sent_by(Origin::System));
         self.model.update(Action::AgentEvents { task: TASK, events, at }.sent_by(Origin::System));
     }
 
@@ -96,7 +98,8 @@ mod tests {
         let shell = start("s", "Bash", Station::Shell, "duped report", "duped report . --json");
         r.step(vec![end, shell], 2);
         let city = r.city().unwrap();
-        assert_eq!(city.agents.iter().map(|a| (a.at, a.near.len())).collect::<Vec<_>>(), [(None, 0)]);
+        // At no file and no path named: held over the file it just read (`HOLD_MS`).
+        assert_eq!(city.agents.iter().map(|a| (a.at, a.near.len())).collect::<Vec<_>>(), [(Some("src/main.rs"), 0)]);
         assert_eq!(city.glimpses.len(), 1, "the read's, kept for the turn");
         assert_eq!(r.pulse(), Some(Pulse::Running));
     }
