@@ -313,10 +313,11 @@ fn watched(event: &ottospace_sessions::Event) -> Vec<Event> {
             let started = model.clone().map(|model| Event::Started { session: None, model: Some(model), mode: None });
             started.into_iter().chain([usage]).collect()
         }
-        What::ToolStart { id, tool, station, summary, diff, gist } => {
+        What::ToolStart { id, tool, station, summary, detail, diff, gist } => {
             let (tool, station, label, diff, gist) =
                 (tool.clone(), *station, summary.clone(), diff.clone(), gist.clone());
-            let detail = Text::default();
+            // Its input's words, as a live chat's row has them: a glance reads its file or command.
+            let detail = detail.as_deref().map(Text::new).unwrap_or_default();
             vec![Event::ToolStart { id: id.clone(), parent: None, tool, station, label, detail, diff, gist }]
         }
         What::ToolEnd { id, failed, output, .. } => {

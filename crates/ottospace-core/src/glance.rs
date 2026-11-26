@@ -99,6 +99,17 @@ impl Glances {
     }
 }
 
+/// The words of a call's input its row and its glance read: a shell's command, a fetch's URL,
+/// else the file or folder it names. None: none of these (a caller may show the input whole).
+pub fn call_detail<'a>(tool: &str, input: &'a serde_json::Value) -> Option<&'a str> {
+    let text = |key: &str| input[key].as_str();
+    match tool {
+        "Bash" | "PowerShell" => text("command"),
+        "WebFetch" => text("url"),
+        _ => text("file_path").or(text("notebook_path")).or(text("path")),
+    }
+}
+
 /// A Grep or Glob call's scope from its detail: its `path`, given alone or in its input's JSON.
 fn scope(detail: &str) -> Words {
     if !detail.trim_start().starts_with('{') {

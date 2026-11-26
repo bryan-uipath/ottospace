@@ -436,7 +436,9 @@ fn assistant(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
         let diff = cursor.edits.then(|| ottospace_core::diff::claude(tool, &block["input"])).flatten();
         let gist = cursor.edits.then(|| ottospace_core::gist::claude(tool, &block["input"])).flatten();
         let label = station::tool_label(tool);
-        emit(What::ToolStart { id: id.clone(), tool: label, station, summary: summary.clone(), diff, gist });
+        let detail = cursor.words.then(|| ottospace_core::glance::call_detail(tool, &block["input"])).flatten();
+        let detail = detail.map(|detail| ottospace_core::transcript::cut(detail, crate::MAX_DETAIL).to_string());
+        emit(What::ToolStart { id: id.clone(), tool: label, station, summary: summary.clone(), detail, diff, gist });
         if matches!(tool, "Agent" | "Task") && track(&mut cursor.agents, id.clone()) {
             emit(What::SubAgentStart { id, label: summary });
         }
@@ -702,6 +704,35 @@ mod tests {
             })
             .collect();
         assert_eq!(order, ["before", "call", "after"]);
+    }
+
+    /// A call's input words (its path, its command), for a glance, leave the crate only for the
+    /// watch view's cursor, as the user's and the model's words do; cut to `MAX_DETAIL`.
+    #[test]
+    fn a_calls_detail_only_for_a_cursor_that_asks() {
+        let long = "x".repeat(crate::MAX_DETAIL + 10);
+        let blocks = serde_json::json!([
+            { "type": "tool_use", "id": "r", "name": "Read", "input": { "file_path": "/w/a.rs" } },
+            { "type": "tool_use", "id": "b", "name": "Bash", "input": { "command": "rg -n loop src" } },
+            { "type": "tool_use", "id": "l", "name": "Bash", "input": { "command": long } },
+            { "type": "tool_use", "id": "t", "name": "TodoWrite", "input": { "todos": [] } }]);
+        let record = serde_json::json!({ "type": "assistant", "message": { "id": "m", "content": blocks } });
+        let read = |mut cursor: Cursor| {
+            let mut events = Vec::new();
+            record_events(&record, false, &mut cursor, &mut events);
+            let details = events.into_iter().filter_map(|e| match e.what {
+                What::ToolStart { detail, .. } => Some(detail),
+                _ => None,
+            });
+            details.collect::<Vec<_>>()
+        };
+        assert_eq!(read(Cursor::with_edits()), [None, None, None, None]);
+        let seen = read(Cursor::with_words());
+        assert_eq!(
+            (seen[0].as_deref(), seen[1].as_deref(), &seen[3]),
+            (Some("/w/a.rs"), Some("rg -n loop src"), &None)
+        );
+        assert_eq!(seen[2].as_ref().map(String::len), Some(crate::MAX_DETAIL), "cut");
     }
 
     #[test]
