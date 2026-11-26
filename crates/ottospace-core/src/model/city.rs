@@ -228,8 +228,8 @@ impl Model {
 
     /// The city an empty place draws, with the flag on: the map of its folder. Lit: the files
     /// the agents are at now (`Activity::files`), each in its task's colour: in a task's space
-    /// that task's; elsewhere every task that works in that folder (`task_worktree`, as the
-    /// Repos section's dots).
+    /// its tasks' (its own and those that joined it); elsewhere every task that works in that
+    /// folder (`task_worktree`, as the Repos section's dots).
     pub fn city_at(&self, at: At) -> Option<City<'_>> {
         let empty = match at {
             At::Tab(id) => self.tabs.iter().position(|tab| tab.id == id).is_some_and(|i| self.tree_at(i).is_none()),
@@ -262,9 +262,13 @@ impl Model {
             Some(Owner::Task { id }) => Some(*id),
             _ => None,
         };
+        // A task's space: its tasks, its own and those that joined it; elsewhere, the checkout's.
+        let members = space.filter(|_| own.is_some()).map(|of| self.space_tasks(of));
+        let works =
+            |task: TaskId| members.as_ref().map_or(self.task_worktree(task) == Some(dir), |m| m.contains(&task));
         let chats = self.chats.iter().filter_map(|chat| {
             let task = chat.subject.task()?;
-            let works = own.map_or(self.task_worktree(task) == Some(dir), |own| own == task);
+            let works = works(task);
             works.then(|| Some((task, self.tasks.get(task)?.colour, &chat.transcript)))?
         });
         let chats: Vec<_> = chats.collect();
@@ -289,7 +293,7 @@ impl Model {
         let mut drawn: Vec<&crate::sessions::Found> = Vec::new();
         let in_terminal = (self.at_work.iter()).filter_map(|s| {
             let task = self.tasks.adopter(&s.runner, &s.id)?;
-            let works = own.map_or(self.task_worktree(task.id) == Some(dir), |own| own == task.id);
+            let works = works(task.id);
             let chatted = self.chat(&Subject::Task(task.id)).is_some_and(|chat| chat.transcript.live);
             let agent = Agent {
                 who: Who::Task(task.id),
@@ -566,6 +570,24 @@ mod tests {
         city(m).map(|city| city.dir)
     }
 
+    /// A task started in another task's workspace joins its space: its agent floats on that
+    /// space's city too, not only the space's own task's.
+    #[test]
+    fn a_task_that_joined_a_space_floats_on_its_city() {
+        let mut m = task_in_app();
+        m.update(Action::OpenCompose { text: "second".into() });
+        m.update(Action::ComposeEnter);
+        assert_eq!(m.space_tasks(&Owner::Task { id: 1 }), [1, 2], "task 2 joined task 1's space");
+        m.update(Action::AgentStarted { task: Subject::Task(2), session: None, at: 1 }.sent_by(Origin::System));
+        let start = call("r", Station::Shell, "duped report");
+        m.update(
+            Action::AgentEvents { task: Subject::Task(2), events: vec![Event::TurnStarted, start], at: 5 }
+                .sent_by(Origin::System),
+        );
+        let agents = city(&m).map(|c| c.agents.iter().map(|a| a.who).collect::<Vec<_>>()).unwrap_or_default();
+        assert!(agents.contains(&Who::Task(2)), "{agents:?}");
+    }
+
     #[test]
     fn a_tasks_empty_tab_is_the_city_of_its_checkout_and_only_with_the_flag() {
         let mut m = task_in_app();
@@ -685,7 +707,8 @@ mod tests {
         let mut m = task_in_app();
         let one = m.tasks.get(1).and_then(|task| task.colour);
         events(&mut m, vec![Event::TurnStarted, call("a", Station::Files, "src/main.rs")]);
-        // A second task in the same checkout, at another file.
+        // A second task in the same checkout, at another file: started from Home, a space of its own.
+        m.update(Action::SpaceOpen { space: Owner::Home });
         m.update(Action::OpenCompose { text: "second >app".into() });
         m.update(Action::ComposeEnter);
         let two = 2;
@@ -1058,6 +1081,8 @@ src/main.rs:9:loop
     fn a_workspace_floats_every_working_task_and_a_task_only_its_own() {
         let mut m = task_in_app();
         events(&mut m, vec![Event::TurnStarted, call("a", Station::Files, "src/main.rs")]);
+        // Started from Home: not in task 1's space, though in its checkout.
+        m.update(Action::SpaceOpen { space: Owner::Home });
         m.update(Action::OpenCompose { text: "second >app".into() });
         m.update(Action::ComposeEnter);
         m.update(Action::AgentStarted { task: Subject::Task(2), session: None, at: 1 }.sent_by(Origin::System));
