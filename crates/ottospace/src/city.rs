@@ -2820,7 +2820,7 @@ fn name_agent(
 
 /// Each agent's icon (`Scene::marks`): over the building it is at, at its beam's end, a cone of
 /// its colour from the icon down onto the building's top; fanned beside others there; at no file,
-/// hovering over the city's middle with no cone. Lowered along the beam until inside the picture,
+/// hovering at the picture's top edge over its middle, with no cone. Lowered along the beam until inside the picture,
 /// else not drawn. Never moved for the hints: they are drawn over it, so an icon stays where its
 /// work is whether they show or not. One that moves glides there (at once under Reduce Motion).
 /// A busy agent pulses (none under Reduce Motion): the pool on its building, or at no file a
@@ -2862,8 +2862,9 @@ fn agents(
             let rect = Bounds { size: gpui::size(rect.size.width, rect.size.height + below), ..rect };
             (bounds.contains(&rect.origin) && bounds.contains(&rect.bottom_right())).then_some(at)
         };
-        // At no file: whole inside the picture's top.
-        let hover = point(end.x, end.y.max(bounds.top() + px(ICON / 2. + 1.)));
+        // At no file: along the picture's top edge, a place of its own whatever covers the city
+        // (the hints stand in its middle, then go when a pane opens over it).
+        let hover = point(end.x, bounds.top() + px(ICON / 2. + 1.));
         let to = match foot {
             // Down its beam while it is off the picture.
             Some(f) => [1., 0.75, 0.5, 0.25].into_iter().find_map(|t: f32| fits(f + (end - f) * t + offset)),
