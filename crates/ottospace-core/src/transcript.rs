@@ -731,9 +731,9 @@ impl Transcript {
         self.activity.file_held(&self.is(), now)
     }
 
-    /// When its newest file's hold ends (`Activity::held_until`).
-    pub fn held_until(&self) -> Option<u64> {
-        self.activity.held_until()
+    /// When each of its files' holds ends (`Activity::holds_end`).
+    pub fn holds_end(&self) -> Vec<u64> {
+        self.activity.holds_end(&self.is()).collect()
     }
 
     fn is(&self) -> Is<'_> {

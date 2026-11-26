@@ -154,6 +154,8 @@ impl Activity {
         self.turns = self.turns.saturating_add(1);
         self.uses.iter_mut().for_each(|used| used.failing = 0);
         (self.error, self.stepped, self.thinking) = (None, false, at);
+        // A new turn holds none of the last one's files.
+        self.ended.clear();
     }
 
     /// The model wrote or asked: one request, counted once until a call ends or a message comes.
@@ -196,7 +198,8 @@ impl Activity {
         let Some(place) = self.running.iter().position(|call| call.id == id) else { return };
         let call = self.running.remove(place);
         if call.station == Station::Files {
-            self.ended.retain(|(label, _)| *label != call.label);
+            // Its own earlier end, and holds over by now, go; at most `MAX_HELD` live at once.
+            self.ended.retain(|(label, end)| *label != call.label && at < end + HOLD_MS);
             if self.ended.len() == MAX_HELD {
                 self.ended.remove(0);
             }
@@ -236,6 +239,7 @@ impl Activity {
         self.stepped = false;
         self.error = error.or(self.error.take());
         self.latest = self.latest.max(at);
+        self.ended.clear();
     }
 
     /// The labels of the files the agent is at now: its `Files` calls that run, and its last
@@ -258,10 +262,11 @@ impl Activity {
     }
 
     /// `files`, and those whose call ended under `HOLD_MS` before `now` while the agent works:
-    /// a burst of quick reads leaves a trail.
+    /// a burst of quick reads leaves a trail. Not for records read with no clock (a watched
+    /// file's, all at once): their ends are not when they happened.
     pub fn files_held(&self, is: &Is, now: u64) -> Vec<(&str, bool)> {
         let mut files = self.files(is);
-        if self.pulse(is) == Pulse::Running {
+        if self.holds(is) {
             files.extend(self.held(now).map(|label| (label, false)));
             files.sort_unstable_by(|a, b| a.0.cmp(b.0).then(b.1.cmp(&a.1)));
             files.dedup_by_key(|file| file.0);
@@ -271,12 +276,17 @@ impl Activity {
 
     /// The newest file held at `now` while the agent works: where it stays when it is at none.
     pub fn file_held(&self, is: &Is, now: u64) -> Option<&str> {
-        (self.pulse(is) == Pulse::Running).then(|| self.held(now).last()).flatten()
+        self.holds(is).then(|| self.held(now).last()).flatten()
     }
 
-    /// When the newest hold ends, while one may: for the shell to look again then (`Model::due`).
-    pub fn held_until(&self) -> Option<u64> {
-        self.ended.last().map(|(_, at)| at + HOLD_MS)
+    /// When each hold ends, while any may: for the shell to look again then (`Model::due`).
+    pub fn holds_end(&self, is: &Is) -> impl Iterator<Item = u64> {
+        let ends = self.holds(is).then_some(self.ended.iter()).into_iter().flatten();
+        ends.map(|(_, at)| at + HOLD_MS)
+    }
+
+    fn holds(&self, is: &Is) -> bool {
+        is.timed && self.pulse(is) == Pulse::Running
     }
 
     fn held(&self, now: u64) -> impl Iterator<Item = &str> {

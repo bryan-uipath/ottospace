@@ -19458,10 +19458,20 @@ fn a_quick_read_holds_its_building_then_lets_go() {
     otto.call(json!({"cmd": "section", "section": "tasks"}));
     otto.start_task(1);
     otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    // Held over the file it read, in one state: its read ended, the shell line running.
+    let held = |o: &Otto| {
+        let state = o.call(json!({"cmd": "state"}));
+        let stations = &state["drawer"]["native"]["chats"]["1"]["dial"]["stations"];
+        let running = |name: &str| {
+            stations.as_array().into_iter().flatten().find(|s| s["station"] == name).map(|s| s["running"].clone())
+        };
+        let city = &state["city"];
+        let lit = city["lit"].as_array().is_some_and(|l| l.len() == 1);
+        let after = running("files") == Some(json!(0)) && running("shell") == Some(json!(1));
+        (after && lit && city["agents"][0]["cone"] == json!(true)).then(Instant::now)
+    };
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
-    let held = |c: &Value| c["agents"][0]["cone"] == json!(true) && c["lit"].as_array().is_some_and(|l| l.len() == 1);
-    // Held over the file it read, though its call ended and the shell line runs.
-    let at = otto.wait_for("held over its file", |o| Some(city(o)).filter(held).map(|_| Instant::now()));
+    let at = otto.wait_for("held over its file, its read ended", held);
     // Then let go: the agent hovers, nothing lit.
     otto.wait_for("let go", |o| {
         let c = city(o);

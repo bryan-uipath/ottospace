@@ -1018,6 +1018,17 @@ mod tests {
         assert!(!m.due(until - 1) && m.due(until), "the shell looks again when the hold ends");
         m.update(Action::Tick { now: until }.sent_by(Origin::System));
         assert_eq!(held(&m), Some((None, vec![])), "let go");
+        // Two reads ended apart: each hold's end is due in turn, and the shell wakes for the first.
+        at(&mut m, vec![call("a", Station::Files, "src/a.rs")], 3_000);
+        at(&mut m, vec![end("a"), call("b", Station::Files, "src/b.rs")], 3_000);
+        at(&mut m, vec![end("b"), shell("u", "cargo test")], 3_500);
+        let hold = crate::activity::HOLD_MS;
+        assert_eq!(m.next_due(), Some(3_000 + hold));
+        assert!(m.due(3_000 + hold) && !m.due(3_000 + hold - 1));
+        m.update(Action::Tick { now: 3_000 + hold }.sent_by(Origin::System));
+        assert_eq!(held(&m), Some((Some("src/b.rs"), vec!["src/b.rs"])), "the first let go, the second held");
+        m.update(Action::Tick { now: 3_500 + hold }.sent_by(Origin::System));
+        assert_eq!(held(&m), Some((None, vec![])));
         // A shell line naming a path: there at once, the held file lit still.
         at(&mut m, vec![call("r2", Station::Files, "src/lib.rs")], 5_000);
         at(&mut m, vec![end("r2"), shell("t", "ls src/")], 5_010);
