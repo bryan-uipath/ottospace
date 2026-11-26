@@ -61,7 +61,7 @@ pub const CHIP_LABEL: usize = 60;
 
 /// A call's label as the chip and the city show it: cleaned, on one line, cut to `CHIP_LABEL`.
 /// None when nothing is left.
-pub fn call_line(label: &str) -> Option<String> {
+pub(crate) fn call_line(label: &str) -> Option<String> {
     // Cut before it is cleaned, and after: a label may be long.
     let label: String = label.chars().take(4 * CHIP_LABEL).collect();
     let label = crate::transcript::clean(&label).replace('\n', " ");

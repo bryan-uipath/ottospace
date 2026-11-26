@@ -19619,7 +19619,9 @@ fn a_terminal_session_floats_on_the_city_behind_a_terminal() {
     otto.wait_for("the session on the city behind the terminal", |o| {
         let c = city(o);
         let behind = c["behind"].as_array().is_some_and(|b| !b.is_empty());
-        let session = c["agents"].as_array().is_some_and(|a| a.iter().any(|a| a["task"].is_null()));
+        let session = c["agents"]
+            .as_array()
+            .is_some_and(|a| a.iter().any(|a| a["task"].is_null() && a["station"] == json!("shell")));
         (behind && session).then_some(())
     });
     drop(otto);

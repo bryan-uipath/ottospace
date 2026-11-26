@@ -189,19 +189,19 @@ pub enum At {
     Pane(PaneId),
 }
 
-/// The file a session at work is at: its label, while its station is files (as serialized).
-/// A session's call's station and line, as its Sessions row says them (`Found::doing`).
+/// A session's call's station, as its reader names it (a quiet one running sub-agents: `agents`).
 fn station_of(s: &crate::sessions::Found) -> Option<Station> {
-    s.station.as_deref().filter(|_| s.active).and_then(Station::named)
+    s.station.as_deref().and_then(Station::named)
 }
 
+/// Its call as its Sessions row says it (`Found::doing`).
 fn line_of(s: &crate::sessions::Found) -> Option<String> {
     s.doing().as_deref().and_then(talk::call_line)
 }
 
+/// The file a session at work is at: its label, while its station is files.
 fn file_of(s: &crate::sessions::Found) -> Option<&str> {
-    let file = s.station.as_deref().is_some_and(|station| station.eq_ignore_ascii_case(Station::Files.name()));
-    s.label.as_deref().filter(|_| file)
+    s.label.as_deref().filter(|_| station_of(s) == Some(Station::Files))
 }
 
 impl Model {
@@ -905,7 +905,10 @@ mod tests {
         };
         m.update(Action::SetSessions { found: vec![found], day: 0 }.sent_by(Origin::System));
         let city = city(&m).unwrap();
-        assert_eq!(city.agents.iter().map(|a| (a.at, a.subagents)).collect::<Vec<_>>(), [(None, 2)]);
+        assert_eq!(
+            city.agents.iter().map(|a| (a.at, a.subagents, a.station)).collect::<Vec<_>>(),
+            [(None, 2, Some(Station::Agents))]
+        );
         let lit: Vec<&str> = city.lit.iter().map(|lit| lit.label).collect();
         assert_eq!(lit, ["src/lib.rs", "docs/a.md"]);
     }

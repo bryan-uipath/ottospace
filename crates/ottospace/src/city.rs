@@ -744,7 +744,8 @@ struct Icon {
     fan: (usize, usize),
     pulsing: bool,
     subagents: usize,
-    /// The glyph drawn at its corner, and where its call's line was drawn (never its words).
+    /// Its call's station (its glyph drawn at its corner where it fits), and where its call's
+    /// line was drawn (never its words).
     station: Option<ottospace_core::activity::Station>,
     caption: Option<Bounds<Pixels>>,
 }
@@ -2903,9 +2904,11 @@ fn agents(
         }
         // The call it runs: its station's glyph on the icon's corner, in its colour, as on the dial.
         let glyph = agent.station.and_then(|station| Some((station, crate::dial::glyph(station)?)));
-        if let Some((station, glyph)) = glyph {
+        let dot = Bounds::centered_at(point(rect.right(), rect.top()), gpui::size(px(STATION), px(STATION)));
+        // Inside the picture and clear of the hints, as the icon is: else not drawn.
+        let room = bounds.contains(&dot.origin) && bounds.contains(&dot.bottom_right()) && !dot.intersects(&clear);
+        if let Some((station, glyph)) = glyph.filter(|_| room) {
             let hue = Hsla::from(rgb(theme::station(station)));
-            let dot = Bounds::centered_at(point(rect.right(), rect.top()), gpui::size(px(STATION), px(STATION)));
             window.paint_quad(
                 fill(dot, rgb(theme::SELECTED)).corner_radii(px(STATION / 2.)).border_widths(px(1.)).border_color(hue),
             );
@@ -2939,7 +2942,7 @@ fn agents(
             fan: mark.fan,
             pulsing: pulse.is_some(),
             subagents,
-            station: glyph.map(|(station, _)| station),
+            station: agent.station,
             caption,
         });
     }
