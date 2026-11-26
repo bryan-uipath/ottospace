@@ -70,7 +70,7 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "m
 # The viewer decodes pictures with it, off the main thread, with limits: the formats gpui's own
 # defaults already build (no new crate in the lock).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
-pollster = "0.4"
+pollster = "1.0"
 
 [dev-dependencies]
 serde_json = "1"
