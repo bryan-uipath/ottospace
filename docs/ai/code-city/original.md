@@ -29,7 +29,7 @@ follow it.
 | Chosen by on-screen size: kept when 40 px to 45% of the view tall | Labels follow zoom: districts far out, files near in | bring over |
 | Largest first, greedy, no overlap, at most 50 | Deterministic, the important names win | bring over |
 | Constant pixel size per tier (folder 26, file 18, item 14) | Legible at any distance | bring over (our sizes) |
-| Top two folder tiers painted on the terrace wall that faces the camera | Names sit on the thing they name, not floating | bring over (as a later step; first, edge labels) |
+| Top two folder tiers painted on the terrace wall that faces the camera | Names sit on the thing they name, not floating | have, behind `city_wall_names` ([wall-names.md](wall-names.md)) |
 | Re-picked every 0.15 s, cross-faded; frozen during camera flights | No flicker as the camera moves | bring over with the camera |
 | Leader lines from a parent's label to its children's, on hover | Shows nesting on demand | leave (noise) |
 | Folder names in capitals | Tells folders from files | bring over |

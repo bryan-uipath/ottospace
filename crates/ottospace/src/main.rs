@@ -80,6 +80,7 @@ mod child;
 mod city;
 mod city_gpu;
 mod city_replay;
+mod city_text;
 mod clipboard;
 mod clone;
 mod collect;

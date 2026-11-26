@@ -21,6 +21,7 @@ pub mod city_filter;
 pub mod city_labels;
 pub mod city_replay;
 pub mod city_shell;
+pub mod city_walls;
 pub mod clip;
 pub mod clone;
 pub mod commands;

@@ -71,6 +71,9 @@ wgpu = { version = "30", default-features = false, features = ["std", "wgsl", "m
 # defaults already build (no new crate in the lock).
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 pollster = "1.0"
+# The code city's own text (`city_text.rs`): shapes a line from the system font, whose outlines it
+# reads (its `ttf_parser`). MIT; pure Rust; in the lock already (GPUI's SVG stack), so no new crate.
+rustybuzz = "=0.20.1"
 
 [dev-dependencies]
 serde_json = "1"
