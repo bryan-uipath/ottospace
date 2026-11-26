@@ -19422,6 +19422,53 @@ fn a_terminal_session_waiting_on_its_subagent_floats_in_the_city_and_lights_its_
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A task started in another task's workspace joins its space, and its agent floats on that
+/// space's city while it works, as the space's own task's would.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_task_that_joined_a_space_floats_on_its_city() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let extra = [("OTTOSPACE_FEATURES", "code_city"), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+    let (root, _, env) = native_setup("city-joined", &[], &extra);
+    let app = root.join("repos/app");
+    git(&app, &["init", "-q"]);
+    let path = app.join("src/main.rs");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(path, "x".repeat(3000)).unwrap();
+    // Each agent's first turn: a shell line that runs on, both agents at work at once.
+    let call = json!({"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "duped report ."}});
+    let lines = [
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#),
+        format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#),
+        r#"{"_sleep":60}"#.into(),
+    ];
+    std::fs::write(root.join("fixtures/turn1.jsonl"), lines.join("\n") + "\n").unwrap();
+    let otto = launch_env("city-joined", &env);
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    let tasks = |o: &Otto| {
+        state(o)["city"]["agents"].as_array().map(|a| a.iter().map(|a| a["task"].clone()).collect::<Vec<_>>())
+    };
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    otto.wait_for("task 1 floats", |o| tasks(o).filter(|t| t.contains(&json!(1))));
+    // The user's ⌘N in front of task 1's space: the task started there joins it.
+    assert_eq!(otto.user_key("cmd-n")["mode"], "compose");
+    otto.user_key("s e c o n d");
+    otto.user_key("enter");
+    let joined = state(&otto)["spaces"].as_array().into_iter().flatten().any(|space| {
+        space["of"] == json!({"kind": "task", "id": 1})
+            && space["tasks"].as_array().is_some_and(|t| t.contains(&json!(2)))
+    });
+    assert!(joined, "task 2 joined task 1's space: {}", state(&otto)["spaces"]);
+    otto.wait_for("both float on task 1's city", |o| {
+        tasks(o).filter(|t| t.contains(&json!(1)) && t.contains(&json!(2)))
+    });
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// Shell lines as activity in the code city: while `cd <checkout> && ls src/ui` runs, the agent
 /// stands over that folder's plinth, its cone on it, pulsing; while `git status` (no path) runs, it
 /// hovers, its icon pulsing; its turn over, it is gone and no frame pulses. Under Reduce Motion

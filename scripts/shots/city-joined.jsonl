@@ -1,0 +1,20 @@
+# A task started in another task's workspace joins its space (the user's ⌘N there) and floats on
+# that space's city beside the space's own task: both read one made-up file, fanned (`joined`).
+# Before the fix only the space's own task floated.
+{"env": {"OTTOSPACE_FEATURES": "code_city"}}
+{"tree": "repos/app", "files": 60}
+{"cmd": "repo_add", "path": "{ROOT}/repos/app"}
+{"until": "repos_bar.0"}
+{"cmd": "task_new", "line": "fix the login loop >app"}
+{"cmd": "section", "section": "tasks"}
+{"click": "task:1", "at": [0.3, 0.3]}
+{"click": "talk:talk-start"}
+{"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
+{"until": "city.agents.0.cone", "is": true, "timeout_ms": 30000}
+{"cmd": "key", "keys": "cmd-n", "as": "user"}
+{"cmd": "key", "keys": "t i d y space t h e space p a r s e r", "as": "user"}
+{"cmd": "key", "keys": "enter", "as": "user"}
+{"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
+{"until": "drawer.native.chats.2.dial.stations.2.running", "is": 1, "timeout_ms": 30000}
+{"settle": 1500}
+{"shot": "joined"}
