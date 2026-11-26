@@ -199,6 +199,7 @@ impl Feature {
             }
             Feature::CityBehind => {
                 "A tab's city drawn behind its panes, seen through terminals and explorers at terminal_opacity and explorer_opacity (with code_city)"
+            }
             Feature::CityWallNames => {
                 "The code city's top two folder tiers named on the wall of their plinth that faces the camera, drawn with the city (with code_city)"
             }
