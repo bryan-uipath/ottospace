@@ -142,7 +142,7 @@ pub(crate) fn small(path: &Path, most: u64) -> Option<String> {
 }
 
 /// An RFC 3339 UTC time in Unix milliseconds, e.g. `2026-11-12T10:44:00.123Z` → 1794480240123.
-pub fn parse_time(text: &str) -> Option<u64> {
+pub(crate) fn parse_time(text: &str) -> Option<u64> {
     let text = text.strip_suffix('Z')?;
     let (date, time) = text.split_once('T')?;
     let mut date = date.split('-').map(|p| p.parse::<u64>().ok());
@@ -165,7 +165,7 @@ pub fn parse_time(text: &str) -> Option<u64> {
 }
 
 /// A record's `timestamp` field in Unix milliseconds, or 0.
-pub(crate) fn time_of(record: &Value) -> u64 {
+pub fn time_of(record: &Value) -> u64 {
     record["timestamp"].as_str().and_then(parse_time).unwrap_or(0)
 }
 

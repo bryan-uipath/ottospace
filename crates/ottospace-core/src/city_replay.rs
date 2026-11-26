@@ -23,7 +23,8 @@ impl Replay {
     pub fn new(dir: &str, features: Features) -> Self {
         let mut model = Model::default();
         model.update(Action::SetFeatures { features }.sent_by(Origin::System));
-        let repo = Repo { name: "replay".into(), path: dir.into(), branch: None, worktrees: vec![] };
+        let name = dir.rsplit('/').next().unwrap_or(dir).into();
+        let repo = Repo { name, path: dir.into(), branch: None, worktrees: vec![] };
         model.update(Action::SetRepos { repos: vec![repo] }.sent_by(Origin::System));
         // The user's acts: a click on the checkout, a task written and started there.
         for act in [
@@ -47,6 +48,12 @@ impl Replay {
     pub fn city(&self) -> Option<City<'_>> {
         let at = *self.model.empty_places().first()?;
         self.model.city_at(at)
+    }
+
+    /// The model, for the city's own tests (`task_in_app`).
+    #[cfg(test)]
+    pub(crate) fn into_model(self) -> Model {
+        self.model
     }
 
     /// Its chat's state: an agent floats only while it is `Running`.
