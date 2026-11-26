@@ -19,12 +19,11 @@ pub struct LiveLayer {
 
 impl LiveLayer {
     /// A view with a Metal layer, below `gpui_view` (GPUI's view, from its window handle) in that
-    /// view's superview, hidden until placed; `bottom`: below every other layer of it too. None
-    /// off the main thread or with no superview.
+    /// view's superview, hidden until placed. None off the main thread or with no superview.
     ///
     /// # Safety
     /// `gpui_view` is a live `NSView`.
-    pub unsafe fn below(gpui_view: *mut c_void, bottom: bool) -> Option<LiveLayer> {
+    pub unsafe fn below(gpui_view: *mut c_void) -> Option<LiveLayer> {
         let mtm = MainThreadMarker::new()?;
         // SAFETY: the caller's view, alive while this runs.
         let gpui = unsafe { (gpui_view as *const NSView).as_ref() }?;
@@ -39,8 +38,7 @@ impl LiveLayer {
         view.setLayer(Some(as_layer));
         view.setWantsLayer(true);
         view.setHidden(true);
-        // Relative to none: below every sibling.
-        parent.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, (!bottom).then_some(gpui));
+        parent.addSubview_positioned_relativeTo(&view, NSWindowOrderingMode::Below, Some(gpui));
         Some(LiveLayer { view, layer })
     }
 

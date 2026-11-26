@@ -18827,11 +18827,14 @@ fn a_tabs_city_shows_behind_its_terminal_and_explorer_and_streams_render_nothing
         });
         assert_eq!(opacities(&shown), [(Some(1), 85.)], "{features}: {shown}");
         assert_eq!(shown["names"], json!([]), "{features}: no names behind panes");
-        // A pointer over a building behind the terminal is the terminal's.
+        // A pointer over a building behind the terminal is the terminal's: no hover, no zoom.
         let spot = otto.wait_for("a building", |o| Some(city(o)["spots"]["file"].clone()).filter(|s| !s.is_null()));
         let (x, y) = (spot[0].as_f64().unwrap(), spot[1].as_f64().unwrap());
         otto.call(json!({"cmd": "mouse", "action": "move", "x": x, "y": y, "as": "user"}));
         assert_eq!(city(&otto)["hovered"], Value::Null, "{features}");
+        let view = city(&otto)["view"].clone();
+        otto.call(json!({"cmd": "mouse", "action": "wheel", "x": x, "y": y, "dx": 0, "dy": 3, "as": "user"}));
+        assert_eq!(city(&otto)["view"], view, "{features}: the wheel there turns no camera");
         // A terminal streaming over it: painted again, never rendered again.
         // At rest first: its rise and levels of detail done.
         let renders = otto.wait_for("the city at rest", |o| {

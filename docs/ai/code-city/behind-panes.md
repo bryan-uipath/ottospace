@@ -69,8 +69,11 @@ shortcuts transparent". Built as the picks say, with these changes:
   dim. Headers, borders, gaps and other panes stay opaque; an empty pane draws its own city in
   front, as before. Terminal cells on the default background already draw no background, so the
   city shows under the text, not only in gaps.
-- **Both paths:** an image painted under the panes, or the live layer (`city_live_layer`), the
-  tab's layer placed under every other layer so an empty pane's city stays over it.
+- **Both paths:** an image painted under the panes, or the live layer (`city_live_layer`). An
+  empty pane in that tab paints its own city as an image: on a live layer of its own, the beams
+  and icons GPUI draws for the city behind would show over it.
+- **Camera:** the city behind uses its tab's view; turning an empty pane's city of the same
+  checkout leaves it where it was.
 - **Cost:** proven by `a_tabs_city_shows_behind_its_terminal_and_explorer_and_streams_render_nothing`:
   4000 lines streamed over the city render no new picture.
 - **Hints:** their backing over the city peaks at about 0.5 (was 0.75), so the city dims there

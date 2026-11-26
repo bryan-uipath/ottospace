@@ -1344,7 +1344,11 @@ impl Workspace {
     /// place, is painted at once.
     pub(crate) fn render_city(&self, floor: Floor, at: At, lattice: AnyElement, cx: &mut Context<Self>) -> AnyElement {
         let Some(mut city) = self.city_for(at) else { return lattice };
-        let behind = self.model.city_behind().is_some_and(|(of, _)| of == at);
+        let behind_tab = self.model.behind_tab();
+        let behind = behind_tab.is_some_and(|tab| at == At::Tab(tab));
+        // An empty pane over its tab's city paints as an image: GPUI's beams and icons of the city
+        // behind would show over a live layer of its own.
+        let over_behind = matches!(at, At::Pane(pane) if behind_tab.is_some() && self.model.tab_of(pane) == behind_tab);
         let view = self.eased_view(at, city.view);
         let easing = self.city_ease.get().is_some_and(|(of, ..)| of == at);
         // Its camera moving: the user's drag of it that has moved, a reset easing back, or a
@@ -1438,7 +1442,7 @@ impl Workspace {
                 // Its live layer under GPUI's view, on its rectangle; the window transparent there.
                 let id = window.window_handle().window_id();
                 let in_main = window.window_handle() == main;
-                let live = live_on && in_main && !small && plan.is_some();
+                let live = live_on && in_main && !small && plan.is_some() && !over_behind;
                 held.live_shown.remove(&floor);
                 // The flag turned off: its layer goes, and with no other the window is opaque again.
                 if !live_on && held.live_views.remove(&floor).is_some() {
@@ -1451,11 +1455,9 @@ impl Workspace {
                     window.set_background_appearance(gpui::WindowBackgroundAppearance::Opaque);
                 }
                 if live && !held.live_views.contains_key(&floor) {
-                    // The tab's own under every other: an empty pane's city over the city behind it.
-                    let bottom = floor == Floor::Main;
                     // SAFETY: this window's own view, alive while it draws.
                     let made = crate::ns_view(window)
-                        .and_then(|view| unsafe { ottospace_mac::live_layer::LiveLayer::below(view, bottom) });
+                        .and_then(|view| unsafe { ottospace_mac::live_layer::LiveLayer::below(view) });
                     if let Some(layer) = made {
                         held.live_views.insert(floor, layer);
                     }
@@ -1913,9 +1915,8 @@ impl Workspace {
         snapshot["grabbed"] = self.model.camera_grabbed().into();
         snapshot["spin"] = serde_json::json!({ "running": self.city_spin.is_some(), "result": self.city_spun });
         // Behind its tab's panes: each that lets it show, at its opacity.
-        let leaves = self.model.tree_at(self.model.main_at()).map(|tree| tree.leaves()).unwrap_or_default();
-        let behind = self.model.city_behind().filter(|(of, _)| of == at).map(|_| {
-            let open = leaves.iter().map(|id| (*id, self.model.pane_opacity(*id))).filter(|(_, o)| *o < 1.);
+        let behind = self.model.behind_tab().filter(|tab| *at == At::Tab(*tab)).map(|_| {
+            let open = self.model.see_through_panes().into_iter();
             open.map(|(pane, opacity)| serde_json::json!({ "pane": pane, "opacity": opacity })).collect::<Vec<_>>()
         });
         snapshot["behind"] = behind.into();
@@ -2019,9 +2020,10 @@ impl Workspace {
         }
         // In the main window: its frames time the spin.
         let places = self.city_places().into_iter().map(|at| (self.floor_of(at), at));
+        // Not one behind panes: its camera stays.
         let first = places.filter(|(floor, _)| !matches!(floor, Floor::Out(_))).find(|(floor, _)| {
             let drawn = self.city_drawn.borrow();
-            drawn.places.get(floor).is_some_and(|place| drawn.picture(place).is_some())
+            drawn.places.get(floor).is_some_and(|place| !place.behind && drawn.picture(place).is_some())
         });
         let Some((floor, at)) = first else {
             self.told = Some(("No city on show to spin".into(), Instant::now()));
@@ -2229,7 +2231,7 @@ impl Workspace {
     pub(crate) fn city_places(&self) -> Vec<At> {
         let mut places = self.model.empty_places();
         places.extend(self.city_under.map(|(pane, _)| At::Pane(pane)).filter(|at| !places.contains(at)));
-        places.extend(self.model.city_behind().map(|(at, _)| at));
+        places.extend(self.model.behind_tab().map(At::Tab));
         places
     }
 
@@ -2238,34 +2240,28 @@ impl Workspace {
         let under = |pane| self.city_under.filter(|(of, _)| *of == pane).and_then(|_| self.model.city_under(pane));
         self.model.city_at(at).or_else(|| match at {
             At::Pane(pane) => under(pane),
-            At::Tab(_) => self.model.city_behind().filter(|(of, _)| *of == at).map(|(_, city)| city),
+            At::Tab(tab) if self.model.behind_tab() == Some(tab) => self.model.city_behind().map(|(_, city)| city),
+            At::Tab(_) => None,
         })
     }
 
     /// The city behind the main window's tab's panes (`city_behind`), and over it the window's
     /// background: opaque, but over the body of a pane that lets the city show at that pane's
-    /// opacity (one quad: the dark background is the dim), and open over another place's live layer.
+    /// opacity (one quad: the dark background is the dim).
     pub(crate) fn render_city_behind(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (at, _) = self.model.city_behind()?;
-        let leaves = self.model.tree_at(self.model.main_at())?.leaves();
+        let at = At::Tab(self.model.behind_tab()?);
         let city = self.render_city(Floor::Main, at, div().into_any_element(), cx);
         // Each body's bounds as this frame lays it out (set before this paints).
-        let open: Vec<(Rc<std::cell::Cell<Bounds<Pixels>>>, f32)> = (leaves.into_iter())
-            .map(|id| (id, self.model.pane_opacity(id)))
-            .filter(|(_, opacity)| *opacity < 1.)
+        let open: Vec<(Rc<std::cell::Cell<Bounds<Pixels>>>, f32)> = (self.model.see_through_panes().into_iter())
             .filter_map(|(id, opacity)| Some((self.cells.get(&id)?.clone(), opacity)))
             .collect();
-        let drawn = self.city_drawn.clone();
         let over = canvas(
             |_, _, _| (),
             move |bounds, _, window, _| {
                 let colour = Hsla::from(rgb(theme::BACKGROUND));
                 let bodies: Vec<(Bounds<Pixels>, f32)> =
                     open.iter().map(|(at, opacity)| (at.get(), *opacity)).collect();
-                let drawn = drawn.borrow();
-                let others = (drawn.live_shown.iter()).filter(|(floor, _)| **floor != Floor::Main).map(|(_, b)| *b);
-                let holes: Vec<Bounds<Pixels>> = bodies.iter().map(|(b, _)| *b).chain(others).collect();
-                drop(drawn);
+                let holes: Vec<Bounds<Pixels>> = bodies.iter().map(|(b, _)| *b).collect();
                 paint_around(bounds, &holes, colour, window);
                 for (body, opacity) in bodies {
                     window.paint_quad(fill(body, colour.opacity(opacity)));

@@ -4070,7 +4070,7 @@ impl Workspace {
         // A session's space on show lists them as Tasks does: its watch and the counts need them.
         let tasks = self.model.sidebar == Some(Section::Tasks) || self.model.shows_session();
         let city = self.model.empty_places().into_iter().any(|at| self.model.city_at(at).is_some())
-            || self.model.city_behind().is_some();
+            || self.model.behind_tab().is_some();
         let open = tasks || self.model.sidebar == Some(Section::Repos) || city;
         // The agent CLIs our panes run, by their processes alone: a city's agents, no setting
         // needed. Read only while a city is on show; told only when they change.

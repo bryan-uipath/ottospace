@@ -249,7 +249,7 @@ impl Model {
 
     /// The main window's tab whose city is drawn behind its panes (`city_behind`): one with
     /// panes, a folder, and a pane that lets the city show (`see_through` under 1).
-    fn behind_tab(&self) -> Option<u32> {
+    pub fn behind_tab(&self) -> Option<u32> {
         let on = self.features.on(Feature::CityBehind) && self.features.on(Feature::CodeCity);
         let tree = self.tree_at(self.main_at()).filter(|_| on)?;
         let tab = self.tabs.get(self.main_at())?.id;
@@ -271,6 +271,12 @@ impl Model {
     pub fn city_behind(&self) -> Option<(At, City<'_>)> {
         let at = At::Tab(self.behind_tab()?);
         Some((at, self.city_of(at)?))
+    }
+
+    /// The panes of the tab whose city is behind them that let it show, with their opacity.
+    pub fn see_through_panes(&self) -> Vec<(PaneId, f32)> {
+        let Some(tree) = self.behind_tab().and_then(|_| self.tree_at(self.main_at())) else { return Vec::new() };
+        tree.leaves().into_iter().map(|id| (id, self.see_through(id))).filter(|(_, o)| *o < 1.).collect()
     }
 
     /// How opaque pane `id`'s background is: under 1 only over the city behind its tab.
@@ -503,7 +509,8 @@ impl Model {
             At::Tab(id) => tabs.contains(id),
             At::Pane(id) => panes.contains(id),
         });
-        for other in self.empty_places().into_iter().filter(|other| *other != at) {
+        let behind = self.behind_tab().map(At::Tab);
+        for other in self.empty_places().into_iter().chain(behind).filter(|other| *other != at) {
             if self.camera_of(other).as_deref() == Some(key.as_str()) {
                 let shown = self.city_view(other);
                 self.cameras.places.entry((other, key.clone())).or_insert(shown);
@@ -1368,6 +1375,12 @@ src/main.rs:9:loop
         assert_eq!((at, city.dir), (At::Tab(tab), "/code/app"));
         assert_eq!(city.view, m.city_view(At::Tab(tab)), "the tab's own camera");
         assert_eq!(opacities(&m), [0.85, 0.6, 1.], "kept in range; an empty pane draws its own city");
+        assert_eq!(m.see_through_panes(), [(terminal, 0.85), (explorer, 0.6)]);
+        // The empty pane's city turns; the one behind stays where it was.
+        let behind = m.city_view(At::Tab(tab));
+        m.update(Action::CityCamera { at: At::Pane(empty), step: CameraStep::Orbit { yaw: 30., pitch: 0. } });
+        assert!(m.city_view(At::Pane(empty)) != behind);
+        assert_eq!(m.city_view(At::Tab(tab)), behind);
         // Only the explorer lets it show: still behind.
         settings(&mut m, r#"{"explorer_opacity": 0.9}"#);
         assert_eq!(opacities(&m), [1., 0.9, 1.]);
