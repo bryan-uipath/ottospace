@@ -2588,7 +2588,7 @@ fn paint(
         }
     }
     let glimmering = glance(&mut glimmer, made, glimpses, bounds, clear, window);
-    let (icons, gliding, pulsing) = agents(made, floating, &was, bounds, clear, window, cx, &shape);
+    let (icons, gliding, pulsing) = agents(made, floating, &was, bounds, window, cx, &shape);
     // The last painted is on top.
     let over_icon = pointer.and_then(|at| icons.iter().rev().find(|icon| icon.rect.contains(&at)));
     let hovered_agent = over_icon.map(|icon| icon.key.clone());
@@ -2820,8 +2820,9 @@ fn name_agent(
 
 /// Each agent's icon (`Scene::marks`): over the building it is at, at its beam's end, a cone of
 /// its colour from the icon down onto the building's top; fanned beside others there; at no file,
-/// hovering over the city's middle (above the hints if they cover it, else under) with no cone. Lowered along the beam
-/// until clear of the hints and inside the picture, else not drawn. One that moves glides there (at once under Reduce Motion).
+/// hovering over the city's middle with no cone. Lowered along the beam until inside the picture,
+/// else not drawn. Never moved for the hints: they are drawn over it, so an icon stays where its
+/// work is whether they show or not. One that moves glides there (at once under Reduce Motion).
 /// A busy agent pulses (none under Reduce Motion): the pool on its building, or at no file a
 /// halo round its icon, swelling and fading once every `PULSE`.
 /// Returns the icons drawn, whether one still glides, and whether one pulses.
@@ -2830,7 +2831,6 @@ fn agents(
     floating: &[Floating],
     was: &[Icon],
     bounds: Bounds<Pixels>,
-    clear: Bounds<Pixels>,
     window: &mut Window,
     cx: &mut gpui::App,
     shape: &dyn Fn(&str, Hsla, f32, &mut Window) -> gpui::ShapedLine,
@@ -2860,25 +2860,14 @@ fn agents(
         let fits = |at: Point<Pixels>| {
             let rect = Bounds::centered_at(at, side);
             let rect = Bounds { size: gpui::size(rect.size.width, rect.size.height + below), ..rect };
-            (!rect.intersects(&clear) && bounds.contains(&rect.origin) && bounds.contains(&rect.bottom_right()))
-                .then_some(at)
+            (bounds.contains(&rect.origin) && bounds.contains(&rect.bottom_right())).then_some(at)
         };
-        // At no file: whole inside the picture's top, then above the hints if they cover it, else
-        // under (a workspace's empty tab keeps 560 points clear for them).
+        // At no file: whole inside the picture's top.
         let hover = point(end.x, end.y.max(bounds.top() + px(ICON / 2. + 1.)));
-        let above = point(hover.x, hover.y.min(clear.top() - px(ICON / 2. + 1.)));
-        let under = point(hover.x, hover.y.max(clear.bottom() + px(ICON / 2. + 1.)));
         let to = match foot {
-            // Down its beam while the hints cover it; last, on the beam just under them, if that is
-            // over its roof (a building the hints stand over).
-            Some(f) => {
-                let rise = f32::from(f.y - end.y);
-                let under = f32::from(f.y - clear.bottom() - px(ICON / 2. + 1.)) / rise;
-                let under = (rise > 0. && under > 0. && under < 1.).then_some(under);
-                let ts = [1., 0.75, 0.5, 0.25].into_iter().chain(under);
-                ts.into_iter().find_map(|t: f32| fits(f + (end - f) * t + offset))
-            }
-            None => [hover, above, under].into_iter().find_map(|at| fits(at + offset)),
+            // Down its beam while it is off the picture.
+            Some(f) => [1., 0.75, 0.5, 0.25].into_iter().find_map(|t: f32| fits(f + (end - f) * t + offset)),
+            None => fits(hover + offset),
         };
         let Some(to) = to else { continue };
         let before = was.iter().find(|icon| icon.key == agent.key);
@@ -2947,8 +2936,8 @@ fn agents(
         // The call it runs: its station's glyph on the icon's corner, in its colour, as on the dial.
         let glyph = agent.station.and_then(|station| Some((station, crate::dial::glyph(station)?)));
         let dot = Bounds::centered_at(point(rect.right(), rect.top()), gpui::size(px(STATION), px(STATION)));
-        // Inside the picture and clear of the hints, as the icon is: else not drawn.
-        let room = bounds.contains(&dot.origin) && bounds.contains(&dot.bottom_right()) && !dot.intersects(&clear);
+        // Inside the picture, as the icon is: else not drawn.
+        let room = bounds.contains(&dot.origin) && bounds.contains(&dot.bottom_right());
         if let Some((station, glyph)) = glyph.filter(|_| room) {
             let hue = Hsla::from(rgb(theme::station(station)));
             window.paint_quad(
@@ -2958,14 +2947,14 @@ fn agents(
             let at = point(dot.center().x - sign.width / 2., dot.center().y - px(STATION * 0.4));
             let _ = sign.paint(at, px(STATION * 0.8), window, cx);
         }
-        // Its line, the sidebar's, under it: alone in its place (not fanned), clear of the hints.
+        // Its line, the sidebar's, under it: alone in its place (not fanned), inside the picture.
         let caption = agent.line.as_deref().filter(|_| mark.fan.1 == 1).and_then(|line| {
             let text = shape(line, Hsla::from(rgb(theme::TEXT)).opacity(0.85), theme::TEXT_XS, window);
             let (top, pad) = (rect.bottom() + below + px(4.), px(4.));
             let size = gpui::size(text.width + pad * 2., px(CAPTION));
             let at = Bounds { origin: point(shown.x - size.width / 2., top), size };
             let inside = bounds.contains(&at.origin) && bounds.contains(&at.bottom_right());
-            (inside && !at.intersects(&clear)).then(|| {
+            inside.then(|| {
                 window.paint_quad(fill(at, Hsla::from(rgb(theme::SELECTED)).opacity(0.85)).corner_radii(px(4.)));
                 let _ = text.paint(point(at.left() + pad, top + px(1.)), px(CAPTION - 2.), window, cx);
                 at
