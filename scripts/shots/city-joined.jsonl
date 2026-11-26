@@ -15,6 +15,6 @@
 {"cmd": "key", "keys": "t i d y space t h e space p a r s e r", "as": "user"}
 {"cmd": "key", "keys": "enter", "as": "user"}
 {"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
-{"sleep_ms": 6000}
-{"settle": 800}
+{"until": "drawer.native.chats.2.dial.stations.2.running", "is": 1, "timeout_ms": 30000}
+{"settle": 1500}
 {"shot": "joined"}

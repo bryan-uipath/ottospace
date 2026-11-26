@@ -19435,15 +19435,12 @@ fn a_task_that_joined_a_space_floats_on_its_city() {
     let path = app.join("src/main.rs");
     std::fs::create_dir_all(path.parent().unwrap()).unwrap();
     std::fs::write(path, "x".repeat(3000)).unwrap();
-    // Each agent's first turn: a shell line that runs a while, then its result.
+    // Each agent's first turn: a shell line that runs on, both agents at work at once.
     let call = json!({"type": "tool_use", "id": "b1", "name": "Bash", "input": {"command": "duped report ."}});
-    let r = json!({"type": "tool_result", "tool_use_id": "b1", "content": "ok", "is_error": false});
     let lines = [
         format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#),
         format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#),
-        r#"{"_sleep":3}"#.into(),
-        format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{r}]}}}}"#),
-        r#"{"type":"result","subtype":"success","is_error":false,"total_cost_usd":0.01}"#.into(),
+        r#"{"_sleep":60}"#.into(),
     ];
     std::fs::write(root.join("fixtures/turn1.jsonl"), lines.join("\n") + "\n").unwrap();
     let otto = launch_env("city-joined", &env);
@@ -19456,7 +19453,6 @@ fn a_task_that_joined_a_space_floats_on_its_city() {
     otto.start_task(1);
     otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
     otto.wait_for("task 1 floats", |o| tasks(o).filter(|t| t.contains(&json!(1))));
-    otto.wait_for("task 1's turn over", |o| tasks(o).filter(|t| t.is_empty()));
     // The user's ⌘N in front of task 1's space: the task started there joins it.
     assert_eq!(otto.user_key("cmd-n")["mode"], "compose");
     otto.user_key("s e c o n d");
@@ -19466,7 +19462,9 @@ fn a_task_that_joined_a_space_floats_on_its_city() {
             && space["tasks"].as_array().is_some_and(|t| t.contains(&json!(2)))
     });
     assert!(joined, "task 2 joined task 1's space: {}", state(&otto)["spaces"]);
-    otto.wait_for("task 2 floats on task 1's city", |o| tasks(o).filter(|t| t.contains(&json!(2))));
+    otto.wait_for("both float on task 1's city", |o| {
+        tasks(o).filter(|t| t.contains(&json!(1)) && t.contains(&json!(2)))
+    });
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }

@@ -262,10 +262,13 @@ impl Model {
             Some(Owner::Task { id }) => Some(*id),
             _ => None,
         };
-        // A task's space: its tasks, its own and those that joined it; elsewhere, the checkout's.
-        let members = space.filter(|_| own.is_some()).map(|of| self.space_tasks(of));
-        let works =
-            |task: TaskId| members.as_ref().map_or(self.task_worktree(task) == Some(dir), |m| m.contains(&task));
+        // A task's space: its own task, and those that joined it working in this checkout (one
+        // may name another, `tidy >web`); elsewhere, every task of the checkout.
+        let members = own.map(|id| self.members(&Owner::Task { id }));
+        let works = |task: TaskId| match &members {
+            Some(members) => Some(task) == own || (members.contains(&task) && self.task_worktree(task) == Some(dir)),
+            None => self.task_worktree(task) == Some(dir),
+        };
         let chats = self.chats.iter().filter_map(|chat| {
             let task = chat.subject.task()?;
             let works = works(task);
@@ -586,6 +589,22 @@ mod tests {
         );
         let agents = city(&m).map(|c| c.agents.iter().map(|a| a.who).collect::<Vec<_>>()).unwrap_or_default();
         assert!(agents.contains(&Who::Task(2)), "{agents:?}");
+        // One that joined but works in another checkout (`>web`): not on this city.
+        let web = Repo { name: "web".into(), path: "/code/web".into(), branch: None, worktrees: vec![] };
+        let app = Repo { name: "app".into(), path: "/code/app".into(), branch: None, worktrees: vec![] };
+        m.update(Action::SetRepos { repos: vec![app, web] });
+        m.update(Action::OpenCompose { text: "third >web".into() });
+        m.update(Action::ComposeEnter);
+        assert!(m.space_tasks(&Owner::Task { id: 1 }).contains(&3), "task 3 joined task 1's space");
+        assert_eq!(m.task_worktree(3), Some("/code/web"));
+        m.update(Action::AgentStarted { task: Subject::Task(3), session: None, at: 1 }.sent_by(Origin::System));
+        let start = call("w", Station::Shell, "cargo test");
+        m.update(
+            Action::AgentEvents { task: Subject::Task(3), events: vec![Event::TurnStarted, start], at: 5 }
+                .sent_by(Origin::System),
+        );
+        let agents = city(&m).map(|c| c.agents.iter().map(|a| a.who).collect::<Vec<_>>()).unwrap_or_default();
+        assert!(!agents.contains(&Who::Task(3)), "{agents:?}");
     }
 
     #[test]
