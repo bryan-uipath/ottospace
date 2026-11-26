@@ -316,10 +316,9 @@ impl Model {
             .collect();
         tasks.extend(in_terminal);
         tasks.sort_by_key(|(task, _)| *task);
-        // A session no task has, at work in this checkout (as its Repos dot says): not in a task's space.
-        let free: Vec<&crate::sessions::Found> = (self.at_work.iter())
-            .filter(|s| own.is_none() && s.repo == dir && !self.tasks.adopted(&s.runner, &s.id))
-            .collect();
+        // A session no task has, at work in this checkout (as its Repos dot says), a task's space too.
+        let free: Vec<&crate::sessions::Found> =
+            (self.at_work.iter()).filter(|s| s.repo == dir && !self.tasks.adopted(&s.runner, &s.id)).collect();
         drawn.extend(free.iter().copied());
         let sessions = free.into_iter().map(|s| Agent {
             who: Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() },
@@ -756,7 +755,8 @@ mod tests {
     }
 
     /// A session no task has, at work in the checkout (a `claude` in the user's terminal): an
-    /// agent of the city at the file it reads, that file lit; not in a task's space; idle, gone.
+    /// agent of the city at the file it reads, that file lit, in a task's space of the checkout
+    /// too; idle, gone.
     #[test]
     fn a_session_in_a_terminal_floats_over_its_file() {
         let mut m = listed();
@@ -791,6 +791,16 @@ mod tests {
         assert_eq!(agents(&m), Some(vec![(0, None)]), "a shell line: at no file");
         m.update(Action::SetSessions { found: vec![found(false, "files", "src/main.rs")], day: 0 });
         assert_eq!(agents(&m), Some(vec![]));
+        // A task's space of the checkout: there too.
+        let mut m = task_in_app();
+        m.update(Action::SetSessions { found: vec![found(true, "files", "src/main.rs")], day: 0 });
+        let shown = m.empty_places().first().and_then(|at| m.city_at(*at));
+        let who = shown.map(|c| c.agents.iter().map(|a| a.who).collect::<Vec<_>>());
+        assert!(who.is_some_and(|w| w.contains(&Who::Session {
+            runner: "claude",
+            id: "s1",
+            title: Some("fix the loop")
+        })));
     }
 
     /// The owner's case: a `claude` in another terminal, its own file quiet while its sub-agents
