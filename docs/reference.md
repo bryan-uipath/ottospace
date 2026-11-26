@@ -1822,7 +1822,9 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   eight at most, then `+n`; a terminal session's are not shown yet.
   A `claude` or `codex` the user runs in one of ottospace's terminals, working in the checkout,
   shows by its process alone (no setting, no session file read): its runner's glyph, hovering,
-  until its program ends or its pane closes. With `sessions` on, its session shows instead. An icon with no room clear of the hints is not drawn.
+  until its program ends or its pane closes. With `sessions` on, its session shows instead. An icon keeps the place of its work: the
+  shortcut hints are drawn over it (a click or hover there is theirs), and an agent at no file
+  hovers at the picture's top edge, so nothing moves when a pane opens and the hints go.
 - The files are what `git ls-files` lists there (tracked, and new ones not ignored), less the
   folders `city_exclude` leaves out and built-in ones (`node_modules`, `target`, `dist`, …):
   dropped before the layout, they take no room, move nothing and count toward no limit. Read off

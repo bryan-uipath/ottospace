@@ -20344,8 +20344,9 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
     let icon = numbers(&icon);
     // Under the hints it is behind them, and a click there is theirs: the user's middle drag pans
     // the city down, below the hints, first.
-    let panel = numbers(&otto.call(json!({"cmd": "state"}))["home_drawn"]["panel"]);
-    let below = panel[1] + panel[3];
+    // The hints' rows as drawn now, and the room the city keeps round them (`CLEAR`).
+    let rows = ["home:open_app", "home:terminal", "home:new_task"].map(|id| otto.control_opt(id));
+    let below = rows.iter().flatten().map(|r| r[1] + r[3]).fold(0., f64::max) + 12.;
     let icon = if icon[1] < below + 4. {
         let (x, y) = (icon[0] + icon[2] / 2., below + 40.);
         let drag = |action: &str, y: f64| json!({"cmd": "mouse", "action": action, "x": x, "y": y, "button": "middle", "as": "user"});

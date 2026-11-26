@@ -1935,6 +1935,10 @@ impl Workspace {
     /// A press at `at` in `floor`'s city: on an agent's icon, what the core says a click there
     /// does (the user's own goes to its task).
     fn city_click(&mut self, floor: Floor, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        // An icon under the hints is behind them: the press is theirs.
+        if self.over_hints(floor, at) {
+            return;
+        }
         let icon = (self.city_drawn.borrow().places.get(&floor)).and_then(|place| {
             place.icons.iter().rev().find(|icon| icon.rect.contains(&at)).map(|icon| (icon.task, icon.key.clone()))
         });
@@ -2582,14 +2586,16 @@ fn paint(
             _ => continue,
         };
         let Some((foot, end)) = beam_of(i) else { continue };
-        if let Some((end, _)) = fit_beam(foot, end, None, bounds, clear) {
+        // Under the hints as its agent's icon is: its dot stays where the icon stands.
+        if let Some((end, _)) = fit_beam(foot, end, None, bounds, Bounds::default()) {
             paint_beam(window, foot, end, Hsla::from(rgb(colour)).opacity(0.85), 1., 2., false);
             lit_beams.push([foot.x, foot.y, end.x, end.y].map(f32::from));
         }
     }
-    let glimmering = glance(&mut glimmer, made, glimpses, bounds, clear, window);
+    let glimmering = glance(&mut glimmer, made, glimpses, bounds, window);
     let (icons, gliding, pulsing) = agents(made, floating, &was, bounds, window, cx, &shape);
-    // The last painted is on top.
+    // The last painted is on top; under the hints, the hints are (an icon there is behind them).
+    let pointer = pointer.filter(|at| !clear.dilate(px(CLEAR)).contains(at));
     let over_icon = pointer.and_then(|at| icons.iter().rev().find(|icon| icon.rect.contains(&at)));
     let hovered_agent = over_icon.map(|icon| icon.key.clone());
     if let Some(icon) = over_icon {
@@ -2666,14 +2672,7 @@ fn box_of(made: &Made, id: &str) -> Option<usize> {
 /// covers (its folders' plinths, the whole ground when unscoped), and the files its result names
 /// stay lit a moment. Glimpses `TOGETHER` play as one; one sweep at a time; none under Reduce
 /// Motion. Returns whether one still plays.
-fn glance(
-    g: &mut Glimmer,
-    made: &Made,
-    glimpses: &[Glimpse],
-    bounds: Bounds<Pixels>,
-    clear: Bounds<Pixels>,
-    window: &mut Window,
-) -> bool {
+fn glance(g: &mut Glimmer, made: &Made, glimpses: &[Glimpse], bounds: Bounds<Pixels>, window: &mut Window) -> bool {
     let (now, calm) = (Instant::now(), crate::dial::calm());
     // A folder with no plinth of its own (its one child stands for it): its buildings'.
     let blocks_of = |path: &str| -> Vec<usize> {
@@ -2789,7 +2788,7 @@ fn glance(
             for &i in drawn.iter().filter(|i| building(**i)) {
                 let Some((foot, end)) = made.scene.beam(i) else { continue };
                 let (Some(foot), Some(end)) = (to_window(foot), to_window(end)) else { continue };
-                if let Some((end, _)) = fit_beam(foot, end, None, bounds, clear) {
+                if let Some((end, _)) = fit_beam(foot, end, None, bounds, Bounds::default()) {
                     paint_beam(window, foot, end, colour.opacity(0.85 * fading(t)), 1., 2., false);
                 }
             }
@@ -2864,7 +2863,7 @@ fn agents(
         };
         // At no file: along the picture's top edge, a place of its own whatever covers the city
         // (the hints stand in its middle, then go when a pane opens over it).
-        let hover = point(end.x, bounds.top() + px(ICON / 2. + 1.));
+        let hover = point(end.x, bounds.top() + px(ICON / 2. + STATION / 2. + 1.));
         let to = match foot {
             // Down its beam while it is off the picture.
             Some(f) => [1., 0.75, 0.5, 0.25].into_iter().find_map(|t: f32| fits(f + (end - f) * t + offset)),
