@@ -313,8 +313,9 @@ impl Model {
             works.then(|| Some((task, self.tasks.get(task)?.colour, &chat.transcript)))?
         });
         let chats: Vec<_> = chats.collect();
+        let now = self.now;
         let lit = (chats.iter()).flat_map(|(_, colour, transcript)| {
-            transcript.files().into_iter().map(move |(label, running)| Lit { label, colour: *colour, running })
+            transcript.files_held(now).into_iter().map(move |(label, running)| Lit { label, colour: *colour, running })
         });
         let working = chats.iter().filter(|(.., transcript)| transcript.pulse() == Pulse::Running);
         let mut tasks: Vec<(TaskId, Agent)> = (working)
@@ -322,6 +323,8 @@ impl Model {
                 let at = transcript.file_at();
                 let near = (transcript.shell_line().filter(|_| at.is_none()))
                     .map_or_else(Vec::new, |line| crate::city_shell::paths(line, dir));
+                // At no file and no path named: over the file it just left, a while.
+                let at = at.or_else(|| transcript.file_held(now).filter(|_| near.is_empty()));
                 let (busy, subagents) = (transcript.calling(), transcript.subagents());
                 (*task, Agent { who: Who::Task(*task), colour: *colour, at, near, busy, subagents })
             })
@@ -674,12 +677,14 @@ mod tests {
         // Ended: still where the agent was last, while its turn runs. A second call beside it.
         events(&mut m, vec![end("a")]);
         assert_eq!(city(&m).map(|city| city.lit), Some(vec![Lit { label: "src/main.rs", colour, running: false }]));
+        // The next read: the one just ended held a while beside it, a trail.
         events(&mut m, vec![call("b", Station::Files, "src/lib.rs")]);
-        assert_eq!(labels(&m), Some(vec!["src/lib.rs"]));
+        assert_eq!(labels(&m), Some(vec!["src/lib.rs", "src/main.rs"]));
         events(&mut m, vec![call("c", Station::Files, "docs/a.md")]);
-        assert_eq!(labels(&m), Some(vec!["docs/a.md", "src/lib.rs"]));
-        // A shell line names no file: the agent is at none, whatever it read before.
+        assert_eq!(labels(&m), Some(vec!["docs/a.md", "src/lib.rs", "src/main.rs"]));
+        // A shell line names no file: once the files' hold is over, the agent is at none.
         events(&mut m, vec![end("b"), end("c"), call("d", Station::Shell, "cargo test")]);
+        m.update(Action::Tick { now: 5 + crate::activity::HOLD_MS }.sent_by(Origin::System));
         assert_eq!(labels(&m), Some(vec![]));
         // The turn over: nothing is lit.
         events(&mut m, vec![end("d"), call("e", Station::Files, "src/main.rs"), end("e")]);
@@ -890,7 +895,8 @@ mod tests {
         events(&mut m, vec![end("b"), call("c", Station::Shell, "cargo test")]);
         assert_eq!(agents(&m), Some(vec![(1, Some("src/main.rs"))]));
         events(&mut m, vec![end("a")]);
-        assert_eq!(agents(&m), Some(vec![(1, None)]), "a shell line: at no file");
+        m.update(Action::Tick { now: 5 + crate::activity::HOLD_MS }.sent_by(Origin::System));
+        assert_eq!(agents(&m), Some(vec![(1, None)]), "a shell line, the hold over: at no file");
         events(&mut m, vec![end("c"), Event::TurnFinished { outcome: Outcome::Completed }]);
         assert_eq!(agents(&m), Some(vec![]));
     }
@@ -1019,6 +1025,55 @@ mod tests {
         m.update(Action::PaneAgents { found: vec![found("/code/app")] }.sent_by(Origin::System));
         m.update(Action::Close { pane: Some(pane) });
         assert_eq!(who(&m).map(|w| w.len()), Some(0), "its pane closed");
+    }
+
+    /// A file read for an instant stays lit, and its agent over it, `HOLD_MS` after its call
+    /// ends while the agent works (a shell line that names no path); then both go, and the
+    /// shell is told to look again then (`due`). A path the shell line names wins at once.
+    #[test]
+    fn a_quick_read_holds_its_file_and_agent_a_while() {
+        let mut m = task_in_app();
+        let at = |m: &mut Model, events: Vec<Event>, now: u64| {
+            m.update(Action::Tick { now }.sent_by(Origin::System));
+            m.update(Action::AgentEvents { task: Subject::Task(1), events, at: now }.sent_by(Origin::System));
+        };
+        let shell = |id: &str, line: &str| Event::ToolStart {
+            id: id.into(),
+            parent: None,
+            tool: "Bash".into(),
+            station: Station::Shell,
+            label: line.into(),
+            detail: Text::new(line),
+            diff: None,
+            gist: None,
+        };
+        fn held(m: &Model) -> Option<(Option<&str>, Vec<&str>)> {
+            city(m).map(|c| (c.agents[0].at, c.lit.iter().map(|l| l.label).collect()))
+        }
+        at(&mut m, vec![Event::TurnStarted, call("r", Station::Files, "src/main.rs")], 1_000);
+        at(&mut m, vec![end("r"), shell("s", "cargo test")], 1_005);
+        assert_eq!(held(&m), Some((Some("src/main.rs"), vec!["src/main.rs"])), "held");
+        let until = 1_005 + crate::activity::HOLD_MS;
+        assert!(!m.due(until - 1) && m.due(until), "the shell looks again when the hold ends");
+        m.update(Action::Tick { now: until }.sent_by(Origin::System));
+        assert_eq!(held(&m), Some((None, vec![])), "let go");
+        // Two reads ended apart: each hold's end is due in turn, and the shell wakes for the first.
+        at(&mut m, vec![call("a", Station::Files, "src/a.rs")], 3_000);
+        at(&mut m, vec![end("a"), call("b", Station::Files, "src/b.rs")], 3_000);
+        at(&mut m, vec![end("b"), shell("u", "cargo test")], 3_500);
+        let hold = crate::activity::HOLD_MS;
+        assert_eq!(m.next_due(), Some(3_000 + hold));
+        assert!(m.due(3_000 + hold) && !m.due(3_000 + hold - 1));
+        m.update(Action::Tick { now: 3_000 + hold }.sent_by(Origin::System));
+        assert_eq!(held(&m), Some((Some("src/b.rs"), vec!["src/b.rs"])), "the first let go, the second held");
+        m.update(Action::Tick { now: 3_500 + hold }.sent_by(Origin::System));
+        assert_eq!(held(&m), Some((None, vec![])));
+        // A shell line naming a path: there at once, the held file lit still.
+        at(&mut m, vec![call("r2", Station::Files, "src/lib.rs")], 5_000);
+        at(&mut m, vec![end("r2"), shell("t", "ls src/")], 5_010);
+        let city = city(&m).unwrap();
+        assert_eq!((city.agents[0].at, city.agents[0].near.clone()), (None, vec!["src".to_string()]));
+        assert_eq!(city.lit.iter().map(|l| l.label).collect::<Vec<_>>(), ["src/lib.rs"]);
     }
 
     /// An agent counts the sub-agents it runs: its `Agent`/`Task` calls not ended (a sub-agent's

@@ -1,0 +1,6 @@
+{"type": "system", "subtype": "init", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "model": "claude-opus-5-5", "permissionMode": "default"}
+{"_sleep": 6}
+{"type": "assistant", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_use", "id": "toolu_r1", "name": "Read", "input": {"file_path": "{ROOT}/repos/app/m1/core/model/part1/f49.rs"}}]}}
+{"type": "user", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_result", "tool_use_id": "toolu_r1", "content": "ok", "is_error": false}]}}
+{"type": "assistant", "session_id": "8f14e45f-ceea-467f-a8d3-0242ac130003", "parent_tool_use_id": null, "message": {"content": [{"type": "tool_use", "id": "toolu_b1", "name": "Bash", "input": {"command": "cargo test"}}]}}
+{"_sleep": 120}

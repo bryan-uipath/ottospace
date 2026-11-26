@@ -19520,6 +19520,67 @@ fn a_terminal_session_waiting_on_its_subagent_floats_in_the_city_and_lights_its_
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// A file read for an instant stays lit, and the agent over it, a while (`HOLD_MS`) while a shell
+/// line that names no path runs; then both let go, with no frame asked for at rest.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_quick_read_holds_its_building_then_lets_go() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let extra = [("OTTOSPACE_FEATURES", "code_city"), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+    let (root, _, env) = native_setup("city-hold", &[], &extra);
+    let app = root.join("repos/app");
+    git(&app, &["init", "-q"]);
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("src/main.rs"), "x".repeat(3000)).unwrap();
+    let app = app.canonicalize().unwrap();
+    let tool = |id: &str, name: &str, input: Value| {
+        let call = json!({"type": "tool_use", "id": id, "name": name, "input": input});
+        format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#)
+    };
+    let result = |id: &str| {
+        let r = json!({"type": "tool_result", "tool_use_id": id, "content": "ok", "is_error": false});
+        format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{r}]}}}}"#)
+    };
+    // A read, ended at once, then a shell line naming no path that runs on.
+    let lines = [
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#),
+        r#"{"_sleep":4}"#.into(),
+        tool("r1", "Read", json!({"file_path": app.join("src/main.rs")})),
+        result("r1"),
+        tool("b1", "Bash", json!({"command": "cargo test"})),
+        r#"{"_sleep":60}"#.into(),
+    ];
+    std::fs::write(root.join("fixtures/turn1.jsonl"), lines.join("\n") + "\n").unwrap();
+    let otto = launch_env("city-hold", &env);
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    // Held over the file it read, in one state: its read ended, the shell line running.
+    let held = |o: &Otto| {
+        let state = o.call(json!({"cmd": "state"}));
+        let stations = &state["drawer"]["native"]["chats"]["1"]["dial"]["stations"];
+        let running = |name: &str| {
+            stations.as_array().into_iter().flatten().find(|s| s["station"] == name).map(|s| s["running"].clone())
+        };
+        let city = &state["city"];
+        let lit = city["lit"].as_array().is_some_and(|l| l.len() == 1);
+        let after = running("files") == Some(json!(0)) && running("shell") == Some(json!(1));
+        (after && lit && city["agents"][0]["cone"] == json!(true)).then(Instant::now)
+    };
+    let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    let at = otto.wait_for("held over its file, its read ended", held);
+    // Then let go: the agent hovers, nothing lit.
+    otto.wait_for("let go", |o| {
+        let c = city(o);
+        (c["agents"][0]["cone"] == json!(false) && c["lit"].as_array().is_some_and(Vec::is_empty)).then_some(())
+    });
+    let held_for = at.elapsed();
+    assert!(held_for < Duration::from_secs(4), "let go in time: {held_for:?}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A `claude` in the user's own terminal (no task's) at work in a checkout floats on the city of a
 /// task's space there too, over the file it reads, beside the task's own agent.
 #[test]

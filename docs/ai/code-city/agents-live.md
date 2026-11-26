@@ -5,7 +5,7 @@ agent should at least be 'floating' over the city", "lerp between states", "a be
 downward" for a shell command, "an antenna or pulse upward" for a network request, sub-agents
 visualized too, and a text replay of a recorded session to debug a city that stayed quiet.
 
-State: slice 1 **built** (`ottospace city-replay`); the rest proposed.
+State: slices 1 to 3 **built** (`ottospace city-replay`; the missing icon, #541 and #546; the hold); the rest proposed.
 
 ## What that session showed
 
@@ -40,11 +40,19 @@ a watched session never produces a glimpse, even for a `Read`.
    files, glimpses, and why a call gave the city nothing. The agent's words are printed with control
    characters removed. Core logic in `ottospace-core` with tests; the subcommand reads the files.
 2. **The missing icon**, on the side slice 1 shows, with a core test.
-3. **Dwell and lerp.** A state the city shows holds a least time, then eases to the next: a read
-   of 5 ms is seen. The icon's glide exists; a lit file, a beam and a glimpse fade in and out.
+3. **Dwell and lerp.** Built: a file call that ended stays lit `HOLD_MS` (1.5 s) while the agent
+   works, so a burst of reads leaves a trail, and an agent at no file and no named path stays over
+   the newest held file (`Activity::files_held`, `file_held`); `Model::due` tells the shell when a
+   hold ends, so it draws once then. The icon's glide between buildings existed. A fade of the
+   lit buildings themselves is left: each is a new picture.
 4. **Stations on the icon.** A shell call running: a beam down from the icon (to its near path's
    plinth, or the ground). A network call: a pulse up from it, an antenna. From the running calls'
-   `Station`. Frames only while one runs; under Reduce Motion, drawn still.
+   `Station`. Frames only while one runs; under Reduce Motion, drawn still. With them, the call in
+   small at the icon: its station's glyph flashes on the rim (the dial's glyphs), and one line under
+   it is what the call is. That line is the sidebar's, never its own wording: a task's from
+   `talk::chip_line` (the agent chip, "Working · part1/f49.rs"), a session's from `Found::doing`
+   (the Sessions row, "shell · cargo test"), carried on `Agent` from `city_of`. Held as slice 3
+   holds; agent text, drawn only, never in the state.
 5. **More is recognised.** `jq`, `diff` as reads; `p=x` assignments expanded in later words; `$(…)`
    read as commands; a path operand of any program (`duped report .`) a sweep of that place. The
    watch path passes the call's `detail`.

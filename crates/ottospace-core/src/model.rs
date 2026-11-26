@@ -9792,6 +9792,12 @@ impl Model {
             || self.calendar.due(now)
             || self.new_window.as_ref().is_some_and(|wait| wait.since + crate::new_window::WAIT_MS <= now)
             || self.filed.next_due().is_some_and(|at| at <= now)
+            || self.hold_ends().any(|at| at <= now)
+    }
+
+    /// When the city's file holds end, of those not over at the model's `now` (`HOLD_MS`).
+    fn hold_ends(&self) -> impl Iterator<Item = u64> {
+        self.chats.iter().flat_map(|chat| chat.transcript.holds_end()).filter(|at| self.now < *at)
     }
 
     /// When `due` turns true next, but for the calendar's alerts: the shell looks at those on its
@@ -9802,7 +9808,11 @@ impl Model {
         let done = self.finish.offer.as_ref().map(|offer| offer.until);
         let window = self.new_window.as_ref().map(|wait| wait.since + crate::new_window::WAIT_MS);
         let filed = self.filed.next_due();
-        [self.tasks.next_due(), offer, clip, self.workbooks.next_due(), done, window, filed].into_iter().flatten().min()
+        let hold = self.hold_ends().min();
+        [self.tasks.next_due(), offer, clip, self.workbooks.next_due(), done, window, filed, hold]
+            .into_iter()
+            .flatten()
+            .min()
     }
 
     /// Everything the marks and the workbooks need, each once: what the shell looks for on

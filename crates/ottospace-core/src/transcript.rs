@@ -721,6 +721,21 @@ impl Transcript {
         self.activity.files(&self.is())
     }
 
+    /// `files`, and those held a while after their calls ended (`Activity::files_held`).
+    pub fn files_held(&self, now: u64) -> Vec<(&str, bool)> {
+        self.activity.files_held(&self.is(), now)
+    }
+
+    /// The newest file held at `now` (`Activity::file_held`).
+    pub fn file_held(&self, now: u64) -> Option<&str> {
+        self.activity.file_held(&self.is(), now)
+    }
+
+    /// When each of its files' holds ends (`Activity::holds_end`).
+    pub fn holds_end(&self) -> Vec<u64> {
+        self.activity.holds_end(&self.is()).collect()
+    }
+
     fn is(&self) -> Is<'_> {
         let asking = self.cards.front().map(|card| card.label.as_str());
         let (live, watched, turn) = (self.live, self.watched && !self.live, self.turn.is_some());

@@ -84,6 +84,10 @@ pub const AMBER: f32 = 0.7;
 pub const RED: f32 = 0.9;
 /// The most calls kept as running: a stream that starts calls and never ends them stays small.
 const MAX_RUNNING: usize = 64;
+/// How long a file stays lit, and its agent over it, after its call ends: a 5 ms read is seen.
+pub const HOLD_MS: u64 = 1_500;
+/// The most ended file calls kept for their hold.
+const MAX_HELD: usize = 16;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct Use {
@@ -127,6 +131,8 @@ pub struct Activity {
     thinking: u64,
     /// Why the last turn or the process failed, until the user's next message.
     error: Option<String>,
+    /// Its file calls that ended lately, each label with when, the newest last (`HOLD_MS`).
+    ended: Vec<(String, u64)>,
 }
 
 impl Activity {
@@ -148,6 +154,8 @@ impl Activity {
         self.turns = self.turns.saturating_add(1);
         self.uses.iter_mut().for_each(|used| used.failing = 0);
         (self.error, self.stepped, self.thinking) = (None, false, at);
+        // A new turn holds none of the last one's files.
+        self.ended.clear();
     }
 
     /// The model wrote or asked: one request, counted once until a call ends or a message comes.
@@ -189,6 +197,14 @@ impl Activity {
     pub(crate) fn end(&mut self, id: &str, failed: bool, at: u64) {
         let Some(place) = self.running.iter().position(|call| call.id == id) else { return };
         let call = self.running.remove(place);
+        if call.station == Station::Files {
+            // Its own earlier end, and holds over by now, go; at most `MAX_HELD` live at once.
+            self.ended.retain(|(label, end)| *label != call.label && at < end + HOLD_MS);
+            if self.ended.len() == MAX_HELD {
+                self.ended.remove(0);
+            }
+            self.ended.push((call.label.clone(), at));
+        }
         if failed {
             let used = &mut self.uses[call.station.at()];
             (used.failed, used.failing) = (used.failed.saturating_add(1), used.failing.saturating_add(1));
@@ -223,6 +239,7 @@ impl Activity {
         self.stepped = false;
         self.error = error.or(self.error.take());
         self.latest = self.latest.max(at);
+        self.ended.clear();
     }
 
     /// The labels of the files the agent is at now: its `Files` calls that run, and its last
@@ -242,6 +259,38 @@ impl Activity {
         files.sort_unstable_by(|a, b| a.0.cmp(b.0).then(b.1.cmp(&a.1)));
         files.dedup_by_key(|file| file.0);
         files
+    }
+
+    /// `files`, and those whose call ended under `HOLD_MS` before `now` while the agent works:
+    /// a burst of quick reads leaves a trail. Not for records read with no clock (a watched
+    /// file's, all at once): their ends are not when they happened.
+    pub fn files_held(&self, is: &Is, now: u64) -> Vec<(&str, bool)> {
+        let mut files = self.files(is);
+        if self.holds(is) {
+            files.extend(self.held(now).map(|label| (label, false)));
+            files.sort_unstable_by(|a, b| a.0.cmp(b.0).then(b.1.cmp(&a.1)));
+            files.dedup_by_key(|file| file.0);
+        }
+        files
+    }
+
+    /// The newest file held at `now` while the agent works: where it stays when it is at none.
+    pub fn file_held(&self, is: &Is, now: u64) -> Option<&str> {
+        self.holds(is).then(|| self.held(now).last()).flatten()
+    }
+
+    /// When each hold ends, while any may: for the shell to look again then (`Model::due`).
+    pub fn holds_end(&self, is: &Is) -> impl Iterator<Item = u64> {
+        let ends = self.holds(is).then_some(self.ended.iter()).into_iter().flatten();
+        ends.map(|(_, at)| at + HOLD_MS)
+    }
+
+    fn holds(&self, is: &Is) -> bool {
+        is.timed && self.pulse(is) == Pulse::Running
+    }
+
+    fn held(&self, now: u64) -> impl Iterator<Item = &str> {
+        self.ended.iter().filter(move |(_, at)| now < at + HOLD_MS).map(|(label, _)| label.as_str())
     }
 
     /// The one file its agent is at now, of `files`: its newest call's if a file's, else its

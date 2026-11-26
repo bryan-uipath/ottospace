@@ -1,0 +1,17 @@
+# A quick read held (`code_city`): the agent reads a made-up file, the call ends at once, and a
+# shell line naming no path runs. Just after (`held`), the file is still lit and the agent over it,
+# as for `HOLD_MS`; the base has let go already (hovering, nothing lit).
+{"env": {"OTTOSPACE_FEATURES": "code_city"}}
+{"tree": "repos/app", "files": 60}
+{"cmd": "repo_add", "path": "{ROOT}/repos/app"}
+{"until": "repos_bar.0"}
+{"cmd": "task_new", "line": "fix the login loop >app"}
+{"cmd": "section", "section": "tasks"}
+{"click": "task:1", "at": [0.3, 0.3]}
+{"click": "talk:talk-start"}
+{"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
+{"cmd": "open_space", "space": {"kind": "task", "id": 1}}
+{"until": "city.picture", "timeout_ms": 30000}
+{"until": "drawer.native.chats.1.dial.stations.3.running", "is": 1, "timeout_ms": 30000}
+{"settle": 300}
+{"shot": "held"}
