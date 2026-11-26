@@ -1793,8 +1793,9 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   in its colour), or a session's runner glyph for a `claude` or `codex` you started in a terminal.
   It shows only while a city is on show (an empty tab or pane of a checkout listed in Repos, with
   `code_city` on), and only while the agent works: a task's turn runs, or its session is active
-  (its file changed lately). In a task's own space, only that task's agent; elsewhere every task
-  whose checkout it is, and every session at work there that no task has. A task whose agent
+  (its file changed lately). In a task's space, its own task's agent and those of tasks that joined
+  it working in that checkout; elsewhere every task whose checkout it is. Everywhere, every
+  session at work there that no task has. A task whose agent
   runs in a terminal (Codex, or `conversation_view: "terminal"`) shows by its session, read from
   its file (so `sessions` must be on and `session_dirs` must hold its config folder). The icon
   stands over the file the agent reads or edits now, a cone of its colour on it (in a chat, the

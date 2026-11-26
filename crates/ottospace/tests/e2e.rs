@@ -19455,10 +19455,12 @@ fn a_terminal_session_floats_on_a_tasks_city_of_its_checkout() {
     otto.start_task(1);
     otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
     let agents = |o: &Otto| o.call(json!({"cmd": "state"}))["city"]["agents"].as_array().cloned();
-    let session = otto.wait_for("the terminal session over its file", |o| {
-        agents(o)?.into_iter().find(|a| a["task"].is_null() && a["cone"] == json!(true))
+    // Both in one state: the terminal session over its file, beside the task's own agent.
+    otto.wait_for("the terminal session over its file, beside task 1", |o| {
+        let agents = agents(o)?;
+        let session = agents.iter().any(|a| a["task"].is_null() && a["cone"] == json!(true));
+        (session && agents.iter().any(|a| a["task"] == json!(1))).then_some(())
     });
-    assert!(session["task"].is_null(), "{session}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
 }
