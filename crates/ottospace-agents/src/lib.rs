@@ -57,7 +57,7 @@ impl fmt::Debug for Untrusted {
 }
 
 /// The most of one tool call's or permission request's detail kept: a command line, a path.
-pub const MAX_DETAIL: usize = 4096;
+pub const MAX_DETAIL: usize = ottospace_core::glance::MAX_DETAIL;
 /// The most of one message's text kept.
 pub const MAX_TEXT: usize = 1 << 20;
 

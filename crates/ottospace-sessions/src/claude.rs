@@ -437,7 +437,8 @@ fn assistant(record: &Value, cursor: &mut Cursor, emit: &mut impl FnMut(What)) {
         let gist = cursor.edits.then(|| ottospace_core::gist::claude(tool, &block["input"])).flatten();
         let label = station::tool_label(tool);
         let detail = cursor.words.then(|| ottospace_core::glance::call_detail(tool, &block["input"])).flatten();
-        let detail = detail.map(|detail| ottospace_core::transcript::cut(detail, crate::MAX_DETAIL).to_string());
+        let cut = |detail| ottospace_core::transcript::cut(detail, ottospace_core::glance::MAX_DETAIL);
+        let detail = detail.map(|detail| ottospace_core::transcript::Text::new(cut(detail)));
         emit(What::ToolStart { id: id.clone(), tool: label, station, summary: summary.clone(), detail, diff, gist });
         if matches!(tool, "Agent" | "Task") && track(&mut cursor.agents, id.clone()) {
             emit(What::SubAgentStart { id, label: summary });
@@ -710,7 +711,7 @@ mod tests {
     /// watch view's cursor, as the user's and the model's words do; cut to `MAX_DETAIL`.
     #[test]
     fn a_calls_detail_only_for_a_cursor_that_asks() {
-        let long = "x".repeat(crate::MAX_DETAIL + 10);
+        let long = "x".repeat(ottospace_core::glance::MAX_DETAIL + 10);
         let blocks = serde_json::json!([
             { "type": "tool_use", "id": "r", "name": "Read", "input": { "file_path": "/w/a.rs" } },
             { "type": "tool_use", "id": "b", "name": "Bash", "input": { "command": "rg -n loop src" } },
@@ -721,7 +722,7 @@ mod tests {
             let mut events = Vec::new();
             record_events(&record, false, &mut cursor, &mut events);
             let details = events.into_iter().filter_map(|e| match e.what {
-                What::ToolStart { detail, .. } => Some(detail),
+                What::ToolStart { detail, .. } => Some(detail.map(|d| d.text().to_string())),
                 _ => None,
             });
             details.collect::<Vec<_>>()
@@ -732,7 +733,7 @@ mod tests {
             (seen[0].as_deref(), seen[1].as_deref(), &seen[3]),
             (Some("/w/a.rs"), Some("rg -n loop src"), &None)
         );
-        assert_eq!(seen[2].as_ref().map(String::len), Some(crate::MAX_DETAIL), "cut");
+        assert_eq!(seen[2].as_ref().map(String::len), Some(ottospace_core::glance::MAX_DETAIL), "cut");
     }
 
     #[test]

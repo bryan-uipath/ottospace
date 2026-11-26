@@ -186,8 +186,9 @@ pub enum What {
         station: Station,
         summary: String,
         /// The words of its input a row and a glance read (`glance::call_detail`: the command,
-        /// the path), cut to `MAX_DETAIL`; only for a cursor that reads words (`with_words`).
-        detail: Option<String>,
+        /// the path), cut to `glance::MAX_DETAIL`; only for a cursor that reads words
+        /// (`with_words`). A `Text`: never printed by `Debug`.
+        detail: Option<ottospace_core::transcript::Text>,
         diff: Option<ottospace_core::diff::Diff>,
         gist: Option<ottospace_core::gist::Gist>,
     },
@@ -339,8 +340,6 @@ fn recorded_cwd(text: &str) -> Option<PathBuf> {
 
 /// The longest title given out, in characters. What draws it cuts it further.
 pub const MAX_TITLE: usize = 256;
-/// The most bytes of a call's input words kept (`What::ToolStart::detail`).
-pub(crate) const MAX_DETAIL: usize = 4 << 10;
 
 /// A title as it leaves the crate: its first line, without control characters, cut and trimmed.
 fn title_text(text: &str) -> Option<String> {
