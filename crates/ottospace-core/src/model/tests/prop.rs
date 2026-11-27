@@ -352,6 +352,7 @@ impl Gen<'_> {
             14 => Said::Hook,
             12 if self.rng.coin() => Said::MessageElsewhere,
             12 => Said::UserText { text },
+            13 if self.rng.coin() => Said::CaughtUp,
             13 => Said::WatchFromStart,
             0 | 1 => Said::TurnStarted,
             2 => Said::TextDelta { text },
@@ -1951,6 +1952,13 @@ const MAKERS: &[Make] = &[
         let task = shown.unwrap_or_else(|| g.subject());
         let events = (0..g.rng.below(4)).map(|_| g.event()).collect();
         Action::AgentEvents { task, events, at: g.rng.pick(&[0, 1, 5_000]) }
+    },
+    |g| {
+        // Mostly a session at work, so a city follows it.
+        let s = g.m.at_work.first().filter(|_| !g.rng.one_in(4)).map(|s| (s.runner.clone(), s.id.clone()));
+        let (runner, id) = s.unwrap_or_else(|| (g.runner(), g.name(SESSIONS)));
+        let events = (0..g.rng.below(4)).map(|_| g.event()).collect();
+        Action::SessionEvents { runner, id, events, at: g.rng.pick(&[0, 1, 5_000]) }
     },
     |_| Action::TalkSend,
     |_| Action::TalkSendNow,
@@ -7171,6 +7179,15 @@ fn code(sent: &Envelope) -> String {
             sent.origin
         );
     }
+    if let Action::SessionEvents { runner, id, events, at } = &sent.action {
+        let events: Vec<String> = events.iter().map(event_code).collect();
+        let events = events.join(", ");
+        return format!(
+            "Action::SessionEvents {{ runner: {runner:?}.into(), id: {id:?}.into(), events: vec![{events}], at: {at} }}\
+             .sent_by(Origin::{:?})",
+            sent.origin
+        );
+    }
     if let Action::ListenStart { source: crate::listen::Source::Pane(pane), mic, id, at } = &sent.action {
         return format!(
             "Action::ListenStart {{ source: crate::listen::Source::Pane({pane}), mic: {mic}, id: {id:?}.into(), \
@@ -7385,6 +7402,7 @@ fn event_code(event: &Said) -> String {
         Said::MessageElsewhere => "Said::MessageElsewhere".into(),
         Said::UserText { text: t } => format!("Said::UserText {{ text: {} }}", text(t)),
         Said::WatchFromStart => "Said::WatchFromStart".into(),
+        Said::CaughtUp => "Said::CaughtUp".into(),
     }
 }
 

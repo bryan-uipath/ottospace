@@ -1911,6 +1911,14 @@ pub enum Action {
         events: Vec<crate::transcript::Event>,
         at: u64,
     },
+    /// What a session followed for a code city said (`city_follows`), read from its file at
+    /// `at` (ms since 1970). Only the shell's reader sends it (`Origin::System`).
+    SessionEvents {
+        runner: String,
+        id: String,
+        events: Vec<crate::transcript::Event>,
+        at: u64,
+    },
     /// ↵ in the shown conversation's composer: its draft to the agent, if no turn runs and no
     /// card waits; while one runs (or a card waits), the draft is queued, sent on its own once the
     /// conversation is idle. Only the user's.
@@ -2965,6 +2973,7 @@ impl Action {
             | Action::SessionQuiet { .. }
             | Action::SessionsSeen { .. }
             | Action::SessionsInPanes { .. }
+            | Action::SessionEvents { .. }
             | Action::PaneAgents { .. }
             | Action::SessionAdopt { .. }
             | Action::SessionHide { .. }
@@ -3269,7 +3278,9 @@ impl Action {
             Action::OverlayDismiss | Action::QuickOpen { .. } | Action::QuickPill { .. } | Action::TalkWide => {
                 Some(Feature::OverlayPanels)
             }
-            Action::CityCamera { .. } | Action::CityOpen { .. } => Some(Feature::CodeCity),
+            Action::CityCamera { .. } | Action::CityOpen { .. } | Action::SessionEvents { .. } => {
+                Some(Feature::CodeCity)
+            }
             Action::OpenDiff { .. } => Some(Feature::Review),
             Action::DecisionsOpen
             | Action::DecisionsAsk { .. }
@@ -4530,6 +4541,10 @@ pub struct Model {
     /// Of the sessions last read (Tasks or Repos open), those at work: for the checkouts' dots.
     #[serde(skip)]
     at_work: Vec<Found>,
+    /// The sessions a code city on show follows (`city_follows`), each its file's transcript,
+    /// by runner and id: what they do, as a chat's, for the city.
+    #[serde(skip)]
+    follows: std::collections::BTreeMap<(String, String), crate::transcript::Transcript>,
     /// The agent CLIs our terminal panes run, as last read (`PaneAgents`).
     #[serde(skip)]
     pane_agents: Vec<sessions::PaneAgent>,
@@ -4905,6 +4920,7 @@ impl Default for Model {
             local_day: 0,
             found: Vec::new(),
             at_work: Vec::new(),
+            follows: Default::default(),
             pane_agents: Vec::new(),
             in_panes: Vec::new(),
             session_quiet_ms: sessions::QUIET_MS,
@@ -5617,6 +5633,7 @@ impl Model {
             // Only the shell's runner reports an agent's events (a user's is dropped in `chat_act`).
             Action::AgentSendFailed { .. } if origin != Origin::System => Some(chat::RUNNERS_ALONE),
             Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
+            Action::SessionEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
             // On a rail list keys move over the rail: the user's, as the move that got there.
             Action::ListMove { .. } | Action::ListChoose { .. } | Action::LeaveList if self.rail_focus.is_some() => {
                 Some(zones::RAILS_USERS)
@@ -7112,12 +7129,14 @@ impl Model {
                 self.found = sessions::kept(found);
                 self.at_work = self.found.iter().filter(|s| s.works()).cloned().collect();
                 self.session_day = day;
+                self.follows_working();
                 let seen = self.found.iter().map(|s| (s.runner.clone(), s.id.clone(), s.active, s.last_activity));
                 self.follow_sessions(seen.collect());
                 self.note_cards(effects);
                 self.list_back(kept);
             }
             Action::SessionQuiet { ms } => self.session_quiet_ms = ms,
+            Action::SessionEvents { runner, id, events, at } => self.follow_events(runner, id, events, at),
             Action::PaneAgents { found } => self.pane_agents = found,
             Action::SessionsSeen { seen } => {
                 let seen = seen.into_iter().map(|s| (s.runner, s.id, s.active, Some(s.last_activity)));
@@ -12177,6 +12196,7 @@ mod tests {
         Action::SessionQuiet { .. },
         Action::SessionsSeen { .. },
         Action::SessionsInPanes { .. },
+        Action::SessionEvents { .. },
         Action::PaneAgents { .. },
         Action::SessionAdopt { .. },
         Action::SessionHide { .. },
@@ -12614,6 +12634,7 @@ mod tests {
             Action::SessionQuiet { ms: 0 },
             Action::SessionsSeen { seen: Vec::new() },
             Action::SessionsInPanes { found: Vec::new() },
+            Action::SessionEvents { runner: text(), id: text(), events: Vec::new(), at: 0 },
             Action::PaneAgents { found: Vec::new() },
             Action::SessionAdopt { runner: text(), id: text() },
             Action::SessionHide { runner: text(), id: text() },
@@ -13503,6 +13524,7 @@ mod tests {
                     Action::SetDisplays { .. } if origin == Origin::Socket => Some(displays::SHELLS_ALONE),
                     Action::AgentSendFailed { .. } if origin != Origin::System => Some(chat::RUNNERS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
+                    Action::SessionEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {
@@ -21279,6 +21301,7 @@ mod tests {
                     Action::SetDisplays { .. } if origin == Origin::Socket => Some(displays::SHELLS_ALONE),
                     Action::AgentSendFailed { .. } if origin != Origin::System => Some(chat::RUNNERS_ALONE),
                     Action::AgentEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
+                    Action::SessionEvents { .. } if origin == Origin::Socket => Some(chat::RUNNERS_ALONE),
                     _ if in_palette(action) && action_is_palettes(action) => Some(commands::USERS_ALONE),
                     _ if in_palette(action) => Some(inspect::USERS_ALONE),
                     Action::InspectorRead { .. } | Action::InspectorFailed { .. } if origin == Origin::Socket => {

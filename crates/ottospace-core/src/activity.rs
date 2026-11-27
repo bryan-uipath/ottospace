@@ -289,6 +289,11 @@ impl Activity {
         files
     }
 
+    /// Nothing held: a file's history played (`Event::CaughtUp`).
+    pub(crate) fn clear_holds(&mut self) {
+        self.ended.clear();
+    }
+
     /// `files`, and those whose call ended under `HOLD_MS` before `now` while the agent works:
     /// a burst of quick reads leaves a trail. Not for records read with no clock (a watched
     /// file's, all at once): their ends are not when they happened.

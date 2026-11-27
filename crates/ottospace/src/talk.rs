@@ -63,6 +63,9 @@ pub struct Drawer {
     pub stopping: Vec<(Subject, crate::conversation::Stopping)>,
     /// The watched session's file being followed (`Model::watch_target`).
     pub watch: Option<crate::conversation::Watch>,
+    /// The sessions a code city on show follows by their files (`Model::city_follows`), by
+    /// runner and id.
+    pub follows: HashMap<(String, String), crate::conversation::Watch>,
     /// The end of each ended native agent's stderr, cleaned and its tokens hidden
     /// (`transcript::details`): drawn on the user's click only, never in the state or a log.
     pub details: HashMap<Subject, String>,
