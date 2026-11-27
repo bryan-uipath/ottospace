@@ -2138,6 +2138,8 @@ export interface CityAgent {
   station: Station | null;
   /** Where its call's line (the sidebar's) was drawn under it, never its words; null when not drawn. */
   caption: Rect | null;
+  /** A terminal session's, followed by its file as a chat's while its city shows, caught up. */
+  followed: boolean;
 }
 
 export interface CityView {

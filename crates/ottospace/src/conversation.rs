@@ -3061,7 +3061,9 @@ mod tests {
         let mut follow = Follow::new(id.into(), cwd.to_string_lossy().into_owned());
         let (events, more) = follow.step(&reader).unwrap();
         let said = Event::UserText { text: Text::new("made-up prompt") };
-        assert!(matches!(&events[..], [Event::WatchFromStart, first] if *first == said) && !more, "{events:?}");
+        // Its end reached at once: caught up, once.
+        let first = matches!(&events[..], [Event::WatchFromStart, first, Event::CaughtUp] if *first == said);
+        assert!(first && !more, "{events:?}");
         // Half a record: nothing yet. Its end: the call.
         let line = call(1);
         let (half, rest) = line.split_at(line.len() / 2);
@@ -3075,7 +3077,9 @@ mod tests {
         assert!(follow.step(&reader).is_err());
         std::fs::rename(&aside, &file).unwrap();
         append(&file, &format!("{}\n", call(2)));
-        assert_eq!(calls(&follow.step(&reader).unwrap().0), 1, "only the new call");
+        let later = follow.step(&reader).unwrap().0;
+        assert_eq!(calls(&later), 1, "only the new call");
+        assert!(!later.contains(&Event::CaughtUp), "caught up once, not again: {later:?}");
         // A reply: its words, as a chat shows them.
         let message = serde_json::json!({"id": "msg_r", "content": [{"type": "text", "text": "made-up reply"}]});
         append(&file, &format!("{}\n", serde_json::json!({"type": "assistant", "message": message})));
@@ -3100,7 +3104,7 @@ mod tests {
         follow.session = Some(ottospace_sessions::SessionRef { path: file.with_extension("gone"), ..found });
         assert!(follow.step(&reader).is_err());
         let (events, _) = follow.step(&reader).unwrap();
-        assert!(matches!(events[..], [Event::WatchFromStart, Event::UserText { .. }]), "{events:?}");
+        assert!(matches!(events[..], [Event::WatchFromStart, Event::UserText { .. }, Event::CaughtUp]), "{events:?}");
     }
 
     /// A large file (the owner's was 45 MB) is read whole in budget-sized looks, then followed.

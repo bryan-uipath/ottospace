@@ -19668,12 +19668,13 @@ fn a_terminal_sessions_read_plays_on_the_city_as_a_chats() {
     otto.call(json!({"cmd": "open_repo", "path": app}));
     otto.call(json!({"cmd": "close"}));
     let state = |o: &Otto| o.call(json!({"cmd": "state"}));
-    otto.wait_for("the session on the city", |o| {
+    // Followed by its file and caught up: what comes next happens now.
+    otto.wait_for("the session on the city, its file read to its end", |o| {
         let c = state(o)["city"].clone();
-        let session = c["agents"].as_array().is_some_and(|a| a.iter().any(|a| a["task"].is_null()));
+        let session = c["agents"].as_array().is_some_and(|a| a.iter().any(|a| a["followed"] == json!(true)));
         (session && !c["picture"].is_null()).then_some(())
     });
-    std::thread::sleep(Duration::from_millis(1500));
+    std::thread::sleep(Duration::from_millis(300));
     let flashes = |o: &Otto| state(o)["counts"]["city_glimmer_frames"].as_u64().unwrap_or(0);
     assert_eq!(flashes(&otto), 0, "its history plays nothing");
     // A read now, written to its file.

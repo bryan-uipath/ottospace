@@ -531,8 +531,8 @@ pub struct Transcript {
     /// Built from the file of a session nothing has (a restart since its agent ran): its calls
     /// and edits, to go on with. Not read-only.
     pub past: bool,
-    /// A watched file read to its end once (`Event::CaughtUp`): its events since are timed as
-    /// they come, so a file's call held after it ends (`activity::HOLD_MS`).
+    /// A watched file read to its end once (`Event::CaughtUp`): its calls' ends since are seen
+    /// as they come, so a file's call held after it ends (`activity::HOLD_MS`).
     pub caught_up: bool,
     /// Something came back from its process since it started: a turn, text, a call, a request.
     pub replied: bool,
@@ -767,8 +767,9 @@ impl Transcript {
         let asking = self.cards.front().map(|card| card.label.as_str());
         let (live, watched, turn) = (self.live, self.watched && !self.live, self.turn.is_some());
         // A file's records came all at once: no clock says when its calls ran.
-        let timed = (!watched && (live || !self.past)) || (watched && self.caught_up);
-        Is { live, watched, turn, asking, context: self.context, window: self.window, timed }
+        let timed = !watched && (live || !self.past);
+        let held = timed || (watched && self.caught_up);
+        Is { live, watched, turn, asking, context: self.context, window: self.window, timed, held }
     }
 
     /// A process for this conversation started (again). A resume with its earlier turns on show

@@ -2691,6 +2691,7 @@ function cityAgent(value: unknown, at: string): CityAgent {
     subagents: num(o.subagents, `${at}.subagents`),
     station: orNull(station)(o.station, `${at}.station`),
     caption: orNull(rect)(o.caption, `${at}.caption`),
+    followed: bool(o.followed, `${at}.followed`),
   };
 }
 

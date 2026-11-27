@@ -9816,7 +9816,8 @@ impl Model {
 
     /// When the city's file holds end, of those not over at the model's `now` (`HOLD_MS`).
     fn hold_ends(&self) -> impl Iterator<Item = u64> {
-        self.chats.iter().flat_map(|chat| chat.transcript.holds_end()).filter(|at| self.now < *at)
+        let transcripts = self.chats.iter().map(|chat| &chat.transcript).chain(self.follows.values());
+        transcripts.flat_map(|transcript| transcript.holds_end()).filter(|at| self.now < *at)
     }
 
     /// When `due` turns true next, but for the calendar's alerts: the shell looks at those on its

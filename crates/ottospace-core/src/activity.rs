@@ -319,7 +319,7 @@ impl Activity {
     }
 
     fn holds(&self, is: &Is) -> bool {
-        is.timed && self.pulse(is) == Pulse::Running
+        is.held && self.pulse(is) == Pulse::Running
     }
 
     fn held(&self, now: u64) -> impl Iterator<Item = &str> {
@@ -492,6 +492,10 @@ pub struct Is<'a> {
     pub window: Option<u64>,
     /// Times are known as they happen: false for a watched session, read a message at a time.
     pub timed: bool,
+    /// Its calls' ends are known as they happen, so a file holds after one (`HOLD_MS`): timed,
+    /// or a watched file read to its end once (`Event::CaughtUp`). Its starts may not be: a call
+    /// running when the file was first read started earlier than it was seen.
+    pub held: bool,
 }
 
 /// The centre's state, coloured as a task's (`theme::pulse`).
@@ -606,7 +610,7 @@ mod tests {
     type Case = (&'static str, Box<dyn Fn(&mut Activity)>, Is<'static>, u64, [Option<&'static str>; 3]);
 
     fn live<'a>() -> Is<'a> {
-        Is { live: true, timed: true, ..Is::default() }
+        Is { live: true, timed: true, held: true, ..Is::default() }
     }
 
     #[test]

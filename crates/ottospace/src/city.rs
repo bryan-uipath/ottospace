@@ -739,6 +739,8 @@ struct Floating {
     /// The call it runs: its station's glyph at the icon's corner, its line (the sidebar's) under it.
     station: Option<ottospace_core::activity::Station>,
     line: Option<String>,
+    /// A session followed by its file, caught up (`Agent::followed`).
+    followed: bool,
 }
 
 /// An agent's icon as a paint drew it: its centre, where it glides to and since when (window
@@ -760,6 +762,7 @@ struct Icon {
     /// line was drawn (never its words).
     station: Option<ottospace_core::activity::Station>,
     caption: Option<Bounds<Pixels>>,
+    followed: bool,
 }
 
 /// A hovered box's beacon as drawn: whether a file's, whether lit; a file's beam (foot and end)
@@ -1183,7 +1186,7 @@ impl Drawn {
                 serde_json::json!({
                     "task": i.task, "rect": rect(i.rect), "cone": i.cone, "fan": [i.fan.0, i.fan.1], "hovered": hovered,
                     "pulsing": i.pulsing, "subagents": i.subagents,
-                    "station": i.station.map(|station| station.id()), "caption": i.caption.map(rect),
+                    "station": i.station.map(|station| station.id()), "caption": i.caption.map(rect), "followed": i.followed,
                 })
             })
             .collect();
@@ -1427,21 +1430,33 @@ impl Workspace {
             .filter_map(|agent| {
                 let at = placed(plan.as_deref(), &folder, agent.at, &agent.near);
                 let (busy, subagents) = (agent.busy, agent.subagents);
-                let (station, line) = (agent.station, agent.line.clone());
+                let (station, line, followed) = (agent.station, agent.line.clone(), agent.followed);
                 Some(match agent.who {
                     Who::Task(task) => {
                         let subject = ottospace_core::talk::Subject::Task(task);
                         let mono = badges.iter().find(|(of, _)| *of == subject)?.1.clone();
                         let title = self.model.tasks.live(task)?.title.clone();
                         let (key, colour) = (format!("task:{task}"), theme::identity(agent.colour));
-                        Floating { task: Some(task), key, colour, mono, title, at, busy, subagents, station, line }
+                        Floating {
+                            task: Some(task),
+                            key,
+                            colour,
+                            mono,
+                            title,
+                            at,
+                            busy,
+                            subagents,
+                            station,
+                            line,
+                            followed,
+                        }
                     }
                     // An agent CLI in a pane, by its process: its runner's glyph, no title of its own.
                     Who::Pane { pane, runner } => {
                         let spec = ottospace_core::runner::RunnerId::named(runner)?.spec();
                         let (key, colour) = (format!("pane:{pane}"), theme::task(Group::Running));
                         let (mono, title) = (spec.glyph.to_string(), spec.display.to_string());
-                        Floating { task: None, key, colour, mono, title, at, busy, subagents, station, line }
+                        Floating { task: None, key, colour, mono, title, at, busy, subagents, station, line, followed }
                     }
                     // A session no task has: its runner's glyph, in the colour of work going on.
                     Who::Session { runner, id, title } => {
@@ -1459,6 +1474,7 @@ impl Workspace {
                             subagents,
                             station,
                             line,
+                            followed,
                         }
                     }
                 })
@@ -2975,6 +2991,7 @@ fn agents(
             subagents,
             station: agent.station,
             caption,
+            followed: agent.followed,
         });
     }
     (icons, gliding, pulsing)
