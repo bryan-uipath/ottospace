@@ -151,7 +151,7 @@ impl Feature {
             Feature::CityLiveLayer => "Code city on a live layer",
             Feature::Review => "Review a change",
             Feature::CityBehind => "Code city behind panes",
-            Feature::CityWallNames => "Folder names on the plinths",
+            Feature::CityWallNames => "Names drawn in the city",
             Feature::CityKinds => "Roofs by kind of file",
         }
     }
@@ -207,7 +207,7 @@ impl Feature {
                 "A tab's city drawn behind its panes, seen through terminals and explorers at terminal_opacity and explorer_opacity (with code_city)"
             }
             Feature::CityWallNames => {
-                "The code city's top two folder tiers named on the wall of their plinth that faces the camera, drawn with the city (with code_city)"
+                "The code city's top folders named on the wall of their plinth that faces the camera, deeper folders and files on labels over them, drawn with the city (with code_city)"
             }
             Feature::CityKinds => {
                 "A code city building's roof in its file's kind: code, test, docs, config or data; its walls keep its folder's colour (with code_city)"

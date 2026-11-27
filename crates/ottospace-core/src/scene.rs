@@ -334,7 +334,7 @@ impl Camera {
     }
 
     /// `project`, by the camera's matrix made once.
-    fn project_by(&self, m: &[[f32; 4]; 4], p: [f32; 3]) -> Option<(f32, f32)> {
+    pub(crate) fn project_by(&self, m: &[[f32; 4]; 4], p: [f32; 3]) -> Option<(f32, f32)> {
         let clip = |row: usize| m[0][row] * p[0] + m[1][row] * p[1] + m[2][row] * p[2] + m[3][row];
         let w = clip(3);
         (w > self.near * 0.5).then(|| ((clip(0) / w + 1.) / 2., (1. - clip(1) / w) / 2.))

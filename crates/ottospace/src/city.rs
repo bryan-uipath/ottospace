@@ -81,6 +81,8 @@ const KEEP_LOG: Duration = Duration::from_secs(3600);
 const EMPTY_TREE: &str = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 /// Cities kept, by folder: a task's tab shown again draws at once.
 const KEPT: usize = 8;
+/// A label whose box is hidden behind another is drawn this opaque, on top.
+const DIMMED: f32 = 0.4;
 /// Names are shaped for this many things at most, the largest: a few placed of each.
 const SHAPED: usize = 4 * city_labels::MOST;
 /// A hovered file's kind's swatch, points a side (`city_kinds`).
@@ -528,7 +530,7 @@ struct Key {
     calm: bool,
     /// Drawn straight to its place's live layer (`city_live_layer`), not read back as an image.
     live: bool,
-    /// The top tiers' names on their plinths (`city_wall_names`): the least em drawn, in pixels.
+    /// Names drawn in the picture (`city_wall_names`): the window's scale, in hundredths.
     walls: Option<u32>,
     /// Roof caps by kind of file (`city_kinds`).
     kinds: bool,
@@ -571,6 +573,16 @@ impl Key {
             return (w, h);
         }
         if self.moving || self.rise < 1000 { ((w / 2).max(1), (h / 2).max(1)) } else { (w, h) }
+    }
+}
+
+/// How a box is named: the top folder tiers on their wall, deeper folders, files; the ground not.
+fn tier_of(kind: Kind) -> Option<Tier> {
+    match kind {
+        Kind::Plate(tier) if tier <= WALL_TIERS => Some(Tier::Wall),
+        Kind::Plate(_) => Some(Tier::Folder),
+        Kind::Building | Kind::Lit(_) => Some(Tier::File),
+        Kind::Ground => None,
     }
 }
 
@@ -886,6 +898,8 @@ impl Painter {
         // frames and a camera's moves lay one out once (two places of one checkout, two sizes).
         let mut last: Layouts = Vec::new();
         let mut details = Details::new();
+        // Each place's billboards named last (`city_walls::billboards`), by its plan.
+        let mut picks: HashMap<(Floor, usize), Vec<usize>> = HashMap::new();
         let bell = Arc::new(ottospace_mac::wake::Bell::default());
         let ring = bell.clone();
         let (live, stats) = (LiveTargets::default(), Arc::new(LiveStats::default()));
@@ -927,7 +941,9 @@ impl Painter {
                             None => None,
                         };
                         let spun = counted.spinning.lock().is_ok_and(|of| *of == Some(*floor));
-                        let made = make(gpu, key, plan, &mut last, detail, surface, *asked, spun.then_some(&*counted));
+                        let picked = picks.entry((*floor, key.plan)).or_default();
+                        let counted = spun.then_some(&*counted);
+                        let made = make(gpu, key, plan, &mut last, detail, surface, *asked, counted, picked);
                         // A layer that gave no drawable (resized, lost) gets a new surface next time.
                         if made.is_err() && target.is_some() {
                             surfaces.remove(floor);
@@ -989,6 +1005,7 @@ fn make(
     live: Option<&wgpu::Surface<'static>>,
     asked_at: Instant,
     stats: Option<&LiveStats>,
+    picks: &mut Vec<usize>,
 ) -> Result<(Made, lod::Detail), String> {
     let started = Instant::now();
     let (w, h) = key.size;
@@ -1024,20 +1041,47 @@ fn make(
     if last.len() > KEPT_LAYOUTS {
         last.remove(0);
     }
-    // The top tiers' names on their plinths, in capitals, drawn in the picture: they turn with
-    // it, and a building in front hides them.
+    // Names drawn in the picture (`city_wall_names`): they turn with it, and a building in front
+    // hides them. The top folders on their plinths; deeper folders and files on billboards, picked
+    // at rest, the same ones moved while the camera moves, none while the city rises.
+    let rising = key.rise < 1000;
     let name = |place: usize| {
-        let label = plan.places.get(place)?.label.to_uppercase();
+        let place = plan.places.get(place)?;
+        let label = if place.group { place.label.to_uppercase() } else { place.label.clone() };
         (!label.contains(char::is_control)).then_some(label)
     };
-    let signs = key.walls.map_or_else(Vec::new, |least| {
-        city_walls::signs(&scene, |place| gpu.measure(&name(place)?), [w as f32, h as f32], least as f32)
-    });
-    let [r, g, b] = [theme::MUTED >> 16, theme::MUTED >> 8, theme::MUTED].map(|c| (c & 0xff) as f32 / 255.);
+    let view = [w as f32, h as f32];
+    let mut signs = Vec::new();
+    if let Some(scale) = key.walls.map(|s| s as f32 / 100.) {
+        signs = city_walls::signs(&scene, |place| gpu.measure(&name(place)?), view, scale);
+        if rising {
+            picks.clear();
+        } else {
+            let boards =
+                city_walls::billboards(&scene, |place| gpu.measure(&name(place)?), view, scale, picks, key.moving);
+            *picks = boards.iter().map(|s| s.place).collect();
+            signs.extend(boards);
+        }
+    }
+    let rgba = |hex: u32, a: f32| {
+        let [r, g, b] = crate::city_gpu::rgb(hex);
+        [r, g, b, a]
+    };
     let labels: Vec<Label> = (signs.iter())
         .filter_map(|s| {
-            let (origin, across, up, em) = (s.origin, s.across, [0., 1., 0.], s.em);
-            Some(Label { text: name(s.place)?, origin, across, up, em, colour: [r, g, b, 1.] })
+            let (origin, across, up, em) = (s.origin, s.across, s.up, s.em);
+            // Brightest the top tier, then the second; labels as GPUI drew names, on a pill, on top,
+            // dimmed where a box stands in front of what they name.
+            let (colour, on_top) = match scene.blocks[s.block].kind {
+                Kind::Plate(1) => (rgba(theme::TEXT, 0.95), false),
+                Kind::Plate(t) if t <= WALL_TIERS => (rgba(theme::TEXT, 0.8), false),
+                Kind::Plate(_) => (rgba(theme::MUTED, 1.), true),
+                _ => (rgba(theme::MUTED, 0.9), true),
+            };
+            let dim = if on_top && city_walls::hidden(&scene, s) { DIMMED } else { 1. };
+            let colour = [colour[0], colour[1], colour[2], colour[3] * dim];
+            let backing = on_top.then(|| rgba(theme::BACKGROUND, 0.78 * dim));
+            Some(Label { text: name(s.place)?, origin, across, up, em, colour, on_top, backing })
         })
         .collect();
     let scene_us = started.elapsed().as_micros() as u64;
@@ -1081,28 +1125,22 @@ fn make(
         })
         .collect();
     // What may be named: the top two folder tiers on their front wall, deeper folders and files
-    // over their top (folders in capitals). None while the city rises or its camera moves.
-    let rising = key.rise < 1000 || key.moving;
+    // over their top (folders in capitals). None while the city rises or its camera moves, nor
+    // when the picture names them (`city_wall_names`).
+    let unnamed = rising || key.moving || key.walls.is_some();
     let marks_at = Instant::now();
     let marks: Vec<Mark> = (scene.blocks.iter().enumerate())
-        .filter(|(i, _)| !rising && scene.is_shown(*i))
+        .filter(|(i, _)| !unnamed && scene.is_shown(*i))
         .filter_map(|(i, b)| {
             let place = b.place?;
-            let tier = match b.kind {
-                // On their plinths, in the picture (`city_wall_names`).
-                Kind::Plate(tier) if tier <= WALL_TIERS && key.walls.is_some() => return None,
-                Kind::Plate(tier) if tier <= WALL_TIERS => Tier::Wall,
-                Kind::Plate(_) => Tier::Folder,
-                Kind::Building | Kind::Lit(_) => Tier::File,
-                Kind::Ground => return None,
-            };
+            let tier = tier_of(b.kind)?;
             let top = camera.project(b.top())?;
             let label = &plan.places[place].label;
             let text = if tier == Tier::File { label.clone() } else { label.to_uppercase() };
             Some(Mark { place, tier, text, bounds: camera.bounds(b)?, top, face: scene.outline(i)? })
         })
         .collect();
-    if !rising {
+    if !unnamed {
         crate::trace::record("city_marks", serde_json::json!({ "us": marks_at.elapsed().as_micros() as u64 }));
     }
     let groups = plan.places.iter().filter(|p| p.group).count();
@@ -1205,11 +1243,13 @@ impl Drawn {
                 |(_, t, r)| serde_json::json!({ "tier": tier(*t), "rect": rect(*r), "plinth": false, "hidden": false }),
             )
             .collect();
-        // Those on plinths, as the picture drew them: hidden where a box stands in front.
+        // Those the picture drew, on plinths and buildings: hidden where a box stands in front.
         names.extend(made.iter().flat_map(|made| made.signs.iter().map(move |s| (made, s))).map(|(made, s)| {
             let [rx, ry, rw, rh] = s.rect;
             let at = [x + rx * w, y + ry * h, rw * w, rh * h];
-            serde_json::json!({ "tier": "wall", "rect": at, "plinth": true, "hidden": city_walls::hidden(&made.scene, s) })
+            let of = tier_of(made.scene.blocks[s.block].kind).unwrap_or(Tier::File);
+            let hidden = city_walls::hidden(&made.scene, s);
+            serde_json::json!({ "tier": tier(of), "rect": at, "plinth": true, "hidden": hidden })
         }));
         serde_json::json!({
             "on": on(floor), "places": made.map(|made| made.places), "groups": made.map(|made| made.groups),
@@ -1594,8 +1634,8 @@ impl Workspace {
                     detail_at,
                     calm: crate::dial::calm(),
                     live,
-                    // No smaller than the size GPUI named them in (`paint`).
-                    walls: walls.then(|| (theme::TEXT_XS * scale).round() as u32),
+                    // None behind panes.
+                    walls: (walls && !behind).then(|| (scale * 100.).round() as u32),
                     kinds,
                 });
                 key = key.filter(|key| !small && key.size.0 > 0 && key.size.1 > 0);
@@ -3322,8 +3362,8 @@ mod tests {
             detail_at: 0,
             calm: false,
             live: false,
-            // `CITY_WALLS=1`: the top tiers named on their plinths (`city_wall_names`), at 2×.
-            walls: std::env::var_os("CITY_WALLS").map(|_| 24),
+            // `CITY_WALLS=1`: names drawn in the picture (`city_wall_names`), at 2×.
+            walls: std::env::var_os("CITY_WALLS").map(|_| 200),
             // `CITY_KINDS=1`: roof caps by kind of file (`city_kinds`).
             kinds: std::env::var_os("CITY_KINDS").is_some(),
         };
@@ -3353,7 +3393,8 @@ mod tests {
         set(&mut key, view);
         let skip = crate::trace::jsonl().lines().count();
         let at_rest = Instant::now();
-        let (first, mut detail) = make(gpu, &key, plan, &mut last, None, None, Instant::now(), None).unwrap();
+        let (first, mut detail) =
+            make(gpu, &key, plan, &mut last, None, None, Instant::now(), None, &mut Vec::new()).unwrap();
         let rest_ms = ms(at_rest);
         let blocks = first.scene.blocks.len();
         let districts = first.scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).count();
@@ -3407,7 +3448,8 @@ mod tests {
             view = view.orbited(1.5, 0.);
             set(&mut key, view);
             let started = Instant::now();
-            let (made, next) = make(gpu, &key, plan, &mut last, Some(detail), None, Instant::now(), None).unwrap();
+            let (made, next) =
+                make(gpu, &key, plan, &mut last, Some(detail), None, Instant::now(), None, &mut Vec::new()).unwrap();
             detail = next;
             let total = ms(started);
             // Boxes shown or hidden by a level of detail since the last picture: none in a turn.
@@ -3444,7 +3486,8 @@ mod tests {
         for _ in 0..60 {
             view = view.orbited(1.5, 0.);
             set(&mut key, view);
-            detail = make(gpu, &key, plan, &mut last, Some(detail), None, Instant::now(), None).unwrap().1;
+            detail =
+                make(gpu, &key, plan, &mut last, Some(detail), None, Instant::now(), None, &mut Vec::new()).unwrap().1;
         }
         let trace = crate::trace::jsonl();
         let opaque: Vec<f64> = (trace.lines().skip(skip))
@@ -3520,7 +3563,8 @@ mod tests {
         for frame in 0..200 {
             view.zoom = 0.985f32.powi(frame);
             key.view = [view.yaw, view.pitch, view.zoom, view.pan[0], view.pan[1], view.lift].map(f32::to_bits);
-            let (made, next) = make(&gpu, &key, &plan, &mut last, detail.take(), None, Instant::now(), None).unwrap();
+            let (made, next) =
+                make(&gpu, &key, &plan, &mut last, detail.take(), None, Instant::now(), None, &mut Vec::new()).unwrap();
             detail = Some(next);
             let rects: Vec<[f32; 4]> =
                 made.scene.blocks.iter().map(|b| [b.min[0], b.min[2], b.max[0], b.max[2]]).collect();

@@ -7,6 +7,7 @@
 use std::collections::HashMap;
 use std::sync::OnceLock;
 
+use ottospace_core::city_walls::{PILL_END, PILL_RISE};
 use rustybuzz::ttf_parser::{GlyphId, OutlineBuilder, Tag};
 
 /// The atlas's side, in texels; a glyph's em in it; how far (texels) its field reaches each way.
@@ -24,7 +25,8 @@ const LINES: usize = 4096;
 pub(crate) const QUAD: usize = 17;
 
 /// A line to draw: its em box's bottom left (world), the unit ways it reads and up, its em
-/// (plan units) and colour (RGBA). The capitals sit in the middle of its em box.
+/// (plan units) and colour (RGBA). The capitals sit in the middle of its em box. `on_top`: drawn
+/// last, over everything (a label, not a wall's name); `backing`: a pill's colour under it.
 pub(crate) struct Label {
     pub text: String,
     pub origin: [f32; 3],
@@ -32,7 +34,13 @@ pub(crate) struct Label {
     pub up: [f32; 3],
     pub em: f32,
     pub colour: [f32; 4],
+    pub on_top: bool,
+    pub backing: Option<[f32; 4]>,
 }
+
+/// A pill's corners are rounded this share of its height (the web city's 30 of 68 px); its reach
+/// past the text is `city_walls`'.
+const PILL_ROUND: f32 = 0.44;
 
 /// A glyph in the atlas: its rect there (shares: left, top, right, bottom) and its quad from
 /// the pen on the baseline (ems: left, bottom, right, top).
@@ -67,6 +75,8 @@ pub(crate) struct Text {
     lines: HashMap<String, Option<Line>>,
     /// Glyphs were added since the atlas was last uploaded.
     pub(crate) dirty: bool,
+    /// A glyph found no room: the atlas starts again after this picture's draw (`forget`).
+    full: bool,
 }
 
 impl Text {
@@ -76,7 +86,8 @@ impl Text {
         face.set_variation(Tag::from_bytes(b"wght"), WEIGHT);
         let cap = face.capital_height().map_or(0.7, |c| c as f32 / face.units_per_em() as f32);
         let pixels = vec![0; (ATLAS * ATLAS) as usize];
-        Some(Self { face, cap, pixels, cells: HashMap::new(), shelf: (0, 0, 0), lines: HashMap::new(), dirty: false })
+        let (cells, lines) = (HashMap::new(), HashMap::new());
+        Some(Self { face, cap, pixels, cells, shelf: (0, 0, 0), lines, dirty: false, full: false })
     }
 
     /// `text`'s width in ems, its glyphs in the atlas; none if the font lacks one or the atlas is full.
@@ -88,11 +99,18 @@ impl Text {
         self.lines.get(text)?.as_ref().map(|line| line.width)
     }
 
-    /// Past `LINES`, every line forgotten: after a picture's draw, so none it measured is lost
-    /// before its quads.
+    /// Past `LINES`, every line forgotten; with the atlas full, every glyph too, so the next
+    /// picture packs only those it needs (a repository of many scripts names on). After a
+    /// picture's draw, so none it measured is lost before its quads.
     pub(crate) fn forget(&mut self) {
-        if self.lines.len() > LINES {
+        if self.lines.len() > LINES || self.full {
             self.lines.clear();
+        }
+        if std::mem::take(&mut self.full) {
+            self.cells.clear();
+            self.shelf = (0, 0, 0);
+            self.pixels.fill(0);
+            self.dirty = true;
         }
     }
 
@@ -145,6 +163,7 @@ impl Text {
             (x, y, tall) = (0, y + tall + 1, 0);
         }
         if w + 1 > ATLAS || y + h + 1 > ATLAS {
+            self.full = true;
             return None;
         }
         self.shelf = (x + w + 1, y, tall.max(h));
@@ -166,6 +185,15 @@ impl Text {
         let Some(Some(line)) = self.lines.get(&label.text) else { return };
         let baseline = (1. - self.cap) / 2.;
         let at = |o: [f32; 3], d: [f32; 3], by: f32| -> [f32; 3] { std::array::from_fn(|i| o[i] + d[i] * by) };
+        // Its pill first, under its glyphs.
+        if let Some(colour) = label.backing {
+            let em = label.em;
+            let corner = at(at(label.origin, label.across, -PILL_END * em), label.up, -PILL_RISE * em);
+            let (wide, tall) = ((line.width + 2. * PILL_END) * em, (1. + 2. * PILL_RISE) * em);
+            let (across, up) = (label.across.map(|v| v * wide), label.up.map(|v| v * tall));
+            let uv = [-1., wide / tall, PILL_ROUND, 0.];
+            out.extend(corner.into_iter().chain(across).chain(up).chain(uv).chain(colour));
+        }
         for (id, [x, y]) in &line.glyphs {
             let Some(Some(Cell { uv, plane: [l, b, r, t] })) = self.cells.get(id) else { continue };
             let corner =
@@ -301,6 +329,8 @@ mod tests {
             up: [0., 1., 0.],
             em: 2.,
             colour: [1.; 4],
+            on_top: false,
+            backing: None,
         };
         let mut quads = Vec::new();
         text.quads(&label, &mut quads);
@@ -308,5 +338,33 @@ mod tests {
         // Each glyph's quad left of the next, all inside the em box but for the field's reach.
         let lefts: Vec<f32> = quads.chunks(QUAD).map(|q| q[0]).collect();
         assert!(lefts.windows(2).all(|w| w[0] < w[1]) && lefts[2] < width * 2., "{lefts:?}");
+    }
+
+    /// A file's name has lowercase, digits and punctuation: every printable ASCII glyph fits the
+    /// atlas, under half of it, so accented letters and the like have room too.
+    #[test]
+    fn every_ascii_glyph_fits_under_half_the_atlas() {
+        let Some(mut text) = Text::new() else { return eprintln!("no system font: skipped") };
+        let all: String = (' '..='~').collect();
+        assert!(text.width(&all).is_some());
+        let (_, y, tall) = text.shelf;
+        assert!(y + tall < ATLAS / 2, "{} of {ATLAS} rows", y + tall);
+    }
+
+    /// Glyphs past the atlas's room fail their lines that picture; after its draw the atlas starts
+    /// again, and a name whose glyph found no room is drawn the next.
+    #[test]
+    fn a_full_atlas_starts_again_after_a_draw() {
+        let Some(mut text) = Text::new() else { return eprintln!("no system font: skipped") };
+        let mut failed = None;
+        for c in ('À'..='ɏ').chain('Ͱ'..='ӿ') {
+            if text.width(&c.to_string()).is_none() && text.full {
+                failed = Some(c);
+                break;
+            }
+        }
+        let Some(c) = failed else { return eprintln!("the font has too few glyphs to fill the atlas: skipped") };
+        text.forget();
+        assert!(!text.full && text.width(&c.to_string()).is_some(), "{c}");
     }
 }
