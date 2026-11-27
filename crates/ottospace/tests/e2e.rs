@@ -20342,6 +20342,28 @@ fn a_tasks_empty_tab_draws_its_checkout_as_a_city_and_lights_the_file_its_agent_
         Some(city(o)["agents"][0]["rect"].clone()).filter(|rect| !rect.is_null())
     });
     let icon = numbers(&icon);
+    // Under the hints it is behind them, and a click there is theirs: the user's middle drag pans
+    // the city down, below the hints, first.
+    // The hints' rows as drawn now, and the room the city keeps round them (`CLEAR`).
+    let rows = ["home:open_app", "home:terminal", "home:new_task"].map(|id| otto.control_opt(id));
+    let below = rows.iter().flatten().map(|r| r[1] + r[3]).fold(0., f64::max) + 12.;
+    let icon = if icon[1] < below + 4. {
+        let (x, y) = (icon[0] + icon[2] / 2., below + 40.);
+        let drag = |action: &str, y: f64| json!({"cmd": "mouse", "action": action, "x": x, "y": y, "button": "middle", "as": "user"});
+        otto.call(drag("down", y));
+        otto.call(json!({"cmd": "mouse", "action": "move", "x": x, "y": y + 90., "as": "user"}));
+        otto.call(json!({"cmd": "mouse", "action": "move", "x": x, "y": y + 180., "as": "user"}));
+        otto.call(drag("up", y + 180.));
+        // Below them and still: the pan has settled.
+        otto.wait_for("the agent below the hints, still", |o| {
+            let rect = numbers(&city(o)["agents"][0]["rect"]);
+            std::thread::sleep(Duration::from_millis(300));
+            let still = numbers(&city(o)["agents"][0]["rect"]) == rect;
+            (rect.len() == 4 && rect[1] > below + 4. && still).then_some(rect)
+        })
+    } else {
+        icon
+    };
     let click = |user: bool| {
         for action in ["down", "up"] {
             let mut press =
