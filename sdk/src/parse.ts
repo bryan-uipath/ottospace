@@ -23,6 +23,7 @@ import type {
   NoticeLevel,
   AppEntry,
   Feature,
+  FileKind,
   Finish,
   Listen,
   ListenLine,
@@ -115,6 +116,7 @@ import type {
   TypingDist,
   TypingState,
   CityHovered,
+  CityKinds,
   CityName,
   CitySpots,
   CityOn,
@@ -1845,7 +1847,7 @@ function paletteFeature(value: unknown, at: string): PaletteFeature {
 
 function feature(value: unknown, at: string): Feature {
   if (value === "marks" || value === "apps_section" || value === "transcripts" || value === "slots" || value === "agent_mode") return value;
-  if (value === "multi_monitor" || value === "review" || value === "city_behind" || value === "city_wall_names") return value;
+  if (value === "multi_monitor" || value === "review" || value === "city_behind" || value === "city_wall_names" || value === "city_kinds") return value;
   if (value === "overlay_panels" || value === "decisions" || value === "code_city" || value === "city_live_layer") return value;
   if (value === "session_waits" || value === "projects" || value === "terminal_tasks" || value === "zoom_out" || value === "decision_sources") return value;
   throw wrong(at, "a feature", value);
@@ -2594,6 +2596,7 @@ function cityDrawn(value: unknown, at: string): CityDrawn {
     glass: orNull(bool)(o.glass, `${at}.glass`),
     lower: orNull(num)(o.lower, `${at}.lower`),
     folder_colors: orNull(num)(o.folder_colors, `${at}.folder_colors`),
+    kinds: orNull(cityKinds)(o.kinds, `${at}.kinds`),
     hovered: orNull(cityHovered)(o.hovered, `${at}.hovered`),
     first_ms: orNull(num)(o.first_ms, `${at}.first_ms`),
     read_us: orNull(num)(o.read_us, `${at}.read_us`),
@@ -2713,6 +2716,23 @@ function cityHovered(value: unknown, at: string): CityHovered {
     beam: orNull(segment)(o.beam, `${at}.beam`),
     outline: orNull(list(point))(o.outline, `${at}.outline`),
     beacon: rect(o.beacon, `${at}.beacon`),
+    kind: orNull(fileKind)(o.kind, `${at}.kind`),
+  };
+}
+
+function fileKind(value: unknown, at: string): FileKind {
+  if (value === "code" || value === "test" || value === "docs" || value === "config" || value === "data") return value;
+  throw wrong(at, "a file's kind", value);
+}
+
+function cityKinds(value: unknown, at: string): CityKinds {
+  const o = fields(value, at);
+  return {
+    code: num(o.code, `${at}.code`),
+    test: num(o.test, `${at}.test`),
+    docs: num(o.docs, `${at}.docs`),
+    config: num(o.config, `${at}.config`),
+    data: num(o.data, `${at}.data`),
   };
 }
 

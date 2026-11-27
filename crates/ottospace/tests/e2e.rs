@@ -19375,6 +19375,40 @@ fn a_citys_top_folders_are_named_on_their_plinths_and_turn_with_it() {
     }
 }
 
+/// With `city_kinds` each building drawn has a roof cap by its file's kind, counted in `city.kinds`
+/// (two code, two docs here), and a hovered file's label names its kind; on the image path and on a
+/// live layer. Off: no counts, no kind.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_citys_roofs_show_each_files_kind() {
+    for (name, features) in [
+        ("city-kinds-off", "code_city"),
+        ("city-kinds", "code_city,city_kinds"),
+        ("city-kinds-live", "code_city,city_live_layer,city_kinds"),
+    ] {
+        let (otto, root, home) = city_shown(name, features);
+        let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+        let on = features.contains("city_kinds");
+        let want = json!({"code": 2, "test": 0, "docs": 2, "config": 0, "data": 0});
+        let shown = otto.wait_for(&format!("{name}: kinds"), |o| {
+            Some(city(o)).filter(|c| if on { c["kinds"] == want } else { c["kinds"].is_null() })
+        });
+        assert!(!shown.to_string().contains("main.rs"), "no path in the state: {shown}");
+        let spot = otto.wait_for("a building", |o| Some(city(o)["spots"]["file"].clone()).filter(|s| !s.is_null()));
+        let p: Vec<f64> = spot.as_array().unwrap().iter().map(|n| n.as_f64().unwrap()).collect();
+        otto.call(json!({"cmd": "mouse", "action": "move", "x": p[0], "y": p[1], "as": "user"}));
+        let hovered = otto.wait_for(&format!("{name}: a hovered file"), |o| {
+            Some(city(o)["hovered"].clone()).filter(|h| h["file"] == json!(true))
+        });
+        let kind = hovered["kind"].as_str();
+        assert_eq!(kind.is_some(), on, "{name}: {hovered}");
+        assert!(kind.is_none_or(|k| ["code", "docs"].contains(&k)), "{name}: {hovered}");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&home);
+    }
+}
+
 /// The city's names (`city.names`) are placed by `city_labels`: apart, clear of the key hints,
 /// inside the picture, again after a zoom. The user's pointer on a folder's ground outlines its
 /// top face and hangs its label by its near edge or the pointer; on a building, a beam a share of

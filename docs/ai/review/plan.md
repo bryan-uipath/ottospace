@@ -107,7 +107,7 @@ Every action has an `Origin`: only the user opens a PR in the browser or sends n
    `review-list`.
 3. **The city's changes layer.** The review tab's city (and, behind the flag, any city of a
    checkout with a PR) lights the change by kind; a click on a lit building opens its diff; the
-   list's cursor moves the beam. Tests: core (which places, which kind, a closed folder's glow);
+   list's cursor moves the beam. Changed files are named first (label picking's priority). Tests: core (which places, which kind, a closed folder's glow);
    e2e (the state's `city.lit` kinds and counts, a click opens a diff viewer); shot
    `city-changes` before and after.
 4. **Side by side** (`s`, wide panes), and the working tree as a toggle.

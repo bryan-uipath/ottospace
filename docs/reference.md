@@ -1628,6 +1628,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `review` | Experimental | off | Review a change: A changed file's diff in the viewer: D on it in the explorer, ]c and [c between its hunks |
 | `city_behind` | Experimental | off | Code city behind panes: A tab's city drawn behind its panes, seen through terminals and explorers at terminal_opacity and explorer_opacity (with code_city) |
 | `city_wall_names` | Experimental | off | Folder names on the plinths: The code city's top two folder tiers named on the wall of their plinth that faces the camera, drawn with the city (with code_city) |
+| `city_kinds` | Experimental | off | Roofs by kind of file: A code city building's roof in its file's kind: code, test, docs, config or data; its walls keep its folder's colour (with code_city) |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
   menu items, no ◆ on a marked pane, and `marks`, `mark_add`, `mark_go`, `mark_remove`,
@@ -1789,6 +1790,11 @@ a file or a folder changes no other building's colour. A lit building keeps its 
   wall of their plinth that faces the camera, in capitals, at least as large as GPUI named them
   (else not at all), hidden by a building in front, and turning with the city in the same frame
   (design: [code-city/wall-names.md](ai/code-city/wall-names.md)).
+- With `city_kinds` on, a building's roof is capped in its file's kind: code slate, test pink,
+  docs green, config cyan, data lavender (by path and extension: `tests/`, `*_test.*`, `*.md`,
+  `*.toml`, `*.json`, `*.rs`…; a file none names has no cap). Its walls keep its folder's colour;
+  a lit building keeps its task's. A hovered file's label leads with its kind's swatch and name
+  (design: [code-city/kinds.md](ai/code-city/kinds.md)).
 - A double-click on a building opens its file in a viewer (as Go to does), on a district its
   folder in a terminal (as a Repos row does), in the tab or pane the city is in. Only the
   user's own double-click: a client's opens nothing.
@@ -2113,6 +2119,7 @@ first brainstorm:
 - [accessibility.md](ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
 - [code-city/plan.md](ai/code-city/plan.md): the atlas, a map where a thing keeps its place, and the code city on it. Built: the layout, and the city behind a task's empty tab, behind `code_city` (see [Code city](#code-city)).
 - [code-city/wall-names.md](ai/code-city/wall-names.md): the top folders' names on their plinths, drawn by the city's renderer. Built, behind `city_wall_names`.
+- [code-city/kinds.md](ai/code-city/kinds.md): a building's roof cap by its file's kind. Built, behind `city_kinds`.
 - [file-viewer.md](ai/file-viewer.md): the read-only file viewer pane, and what comes after it (the markdown pass, the explorer, comments).
 - [review/plan.md](ai/review/plan.md): reviewing a change (design): a checkout's PR diff from its merge base, seen as the city's changes layer, a change list ordered for reading, and a diff mode of the viewer.
 - [bug-reporter.md](ai/bug-reporter.md): marking a bug in ottospace's own window and handing it to an agent.

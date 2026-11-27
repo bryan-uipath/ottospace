@@ -33,8 +33,8 @@ const DEPTH: wgpu::TextureFormat = wgpu::TextureFormat::Depth32Float;
 /// Per box: its corners (min, max), its top's colour, 1 if it glows (lit), its edges' colour,
 /// when it starts to rise (`Scene::rise_delays`; below 0: it stands from the start), how bright
 /// its sides' edges are, a share of its top's, how opaque its faces are, and the floor it rises
-/// from (a stratum's is its building's).
-const STRIDE: u64 = 17 * 4;
+/// from (a stratum's is its building's), then its roof cap's colour and height (0: none).
+const STRIDE: u64 = 21 * 4;
 /// How opaque a glass building's faces are (the original city's are 0.92; the owner asked for a
 /// little more see-through): its edges are whole.
 const GLASS: f32 = 0.8;
@@ -57,6 +57,7 @@ struct Out {
     @location(6) @interpolate(flat) axis: u32,
     @location(7) @interpolate(flat) sides: f32,
     @location(8) @interpolate(flat) alpha: f32,
+    @location(9) @interpolate(flat) cap: vec4<f32>,
 };
 
 // A cube's 36 corners (two triangles a face) and each face's normal: -x, +x, -y, +y, -z, +z.
@@ -74,7 +75,7 @@ const NORMALS = array<vec3<f32>, 6>(
 );
 
 @vertex
-fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>, @location(3) edge: vec3<f32>, @location(4) delay: f32, @location(5) sides: f32, @location(6) alpha: f32, @location(7) base: f32) -> Out {
+fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi: vec3<f32>, @location(2) top: vec4<f32>, @location(3) edge: vec3<f32>, @location(4) delay: f32, @location(5) sides: f32, @location(6) alpha: f32, @location(7) base: f32, @location(8) cap: vec4<f32>) -> Out {
     // Rising (`frame.light.w`: the share of the rise, 1 at rest): as tall as `scene::risen` says,
     // from its floor (a stratum: its building's, so a stack grows as one).
     let at = clamp((frame.light.w - delay) / (1. - STAGGER), 0., 1.);
@@ -98,6 +99,8 @@ fn vs(@builtin(vertex_index) i: u32, @location(0) lo: vec3<f32>, @location(1) hi
     out.axis = i / 12u;
     out.sides = sides;
     out.alpha = alpha;
+    // Its cap grows with it.
+    out.cap = vec4(cap.rgb * light, cap.w * grown);
     return out;
 }
 
@@ -119,7 +122,9 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
     let line = (1. - smoothstep(0.25, 1.1, to_edge)) * smoothstep(4., 10., size);
     // A side's edges (any face but the top and bottom) dimmed: a plinth's lit rim.
     let edge = select(in.edge * in.sides, in.edge, in.axis == 1u);
-    let colour = mix(in.colour, edge, line);
+    // A roof cap (`city_kinds`): the box's top `cap.w` in its kind's colour.
+    let capped = in.cap.w > 0. && in.world.y >= in.hi.y - in.cap.w;
+    let colour = mix(select(in.colour, in.cap.rgb, capped), edge, line);
     // Fog: from nothing at `fog.x` from the eye to `fog.z` at `fog.y`.
     let far = clamp((distance(in.world, frame.eye.xyz) - frame.fog.x) / (frame.fog.y - frame.fog.x), 0., 1.);
     // Glass: the faces see-through, the edges whole.
@@ -241,10 +246,12 @@ struct Targets {
 /// opaque, the solid first, then the glass. Made once a layout (`Boxes::new`); a camera move only
 /// orders the glass and copies each box's corners.
 pub struct Boxes {
-    base: Vec<[f32; 17]>,
+    base: Vec<[f32; 21]>,
     /// Each instance's block, and a stratum's slice of its height (`Scene::layers`).
     owner: Vec<u32>,
     layer: Vec<Option<[f32; 2]>>,
+    /// Where the stratum above starts (none: infinity): a cap goes on the highest one shown.
+    above: Vec<f32>,
     /// The scene's blocks, for a check that these are its boxes.
     blocks: usize,
     /// Indices into the instances: the solid ones, then the glass.
@@ -266,6 +273,7 @@ impl Boxes {
             base: Vec::new(),
             owner: Vec::new(),
             layer: Vec::new(),
+            above: Vec::new(),
             blocks: scene.blocks.len(),
             solid: Vec::new(),
             glass: Vec::new(),
@@ -280,14 +288,22 @@ impl Boxes {
                 .map(|l| (Some(l.y), l.colour.map(|c| (c, ottospace_core::palette::dim(c, 0xffffff))).or(tint(i))));
             let whole = std::iter::once((None, tint(i)));
             let parts: Vec<_> = if layers.is_empty() { whole.collect() } else { slices.collect() };
-            for (y, colours) in parts {
+            // Its cap's colour on each part; its height where it stands (`placed`).
+            let cap = scene.caps.get(i).copied().flatten().map(|kind| {
+                let [r, g, b] = rgb(kind.colour());
+                [r, g, b, 1.]
+            });
+            let starts = layers.iter().skip(1).map(|l| l.y[0]).chain([f32::INFINITY]);
+            let starts: Vec<f32> = if layers.is_empty() { vec![f32::INFINITY] } else { starts.collect() };
+            for ((y, colours), above) in parts.into_iter().zip(starts) {
+                boxes.above.push(above);
                 let at = boxes.base.len() as u32;
                 if see_through(b) {
                     boxes.glass.push(at)
                 } else {
                     boxes.solid.push(at)
                 }
-                boxes.base.push(instance(b, delays[i], colours, alpha, b.min[1]));
+                boxes.base.push(instance(b, delays[i], colours, alpha, b.min[1], cap));
                 boxes.owner.push(i as u32);
                 boxes.layer.push(y);
             }
@@ -330,7 +346,7 @@ impl Gpu {
         });
         let attributes = wgpu::vertex_attr_array![
             0 => Float32x3, 1 => Float32x3, 2 => Float32x4, 3 => Float32x3, 4 => Float32, 5 => Float32, 6 => Float32,
-            7 => Float32
+            7 => Float32, 8 => Float32x4
         ];
         let pipeline = |glass: bool| {
             device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -680,13 +696,18 @@ impl Gpu {
             let (b, mut one) = (&scene.blocks[block], boxes.base[*i as usize]);
             // A closed box standing for a lit file glows in its colour.
             if let Some(colour) = scene.glows(block) {
-                one = instance(&Block { kind: Kind::Lit(colour), ..*b }, one[13], None, one[15], one[16]);
+                one = instance(&Block { kind: Kind::Lit(colour), ..*b }, one[13], None, one[15], one[16], None);
             }
             one[..3].copy_from_slice(&b.min);
             one[3..6].copy_from_slice(&b.max);
             // A stratum: its slice of the building's height.
             if let Some(y) = boxes.layer[*i as usize] {
                 (one[1], one[4]) = (y[0], y[1].min(b.max[1]));
+            }
+            // A cap, on the highest part shown, as thick as the building now stands (a line of sight
+            // may cut it).
+            if one[20] > 0. {
+                one[20] = if boxes.above[*i as usize] >= b.max[1] { cap(b) } else { 0. };
             }
             one
         };
@@ -821,12 +842,30 @@ fn targets(device: &wgpu::Device, size: wgpu::Extent3d) -> Targets {
     }
 }
 
-fn instance(block: &Block, delay: f32, tint: Option<(u32, u32)>, alpha: f32, base: f32) -> [f32; 17] {
+fn instance(
+    block: &Block,
+    delay: f32,
+    tint: Option<(u32, u32)>,
+    alpha: f32,
+    base: f32,
+    cap: Option<[f32; 4]>,
+) -> [f32; 21] {
     let ([r, g, b], edge) = tint.map_or_else(|| colour(block.kind), |(top, edge)| (rgb(top), rgb(edge)));
     let (lo, hi) = (block.min, block.max);
     let glows = if matches!(block.kind, Kind::Lit(_)) { 1. } else { 0. };
     let sides = if matches!(block.kind, Kind::Plate(_)) { 0.25 } else { 1. };
-    [lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2], delay, sides, alpha, base]
+    let [cr, cg, cb, ch] = cap.unwrap_or_default();
+    [
+        lo[0], lo[1], lo[2], hi[0], hi[1], hi[2], r, g, b, glows, edge[0], edge[1], edge[2], delay, sides, alpha, base,
+        cr, cg, cb, ch,
+    ]
+}
+
+/// A building's roof cap's height: a thin slab, a quarter of its shorter side thick (it scales
+/// with the city's lots), at most a third of its height.
+fn cap(block: &Block) -> f32 {
+    let side = (block.max[0] - block.min[0]).min(block.max[2] - block.min[2]);
+    (side * 0.25).min((block.max[1] - block.min[1]) / 3.)
 }
 
 fn bytes(values: &[f32]) -> Vec<u8> {
@@ -973,6 +1012,42 @@ pub(crate) mod tests {
                 assert!((1..=2).contains(&rows), "{scale}×: the {edge} edge is {rows} rows");
             }
         }
+    }
+
+    /// A cap (`city_kinds`) colours a building's roof in its kind's colour and leaves its walls'
+    /// foot as they were. No GPU: nothing to check.
+    #[test]
+    fn a_cap_colours_the_roof_only() {
+        let Ok(gpu) = Gpu::new() else { return eprintln!("no GPU: skipped") };
+        let plan = atlas::atlas(&atlas::repo(&[("a/b.md".into(), 40_000), ("a/c.rs".into(), 40_000)]));
+        let mut scene = ottospace_core::scene::scene(&plan, &[], 1.6, &View { pitch: 52., ..View::default() });
+        let camera = scene.camera.unwrap();
+        let i = scene.blocks.iter().position(|b| b.kind == Kind::Building).unwrap();
+        let b = scene.blocks[i];
+        let mid = |k: usize| (b.min[k] + b.max[k]) / 2.;
+        let (w, h) = (320, 200);
+        let pixel = |p: &Picture, at: [f32; 3]| {
+            let (x, y) = camera.project(at).unwrap();
+            let at = (((y * h as f32) as u32 * w + (x * w as f32) as u32) * 4) as usize;
+            [p.bgra[at + 2], p.bgra[at + 1], p.bgra[at]]
+        };
+        let (roof, foot) = ([mid(0), b.max[1], mid(2)], [mid(0), b.min[1] + 0.002, b.min[2]]);
+        let plain = gpu.render(&scene, w, h, 1., false, &[]).unwrap();
+        scene.caps = ottospace_core::city_kinds::caps(&plan, &scene.blocks);
+        let kind = scene.caps[i].unwrap();
+        let capped = gpu.render(&scene, w, h, 1., false, &[]).unwrap();
+        let [r, g, bl] = pixel(&capped, roof).map(i32::from);
+        let [cr, cg, cb] = [16, 8, 0].map(|s| (kind.colour() >> s & 0xff) as i32);
+        // Shaded and fogged a little: the kind's hue, its strongest channel strongest.
+        let strongest = |c: [i32; 3]| (0..3).max_by_key(|k| c[*k]).unwrap();
+        assert_eq!(strongest([r, g, bl]), strongest([cr, cg, cb]), "{kind:?}: {:?}", [r, g, bl]);
+        assert_ne!(pixel(&plain, roof), pixel(&capped, roof));
+        assert_eq!(pixel(&plain, foot), pixel(&capped, foot), "the walls' foot keeps its folder's colour");
+        // Boxes made while a line of sight cut it to its floor still cap it standing whole.
+        let mut cut = scene.clone();
+        cut.blocks[i].max[1] = b.min[1];
+        let kept = gpu.render_boxes(&scene, &Boxes::new(&cut, false), w, h, 1., &[]).unwrap();
+        assert_eq!(pixel(&kept, roof), pixel(&capped, roof), "its cap as it stands now");
     }
 
     /// Kept targets and boxes draw what fresh ones do: a view, another size and view, then the

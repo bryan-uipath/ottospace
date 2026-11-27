@@ -116,3 +116,6 @@ the user's click does it; a client's does nothing.
 
 Nested blocks; more languages; double-click flight; an agent's icon over the block it edits
 (the transcript gives a line range for Edit calls).
+
+Next rung: the file's minimap: syntax colours, one row per line, on the hovered or near
+building's camera-facing wall (height is already lines); drawn only.
