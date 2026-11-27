@@ -50,6 +50,9 @@ pub struct Glance {
     pub words: Words,
     /// A search's result, line by line: the part before a line's first `:` (`src/a.rs:12:…`).
     pub found: Vec<String>,
+    /// Its output is the search's alone: no other command runs after it on its line (`grep x;
+    /// diff a b` prints both). Only then is its result read.
+    alone: bool,
 }
 
 /// Its words are what the agent ran or found: never printed (as `Text` is not).
@@ -72,21 +75,21 @@ impl Glances {
     /// A call started: a glance if it reads or searches. `detail` as its row shows it.
     pub(crate) fn start(&mut self, id: &str, tool: &str, station: Station, detail: &str) {
         let glance = match (tool, station) {
-            ("Read", _) => Some((false, Words::Path(detail.to_string()))),
-            ("Grep" | "Glob", _) => Some((true, scope(detail))),
+            ("Read", _) => Some((false, Words::Path(detail.to_string()), true)),
+            ("Grep" | "Glob", _) => Some((true, scope(detail), true)),
             (_, Station::Shell) => stage(detail),
             _ => None,
         };
-        let Some((search, words)) = glance else { return };
+        let Some((search, words, alone)) = glance else { return };
         if self.list.len() == MOST {
             self.list.pop_front();
         }
-        self.list.push_back(Glance { id: id.to_string(), search, words, found: Vec::new() });
+        self.list.push_back(Glance { id: id.to_string(), search, words, found: Vec::new(), alone });
     }
 
     /// A call ended: a search's result, if it printed one.
     pub(crate) fn end(&mut self, id: &str, output: Option<&str>) {
-        let Some(glance) = self.list.iter_mut().find(|g| g.id == id && g.search) else { return };
+        let Some(glance) = self.list.iter_mut().find(|g| g.id == id && g.search && g.alone) else { return };
         let lines = output.unwrap_or("").lines().take(MOST_FOUND);
         let named =
             lines.map(|l| l.split(':').next().unwrap_or("").trim()).filter(|p| !p.is_empty() && p.len() <= 1024);
@@ -131,10 +134,18 @@ fn scope(detail: &str) -> Words {
 
 /// A shell line's first stage that reads or searches (`sed -i` edits: no read), with the `cd`s
 /// run before it and its operands: flags left out, and a search's pattern (its first operand,
-/// unless `-e` gave it; `find`'s operands are its places, up to its first predicate).
-fn stage(line: &str) -> Option<(bool, Words)> {
+/// unless `-e` gave it; `find`'s operands are its places, up to its first predicate). With it,
+/// whether no command runs after it on the line (its pipe's own stages may).
+fn stage(line: &str) -> Option<(bool, Words, bool)> {
     let mut cds: Vec<String> = Vec::new();
-    for (words, then) in city_shell::commands(line) {
+    let commands = city_shell::commands(line);
+    // Whether a command after the one at `at` runs after its pipe: `a | b; c` → after `a`, yes.
+    let after = |at: usize| {
+        let ends = commands[at..].iter().position(|(_, then)| *then).map_or(commands.len(), |end| at + end);
+        commands[ends + 1..].iter().any(|(words, _)| !words.is_empty())
+    };
+    for (at, (words, then)) in commands.iter().enumerate() {
+        let then = *then;
         let Some((program, args)) = words.split_first() else { continue };
         if program == "cd" {
             if let Some(dir) = args.first().filter(|_| then && cds.len() < MOST_WORDS) {
@@ -160,7 +171,7 @@ fn stage(line: &str) -> Option<(bool, Words)> {
             operands.drain(..operands.len().min(1));
         }
         operands.truncate(MOST_WORDS);
-        return Some((search, Words::Stage { cds, operands }));
+        return Some((search, Words::Stage { cds, operands }, !after(at)));
     }
     None
 }
@@ -224,6 +235,18 @@ mod tests {
         }
         assert_eq!(g.iter().count(), MOST);
         assert_eq!(g.iter().next().map(|g| g.id.as_str()), Some("8"));
+        // A search's result is read only when its output is its own: one piped on still is
+        // (`| head`), one followed by another command is not (`; diff a b` prints too).
+        let found = |line: &str| {
+            let mut g = Glances::default();
+            g.start("x", "Bash", Station::Shell, line);
+            g.end("x", Some("src/a.rs:1:x\n11c11\n< made-up line"));
+            g.iter().next().map(|g| g.found.len())
+        };
+        assert_eq!(found("rg -l x src | head -5"), Some(3));
+        assert_eq!(found("grep -rl x src; diff a.rs b.rs | head -50"), Some(0));
+        assert_eq!(found("cd src && rg -l x"), Some(3));
+        assert_eq!(found("rg -l x src && echo done"), Some(0));
         // Never printed: what it ran or found.
         let shown = format!("{:?}", g.iter().next());
         assert!(!shown.contains("a.rs"), "{shown}");

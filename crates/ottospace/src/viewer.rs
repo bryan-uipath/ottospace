@@ -488,7 +488,8 @@ impl Workspace {
         for id in self.animated_panes() {
             let (Some(view), Some(core)) = (self.viewers.get(&id), self.model.viewer(id)) else { continue };
             let Body::Picture(picture) = &view.body else { continue };
-            let at = if playing(core) { picture.frame_at(view.began.elapsed()) } else { 0 };
+            // Paused, it stays on the frame on show (the first until it ever played).
+            let at = if playing(core) { picture.frame_at(view.began.elapsed()) } else { view.frame.get() };
             if view.frame.replace(at) != at {
                 self.picture_frames += 1;
                 cx.notify();

@@ -1,0 +1,8 @@
+# Task badges of titles that start with marks (a pasted quote bar, a list's dash and box, a
+# bullet): their letters, not the marks (before: `▎U`, `-[`, `•T`).
+{"cmd":"task_new","line":"▎ Use the Read tool on the parser"}
+{"cmd":"task_new","line":"- [ ] fix the login loop"}
+{"cmd":"task_new","line":"• tidy the parser"}
+{"cmd":"section","section":"tasks"}
+{"settle":1000}
+{"shot":"tasks"}
