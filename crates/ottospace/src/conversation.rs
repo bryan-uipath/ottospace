@@ -213,12 +213,14 @@ struct Follow {
     cursor: ottospace_sessions::Cursor,
     /// Its first read was given: `WatchFromStart` went with it.
     begun: bool,
+    /// Read to its end since its start: `CaughtUp` went with it.
+    caught: bool,
 }
 
 impl Follow {
     fn new(id: String, cwd: String) -> Self {
         let cursor = ottospace_sessions::Cursor::with_words();
-        Self { id, cwd: cwd.into(), session: None, cursor, begun: false }
+        Self { id, cwd: cwd.into(), session: None, cursor, begun: false, caught: false }
     }
 
     /// One look: what its file says since the last, and whether more is there now. `Err`: not
@@ -239,9 +241,14 @@ impl Follow {
         let mut events = Vec::new();
         if !std::mem::replace(&mut self.begun, true) || batch.restarted {
             events.push(Event::WatchFromStart);
+            self.caught = false;
         }
         self.cursor = batch.cursor;
         events.extend(batch.events.iter().flat_map(watched));
+        // Its end reached: what came before is its history, what comes after happens now.
+        if !batch.more && !std::mem::replace(&mut self.caught, true) {
+            events.push(Event::CaughtUp);
+        }
         Ok((events, batch.more))
     }
 }
@@ -624,6 +631,7 @@ impl Workspace {
             self.dispatch(Action::AgentExited { task }, Origin::System, window, cx);
         }
         let changed = self.sync_watch(window, cx) || changed;
+        let changed = self.sync_follows(window, cx) || changed;
         let changed = self.lay_out() || changed;
         if changed {
             cx.notify();
@@ -696,6 +704,41 @@ impl Workspace {
         }
         self.dispatch(Action::AgentEvents { task, events, at: crate::now_ms() }, Origin::System, window, cx);
         true
+    }
+
+    /// Follows, by their files, the sessions the code cities on show follow (`city_follows`):
+    /// starts and ends a reader as they change, and gives the core what each read. True if one
+    /// read anything.
+    fn sync_follows(&mut self, window: &Window, cx: &mut Context<Self>) -> bool {
+        let wanted = self.model.city_follows();
+        let key = |runner: &ottospace_core::runner::RunnerId, id: &str| (runner.name().to_string(), id.to_string());
+        let keys: Vec<(String, String)> = wanted.iter().map(|(runner, id, _)| key(runner, id)).collect();
+        self.drawer.follows.retain(|k, _| keys.contains(k));
+        for (runner, id, cwd) in wanted {
+            let k = key(&runner, &id);
+            if self.drawer.follows.contains_key(&k) {
+                continue;
+            }
+            // Its config folders, read for each new reader (`ConfigDirs` is no `Clone`).
+            if let Some(dirs) = crate::config::session_dirs() {
+                let subject = Subject::Session { runner: k.0.clone(), id: id.clone() };
+                self.drawer.follows.insert(k, Watch::start(subject, runner, id, cwd, dirs));
+            }
+        }
+        let read: Vec<((String, String), Vec<Event>)> = (self.drawer.follows.iter())
+            .map(|(k, watch)| (k.clone(), watch.read.try_iter().flatten().collect::<Vec<_>>()))
+            .filter(|(_, events)| !events.is_empty())
+            .collect();
+        let any = !read.is_empty();
+        for ((runner, id), events) in read {
+            self.dispatch(
+                Action::SessionEvents { runner, id, events, at: crate::now_ms() },
+                Origin::System,
+                window,
+                cx,
+            );
+        }
+        any
     }
 
     /// The repository a conversation's links and images may be in, and its agent runs in.
@@ -3018,7 +3061,9 @@ mod tests {
         let mut follow = Follow::new(id.into(), cwd.to_string_lossy().into_owned());
         let (events, more) = follow.step(&reader).unwrap();
         let said = Event::UserText { text: Text::new("made-up prompt") };
-        assert!(matches!(&events[..], [Event::WatchFromStart, first] if *first == said) && !more, "{events:?}");
+        // Its end reached at once: caught up, once.
+        let first = matches!(&events[..], [Event::WatchFromStart, first, Event::CaughtUp] if *first == said);
+        assert!(first && !more, "{events:?}");
         // Half a record: nothing yet. Its end: the call.
         let line = call(1);
         let (half, rest) = line.split_at(line.len() / 2);
@@ -3032,7 +3077,9 @@ mod tests {
         assert!(follow.step(&reader).is_err());
         std::fs::rename(&aside, &file).unwrap();
         append(&file, &format!("{}\n", call(2)));
-        assert_eq!(calls(&follow.step(&reader).unwrap().0), 1, "only the new call");
+        let later = follow.step(&reader).unwrap().0;
+        assert_eq!(calls(&later), 1, "only the new call");
+        assert!(!later.contains(&Event::CaughtUp), "caught up once, not again: {later:?}");
         // A reply: its words, as a chat shows them.
         let message = serde_json::json!({"id": "msg_r", "content": [{"type": "text", "text": "made-up reply"}]});
         append(&file, &format!("{}\n", serde_json::json!({"type": "assistant", "message": message})));
@@ -3057,7 +3104,7 @@ mod tests {
         follow.session = Some(ottospace_sessions::SessionRef { path: file.with_extension("gone"), ..found });
         assert!(follow.step(&reader).is_err());
         let (events, _) = follow.step(&reader).unwrap();
-        assert!(matches!(events[..], [Event::WatchFromStart, Event::UserText { .. }]), "{events:?}");
+        assert!(matches!(events[..], [Event::WatchFromStart, Event::UserText { .. }, Event::CaughtUp]), "{events:?}");
     }
 
     /// A large file (the owner's was 45 MB) is read whole in budget-sized looks, then followed.

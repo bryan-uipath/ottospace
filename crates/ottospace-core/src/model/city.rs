@@ -12,9 +12,11 @@ use crate::glance::{Glance, Words};
 use crate::layout::Axis;
 use crate::model::spaces::Owner;
 use crate::model::{Action, Effect, Model, Origin};
+use crate::runner::{RunnerId, Support};
 use crate::scene::View;
 use crate::talk::{self, Subject};
 use crate::tasks::TaskId;
+use crate::transcript::{Event, Transcript};
 
 /// A file an agent is at, as its call names it (the last two parts of its path), and the
 /// identity colour of the agent's task.
@@ -46,6 +48,8 @@ pub struct Agent<'a> {
     /// That call as the sidebar says it (`talk::call_line` of a chat's `live_label`, a session's
     /// `Found::doing`): agent text, drawn only, never in the state.
     pub line: Option<String>,
+    /// A session's, read from its file as a chat's while a city follows it (`follows`), caught up.
+    pub followed: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -95,10 +99,10 @@ pub struct Glimpse {
 /// `glance` in the checkout `dir`; none for a read of no file there, or a search elsewhere (a
 /// `cd` out of the checkout, or operands all outside it). A search with no operands covers where
 /// it ran: the whole checkout, or the folder its `cd` went to. Its result is read from there.
-fn glimpse(task: TaskId, colour: Option<u8>, glance: &Glance, dir: &str) -> Option<Glimpse> {
-    let mut base = String::new();
+fn glimpse(who: &str, colour: Option<u8>, glance: &Glance, dir: &str, from: &str) -> Option<Glimpse> {
+    let mut base = from.to_string();
     let scope = match &glance.words {
-        Words::Path(path) => vec![city_shell::path(path, dir, "")?],
+        Words::Path(path) => vec![city_shell::path(path, dir, from)?],
         Words::Stage { cds, operands } => {
             for cd in cds {
                 base = city_shell::path(cd, dir, &base)?;
@@ -116,7 +120,7 @@ fn glimpse(task: TaskId, colour: Option<u8>, glance: &Glance, dir: &str) -> Opti
         return None;
     }
     let found = glance.found.iter().filter_map(|word| city_shell::path(word, dir, &base)).filter(|p| !p.is_empty());
-    let (id, search) = (format!("{task}:{}", glance.id), glance.search);
+    let (id, search) = (format!("{who}:{}", glance.id), glance.search);
     Some(Glimpse { id, search, scope, found: found.collect(), colour })
 }
 
@@ -200,6 +204,12 @@ fn line_of(s: &crate::sessions::Found) -> Option<String> {
 }
 
 /// The file a session at work is at: its label, while its station is files.
+/// `cwd`, a folder at or below `dir`, relative to it ("": `dir` itself or not below it).
+fn below(cwd: &str, dir: &str) -> String {
+    let rest = cwd.strip_prefix(dir.trim_end_matches('/')).filter(|rest| rest.is_empty() || rest.starts_with('/'));
+    rest.map(|rest| rest.trim_start_matches('/').to_string()).unwrap_or_default()
+}
+
 fn file_of(s: &crate::sessions::Found) -> Option<&str> {
     s.label.as_deref().filter(|_| station_of(s) == Some(Station::Files))
 }
@@ -342,7 +352,7 @@ impl Model {
                 let (busy, subagents) = (transcript.calling(), transcript.subagents());
                 let (station, line) = (transcript.calling_station(), transcript.live_label().and_then(talk::call_line));
                 let who = Who::Task(*task);
-                (*task, Agent { who, colour: *colour, at, near, busy, subagents, station, line })
+                (*task, Agent { who, colour: *colour, at, near, busy, subagents, station, line, followed: false })
             })
             .collect();
         // A task whose agent runs in a terminal (Codex, or `conversation_view: terminal`) has no
@@ -355,16 +365,7 @@ impl Model {
             let task = self.tasks.adopter(&s.runner, &s.id)?;
             let works = works(task.id);
             let chatted = self.chat(&Subject::Task(task.id)).is_some_and(|chat| chat.transcript.live);
-            let agent = Agent {
-                who: Who::Task(task.id),
-                colour: task.colour,
-                at: file_of(s),
-                near: Vec::new(),
-                busy: s.station.is_some(),
-                subagents: s.subagents,
-                station: station_of(s),
-                line: line_of(s),
-            };
+            let agent = self.session_agent(s, Who::Task(task.id), task.colour, dir);
             (works && !chatted).then_some((task.id, agent, s))
         });
         let in_terminal: Vec<(TaskId, Agent)> = (in_terminal.collect::<Vec<_>>().into_iter())
@@ -379,15 +380,9 @@ impl Model {
         let free: Vec<&crate::sessions::Found> =
             (self.at_work.iter()).filter(|s| s.repo == dir && !self.tasks.adopted(&s.runner, &s.id)).collect();
         drawn.extend(free.iter().copied());
-        let sessions = free.into_iter().map(|s| Agent {
-            who: Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() },
-            colour: None,
-            at: file_of(s),
-            near: Vec::new(),
-            busy: s.station.is_some(),
-            subagents: s.subagents,
-            station: station_of(s),
-            line: line_of(s),
+        let sessions = free.into_iter().map(|s| {
+            let who = Who::Session { runner: &s.runner, id: &s.id, title: s.title.as_deref() };
+            self.session_agent(s, who, None, dir)
         });
         // An agent CLI in one of our panes, working in this checkout, no session of it on show
         // here: by its process alone (no setting needed), hovering. A task's space: its own panes.
@@ -417,31 +412,131 @@ impl Model {
                 subagents: 0,
                 station: None,
                 line: None,
+                followed: false,
             });
         let agents: Vec<Agent> = tasks.into_iter().map(|(_, agent)| agent).chain(sessions).chain(in_panes).collect();
-        // A session's file is lit too: in its task's colour if a task has it, else in none.
-        let lit = lit.chain(agents.iter().filter_map(|agent| match agent.who {
-            Who::Session { .. } => Some(Lit { label: agent.at?, colour: None, running: true }),
-            Who::Task(task) if !chats.iter().any(|(t, ..)| *t == task) => {
-                Some(Lit { label: agent.at?, colour: agent.colour, running: true })
-            }
-            Who::Task(_) | Who::Pane { .. } => None,
+        // A session's files are lit too, in its task's colour if a task has it, else in none: as a
+        // chat's while a city follows its file (held a while), else the one it was last read at.
+        let colour_of = |s: &crate::sessions::Found| self.tasks.adopter(&s.runner, &s.id).and_then(|task| task.colour);
+        let lit = lit.chain(drawn.iter().flat_map(|s| {
+            let colour = colour_of(s);
+            let held: Vec<Lit> = match self.followed(s) {
+                Some(t) => {
+                    t.files_held(now).into_iter().map(|(label, running)| Lit { label, colour, running }).collect()
+                }
+                None => file_of(s).map(|label| Lit { label, colour, running: true }).into_iter().collect(),
+            };
+            held
         }));
         // Its sub-agents' files too, in its colour: they may work in another worktree of the
         // repository, whose file a building here has by name (the last two parts of its path).
-        let colour_of = |s: &crate::sessions::Found| self.tasks.adopter(&s.runner, &s.id).and_then(|task| task.colour);
         let subs = drawn.iter().flat_map(|s| {
             let colour = colour_of(s);
             s.sub_files.iter().map(move |label| Lit { label, colour, running: true })
         });
         let lit = lit.chain(subs);
         let view = self.city_view(at);
-        let glimpses = (chats.iter().filter(|(.., transcript)| transcript.pulse() == Pulse::Running))
-            .flat_map(|(task, colour, transcript)| {
-                transcript.glances.iter().filter_map(move |glance| glimpse(*task, *colour, glance, dir))
+        // A followed session's reads and searches too, keyed by its runner and id.
+        let followed = drawn.iter().filter_map(|s| {
+            let t = self.followed(s).filter(|t| t.pulse() == Pulse::Running)?;
+            Some((format!("{}:{}", s.runner, s.id), colour_of(s), t, below(&s.cwd, dir)))
+        });
+        let working = chats.iter().filter(|(.., transcript)| transcript.pulse() == Pulse::Running);
+        let working = working.map(|(task, colour, transcript)| (task.to_string(), *colour, *transcript, String::new()));
+        let glimpses = (working.chain(followed))
+            .flat_map(|(who, colour, transcript, from)| {
+                let glances = transcript.glances.iter();
+                glances.filter_map(|glance| glimpse(&who, colour, glance, dir, &from)).collect::<Vec<_>>()
             })
             .collect();
         Some(City { dir, lit: lit.collect(), agents, view, glimpses })
+    }
+
+    /// A session's agent on the city of `dir`: as a chat's from its file's transcript while a
+    /// city follows it (`follows`), else from its last reading (`Found`).
+    fn session_agent<'a>(
+        &'a self,
+        s: &'a crate::sessions::Found,
+        who: Who<'a>,
+        colour: Option<u8>,
+        dir: &str,
+    ) -> Agent<'a> {
+        let (busy, subagents) = (s.station.is_some(), s.subagents);
+        let Some(t) = self.followed(s) else {
+            let (station, line) = (station_of(s), line_of(s));
+            let followed = false;
+            return Agent { who, colour, at: file_of(s), near: Vec::new(), busy, subagents, station, line, followed };
+        };
+        let at = t.file_at();
+        let from = below(&s.cwd, dir);
+        let near = (t.shell_line().filter(|_| at.is_none()))
+            .map_or_else(Vec::new, |line| crate::city_shell::paths_from(line, dir, &from));
+        // At no file and no path named: over the file it just left, a while.
+        let at = at.or_else(|| t.file_held(self.now).filter(|_| near.is_empty()));
+        let station = t.calling_station().or_else(|| station_of(s));
+        let line = t.live_label().and_then(talk::call_line).or_else(|| line_of(s));
+        let (busy, subagents) = (busy || t.calling(), subagents.max(t.subagents()));
+        Agent { who, colour, at, near, busy, subagents, station, line, followed: true }
+    }
+
+    /// The transcript of a session's file a city follows, once read to its end (`CaughtUp`):
+    /// until then its history is coming in, and its last reading stands for it.
+    fn followed(&self, s: &crate::sessions::Found) -> Option<&Transcript> {
+        self.follows.get(&(s.runner.clone(), s.id.clone())).filter(|t| t.caught_up)
+    }
+
+    /// The sessions the code cities on show follow by their files, so they show as chats do:
+    /// each at work in a checkout a city on show maps, no task's or a task's whose agent runs in
+    /// a terminal (a live chat is its own), its runner one whose files are watched. Its runner,
+    /// id and folder, for the shell's readers (`Action::SessionEvents`).
+    pub fn city_follows(&self) -> Vec<(RunnerId, String, String)> {
+        if !self.features.on(Feature::CodeCity) {
+            return Vec::new();
+        }
+        let shown = self.empty_places().into_iter().chain(self.behind_tab().map(At::Tab));
+        let dirs: Vec<&str> = shown.filter_map(|at| self.empty_folder(at)).collect();
+        let live = |s: &crate::sessions::Found| {
+            let task = self.tasks.adopter(&s.runner, &s.id);
+            task.is_some_and(|task| self.chat(&Subject::Task(task.id)).is_some_and(|chat| chat.transcript.live))
+        };
+        (self.at_work.iter())
+            .filter(|s| dirs.contains(&s.repo.as_str()) && !live(s))
+            .filter_map(|s| {
+                let runner = RunnerId::named(&s.runner).filter(|r| r.spec().attach.watch == Support::Yes)?;
+                Some((runner, s.id.clone(), s.cwd.clone()))
+            })
+            .collect()
+    }
+
+    /// A followed session's file said `events` at `at`: into its transcript, its turn running
+    /// while the session is at work. One no city follows now is dropped.
+    pub(super) fn follow_events(&mut self, runner: String, id: String, events: Vec<Event>, at: u64) {
+        let key = (runner, id);
+        if !self.follows_wanted().contains(&key) {
+            return;
+        }
+        let transcript = self.follows.entry(key).or_insert_with(Transcript::followed);
+        for event in events {
+            transcript.fold(event, at);
+        }
+        self.follows_working();
+    }
+
+    /// The sessions the cities on show follow, by runner and id.
+    fn follows_wanted(&self) -> Vec<(String, String)> {
+        self.city_follows().into_iter().map(|(r, id, _)| (r.name().to_string(), id)).collect()
+    }
+
+    /// Each followed session's turn runs while it is at work (`Found::works`), as last read; one
+    /// no city follows now is forgotten (its city closed, or it stopped).
+    pub(crate) fn follows_working(&mut self) {
+        let wanted = self.follows_wanted();
+        self.follows.retain(|key, _| wanted.contains(key));
+        let (at_work, now) = (&self.at_work, self.now);
+        for ((runner, id), transcript) in &mut self.follows {
+            let works = at_work.iter().any(|s| s.runner == *runner && s.id == *id);
+            transcript.set_working(works, now);
+        }
     }
 
     /// What a click on an agent's icon over a city does: the user's own goes to its task (as
@@ -860,6 +955,7 @@ mod tests {
                 subagents: 0,
                 station: Some(Station::Files),
                 line: Some("files · src/main.rs".into()),
+                followed: false,
             }]
         );
         assert_eq!(city.lit, vec![Lit { label: "src/main.rs", colour: None, running: true }]);
@@ -877,6 +973,94 @@ mod tests {
             id: "s1",
             title: Some("fix the loop")
         })));
+    }
+
+    /// A `claude` in the user's terminal at work in the checkout is followed by its file while
+    /// its city shows: its history plays nothing (no flash of a read long done); a read after it
+    /// lights its file, floats it there and flashes, as a chat's does.
+    #[test]
+    fn a_terminal_session_followed_by_its_file_plays_as_a_chat() {
+        let mut m = listed();
+        m.update(Action::RepoClick { path: "/code/app".into(), axis: Axis::Right });
+        m.update(Action::Close { pane: None });
+        let found = crate::sessions::Found {
+            runner: "claude".into(),
+            id: "s1".into(),
+            cwd: "/code/app".into(),
+            repo: "/code/app".into(),
+            started: Some(1),
+            last_activity: Some(2),
+            active: true,
+            station: Some("shell".into()),
+            label: Some("cargo test".into()),
+            title: None,
+            model: None,
+            held: true,
+            subagents: 0,
+            sub_files: Vec::new(),
+        };
+        m.update(Action::SetSessions { found: vec![found.clone()], day: 0 }.sent_by(Origin::System));
+        let follows: Vec<(String, String)> =
+            m.city_follows().into_iter().map(|(r, id, cwd)| (format!("{}:{id}", r.name()), cwd)).collect();
+        assert_eq!(follows, [("claude:s1".to_string(), "/code/app".to_string())]);
+        let read = |id: &str, path: &str| Event::ToolStart {
+            id: id.into(),
+            parent: None,
+            tool: "Read".into(),
+            station: Station::Files,
+            label: path.into(),
+            detail: Text::new(&format!("/code/app/{path}")),
+            diff: None,
+            gist: None,
+        };
+        let session = |m: &mut Model, events: Vec<Event>, at: u64| {
+            m.update(Action::Tick { now: at }.sent_by(Origin::System));
+            let (runner, id) = ("claude".into(), "s1".into());
+            m.update(Action::SessionEvents { runner, id, events, at }.sent_by(Origin::System));
+        };
+        // Its history, read in two batches: nothing plays while it comes, nor after.
+        session(&mut m, vec![Event::WatchFromStart, read("h", "src/old.rs")], 900);
+        assert_eq!(city(&m).map(|c| c.glimpses.len()), Some(0), "its history, coming in, plays nothing");
+        session(&mut m, vec![end("h"), Event::CaughtUp], 1_000);
+        assert_eq!(city(&m).map(|c| c.glimpses.len()), Some(0), "its history plays nothing");
+        // A read now: lit, the agent over it, glimpsed.
+        session(&mut m, vec![read("r", "src/main.rs")], 2_000);
+        let shown = city(&m).unwrap();
+        assert_eq!(
+            shown.agents.iter().map(|a| (a.at, a.station)).collect::<Vec<_>>(),
+            [(Some("src/main.rs"), Some(Station::Files))]
+        );
+        assert!(shown.lit.iter().any(|l| l.label == "src/main.rs"), "{:?}", shown.lit);
+        let glimpses: Vec<Vec<String>> = shown.glimpses.iter().map(|g| g.scope.clone()).collect();
+        assert_eq!(glimpses, [vec!["src/main.rs".to_string()]]);
+        // Ended and held a while, as a chat's: the shell is woken when the hold ends.
+        session(&mut m, vec![end("r")], 2_010);
+        assert_eq!(city(&m).map(|c| c.agents[0].at), Some(Some("src/main.rs")));
+        assert_eq!(m.next_due(), Some(2_010 + crate::activity::HOLD_MS));
+        // No longer at work: nothing followed.
+        m.update(Action::SetSessions { found: vec![], day: 0 }.sent_by(Origin::System));
+        assert!(m.city_follows().is_empty());
+        // Started in a folder below the checkout: its relative paths are from there.
+        let below = crate::sessions::Found { id: "s2".into(), cwd: "/code/app/src".into(), ..found.clone() };
+        m.update(Action::SetSessions { found: vec![below], day: 0 }.sent_by(Origin::System));
+        let cat = Event::ToolStart {
+            id: "c".into(),
+            parent: None,
+            tool: "Bash".into(),
+            station: Station::Shell,
+            label: "cat".into(),
+            detail: Text::new("cat lib.rs"),
+            diff: None,
+            gist: None,
+        };
+        m.update(Action::Tick { now: 9_000 }.sent_by(Origin::System));
+        let events = vec![Event::WatchFromStart, Event::CaughtUp, cat];
+        m.update(
+            Action::SessionEvents { runner: "claude".into(), id: "s2".into(), events, at: 9_000 }
+                .sent_by(Origin::System),
+        );
+        let scopes: Vec<Vec<String>> = city(&m).unwrap().glimpses.iter().map(|g| g.scope.clone()).collect();
+        assert_eq!(scopes, [vec!["src/lib.rs".to_string()]]);
     }
 
     /// The owner's case: a `claude` in another terminal, its own file quiet while its sub-agents

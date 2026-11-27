@@ -12,9 +12,15 @@ const MOST_PATHS: usize = 8;
 /// a new line: a `cd` in a pipeline stays in its stage); a `cd` out of it, or to a place not
 /// known, stops relative words counting until a `cd` back.
 pub fn paths(line: &str, checkout: &str) -> Vec<String> {
+    paths_from(line, checkout, "")
+}
+
+/// `paths`, for a line run in `from` (relative to the checkout; "": its root), as a session
+/// started in a folder below the checkout runs its lines.
+pub fn paths_from(line: &str, checkout: &str, from: &str) -> Vec<String> {
     let checkout = checkout.trim_end_matches('/');
     // Where the line is now, relative to the checkout ("": its root); none: not known.
-    let mut cwd = Some(String::new());
+    let mut cwd = Some(from.to_string());
     let mut found: Vec<String> = Vec::new();
     for (words, then) in commands(line) {
         let Some((program, args)) = words.split_first() else { continue };

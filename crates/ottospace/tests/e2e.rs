@@ -19659,6 +19659,75 @@ fn a_quick_read_holds_its_building_then_lets_go() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A `claude` in the user's own terminal, followed by its file while its checkout's city shows:
+/// a read written to its file now lights its building and flashes it, its agent over it, as a
+/// chat's does; what its file held before plays nothing.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_terminal_sessions_read_plays_on_the_city_as_a_chats() {
+    let root = support::temp(&format!("ottospace-e2e-city-follow-{}", std::process::id()));
+    let app = root.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    git(&app, &["init", "-q"]);
+    for (file, bytes) in [("src/main.rs", 3000), ("src/old.rs", 2000)] {
+        std::fs::write(app.join(file), "x".repeat(bytes)).unwrap();
+    }
+    let app = app.canonicalize().unwrap();
+    let claude = root.join("sessions/claude");
+    let id = "66666666-6666-4666-8666-666666666666";
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&app));
+    std::fs::create_dir_all(&project).unwrap();
+    let file = project.join(format!("{id}.jsonl"));
+    let call = |n: &str, path: &str| {
+        let read = json!({"type": "tool_use", "id": format!("toolu_{n}"), "name": "Read", "input": {"file_path": app.join(path)}});
+        json!({"type": "assistant", "message": {"id": format!("msg_{n}"), "content": [read]},
+            "timestamp": "2026-11-13T09:00:01.000Z", "cwd": app, "sessionId": id})
+    };
+    let result = |n: &str| {
+        let r = json!({"type": "tool_result", "tool_use_id": format!("toolu_{n}"), "content": "x", "is_error": false});
+        json!({"type": "user", "message": {"role": "user", "content": [r]}, "timestamp": "2026-11-13T09:00:02.000Z",
+            "cwd": app, "sessionId": id})
+    };
+    let user = json!({"type": "user", "message": {"role": "user", "content": "made-up prompt"},
+        "timestamp": "2026-11-13T09:00:00.000Z", "cwd": app, "sessionId": id});
+    // Its history: a read long done.
+    std::fs::write(&file, format!("{user}\n{}\n{}\n", call("h", "src/old.rs"), result("h"))).unwrap();
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    let live = json!({"pid": std::process::id(), "sessionId": id, "status": "busy"});
+    std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
+    let settings = json!({"repos": [app], "restore_layout": false, "session_dirs": {"claude": [claude]}});
+    let home = user_folder("city-follow", &settings.to_string());
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "code_city")];
+    let otto = Otto::launch_with("city-follow", &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
+    let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+    // Followed by its file and caught up: what comes next happens now.
+    otto.wait_for("the session on the city, its file read to its end", |o| {
+        let c = state(o)["city"].clone();
+        let session = c["agents"].as_array().is_some_and(|a| a.iter().any(|a| a["followed"] == json!(true)));
+        (session && !c["picture"].is_null()).then_some(())
+    });
+    std::thread::sleep(Duration::from_millis(300));
+    let flashes = |o: &Otto| state(o)["counts"]["city_glimmer_frames"].as_u64().unwrap_or(0);
+    assert_eq!(flashes(&otto), 0, "its history plays nothing");
+    // A read now, written to its file.
+    let mut f = std::fs::OpenOptions::new().append(true).open(&file).unwrap();
+    std::io::Write::write_all(&mut f, format!("{}\n", call("r", "src/main.rs")).as_bytes()).unwrap();
+    drop(f);
+    otto.wait_for("its building lit, the agent over it, flashed", |o| {
+        let s = state(o);
+        let c = &s["city"];
+        let agent = c["agents"].as_array()?.iter().find(|a| a["task"].is_null())?.clone();
+        let lit = c["lit"].as_array().is_some_and(|l| !l.is_empty());
+        let flashed = s["counts"]["city_glimmer_frames"].as_u64().unwrap_or(0) > 0;
+        (agent["cone"] == json!(true) && agent["station"] == json!("files") && lit && flashed).then_some(())
+    });
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// A `claude` at work in the checkout floats on the city behind a tab's see-through terminal
 /// (`city_behind`), as on an empty tab's.
 #[test]

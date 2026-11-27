@@ -231,6 +231,9 @@ pub enum Event {
     },
     /// A watched session's file is read again from its start: what was built from it goes.
     WatchFromStart,
+    /// A watched session's file read to its end for the first time: what came before was its
+    /// history (no clock, nothing to play), what comes after happens now.
+    CaughtUp,
 }
 
 impl Event {
@@ -249,6 +252,7 @@ impl Event {
                 | Event::UserText { .. }
                 | Event::Text { .. }
                 | Event::WatchFromStart
+                | Event::CaughtUp
         )
     }
 }
@@ -527,6 +531,9 @@ pub struct Transcript {
     /// Built from the file of a session nothing has (a restart since its agent ran): its calls
     /// and edits, to go on with. Not read-only.
     pub past: bool,
+    /// A watched file read to its end once (`Event::CaughtUp`): its calls' ends since are seen
+    /// as they come, so a file's call held after it ends (`activity::HOLD_MS`).
+    pub caught_up: bool,
     /// Something came back from its process since it started: a turn, text, a call, a request.
     pub replied: bool,
     /// Lines not understood, by kind, in the order first seen: at most `MAX_KINDS` kinds.
@@ -716,6 +723,21 @@ impl Transcript {
         self.shells.iter().find(|(of, _)| of == id).map(|(_, line)| line.text())
     }
 
+    /// A session's file followed for a code city, read-only (`Model::follows`).
+    pub(crate) fn followed() -> Self {
+        Transcript { watched: true, ..Transcript::default() }
+    }
+
+    /// A followed session at work or not (`Found::works`): its turn runs while it does, as a
+    /// chat's does, so its files held and its glances count.
+    pub(crate) fn set_working(&mut self, working: bool, at: u64) {
+        match (working, self.turn.is_some()) {
+            (true, false) => self.turn = Some(Turn { since: at, tool: None }),
+            (false, true) => self.turn = None,
+            _ => {}
+        }
+    }
+
     /// The one file its agent is at now (`Activity::at`).
     pub fn file_at(&self) -> Option<&str> {
         self.activity.at(&self.is())
@@ -746,7 +768,8 @@ impl Transcript {
         let (live, watched, turn) = (self.live, self.watched && !self.live, self.turn.is_some());
         // A file's records came all at once: no clock says when its calls ran.
         let timed = !watched && (live || !self.past);
-        Is { live, watched, turn, asking, context: self.context, window: self.window, timed }
+        let held = timed || (watched && self.caught_up);
+        Is { live, watched, turn, asking, context: self.context, window: self.window, timed, held }
     }
 
     /// A process for this conversation started (again). A resume with its earlier turns on show
@@ -1023,6 +1046,12 @@ impl Transcript {
                 *self = Transcript { watched: !self.past, past: self.past, ..Transcript::default() }
             }
             Event::WatchFromStart => {}
+            // Its history played nothing: glances and holds start from here.
+            Event::CaughtUp => {
+                self.caught_up = true;
+                self.glances.clear();
+                self.activity.clear_holds();
+            }
             Event::Hook => self.activity.hook(at),
             Event::MessageElsewhere => {
                 self.message_there(at);
