@@ -804,6 +804,9 @@ pub struct Drawn {
     /// While a spin runs: its place, and each new picture's wait there from made to painted and
     /// from asked to painted, in ms.
     waits: Option<(Floor, Vec<(f32, f32)>)>,
+    /// While a spin runs: the pictures made for its place, and its place's paints.
+    spin_made: usize,
+    spin_paints: usize,
     /// Each place's live layer (`city_live_layer`), and the windows made transparent over one.
     live_views: HashMap<Floor, ottospace_mac::live_layer::LiveLayer>,
     transparent: HashSet<WindowId>,
@@ -1298,6 +1301,9 @@ impl Workspace {
                 }
             }
             drawn.renders += 1;
+            if picture.as_ref().is_ok_and(|_| drawn.waits.as_ref().is_some_and(|(of, _)| *of == floor)) {
+                drawn.spin_made += 1;
+            }
             match picture {
                 Ok(made) => {
                     if key.live {
@@ -2077,6 +2083,10 @@ pub(crate) struct Spun {
     pub(crate) render_p95: f32,
     /// Drawn on a live layer (`city_live_layer`), not painted as an image.
     pub(crate) live: bool,
+    /// Pictures made for its place, its place's paints, and the new pictures seen there.
+    pub(crate) made: usize,
+    pub(crate) paints: usize,
+    pub(crate) new: usize,
     pub(crate) boxes: usize,
 }
 
@@ -2099,7 +2109,9 @@ impl Workspace {
             return cx.notify();
         };
         self.dispatch(Action::CityCamera { at, step: CameraStep::Grab }, origin, window, cx);
-        self.city_drawn.borrow_mut().waits = Some((floor, Vec::new()));
+        let mut drawn = self.city_drawn.borrow_mut();
+        (drawn.waits, drawn.spin_made, drawn.spin_paints) = (Some((floor, Vec::new())), 0, 0);
+        drop(drawn);
         // On its live layer: the picture shown was presented there.
         let live = {
             let drawn = self.city_drawn.borrow();
@@ -2181,7 +2193,11 @@ impl Workspace {
         self.dispatch(Action::CityCamera { at: spin.at, step: CameraStep::Cancel }, Origin::User, window, cx);
         let mut frames = spin.frames;
         frames.sort_by(f32::total_cmp);
-        let painted = self.city_drawn.borrow_mut().waits.take().map(|(_, waits)| waits).unwrap_or_default();
+        let (painted, made, paints) = {
+            let mut drawn = self.city_drawn.borrow_mut();
+            let waits = drawn.waits.take().map(|(_, waits)| waits).unwrap_or_default();
+            (waits, std::mem::take(&mut drawn.spin_made), std::mem::take(&mut drawn.spin_paints))
+        };
         let stats = &self.city_painter.stats;
         if let Ok(mut spinning) = stats.spinning.lock() {
             *spinning = None;
@@ -2189,6 +2205,8 @@ impl Workspace {
         let taken =
             |list: &std::sync::Mutex<Vec<f32>>| list.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default();
         let (mut waits, mut shown): (Vec<f32>, Vec<f32>) = painted.into_iter().unzip();
+        // New pictures seen: painted for the first time, or presented on the live layer.
+        let new = if spin.live { stats.shown.lock().map_or(0, |l| l.len()) } else { waits.len() };
         if spin.live {
             shown = taken(&stats.shown);
         }
@@ -2226,6 +2244,9 @@ impl Workspace {
             render_p50: rank(&render, 50),
             render_p95: rank(&render, 95),
             live: spin.live,
+            made,
+            paints,
+            new,
             boxes,
         };
         let text = format!(
@@ -2620,6 +2641,7 @@ fn paint(
         window.request_animation_frame();
     }
     drawn.paints += 1;
+    drawn.spin_paints += usize::from(drawn.waits.as_ref().is_some_and(|(of, _)| *of == floor));
     // A live layer's pictures are timed where they are presented (`LiveStats`).
     if let Some((_, waits)) = drawn.waits.as_mut().filter(|(of, _)| new && !live_made && *of == floor) {
         waits.push((wait, asked));

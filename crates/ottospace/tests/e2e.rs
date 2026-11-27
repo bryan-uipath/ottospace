@@ -19108,6 +19108,7 @@ fn a_spin_turns_the_city_once_round_and_times_its_frames() {
     let (otto, root, home, before, spun) = city_spun("city-spin", "code_city");
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
     assert_eq!((spun["done"].clone(), spun["steps"].clone()), (json!(true), json!(240)), "{spun}");
+    every_frame_new_or_repeated(&spun);
     assert!(spun["frames"].as_u64().unwrap() >= 200 && spun["p50"].as_f64().unwrap() > 0., "{spun}");
     assert_eq!((city(&otto)["view"].clone(), city(&otto)["grabbed"].clone()), (before.clone(), json!(false)));
     // Esc stops one, the camera back where it was.
@@ -19199,6 +19200,15 @@ fn city_shown(name: &str, features: &str) -> (Otto, PathBuf, PathBuf) {
     (otto, root, home)
 }
 
+/// A spin's frames each showed a new picture of its place or repeated the one before: what it
+/// counts as repeated and what its place painted (or presented) agree, and some were new.
+fn every_frame_new_or_repeated(spun: &Value) {
+    let count = |k: &str| spun[k].as_u64().unwrap_or_else(|| panic!("{k}: {spun}"));
+    let (frames, repeats, new) = (count("frames"), count("repeats"), count("new"));
+    assert!(new > 0 && count("made") > 0, "no new picture seen in the spin: {spun}");
+    assert!((repeats + new).abs_diff(frames) <= 3, "repeated + new != frames: {spun}");
+}
+
 /// With `city_live_layer` the city is drawn on a layer of its own under the window: a spin counts
 /// that layer's presents, as `live`, and puts the camera back.
 #[test]
@@ -19206,6 +19216,7 @@ fn city_shown(name: &str, features: &str) -> (Otto, PathBuf, PathBuf) {
 fn a_live_layer_spins_the_city_and_counts_its_presents() {
     let (otto, root, home, before, spun) = city_spun("city-live", "code_city,city_live_layer");
     let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
+    every_frame_new_or_repeated(&spun);
     assert_eq!((spun["done"].clone(), spun["live"].clone()), (json!(true), json!(true)), "{spun}");
     assert!(spun["frames"].as_u64().unwrap() >= 200 && spun["render_p50"].as_f64().unwrap() > 0., "{spun}");
     assert_eq!(city(&otto)["view"], before);

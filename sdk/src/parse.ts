@@ -2640,6 +2640,9 @@ function citySpun(value: unknown, at: string): CitySpun {
     render_p50: n("render_p50"),
     render_p95: n("render_p95"),
     live: bool(o.live, `${at}.live`),
+    made: n("made"),
+    paints: n("paints"),
+    new: n("new"),
     boxes: n("boxes"),
   };
 }
