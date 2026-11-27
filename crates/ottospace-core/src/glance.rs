@@ -116,6 +116,18 @@ pub fn call_detail<'a>(tool: &str, input: &'a serde_json::Value) -> Option<&'a s
     }
 }
 
+/// A line runs something in the background (`a & b`): a single `&` that is no `&&` and no
+/// redirection (`2>&1`, `&>`). Quotes are not read: a quoted `&` counts too, the safe way.
+fn background(line: &str) -> bool {
+    let b = line.as_bytes();
+    (0..b.len()).any(|i| {
+        let around = |j: Option<usize>| j.and_then(|j| b.get(j)).copied();
+        b[i] == b'&'
+            && !matches!(around(i.checked_sub(1)), Some(b'&' | b'>' | b'<'))
+            && !matches!(around(Some(i + 1)), Some(b'&' | b'>'))
+    })
+}
+
 /// A Grep or Glob call's scope from its detail: its `path`, given alone or in its input's JSON.
 fn scope(detail: &str) -> Words {
     // None given (a search with no `path`, read from a session's file): where it ran, all of it.
@@ -139,10 +151,14 @@ fn scope(detail: &str) -> Words {
 fn stage(line: &str) -> Option<(bool, Words, bool)> {
     let mut cds: Vec<String> = Vec::new();
     let commands = city_shell::commands(line);
-    // Whether a command after the one at `at` runs after its pipe: `a | b; c` → after `a`, yes.
+    // Whether a command other than its pipe's stages may print with the one at `at`: one after
+    // its pipe (`a | b; c`), one beside it in the background (`a & c`), or a line cut short for
+    // reading (its tail unknown). A pipe that goes on on the next line is still its pipe.
     let after = |at: usize| {
-        let ends = commands[at..].iter().position(|(_, then)| *then).map_or(commands.len(), |end| at + end);
-        commands[ends + 1..].iter().any(|(words, _)| !words.is_empty())
+        let continues = |i: usize| commands[i].0.is_empty() && i > 0 && !commands[i - 1].1;
+        let ends = (at..commands.len()).find(|i| commands[*i].1 && !continues(*i)).unwrap_or(commands.len());
+        let later = commands.get(ends + 1..).unwrap_or_default().iter().any(|(words, _)| !words.is_empty());
+        later || background(line) || line.len() > city_shell::MOST_BYTES
     };
     for (at, (words, then)) in commands.iter().enumerate() {
         let then = *then;
@@ -247,6 +263,11 @@ mod tests {
         assert_eq!(found("grep -rl x src; diff a.rs b.rs | head -50"), Some(0));
         assert_eq!(found("cd src && rg -l x"), Some(3));
         assert_eq!(found("rg -l x src && echo done"), Some(0));
+        assert_eq!(found("rg -l x src & echo Cargo.toml"), Some(0), "in the background, beside it");
+        assert_eq!(found("rg -l x src 2>&1 | head"), Some(3), "a redirection is no background");
+        assert_eq!(found("rg -l x src |\nhead -1"), Some(3), "its pipe, on the next line");
+        let long = format!("rg -l x src{}; echo Cargo.toml", " ".repeat(city_shell::MOST_BYTES));
+        assert_eq!(found(&long), Some(0), "its tail unread");
         // Never printed: what it ran or found.
         let shown = format!("{:?}", g.iter().next());
         assert!(!shown.contains("a.rs"), "{shown}");

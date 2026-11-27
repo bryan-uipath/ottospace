@@ -406,7 +406,8 @@ impl Workspace {
                         Body::Lines(Rc::new(lines), Rc::new(marks), colours.map(Rc::new))
                     }
                     Some(Loaded::Picture(picture)) => {
-                        view.began = Instant::now();
+                        // A new picture (read again: maybe fewer frames) starts at its first.
+                        (view.began, _) = (Instant::now(), view.frame.replace(0));
                         Body::Picture(Rc::new(picture))
                     }
                     Some(Loaded::Diff(patch, marks)) => Body::Diff(Rc::new(patch), Rc::new(marks)),

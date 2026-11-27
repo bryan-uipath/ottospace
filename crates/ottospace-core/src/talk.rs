@@ -104,9 +104,14 @@ pub fn monogram(title: &str) -> String {
 }
 
 /// A grapheme a badge may show: not a mark (ASCII punctuation, typographic punctuation such as
-/// dashes and bullets, box drawing and block elements such as a quote bar `▎`), nor a space.
+/// dashes and bullets, box drawing and block elements such as a quote bar `▎`), nor a space. A
+/// mark with more after it is an emoji (`#️⃣`, `‼️`): a letter.
 fn is_letter(grapheme: &str) -> bool {
-    let Some(c) = grapheme.chars().next() else { return false };
+    let mut chars = grapheme.chars();
+    let Some(c) = chars.next() else { return false };
+    if chars.next().is_some() {
+        return true;
+    }
     let mark =
         c.is_ascii_punctuation() || ('\u{2010}'..='\u{205E}').contains(&c) || ('\u{2500}'..='\u{259F}').contains(&c);
     !mark && !c.is_whitespace()
@@ -359,6 +364,11 @@ mod tests {
         // A pasted quote bar, a list's marks, a bullet, a quote's `>`: no letters of the badge.
         let marked = ["▎ Use the Read tool", "- [ ] fix the login", "• tidy up", "> quoted note", "▎"];
         assert_eq!(marked.map(monogram), ["UT", "FT", "TU", "QN", ""]);
+        // An emoji whose first scalar is a mark is an emoji: kept.
+        assert_eq!(
+            ["#\u{fe0f}\u{20e3} ship", "\u{203c}\u{fe0f} now"].map(monogram),
+            ["#\u{fe0f}\u{20e3}S", "\u{203c}\u{fe0f}N"]
+        );
         // A place already taken as a badge: the next number.
         assert_eq!(monograms(&["a3", "a", "a"]), ["A3", "A", "A4"]);
     }
