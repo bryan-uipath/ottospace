@@ -443,13 +443,7 @@ fn code(value: &Value, fallback: &'static str) -> String {
 /// What the user reads to judge a call: the command, the path or the address; else the input
 /// as JSON, pretty-printed (an expanded row wraps it). Untrusted, and cut.
 fn detail(tool: &str, input: &Value) -> Untrusted {
-    let text = |key: &str| input[key].as_str();
-    let shown = match tool {
-        "Bash" | "PowerShell" => text("command"),
-        "WebFetch" => text("url"),
-        _ => text("file_path").or(text("notebook_path")).or(text("path")),
-    };
-    match shown {
+    match ottospace_core::glance::call_detail(tool, input) {
         Some(text) => Untrusted::new(text, MAX_DETAIL),
         None => Untrusted::json(input, MAX_DETAIL),
     }

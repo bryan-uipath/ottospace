@@ -99,8 +99,26 @@ impl Glances {
     }
 }
 
+/// The most bytes of a call's input words kept, live or read from a session's file.
+pub const MAX_DETAIL: usize = 4096;
+
+/// The words of a call's input its row and its glance read: a shell's command, a fetch's URL,
+/// else the file or folder it names. None: none of these (a caller may show the input whole).
+pub fn call_detail<'a>(tool: &str, input: &'a serde_json::Value) -> Option<&'a str> {
+    let text = |key: &str| input[key].as_str();
+    match tool {
+        "Bash" | "PowerShell" => text("command"),
+        "WebFetch" => text("url"),
+        _ => text("file_path").or(text("notebook_path")).or(text("path")),
+    }
+}
+
 /// A Grep or Glob call's scope from its detail: its `path`, given alone or in its input's JSON.
 fn scope(detail: &str) -> Words {
+    // None given (a search with no `path`, read from a session's file): where it ran, all of it.
+    if detail.trim().is_empty() {
+        return Words::All;
+    }
     if !detail.trim_start().starts_with('{') {
         return Words::Path(detail.to_string());
     }
@@ -169,6 +187,9 @@ mod tests {
             ("Read", Station::Files, "/code/app/src/a.rs", Some((false, path("/code/app/src/a.rs")))),
             ("Grep", Station::Files, "/code/app/src", Some((true, path("/code/app/src")))),
             ("Grep", Station::Files, r#"{"pattern":"loop"}"#, Some((true, Words::All))),
+            // No input words (a session's file read with a pathless search): the whole checkout.
+            ("Grep", Station::Files, "", Some((true, Words::All))),
+            ("Glob", Station::Files, " ", Some((true, Words::All))),
             ("Glob", Station::Files, r#"{"pattern":"*.rs","path":"src"}"#, Some((true, path("src")))),
             (
                 "Bash",

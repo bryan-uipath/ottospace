@@ -298,7 +298,7 @@ fn record_events(record: &Value, cursor: &mut Cursor, events: &mut Vec<Event>) {
             let label = mcp(tool, payload).unwrap_or_else(|| station::tool_label(tool));
             let patch = payload["input"].as_str().filter(|_| cursor.edits && tool == "apply_patch");
             let diff = patch.and_then(ottospace_core::diff::codex_patch);
-            emit(What::ToolStart { id: id.clone(), tool: label, station, summary, diff, gist: None });
+            emit(What::ToolStart { id: id.clone(), tool: label, station, summary, detail: None, diff, gist: None });
             if kind == "web_search_call" {
                 // A web search is written once, when it is over.
                 emit(What::ToolEnd { id, failed: false, station: None, summary: None, output: None });

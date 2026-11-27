@@ -192,7 +192,7 @@ mod tests {
 
     fn start(time: u64, id: &str, station: Station) -> Event {
         let (id, tool, summary) = (id.to_string(), "Bash".to_string(), "cargo".to_string());
-        at(time, What::ToolStart { id, tool, station, summary, diff: None, gist: None })
+        at(time, What::ToolStart { id, tool, station, summary, detail: None, diff: None, gist: None })
     }
 
     fn end(time: u64, id: &str, failed: bool) -> Event {

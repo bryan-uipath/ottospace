@@ -185,6 +185,10 @@ pub enum What {
         tool: String,
         station: Station,
         summary: String,
+        /// The words of its input a row and a glance read (`glance::call_detail`: the command,
+        /// the path), cut to `glance::MAX_DETAIL`; only for a cursor that reads words
+        /// (`with_words`). A `Text`: never printed by `Debug`.
+        detail: Option<ottospace_core::transcript::Text>,
         diff: Option<ottospace_core::diff::Diff>,
         gist: Option<ottospace_core::gist::Gist>,
     },
