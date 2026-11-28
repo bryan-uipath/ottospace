@@ -116,16 +116,33 @@ pub fn call_detail<'a>(tool: &str, input: &'a serde_json::Value) -> Option<&'a s
     }
 }
 
-/// A line runs something in the background (`a & b`): a single `&` that is no `&&` and no
-/// redirection (`2>&1`, `&>`). Quotes are not read: a quoted `&` counts too, the safe way.
+/// A line runs something in the background (`a & b`): a single `&` outside quotes that is no
+/// `&&` and no redirection (`2>&1`, `&>`). A `\` keeps the next character as it is.
 fn background(line: &str) -> bool {
     let b = line.as_bytes();
-    (0..b.len()).any(|i| {
-        let around = |j: Option<usize>| j.and_then(|j| b.get(j)).copied();
-        b[i] == b'&'
-            && !matches!(around(i.checked_sub(1)), Some(b'&' | b'>' | b'<'))
-            && !matches!(around(Some(i + 1)), Some(b'&' | b'>'))
-    })
+    let (mut quote, mut escaped) = (None, false);
+    for i in 0..b.len() {
+        let c = b[i];
+        if std::mem::take(&mut escaped) {
+            continue;
+        }
+        match (quote, c) {
+            (Some(b'\''), b'\'') | (Some(b'"'), b'"') => quote = None,
+            (Some(b'"'), b'\\') | (None, b'\\') => escaped = true,
+            (Some(_), _) => {}
+            (None, b'\'' | b'"') => quote = Some(c),
+            (None, b'&') => {
+                let around = |j: Option<usize>| j.and_then(|j| b.get(j)).copied();
+                let joined = matches!(around(i.checked_sub(1)), Some(b'&' | b'>' | b'<'))
+                    || matches!(around(Some(i + 1)), Some(b'&' | b'>'));
+                if !joined {
+                    return true;
+                }
+            }
+            (None, _) => {}
+        }
+    }
+    false
 }
 
 /// A Grep or Glob call's scope from its detail: its `path`, given alone or in its input's JSON.
@@ -265,6 +282,8 @@ mod tests {
         assert_eq!(found("rg -l x src && echo done"), Some(0));
         assert_eq!(found("rg -l x src & echo Cargo.toml"), Some(0), "in the background, beside it");
         assert_eq!(found("rg -l x src 2>&1 | head"), Some(3), "a redirection is no background");
+        assert_eq!(found("rg -l 'A&B' src"), Some(3), "a quoted & is no background");
+        assert_eq!(found("rg -l \"A&B\" src \\& | head"), Some(3), "nor an escaped one");
         assert_eq!(found("rg -l x src |\nhead -1"), Some(3), "its pipe, on the next line");
         let long = format!("rg -l x src{}; echo Cargo.toml", " ".repeat(city_shell::MOST_BYTES));
         assert_eq!(found(&long), Some(0), "its tail unread");

@@ -19711,6 +19711,52 @@ fn a_shell_line_beams_down_and_a_network_call_rises_from_the_agent() {
     }
 }
 
+/// A followed terminal session's agent carries its context used, as the dial says it, and draws
+/// it as an arc round its icon: from its file's model step (its usage, its model's window).
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_followed_sessions_context_used_rings_its_icon() {
+    let root = support::temp(&format!("ottospace-e2e-city-context-{}", std::process::id()));
+    let app = root.join("app");
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    git(&app, &["init", "-q"]);
+    std::fs::write(app.join("src/main.rs"), "x".repeat(3000)).unwrap();
+    let app = app.canonicalize().unwrap();
+    let claude = root.join("sessions/claude");
+    let id = "55555555-5555-4555-8555-555555555555";
+    let project = claude.join("projects").join(ottospace_sessions::claude::slug(&app));
+    std::fs::create_dir_all(&project).unwrap();
+    let user = json!({"type": "user", "message": {"role": "user", "content": "made-up prompt"},
+        "timestamp": "2026-11-13T09:00:00.000Z", "cwd": app, "sessionId": id});
+    let bash = json!({"type": "tool_use", "id": "toolu_b", "name": "Bash", "input": {"command": "cargo test"}});
+    // 163,000 of a Haiku's 200,000: amber, 82% as the dial rounds it (81.5).
+    let usage = json!({"input_tokens": 162000, "output_tokens": 1000});
+    let call = json!({"type": "assistant", "message": {"id": "msg_1", "model": "claude-haiku-5-5", "content": [bash],
+        "usage": usage}, "timestamp": "2026-11-13T09:00:01.000Z", "cwd": app, "sessionId": id});
+    std::fs::write(project.join(format!("{id}.jsonl")), format!("{user}\n{call}\n")).unwrap();
+    std::fs::create_dir_all(claude.join("sessions")).unwrap();
+    let live = json!({"pid": std::process::id(), "sessionId": id, "status": "busy"});
+    std::fs::write(claude.join("sessions/1.json"), live.to_string()).unwrap();
+    let settings = json!({"repos": [app], "restore_layout": false, "session_dirs": {"claude": [claude]}});
+    let home = user_folder("city-context", &settings.to_string());
+    let env = [("OTTOSPACE_HOME", home.to_str().unwrap()), ("OTTOSPACE_FEATURES", "code_city")];
+    let otto = Otto::launch_with("city-context", &env);
+    otto.call(json!({"cmd": "open_repo", "path": app}));
+    otto.call(json!({"cmd": "close"}));
+    let agent = otto.wait_for("the session's context used", |o| {
+        let c = o.call(json!({"cmd": "state"}))["city"].clone();
+        c["agents"]
+            .as_array()?
+            .iter()
+            .find(|a| a["followed"] == json!(true) && a["context"].as_f64() > Some(0.))
+            .cloned()
+    });
+    assert_eq!((agent["context"].as_f64(), &agent["context_level"]), (Some(0.82), &json!("amber")), "{agent}");
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+    let _ = std::fs::remove_dir_all(&home);
+}
+
 /// A `claude` in the user's own terminal, followed by its file while its checkout's city shows:
 /// a read written to its file now lights its building and flashes it, its agent over it, as a
 /// chat's does; what its file held before plays nothing.

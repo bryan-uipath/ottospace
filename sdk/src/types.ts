@@ -2145,6 +2145,10 @@ export interface CityAgent {
   followed: boolean;
   /** What its running call draws round it: a shell line's beam, a network or MCP call's antenna; null with none. */
   effect: "beam" | "antenna" | null;
+  /** The share of its context window used (0 to 1, two places), its arc drawn round it; null when not known. */
+  context: number | null;
+  /** That share's level, as the dial colours it; null when not known. */
+  context_level: "calm" | "amber" | "red" | null;
 }
 
 export interface CityView {

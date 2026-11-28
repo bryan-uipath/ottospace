@@ -653,6 +653,12 @@ impl Transcript {
         self.activity.pulse(&self.is())
     }
 
+    /// The share of its context window used and its level, when known (`activity::context_used`).
+    pub fn context_used(&self) -> Option<(f32, crate::activity::Level)> {
+        let (used, level) = crate::activity::context_used(self.context, self.window);
+        used.map(|used| (used, level))
+    }
+
     /// The station of its agent's newest call that runs now.
     pub fn calling_station(&self) -> Option<Station> {
         self.activity.running_station()
