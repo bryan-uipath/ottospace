@@ -88,15 +88,33 @@ pub const KEPT: usize = 8;
 
 /// A task's badge: the first letters of the title's first two words,
 /// or the first two letters of a one-word title, in capitals. Whole graphemes: `éte` → `ÉT`.
+/// A mark is no letter: a pasted quote bar, a list's dash or box (`▎ Use the` → `UT`). An emoji is.
 pub fn monogram(title: &str) -> String {
     use unicode_segmentation::UnicodeSegmentation;
-    let words: Vec<&str> = title.split_whitespace().collect();
-    let letters: Vec<&str> = match words[..] {
+    let words: Vec<Vec<&str>> = (title.split_whitespace())
+        .map(|word| word.graphemes(true).filter(|g| is_letter(g)).collect::<Vec<_>>())
+        .filter(|word| !word.is_empty())
+        .collect();
+    let letters: Vec<&str> = match &words[..] {
         [] => Vec::new(),
-        [one] => one.graphemes(true).take(2).collect(),
-        [one, two, ..] => [one, two].iter().filter_map(|word| word.graphemes(true).next()).collect(),
+        [one] => one.iter().take(2).copied().collect(),
+        [one, two, ..] => vec![one[0], two[0]],
     };
     letters.concat().to_uppercase()
+}
+
+/// A grapheme a badge may show: not a mark (ASCII punctuation, typographic punctuation such as
+/// dashes and bullets, box drawing and block elements such as a quote bar `▎`), nor a space. A
+/// mark with more after it is an emoji (`#️⃣`, `‼️`): a letter.
+fn is_letter(grapheme: &str) -> bool {
+    let mut chars = grapheme.chars();
+    let Some(c) = chars.next() else { return false };
+    if chars.next().is_some() {
+        return true;
+    }
+    let mark =
+        c.is_ascii_punctuation() || ('\u{2010}'..='\u{205E}').contains(&c) || ('\u{2500}'..='\u{259F}').contains(&c);
+    !mark && !c.is_whitespace()
 }
 
 /// The monograms of the tasks, in order: each `monogram`, unless an earlier cell has it;
@@ -105,7 +123,7 @@ pub fn monogram(title: &str) -> String {
 pub fn monograms(titles: &[&str]) -> Vec<String> {
     use unicode_segmentation::UnicodeSegmentation;
     let letters = |title: &str| -> Vec<String> {
-        title.graphemes(true).filter(|g| !g.trim().is_empty()).map(str::to_uppercase).collect()
+        title.graphemes(true).filter(|g| is_letter(g)).map(str::to_uppercase).collect()
     };
     let mut out: Vec<String> = Vec::new();
     for (at, title) in titles.iter().enumerate() {
@@ -343,6 +361,14 @@ mod tests {
         assert_eq!(monograms(&titles), ["FT", "FO", "FE", "F4", "RE"]);
         assert_eq!(monograms(&["été", "étage"]), ["ÉT", "ÉA"]);
         assert_eq!(monograms(&[]), Vec::<String>::new());
+        // A pasted quote bar, a list's marks, a bullet, a quote's `>`: no letters of the badge.
+        let marked = ["▎ Use the Read tool", "- [ ] fix the login", "• tidy up", "> quoted note", "▎"];
+        assert_eq!(marked.map(monogram), ["UT", "FT", "TU", "QN", ""]);
+        // An emoji whose first scalar is a mark is an emoji: kept.
+        assert_eq!(
+            ["#\u{fe0f}\u{20e3} ship", "\u{203c}\u{fe0f} now"].map(monogram),
+            ["#\u{fe0f}\u{20e3}S", "\u{203c}\u{fe0f}N"]
+        );
         // A place already taken as a badge: the next number.
         assert_eq!(monograms(&["a3", "a", "a"]), ["A3", "A", "A4"]);
     }

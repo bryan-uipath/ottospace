@@ -406,7 +406,8 @@ impl Workspace {
                         Body::Lines(Rc::new(lines), Rc::new(marks), colours.map(Rc::new))
                     }
                     Some(Loaded::Picture(picture)) => {
-                        view.began = Instant::now();
+                        // A new picture (read again: maybe fewer frames) starts at its first.
+                        (view.began, _) = (Instant::now(), view.frame.replace(0));
                         Body::Picture(Rc::new(picture))
                     }
                     Some(Loaded::Diff(patch, marks)) => Body::Diff(Rc::new(patch), Rc::new(marks)),
@@ -488,7 +489,8 @@ impl Workspace {
         for id in self.animated_panes() {
             let (Some(view), Some(core)) = (self.viewers.get(&id), self.model.viewer(id)) else { continue };
             let Body::Picture(picture) = &view.body else { continue };
-            let at = if playing(core) { picture.frame_at(view.began.elapsed()) } else { 0 };
+            // Paused, it stays on the frame on show (the first until it ever played).
+            let at = if playing(core) { picture.frame_at(view.began.elapsed()) } else { view.frame.get() };
             if view.frame.replace(at) != at {
                 self.picture_frames += 1;
                 cx.notify();

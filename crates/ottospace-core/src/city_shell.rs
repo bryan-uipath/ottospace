@@ -4,7 +4,7 @@
 //! `cd /code/app && cat src/main.rs | wc -l` → `["src/main.rs"]`.
 
 /// The most of a line read, and the most paths given.
-const MOST_BYTES: usize = 2048;
+pub(crate) const MOST_BYTES: usize = 2048;
 const MOST_PATHS: usize = 8;
 
 /// The paths a shell `line` names inside `checkout` (absolute), relative to it, in order, each
