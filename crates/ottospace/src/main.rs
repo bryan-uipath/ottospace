@@ -4811,6 +4811,7 @@ impl Workspace {
                 "city_agent_frames": self.city_agent_frames(),
                 // Frames a busy agent's pulse in the code city asked for: none once its calls end, none under Reduce Motion.
                 "city_pulse_frames": self.city_pulse_frames(),
+                "city_station_frames": self.city_station_frames(),
                 // Frames a read's flash, a search's sweep or its result's light in the code city asked for: none once they end, none under Reduce Motion.
                 "city_glimmer_frames": self.city_glimmer_frames(),
                 // Frames a city's camera asked for easing back after a reset: none at rest, none under Reduce Motion.

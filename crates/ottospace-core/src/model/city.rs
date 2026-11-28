@@ -473,8 +473,8 @@ impl Model {
             .map_or_else(Vec::new, |line| crate::city_shell::paths_from(line, dir, &from));
         // At no file and no path named: over the file it just left, a while.
         let at = at.or_else(|| t.file_held(self.now).filter(|_| near.is_empty()));
-        let station = t.calling_station().or_else(|| station_of(s));
-        let line = t.live_label().and_then(talk::call_line).or_else(|| line_of(s));
+        // Its file, read as it is written, says what runs now: an older reading of it does not.
+        let (station, line) = (t.calling_station(), t.live_label().and_then(talk::call_line));
         let (busy, subagents) = (busy || t.calling(), subagents.max(t.subagents()));
         Agent { who, colour, at, near, busy, subagents, station, line, followed: true }
     }

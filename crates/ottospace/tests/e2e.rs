@@ -19661,6 +19661,56 @@ fn a_quick_read_holds_its_building_then_lets_go() {
     let _ = std::fs::remove_dir_all(&root);
 }
 
+/// A running call draws round its agent's icon: a shell line's beam falling from it, a network
+/// call's antenna rising over it, moving while it runs; under Reduce Motion drawn still, no frame.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn a_shell_line_beams_down_and_a_network_call_rises_from_the_agent() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    // Each call held open in a run of its own: what it draws, whenever the city first shows.
+    for (calm, tool, input, effect) in [
+        (false, "Bash", json!({"command": "cargo test"}), "beam"),
+        (true, "Bash", json!({"command": "cargo test"}), "beam"),
+        (false, "WebFetch", json!({"url": "https://example.com/made-up"}), "antenna"),
+        (true, "WebFetch", json!({"url": "https://example.com/made-up"}), "antenna"),
+    ] {
+        let tool_name = tool;
+        let mut extra = vec![("OTTOSPACE_FEATURES", "code_city"), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+        extra.extend(calm.then_some(("OTTOSPACE_REDUCE_MOTION", "1")));
+        let name = format!("city-{effect}{}", if calm { "-calm" } else { "" });
+        let name = name.as_str();
+        let (root, _, env) = native_setup(name, &[], &extra);
+        let app = root.join("repos/app");
+        git(&app, &["init", "-q"]);
+        std::fs::create_dir_all(app.join("src")).unwrap();
+        std::fs::write(app.join("src/main.rs"), "x".repeat(3000)).unwrap();
+        let tool = |id: &str, name: &str, input: Value| {
+            let call = json!({"type": "tool_use", "id": id, "name": name, "input": input});
+            format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#)
+        };
+        let lines = [
+            format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#),
+            tool("t1", tool_name, input),
+            r#"{"_sleep":60}"#.into(),
+        ];
+        std::fs::write(root.join("fixtures/turn1.jsonl"), lines.join("\n") + "\n").unwrap();
+        let otto = launch_env(name, &env);
+        otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+        otto.call(json!({"cmd": "section", "section": "tasks"}));
+        otto.start_task(1);
+        otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+        let state = |o: &Otto| o.call(json!({"cmd": "state"}));
+        let frames = |o: &Otto| state(o)["counts"]["city_station_frames"].as_u64().unwrap_or(0);
+        otto.wait_for(effect, |o| (state(o)["city"]["agents"][0]["effect"] == json!(effect)).then_some(()));
+        let before = frames(&otto);
+        std::thread::sleep(Duration::from_millis(400));
+        assert_eq!(frames(&otto) > before, !calm, "{effect}: moving unless Reduce Motion");
+        assert_eq!(calm, frames(&otto) == 0, "{effect}: no frame under Reduce Motion");
+        drop(otto);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
+
 /// A `claude` in the user's own terminal, followed by its file while its checkout's city shows:
 /// a read written to its file now lights its building and flashes it, its agent over it, as a
 /// chat's does; what its file held before plays nothing.
