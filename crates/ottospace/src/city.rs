@@ -1059,7 +1059,10 @@ fn make(
         } else {
             let boards =
                 city_walls::billboards(&scene, |place| gpu.measure(&name(place)?), view, scale, picks, key.moving);
-            *picks = boards.iter().map(|s| s.place).collect();
+            // Picked again only at rest: a label moved off the picture mid-drag comes back with it.
+            if !key.moving {
+                *picks = boards.iter().map(|s| s.place).collect();
+            }
             signs.extend(boards);
         }
     }
@@ -3393,8 +3396,10 @@ mod tests {
         set(&mut key, view);
         let skip = crate::trace::jsonl().lines().count();
         let at_rest = Instant::now();
+        // The labels picked at rest, moved through the turn (`city_wall_names`).
+        let mut picks = Vec::new();
         let (first, mut detail) =
-            make(gpu, &key, plan, &mut last, None, None, Instant::now(), None, &mut Vec::new()).unwrap();
+            make(gpu, &key, plan, &mut last, None, None, Instant::now(), None, &mut picks).unwrap();
         let rest_ms = ms(at_rest);
         let blocks = first.scene.blocks.len();
         let districts = first.scene.blocks.iter().filter(|b| matches!(b.kind, Kind::Plate(_))).count();
@@ -3449,7 +3454,7 @@ mod tests {
             set(&mut key, view);
             let started = Instant::now();
             let (made, next) =
-                make(gpu, &key, plan, &mut last, Some(detail), None, Instant::now(), None, &mut Vec::new()).unwrap();
+                make(gpu, &key, plan, &mut last, Some(detail), None, Instant::now(), None, &mut picks).unwrap();
             detail = next;
             let total = ms(started);
             // Boxes shown or hidden by a level of detail since the last picture: none in a turn.

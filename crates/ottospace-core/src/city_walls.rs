@@ -110,8 +110,13 @@ pub fn signs(scene: &Scene, mut wide: impl FnMut(usize) -> Option<f32>, view: [f
         sides.sort_by(|a, b| facing(b).total_cmp(&facing(a)));
         let height = b.max[1] - b.min[1];
         let base = height * FILL;
-        // Its em on screen per plan unit of em there.
-        let per = |middle: [f32; 3]| Some(apart(seen(at(middle, UP, -0.5))?, seen(at(middle, UP, 0.5))?));
+        if base <= 0. {
+            continue;
+        }
+        // Its em on screen per plan unit of em there, measured over its wall's own em (a unit's
+        // ends may be behind a near camera).
+        let per =
+            |middle: [f32; 3]| Some(apart(seen(at(middle, UP, -base / 2.))?, seen(at(middle, UP, base / 2.))?) / base);
         let facing_sides = || sides.iter().filter(|side| facing(side) > 0.);
         // None with room on screen for a name an em wide, grown its most: its name is not measured.
         let room = |&(_, middle, length): &([f32; 3], [f32; 3], f32)| {

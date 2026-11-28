@@ -520,7 +520,12 @@ impl Gpu {
     /// under the glass, then on top.
     fn text_instances(&self, labels: &[Label]) -> (u32, u32) {
         let mut text = self.text.borrow_mut();
-        let Some(Some(text)) = text.as_mut().filter(|_| !labels.is_empty()) else { return (0, 0) };
+        let Some(Some(text)) = text.as_mut() else { return (0, 0) };
+        // None to draw: a full atlas still starts again (`forget`).
+        if labels.is_empty() {
+            text.glyphs.forget();
+            return (0, 0);
+        }
         let mut data = Vec::new();
         for label in labels.iter().filter(|l| !l.on_top) {
             text.glyphs.quads(label, &mut data);
