@@ -2698,6 +2698,7 @@ function cityAgent(value: unknown, at: string): CityAgent {
     effect: orNull(oneOf(["beam", "antenna"] as const, "an agent's effect"))(o.effect, `${at}.effect`),
     context: orNull(num)(o.context, `${at}.context`),
     context_level: orNull(oneOf(["calm", "amber", "red"] as const, "a context level"))(o.context_level, `${at}.context_level`),
+    mood: orNull(oneOf(["thinking", "talking", "sent"] as const, "an agent's mood"))(o.mood, `${at}.mood`),
   };
 }
 

@@ -1,0 +1,20 @@
+# What an agent does between calls (`code_city`, under Reduce Motion so the marks hold still):
+# thinking, dots over its icon (`thinking`); then its made-up reply streams, a bubble beside it
+# (`talking`). Waits by time: the base draws neither.
+{"env": {"OTTOSPACE_FEATURES": "code_city", "OTTOSPACE_REDUCE_MOTION": "1"}}
+{"tree": "repos/app", "files": 60}
+{"cmd": "repo_add", "path": "{ROOT}/repos/app"}
+{"until": "repos_bar.0"}
+{"cmd": "task_new", "line": "fix the login loop >app"}
+{"cmd": "section", "section": "tasks"}
+{"click": "task:1", "at": [0.3, 0.3]}
+{"click": "talk:talk-start"}
+{"cmd": "key", "keys": "cmd-shift-r", "as": "user"}
+{"cmd": "open_space", "space": {"kind": "task", "id": 1}}
+{"until": "city.picture", "timeout_ms": 30000}
+{"sleep_ms": 3000}
+{"settle": 500}
+{"shot": "thinking"}
+{"sleep_ms": 9000}
+{"settle": 500}
+{"shot": "talking"}

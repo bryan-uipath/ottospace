@@ -2149,6 +2149,8 @@ export interface CityAgent {
   context: number | null;
   /** That share's level, as the dial colours it; null when not known. */
   context_level: "calm" | "amber" | "red" | null;
+  /** What it does between calls: thinks, talks (its reply streams), or a message was just sent to it; null otherwise. */
+  mood: "thinking" | "talking" | "sent" | null;
 }
 
 export interface CityView {

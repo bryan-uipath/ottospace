@@ -52,6 +52,8 @@ pub struct Agent<'a> {
     pub followed: bool,
     /// The share of its context window used and its level, as the dial says it (none: not known).
     pub context: Option<(f32, crate::activity::Level)>,
+    /// What it does between calls: thinks, talks, a message just sent to it (`Transcript::mood`).
+    pub mood: Option<crate::transcript::Mood>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -354,10 +356,10 @@ impl Model {
                 let (busy, subagents) = (transcript.calling(), transcript.subagents());
                 let (station, line) = (transcript.calling_station(), transcript.live_label().and_then(talk::call_line));
                 let who = Who::Task(*task);
-                let context = transcript.context_used();
+                let (context, mood, followed) = (transcript.context_used(), transcript.mood(now), false);
                 (
                     *task,
-                    Agent { who, colour: *colour, at, near, busy, subagents, station, line, followed: false, context },
+                    Agent { who, colour: *colour, at, near, busy, subagents, station, line, followed, context, mood },
                 )
             })
             .collect();
@@ -420,6 +422,7 @@ impl Model {
                 line: None,
                 followed: false,
                 context: None,
+                mood: None,
             });
         let agents: Vec<Agent> = tasks.into_iter().map(|(_, agent)| agent).chain(sessions).chain(in_panes).collect();
         // A session's files are lit too, in its task's colour if a task has it, else in none: as a
@@ -471,9 +474,21 @@ impl Model {
         let (busy, subagents) = (s.station.is_some(), s.subagents);
         let Some(t) = self.followed(s) else {
             let (station, line) = (station_of(s), line_of(s));
-            let (followed, context) = (false, None);
+            let (followed, context, mood) = (false, None, None);
             let at = file_of(s);
-            return Agent { who, colour, at, near: Vec::new(), busy, subagents, station, line, followed, context };
+            return Agent {
+                who,
+                colour,
+                at,
+                near: Vec::new(),
+                busy,
+                subagents,
+                station,
+                line,
+                followed,
+                context,
+                mood,
+            };
         };
         let at = t.file_at();
         let from = below(&s.cwd, dir);
@@ -484,8 +499,8 @@ impl Model {
         // Its file, read as it is written, says what runs now: an older reading of it does not.
         let (station, line) = (t.calling_station(), t.live_label().and_then(talk::call_line));
         let (busy, subagents) = (busy || t.calling(), subagents.max(t.subagents()));
-        let context = t.context_used();
-        Agent { who, colour, at, near, busy, subagents, station, line, followed: true, context }
+        let (context, mood) = (t.context_used(), t.mood(self.now));
+        Agent { who, colour, at, near, busy, subagents, station, line, followed: true, context, mood }
     }
 
     /// The transcript of a session's file a city follows, once read to its end (`CaughtUp`):
@@ -966,6 +981,7 @@ mod tests {
                 line: Some("files · src/main.rs".into()),
                 followed: false,
                 context: None,
+                mood: None,
             }]
         );
         assert_eq!(city.lit, vec![Lit { label: "src/main.rs", colour: None, running: true }]);
@@ -1282,6 +1298,9 @@ mod tests {
         at(&mut m, vec![end("r"), shell("s", "cargo test")], 1_005);
         assert_eq!(held(&m), Some((Some("src/main.rs"), vec!["src/main.rs"])), "held");
         let until = 1_005 + crate::activity::HOLD_MS;
+        // Just before it ends, held still; at its end the shell looks again.
+        m.update(Action::Tick { now: until - 1 }.sent_by(Origin::System));
+        assert_eq!(held(&m), Some((Some("src/main.rs"), vec!["src/main.rs"])), "held still");
         assert!(!m.due(until - 1) && m.due(until), "the shell looks again when the hold ends");
         m.update(Action::Tick { now: until }.sent_by(Origin::System));
         assert_eq!(held(&m), Some((None, vec![])), "let go");
@@ -1337,6 +1356,34 @@ mod tests {
         assert_eq!(city(&m).map(|c| c.agents[0].context), Some(Some((0.75, Level::Amber))));
         let dial = m.chat(&Subject::Task(1)).map(|chat| chat.transcript.dial(0));
         assert_eq!(dial.map(|d| (d.context, d.level)), Some((Some(0.75), Level::Amber)), "the dial's");
+    }
+
+    /// Between its calls an agent's mood: a message just sent to it, then thinking, talking as
+    /// its reply streams, thinking again; none while a call runs or once its turn is over.
+    #[test]
+    fn an_agent_thinks_talks_and_shows_a_message_sent() {
+        use crate::transcript::Mood;
+        let mut m = task_in_app();
+        let at = |m: &mut Model, events: Vec<Event>, now: u64| {
+            m.update(Action::Tick { now }.sent_by(Origin::System));
+            m.update(Action::AgentEvents { task: Subject::Task(1), events, at: now }.sent_by(Origin::System));
+        };
+        let mood = |m: &Model| city(m).and_then(|c| c.agents.first().and_then(|a| a.mood));
+        // Its first message was sent as it started (at 0): long ago by 10 s.
+        at(&mut m, vec![Event::TurnStarted], 10_000);
+        assert_eq!(mood(&m), Some(Mood::Thinking));
+        at(&mut m, vec![Event::TextDelta { text: Text::new("Hel") }], 10_100);
+        assert_eq!(mood(&m), Some(Mood::Talking));
+        at(&mut m, vec![Event::Text { text: Text::new("Hello") }], 10_200);
+        assert_eq!(mood(&m), Some(Mood::Thinking));
+        at(&mut m, vec![call("s", Station::Shell, "cargo test")], 10_300);
+        assert_eq!(mood(&m), None, "a call runs");
+        at(&mut m, vec![end("s"), Event::UserText { text: Text::new("and the docs") }], 20_000);
+        assert_eq!(mood(&m), Some(Mood::Sent));
+        let until = 20_000 + crate::transcript::SENT_MS;
+        assert!(m.next_due() <= Some(until) && m.due(until), "the shell looks again when it ends");
+        m.update(Action::Tick { now: until }.sent_by(Origin::System));
+        assert_eq!(mood(&m), Some(Mood::Thinking), "sent a while ago");
     }
 
     /// An agent counts the sub-agents it runs: its `Agent`/`Task` calls not ended (a sub-agent's

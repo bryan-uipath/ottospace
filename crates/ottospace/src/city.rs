@@ -33,6 +33,7 @@ use ottospace_core::scene::{self, Camera, Kind, Layout, Scene, View};
 use ottospace_core::settings::expand_home;
 use ottospace_core::stats::rank;
 use ottospace_core::tasks::{Group, TaskId};
+use ottospace_core::transcript::Mood;
 use ottospace_core::{status_bar, strata, theme};
 
 use crate::city_gpu::{Boxes, Gpu, Picture};
@@ -103,6 +104,8 @@ const ICON: f32 = 22.;
 /// A station's effect goes round once this long: a shell beam's dashes fall, a network call's
 /// waves rise.
 const STATION_CYCLE: Duration = Duration::from_millis(1200);
+/// A message sent to an agent draws in to its icon this long.
+const MOOD_SENT: Duration = Duration::from_millis(600);
 /// The station's dot at an icon's corner, and the height of its call's line under it, in points.
 const STATION: f32 = 12.;
 /// How far a network call's waves rise over its icon, in points.
@@ -754,6 +757,8 @@ struct Floating {
     followed: bool,
     /// Its context window used, and its level (`Agent::context`).
     context: Option<(f32, ottospace_core::activity::Level)>,
+    /// What it does between calls (`Agent::mood`).
+    mood: Option<Mood>,
 }
 
 /// An agent's icon as a paint drew it: its centre, where it glides to and since when (window
@@ -779,6 +784,9 @@ struct Icon {
     /// What its call draws round it: a shell line's beam, a network call's antenna.
     effect: Option<Around>,
     context: Option<(f32, ottospace_core::activity::Level)>,
+    mood: Option<Mood>,
+    /// When a message sent to it was first drawn: its ring plays from then (`MOOD_SENT`).
+    sent: Option<Instant>,
 }
 
 /// What an agent's running call draws round its icon (`agents`).
@@ -1218,6 +1226,7 @@ impl Drawn {
                     "effect": i.effect.map(|effect| match effect { Around::Beam => "beam", Around::Antenna => "antenna" }),
                     "context": i.context.map(|(used, _)| f64::from((used * 100.).round()) / 100.),
                     "context_level": i.context.map(|(_, level)| level),
+                    "mood": i.mood,
                 })
             })
             .collect();
@@ -1475,6 +1484,7 @@ impl Workspace {
                 let (busy, subagents) = (agent.busy, agent.subagents);
                 let (station, line, followed, context) =
                     (agent.station, agent.line.clone(), agent.followed, agent.context);
+                let mood = agent.mood;
                 Some(match agent.who {
                     Who::Task(task) => {
                         let subject = ottospace_core::talk::Subject::Task(task);
@@ -1494,6 +1504,7 @@ impl Workspace {
                             line,
                             followed,
                             context,
+                            mood,
                         }
                     }
                     // An agent CLI in a pane, by its process: its runner's glyph, no title of its own.
@@ -1514,6 +1525,7 @@ impl Workspace {
                             line,
                             followed,
                             context,
+                            mood,
                         }
                     }
                     // A session no task has: its runner's glyph, in the colour of work going on.
@@ -1534,6 +1546,7 @@ impl Workspace {
                             line,
                             followed,
                             context,
+                            mood,
                         }
                     }
                 })
@@ -3022,6 +3035,33 @@ fn agents(
             _ => None,
         };
         stationing |= effect.is_some() && !calm;
+        // What it does between calls: thinking dots over it, a reply's bubble beside it, a message
+        // just sent drawing in to it once. Still under Reduce Motion (the ring then not drawn).
+        let ink = Hsla::from(rgb(theme::TEXT));
+        let sent = match agent.mood {
+            Some(Mood::Sent) => Some(before.and_then(|icon| icon.sent).unwrap_or(now)),
+            _ => None,
+        };
+        match agent.mood {
+            Some(Mood::Thinking) => {
+                think(window, point(shown.x, rect.top() - px(5.)), ink, (!calm).then_some(cycle));
+                stationing |= !calm;
+            }
+            Some(Mood::Talking) => {
+                talk(window, point(rect.right() + px(3.), rect.top() - px(2.)), ink, (!calm).then_some(cycle));
+                stationing |= !calm;
+            }
+            Some(Mood::Sent) if !calm => {
+                let t = sent.map_or(1., |since| since.elapsed().as_secs_f32() / MOOD_SENT.as_secs_f32());
+                if t < 1. {
+                    let r = ICON / 2. + 2. + ICON * (1. - t);
+                    let ring = crate::dial::arc(1.5, shown, r, 0., std::f32::consts::TAU);
+                    crate::dial::stroke(window, ring, colour.opacity(0.9 * t));
+                    stationing = true;
+                }
+            }
+            _ => {}
+        }
         // Its context used, as the dial says it: an arc round it from the top, faint until amber.
         if let Some((used, level)) = agent.context {
             let hue = match level {
@@ -3097,6 +3137,8 @@ fn agents(
             followed: agent.followed,
             effect,
             context: agent.context,
+            mood: agent.mood,
+            sent,
         });
     }
     (icons, gliding, pulsing, stationing)
@@ -3128,6 +3170,31 @@ fn fall(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, colour: Hsl
         at += DASH * 2.;
     }
     true
+}
+
+/// Thinking: three dots centred at `at`, each brightening in turn with `phase` (none: all half lit).
+fn think(window: &mut Window, at: Point<Pixels>, colour: Hsla, phase: Option<f32>) {
+    for k in 0..3 {
+        let lit = phase.map_or(0.5, |phase| {
+            let d = (phase * 3. - k as f32).rem_euclid(3.);
+            if d < 1. { 1. - d } else { 0.25 }
+        });
+        let c = at + point(px((k as f32 - 1.) * 4.), px(0.));
+        crate::dial::disc(window, c, 1.4, colour.opacity(0.3 + 0.7 * lit));
+    }
+}
+
+/// Talking: a small bubble with its corner at `at` (the icon's top right), its dots filling in
+/// turn with `phase` (none: all lit).
+fn talk(window: &mut Window, at: Point<Pixels>, colour: Hsla, phase: Option<f32>) {
+    let bubble = Bounds { origin: at - point(px(0.), px(8.)), size: gpui::size(px(16.), px(10.)) };
+    let quad = fill(bubble, rgb(theme::SELECTED)).corner_radii(px(4.)).border_widths(px(1.));
+    window.paint_quad(quad.border_color(colour.opacity(0.6)));
+    let shown = phase.map_or(3, |phase| (phase * 4.) as usize);
+    for k in 0..shown.min(3) {
+        let c = bubble.center() + point(px((k as f32 - 1.) * 4.), px(0.));
+        crate::dial::disc(window, c, 1.2, colour);
+    }
 }
 
 /// A network call's antenna over `top` (an icon's top): three arcs rising and fading with

@@ -9814,10 +9814,13 @@ impl Model {
             || self.hold_ends().any(|at| at <= now)
     }
 
-    /// When the city's file holds end, of those not over at the model's `now` (`HOLD_MS`).
+    /// When the city's file holds end (`HOLD_MS`) and its agents' sent messages stop showing
+    /// (`SENT_MS`), of those not over at the model's `now`.
     fn hold_ends(&self) -> impl Iterator<Item = u64> {
         let transcripts = self.chats.iter().map(|chat| &chat.transcript).chain(self.follows.values());
-        transcripts.flat_map(|transcript| transcript.holds_end()).filter(|at| self.now < *at)
+        // A file's hold, and a message just sent showing on its agent (`Mood::Sent`).
+        let ends = transcripts.flat_map(|transcript| transcript.holds_end().into_iter().chain(transcript.sent_until()));
+        ends.filter(|at| self.now < *at)
     }
 
     /// When `due` turns true next, but for the calendar's alerts: the shell looks at those on its

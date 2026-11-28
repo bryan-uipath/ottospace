@@ -212,6 +212,12 @@ impl Activity {
         self.running.iter().rev().find(|call| call.station == station).map(|call| call.id.as_str())
     }
 
+    /// When a message was last sent to its agent (the user's, or one sent elsewhere).
+    pub(crate) fn messaged_at(&self) -> Option<u64> {
+        let you = self.uses[Station::You.at()];
+        (you.calls > 0).then_some(you.at)
+    }
+
     /// The station of the newest call that still runs.
     pub(crate) fn running_station(&self) -> Option<Station> {
         self.running.last().map(|call| call.station)
