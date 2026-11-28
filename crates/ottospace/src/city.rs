@@ -2915,7 +2915,7 @@ fn agents(
     // 0 to 1, again and again: a station's beam falls, its waves rise.
     let cycle = {
         static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
-        (START.get_or_init(Instant::now).elapsed().as_secs_f32() / STATION_CYCLE.as_secs_f32()).fract()
+        (START.get_or_init(Instant::now).elapsed().as_secs_f64() / STATION_CYCLE.as_secs_f64()).fract() as f32
     };
     for (agent, mark) in floating.iter().zip(made.scene.marks(&boxes)) {
         let Some(end) = to_window(mark.at) else { continue };
@@ -2985,13 +2985,14 @@ fn agents(
         // The call it runs, below and above it: a shell line's beam falls from it to its building
         // or the ground, a network call's waves rise over it. Moving while it runs (still under
         // Reduce Motion), in its station's colour as on the dial.
-        let ground = to_window([mark.at[0], 0., mark.at[2]]);
         let effect = match agent.station {
-            Some(Station::Shell) => (foot.or(ground)).map(|to| {
+            Some(Station::Shell) => {
+                let to = foot.or_else(|| to_window([mark.at[0], 0., mark.at[2]]));
                 let hue = Hsla::from(rgb(theme::station(Station::Shell)));
-                fall(window, point(shown.x, rect.bottom()), to, hue, (!calm).then_some(cycle));
-                Around::Beam
-            }),
+                let drawn =
+                    to.is_some_and(|to| fall(window, point(shown.x, rect.bottom()), to, hue, (!calm).then_some(cycle)));
+                drawn.then_some(Around::Beam)
+            }
             Some(station @ (Station::Network | Station::Mcp)) => {
                 let hue = Hsla::from(rgb(theme::station(station)));
                 rise(window, point(shown.x, rect.top()), hue, (!calm).then_some(cycle));
@@ -3071,17 +3072,18 @@ fn agents(
 }
 
 /// A shell line's beam from `from` (an icon's foot) down to `to`: a faint line, and dashes falling
-/// along it with `phase` (0 to 1; none: still, the dashes where they start).
-fn fall(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, colour: Hsla, phase: Option<f32>) {
+/// along it with `phase` (0 to 1; none: still, the dashes where they start). Drawn only below its
+/// icon and at least a dash and a gap long: whether it was.
+fn fall(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, colour: Hsla, phase: Option<f32>) -> bool {
     const DASH: f32 = 6.;
+    if f32::from(to.y - from.y) < DASH * 2. {
+        return false;
+    }
     let mut line = PathBuilder::stroke(px(1.));
     line.move_to(from);
     line.line_to(to);
     crate::dial::stroke(window, line, colour.opacity(0.25));
     let length = (to - from).magnitude() as f32;
-    if length < 1. {
-        return;
-    }
     let shift = phase.unwrap_or(0.) * DASH * 2.;
     let mut at = shift - DASH * 2.;
     while at < length {
@@ -3094,6 +3096,7 @@ fn fall(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, colour: Hsl
         }
         at += DASH * 2.;
     }
+    true
 }
 
 /// A network call's antenna over `top` (an icon's top): three arcs rising and fading with

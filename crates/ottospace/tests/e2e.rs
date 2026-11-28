@@ -19665,10 +19665,18 @@ fn a_quick_read_holds_its_building_then_lets_go() {
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_shell_line_beams_down_and_a_network_call_rises_from_the_agent() {
     const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
-    for calm in [false, true] {
+    // Each call held open in a run of its own: what it draws, whenever the city first shows.
+    for (calm, tool, input, effect) in [
+        (false, "Bash", json!({"command": "cargo test"}), "beam"),
+        (true, "Bash", json!({"command": "cargo test"}), "beam"),
+        (false, "WebFetch", json!({"url": "https://example.com/made-up"}), "antenna"),
+        (true, "WebFetch", json!({"url": "https://example.com/made-up"}), "antenna"),
+    ] {
+        let tool_name = tool;
         let mut extra = vec![("OTTOSPACE_FEATURES", "code_city"), ("GIT_CONFIG_GLOBAL", "/dev/null")];
         extra.extend(calm.then_some(("OTTOSPACE_REDUCE_MOTION", "1")));
-        let name = if calm { "city-stations-calm" } else { "city-stations" };
+        let name = format!("city-{effect}{}", if calm { "-calm" } else { "" });
+        let name = name.as_str();
         let (root, _, env) = native_setup(name, &[], &extra);
         let app = root.join("repos/app");
         git(&app, &["init", "-q"]);
@@ -19678,16 +19686,9 @@ fn a_shell_line_beams_down_and_a_network_call_rises_from_the_agent() {
             let call = json!({"type": "tool_use", "id": id, "name": name, "input": input});
             format!(r#"{{"type":"assistant",{S},"parent_tool_use_id":null,"message":{{"content":[{call}]}}}}"#)
         };
-        let result = |id: &str| {
-            let r = json!({"type": "tool_result", "tool_use_id": id, "content": "ok", "is_error": false});
-            format!(r#"{{"type":"user",{S},"parent_tool_use_id":null,"message":{{"content":[{r}]}}}}"#)
-        };
         let lines = [
             format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#),
-            tool("b1", "Bash", json!({"command": "cargo test"})),
-            r#"{"_sleep":4}"#.into(),
-            result("b1"),
-            tool("w1", "WebFetch", json!({"url": "https://example.com/made-up"})),
+            tool("t1", tool_name, input),
             r#"{"_sleep":60}"#.into(),
         ];
         std::fs::write(root.join("fixtures/turn1.jsonl"), lines.join("\n") + "\n").unwrap();
@@ -19697,16 +19698,12 @@ fn a_shell_line_beams_down_and_a_network_call_rises_from_the_agent() {
         otto.start_task(1);
         otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
         let state = |o: &Otto| o.call(json!({"cmd": "state"}));
-        let effect = |o: &Otto| state(o)["city"]["agents"][0]["effect"].clone();
         let frames = |o: &Otto| state(o)["counts"]["city_station_frames"].as_u64().unwrap_or(0);
-        otto.wait_for("the shell's beam", |o| (effect(o) == json!("beam")).then_some(()));
+        otto.wait_for(effect, |o| (state(o)["city"]["agents"][0]["effect"] == json!(effect)).then_some(()));
         let before = frames(&otto);
         std::thread::sleep(Duration::from_millis(400));
-        assert_eq!(frames(&otto) > before, !calm, "the beam's dashes fall, unless Reduce Motion");
-        otto.wait_for("the network call's antenna", |o| (effect(o) == json!("antenna")).then_some(()));
-        if calm {
-            assert_eq!(frames(&otto), 0, "nothing moves under Reduce Motion");
-        }
+        assert_eq!(frames(&otto) > before, !calm, "{effect}: moving unless Reduce Motion");
+        assert_eq!(calm, frames(&otto) == 0, "{effect}: no frame under Reduce Motion");
         drop(otto);
         let _ = std::fs::remove_dir_all(&root);
     }
