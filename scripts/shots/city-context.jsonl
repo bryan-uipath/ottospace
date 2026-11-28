@@ -1,0 +1,12 @@
+# Context used at an agent's icon (`code_city`): a made-up `claude` in the user's terminal, read
+# by its file, has used 80% of its window: an amber arc round its icon, as the dial colours it.
+{"env": {"OTTOSPACE_FEATURES": "code_city", "OTTOSPACE_REDUCE_MOTION": "1"}}
+{"tree": "repos/app", "files": 60}
+{"cmd": "repo_add", "path": "{ROOT}/repos/app"}
+{"until": "repos_bar.0"}
+{"cmd": "open_repo", "path": "{ROOT}/repos/app"}
+{"cmd": "close"}
+{"until": "city.picture", "timeout_ms": 30000}
+{"sleep_ms": 5000}
+{"settle": 1000}
+{"shot": "context"}

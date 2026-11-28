@@ -50,6 +50,8 @@ pub struct Agent<'a> {
     pub line: Option<String>,
     /// A session's, read from its file as a chat's while a city follows it (`follows`), caught up.
     pub followed: bool,
+    /// The share of its context window used and its level, as the dial says it (none: not known).
+    pub context: Option<(f32, crate::activity::Level)>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -210,6 +212,12 @@ fn below(cwd: &str, dir: &str) -> String {
     rest.map(|rest| rest.trim_start_matches('/').to_string()).unwrap_or_default()
 }
 
+/// A transcript's context used, when known (`Transcript::context_used`).
+fn context_of(t: &Transcript) -> Option<(f32, crate::activity::Level)> {
+    let (used, level) = t.context_used();
+    used.map(|used| (used, level))
+}
+
 fn file_of(s: &crate::sessions::Found) -> Option<&str> {
     s.label.as_deref().filter(|_| station_of(s) == Some(Station::Files))
 }
@@ -352,7 +360,11 @@ impl Model {
                 let (busy, subagents) = (transcript.calling(), transcript.subagents());
                 let (station, line) = (transcript.calling_station(), transcript.live_label().and_then(talk::call_line));
                 let who = Who::Task(*task);
-                (*task, Agent { who, colour: *colour, at, near, busy, subagents, station, line, followed: false })
+                let context = context_of(transcript);
+                (
+                    *task,
+                    Agent { who, colour: *colour, at, near, busy, subagents, station, line, followed: false, context },
+                )
             })
             .collect();
         // A task whose agent runs in a terminal (Codex, or `conversation_view: terminal`) has no
@@ -413,6 +425,7 @@ impl Model {
                 station: None,
                 line: None,
                 followed: false,
+                context: None,
             });
         let agents: Vec<Agent> = tasks.into_iter().map(|(_, agent)| agent).chain(sessions).chain(in_panes).collect();
         // A session's files are lit too, in its task's colour if a task has it, else in none: as a
@@ -464,8 +477,9 @@ impl Model {
         let (busy, subagents) = (s.station.is_some(), s.subagents);
         let Some(t) = self.followed(s) else {
             let (station, line) = (station_of(s), line_of(s));
-            let followed = false;
-            return Agent { who, colour, at: file_of(s), near: Vec::new(), busy, subagents, station, line, followed };
+            let (followed, context) = (false, None);
+            let at = file_of(s);
+            return Agent { who, colour, at, near: Vec::new(), busy, subagents, station, line, followed, context };
         };
         let at = t.file_at();
         let from = below(&s.cwd, dir);
@@ -476,7 +490,8 @@ impl Model {
         // Its file, read as it is written, says what runs now: an older reading of it does not.
         let (station, line) = (t.calling_station(), t.live_label().and_then(talk::call_line));
         let (busy, subagents) = (busy || t.calling(), subagents.max(t.subagents()));
-        Agent { who, colour, at, near, busy, subagents, station, line, followed: true }
+        let context = context_of(t);
+        Agent { who, colour, at, near, busy, subagents, station, line, followed: true, context }
     }
 
     /// The transcript of a session's file a city follows, once read to its end (`CaughtUp`):
@@ -956,6 +971,7 @@ mod tests {
                 station: Some(Station::Files),
                 line: Some("files · src/main.rs".into()),
                 followed: false,
+                context: None,
             }]
         );
         assert_eq!(city.lit, vec![Lit { label: "src/main.rs", colour: None, running: true }]);
@@ -1310,6 +1326,23 @@ mod tests {
         events(&mut m, vec![end("s")]);
         let ended = city(&m).unwrap();
         assert_eq!((ended.agents[0].station, ended.agents[0].line.as_deref()), (None, None));
+    }
+
+    /// An agent carries its context used as the dial says it: the share and its level, none
+    /// before any usage is known.
+    #[test]
+    fn an_agent_carries_its_context_used_as_the_dial() {
+        use crate::activity::Level;
+        let mut m = task_in_app();
+        events(&mut m, vec![Event::TurnStarted]);
+        assert_eq!(city(&m).map(|c| c.agents[0].context), Some(None));
+        let usage = |context| Event::Usage { context: Some(context), window: Some(200), cost_micro_usd: None };
+        events(&mut m, vec![usage(50)]);
+        assert_eq!(city(&m).map(|c| c.agents[0].context), Some(Some((0.25, Level::Calm))));
+        events(&mut m, vec![usage(150)]);
+        assert_eq!(city(&m).map(|c| c.agents[0].context), Some(Some((0.75, Level::Amber))));
+        let dial = m.chat(&Subject::Task(1)).map(|chat| chat.transcript.dial(0));
+        assert_eq!(dial.map(|d| (d.context, d.level)), Some((Some(0.75), Level::Amber)), "the dial's");
     }
 
     /// An agent counts the sub-agents it runs: its `Agent`/`Task` calls not ended (a sub-agent's

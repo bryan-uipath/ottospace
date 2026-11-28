@@ -373,15 +373,7 @@ impl Activity {
             let (calls, failed, failing) = (used.calls, used.failed, used.failing);
             Spot { station, calls, failed, failing, lit, running, weight, for_ms: since }
         });
-        let context = match (is.context, is.window) {
-            (Some(context), Some(window)) if window > 0 => Some((context as f64 / window as f64).min(1.) as f32),
-            _ => None,
-        };
-        let level = match context {
-            Some(f) if f >= RED => Level::Red,
-            Some(f) if f >= AMBER => Level::Amber,
-            _ => Level::Calm,
-        };
+        let (context, level) = context_used(is.context, is.window);
         let pulse = self.pulse(is);
         let lines = self.lines(now, is, pulse, model_lit);
         let failed = stations.iter().any(|spot| spot.failing > 0);
@@ -496,6 +488,21 @@ pub struct Is<'a> {
     /// or a watched file read to its end once (`Event::CaughtUp`). Its starts may not be: a call
     /// running when the file was first read started earlier than it was seen.
     pub held: bool,
+}
+
+/// The share of its context window a conversation used (`context` of `window` tokens), and
+/// its level: amber from `AMBER`, red from `RED`. None without both.
+pub fn context_used(context: Option<u64>, window: Option<u64>) -> (Option<f32>, Level) {
+    let used = match (context, window) {
+        (Some(context), Some(window)) if window > 0 => Some((context as f64 / window as f64).min(1.) as f32),
+        _ => None,
+    };
+    let level = match used {
+        Some(f) if f >= RED => Level::Red,
+        Some(f) if f >= AMBER => Level::Amber,
+        _ => Level::Calm,
+    };
+    (used, level)
 }
 
 /// The centre's state, coloured as a task's (`theme::pulse`).

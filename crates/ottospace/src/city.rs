@@ -752,6 +752,8 @@ struct Floating {
     line: Option<String>,
     /// A session followed by its file, caught up (`Agent::followed`).
     followed: bool,
+    /// Its context window used, and its level (`Agent::context`).
+    context: Option<(f32, ottospace_core::activity::Level)>,
 }
 
 /// An agent's icon as a paint drew it: its centre, where it glides to and since when (window
@@ -776,6 +778,7 @@ struct Icon {
     followed: bool,
     /// What its call draws round it: a shell line's beam, a network call's antenna.
     effect: Option<Around>,
+    context: Option<(f32, ottospace_core::activity::Level)>,
 }
 
 /// What an agent's running call draws round its icon (`agents`).
@@ -1213,6 +1216,8 @@ impl Drawn {
                     "pulsing": i.pulsing, "subagents": i.subagents,
                     "station": i.station.map(|station| station.id()), "caption": i.caption.map(rect), "followed": i.followed,
                     "effect": i.effect.map(|effect| match effect { Around::Beam => "beam", Around::Antenna => "antenna" }),
+                    "context": i.context.map(|(used, _)| (f64::from(used) * 100.).round() / 100.),
+                    "context_level": i.context.map(|(_, level)| level),
                 })
             })
             .collect();
@@ -1468,7 +1473,8 @@ impl Workspace {
             .filter_map(|agent| {
                 let at = placed(plan.as_deref(), &folder, agent.at, &agent.near);
                 let (busy, subagents) = (agent.busy, agent.subagents);
-                let (station, line, followed) = (agent.station, agent.line.clone(), agent.followed);
+                let (station, line, followed, context) =
+                    (agent.station, agent.line.clone(), agent.followed, agent.context);
                 Some(match agent.who {
                     Who::Task(task) => {
                         let subject = ottospace_core::talk::Subject::Task(task);
@@ -1487,6 +1493,7 @@ impl Workspace {
                             station,
                             line,
                             followed,
+                            context,
                         }
                     }
                     // An agent CLI in a pane, by its process: its runner's glyph, no title of its own.
@@ -1494,7 +1501,20 @@ impl Workspace {
                         let spec = ottospace_core::runner::RunnerId::named(runner)?.spec();
                         let (key, colour) = (format!("pane:{pane}"), theme::task(Group::Running));
                         let (mono, title) = (spec.glyph.to_string(), spec.display.to_string());
-                        Floating { task: None, key, colour, mono, title, at, busy, subagents, station, line, followed }
+                        Floating {
+                            task: None,
+                            key,
+                            colour,
+                            mono,
+                            title,
+                            at,
+                            busy,
+                            subagents,
+                            station,
+                            line,
+                            followed,
+                            context,
+                        }
                     }
                     // A session no task has: its runner's glyph, in the colour of work going on.
                     Who::Session { runner, id, title } => {
@@ -1513,6 +1533,7 @@ impl Workspace {
                             station,
                             line,
                             followed,
+                            context,
                         }
                     }
                 })
@@ -3001,6 +3022,15 @@ fn agents(
             _ => None,
         };
         stationing |= effect.is_some() && !calm;
+        // Its context used, as the dial says it: an arc round it from the top, faint until amber.
+        if let Some((used, level)) = agent.context {
+            let hue = match level {
+                ottospace_core::activity::Level::Calm => Hsla::from(rgb(theme::BORDER_STRONG)).opacity(0.7),
+                level => Hsla::from(rgb(theme::level(level))),
+            };
+            let arc = crate::dial::arc(2., shown, ICON / 2. + 4., 0., used.clamp(0., 1.) * std::f32::consts::TAU);
+            crate::dial::stroke(window, arc, hue);
+        }
         // The task's badge, as drawn on its row: its letters in a square bordered in its colour.
         window.paint_quad(
             fill(rect, rgb(theme::SELECTED)).corner_radii(px(ICON / 4.)).border_widths(px(2.)).border_color(colour),
@@ -3066,6 +3096,7 @@ fn agents(
             caption,
             followed: agent.followed,
             effect,
+            context: agent.context,
         });
     }
     (icons, gliding, pulsing, stationing)
