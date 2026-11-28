@@ -133,8 +133,10 @@ fn fs(in: Out) -> @location(0) vec4<f32> {
 "#;
 
 /// Text in the world (`city_text`): a glyph's quad from its corner and sides, its field sampled,
-/// its edge smoothed over a screen pixel, fogged as the boxes are. Drawn over the solid boxes,
-/// depth tested, writing none; under the glass.
+/// its edge smoothed over a screen pixel, fogged as the boxes are. A label's backing pill is a quad
+/// too (its `uv.x` below 0: `uv.y` its width over its height, `uv.z` its corners' radius), a
+/// rounded rectangle worked out from its corner. Walls' names over the solid boxes, depth tested,
+/// writing none, under the glass; labels last, on top.
 const TEXT_SHADER: &str = r#"
 struct Frame { matrix: mat4x4<f32>, eye: vec4<f32>, fog: vec4<f32>, background: vec4<f32>, light: vec4<f32> };
 @group(0) @binding(0) var<uniform> frame: Frame;
@@ -146,6 +148,7 @@ struct Out {
     @location(0) uv: vec2<f32>,
     @location(1) world: vec3<f32>,
     @location(2) colour: vec4<f32>,
+    @location(3) @interpolate(flat) pill: vec3<f32>,
 };
 
 const QUAD = array<vec2<f32>, 6>(vec2(0., 0.), vec2(1., 0.), vec2(1., 1.), vec2(0., 0.), vec2(1., 1.), vec2(0., 1.));
@@ -157,7 +160,9 @@ fn vs(@builtin(vertex_index) i: u32, @location(0) corner: vec3<f32>, @location(1
     var out: Out;
     out.at = frame.matrix * vec4(world, 1.);
     // The atlas's rows run down: a glyph's bottom is its rect's.
-    out.uv = vec2(mix(uv.x, uv.z, c.x), mix(uv.w, uv.y, c.y));
+    let pill = uv.x < 0.;
+    out.uv = select(vec2(mix(uv.x, uv.z, c.x), mix(uv.w, uv.y, c.y)), c, pill);
+    out.pill = select(vec3(0.), vec3(1., uv.y, uv.z), pill);
     out.world = world;
     out.colour = colour;
     return out;
@@ -167,12 +172,19 @@ fn vs(@builtin(vertex_index) i: u32, @location(0) corner: vec3<f32>, @location(1
 fn fs(in: Out) -> @location(0) vec4<f32> {
     let d = textureSample(atlas, sampled, in.uv).r;
     let w = max(fwidth(d) * 0.7, 1e-4);
+    // A pill: how far outside its rounded rectangle, in its height, smoothed over a pixel.
+    let p = vec2(in.uv.x * in.pill.y, in.uv.y);
+    let half = vec2(in.pill.y * 0.5, 0.5);
+    let q = abs(p - half) - (half - vec2(in.pill.z));
+    let e = length(max(q, vec2(0.))) + min(max(q.x, q.y), 0.) - in.pill.z;
+    let f = max(fwidth(e), 1e-4);
+    let shown = select(smoothstep(0.5 - w, 0.5 + w, d), 1. - smoothstep(-f, f, e), in.pill.x > 0.5);
     let far = clamp((distance(in.world, frame.eye.xyz) - frame.fog.x) / (frame.fog.y - frame.fog.x), 0., 1.);
-    return vec4(mix(in.colour.rgb, frame.background.rgb, far * frame.fog.z), smoothstep(0.5 - w, 0.5 + w, d) * in.colour.a);
+    return vec4(mix(in.colour.rgb, frame.background.rgb, far * frame.fog.z), shown * in.colour.a);
 }
 "#;
 
-fn rgb(hex: u32) -> [f32; 3] {
+pub(crate) fn rgb(hex: u32) -> [f32; 3] {
     let c = gpui::rgb(hex);
     [c.r, c.g, c.b]
 }
@@ -219,6 +231,8 @@ pub struct Gpu {
 struct TextGpu {
     glyphs: Text,
     pipeline: wgpu::RenderPipeline,
+    /// The same, tested against no depth: labels drawn over everything (`Label::on_top`).
+    on_top: wgpu::RenderPipeline,
     atlas: wgpu::Texture,
     group: wgpu::BindGroup,
     instances: Option<wgpu::Buffer>,
@@ -436,41 +450,45 @@ impl Gpu {
         });
         let attributes =
             wgpu::vertex_attr_array![0 => Float32x3, 1 => Float32x3, 2 => Float32x3, 3 => Float32x4, 4 => Float32x4];
-        let pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("city text"),
-            layout: Some(&layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs"),
-                compilation_options: Default::default(),
-                buffers: &[Some(wgpu::VertexBufferLayout {
-                    array_stride: (city_text::QUAD * 4) as u64,
-                    step_mode: wgpu::VertexStepMode::Instance,
-                    attributes: &attributes,
-                })],
-            },
-            primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
-            depth_stencil: Some(wgpu::DepthStencilState {
-                format: DEPTH,
-                depth_write_enabled: Some(false),
-                depth_compare: Some(wgpu::CompareFunction::Less),
-                stencil: Default::default(),
-                bias: Default::default(),
-            }),
-            multisample: wgpu::MultisampleState { count: SAMPLES, ..Default::default() },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs"),
-                compilation_options: Default::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: FORMAT,
-                    blend: Some(wgpu::BlendState::ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            multiview_mask: None,
-            cache: None,
-        });
+        // Tested against the boxes' depth (a wall's name), or against none (a label, on top).
+        let pipeline = |compare| {
+            device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some("city text"),
+                layout: Some(&layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs"),
+                    compilation_options: Default::default(),
+                    buffers: &[Some(wgpu::VertexBufferLayout {
+                        array_stride: (city_text::QUAD * 4) as u64,
+                        step_mode: wgpu::VertexStepMode::Instance,
+                        attributes: &attributes,
+                    })],
+                },
+                primitive: wgpu::PrimitiveState { cull_mode: None, ..Default::default() },
+                depth_stencil: Some(wgpu::DepthStencilState {
+                    format: DEPTH,
+                    depth_write_enabled: Some(false),
+                    depth_compare: Some(compare),
+                    stencil: Default::default(),
+                    bias: Default::default(),
+                }),
+                multisample: wgpu::MultisampleState { count: SAMPLES, ..Default::default() },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs"),
+                    compilation_options: Default::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: FORMAT,
+                        blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                multiview_mask: None,
+                cache: None,
+            })
+        };
+        let (on_top, pipeline) = (pipeline(wgpu::CompareFunction::Always), pipeline(wgpu::CompareFunction::Less));
         let atlas = device.create_texture(&wgpu::TextureDescriptor {
             label: Some("city glyphs"),
             size: wgpu::Extent3d { width: city_text::ATLAS, height: city_text::ATLAS, depth_or_array_layers: 1 },
@@ -495,15 +513,25 @@ impl Gpu {
                 wgpu::BindGroupEntry { binding: 1, resource: wgpu::BindingResource::Sampler(&sampler) },
             ],
         });
-        TextGpu { glyphs, pipeline, atlas, group, instances: None }
+        TextGpu { glyphs, pipeline, on_top, atlas, group, instances: None }
     }
 
-    /// `labels`' glyphs as instances in the text's buffer, its atlas uploaded if it grew: how many.
-    fn text_instances(&self, labels: &[Label]) -> u32 {
+    /// `labels`' glyphs as instances in the text's buffer, its atlas uploaded if it grew: how many
+    /// under the glass, then on top.
+    fn text_instances(&self, labels: &[Label]) -> (u32, u32) {
         let mut text = self.text.borrow_mut();
-        let Some(Some(text)) = text.as_mut().filter(|_| !labels.is_empty()) else { return 0 };
+        let Some(Some(text)) = text.as_mut() else { return (0, 0) };
+        // None to draw: a full atlas still starts again (`forget`).
+        if labels.is_empty() {
+            text.glyphs.forget();
+            return (0, 0);
+        }
         let mut data = Vec::new();
-        for label in labels {
+        for label in labels.iter().filter(|l| !l.on_top) {
+            text.glyphs.quads(label, &mut data);
+        }
+        let under = (data.len() / city_text::QUAD) as u32;
+        for label in labels.iter().filter(|l| l.on_top) {
             text.glyphs.quads(label, &mut data);
         }
         if text.glyphs.dirty {
@@ -522,7 +550,7 @@ impl Gpu {
             self.queue.write_buffer(instances, 0, &bytes_of);
         }
         text.glyphs.forget();
-        (data.len() / city_text::QUAD) as u32
+        (under, (data.len() / city_text::QUAD) as u32 - under)
     }
 
     /// One draw of a one-box city at 16×16, its picture dropped: the first picture shown pays no
@@ -722,9 +750,9 @@ impl Gpu {
         let (Some(t), Some(instances)) = (&kept.targets, &kept.instances) else { return Err("no targets".into()) };
         let (row, read) = (t.row, t.read.clone());
         self.queue.write_buffer(instances, 0, &bytes_of);
-        let glyphs = self.text_instances(labels);
+        let (under, over) = self.text_instances(labels);
         let text = self.text.borrow();
-        let text = text.as_ref().and_then(Option::as_ref).filter(|_| glyphs > 0);
+        let text = text.as_ref().and_then(Option::as_ref).filter(|_| under + over > 0);
         let mut encoder = device.create_command_encoder(&wgpu::CommandEncoderDescriptor::default());
         {
             let [r, g, b] = bg.map(f64::from);
@@ -753,16 +781,24 @@ impl Gpu {
             let instances_all = instances.slice(..bytes_of.len() as u64);
             pass.set_vertex_buffer(0, instances_all);
             pass.draw(0..36, 0..solid_count);
+            let glass = solid_count..solid_count + clear.len() as u32;
             // Text over the solid boxes, under the glass.
-            if let Some(TextGpu { pipeline, group, instances: Some(instances), .. }) = text {
+            if let Some(TextGpu { pipeline, group, instances: Some(instances), .. }) = text.filter(|_| under > 0) {
                 pass.set_pipeline(pipeline);
                 pass.set_bind_group(1, group, &[]);
-                pass.set_vertex_buffer(0, instances.slice(..u64::from(glyphs) * (city_text::QUAD * 4) as u64));
-                pass.draw(0..6, 0..glyphs);
+                pass.set_vertex_buffer(0, instances.slice(..));
+                pass.draw(0..6, 0..under);
                 pass.set_vertex_buffer(0, instances_all);
             }
             pass.set_pipeline(&self.glass);
-            pass.draw(0..36, solid_count..solid_count + clear.len() as u32);
+            pass.draw(0..36, glass);
+            // Labels last, over everything: no depth test.
+            if let Some(TextGpu { on_top, group, instances: Some(instances), .. }) = text.filter(|_| over > 0) {
+                pass.set_pipeline(on_top);
+                pass.set_bind_group(1, group, &[]);
+                pass.set_vertex_buffer(0, instances.slice(..));
+                pass.draw(0..6, under..under + over);
+            }
         }
         if into.is_some() {
             // Straight to the layer: no read back; presented by the caller.
@@ -1091,14 +1127,16 @@ pub(crate) mod tests {
         };
         let scene = seen(vec![plinth]);
         let (w, h) = (640, 400);
-        let sign = ottospace_core::city_walls::signs(&scene, |_| Some(wide), [w as f32, h as f32], 12.)[0];
+        let sign = ottospace_core::city_walls::signs(&scene, |_| Some(wide), [w as f32, h as f32], 1.)[0];
         let label = || Label {
             text: "SRC".into(),
             origin: sign.origin,
             across: sign.across,
-            up: [0., 1., 0.],
+            up: sign.up,
             em: sign.em,
             colour: [1.; 4],
+            on_top: false,
+            backing: None,
         };
         let white = |scene: &Scene, name: &str| {
             let p = gpu.render(scene, w, h, 1., false, &[label()]).unwrap();
@@ -1131,6 +1169,86 @@ pub(crate) mod tests {
         assert!(ottospace_core::city_walls::hidden(&behind, &sign));
         assert_eq!(white(&behind, "hidden"), 0, "the tower hides it");
     }
+
+    /// A file's label is drawn on top, on its pill: a tower in front of its box dims it, never
+    /// clips it. Pixels over its pill compared with the same picture unlabelled: lighter where its
+    /// letters are, darker where its pill is. No GPU or no font: nothing to check.
+    /// `CITY_PICTURE=<dir>` writes them.
+    #[test]
+    fn a_label_is_drawn_on_top_on_its_pill_and_dimmed_behind_a_tower() {
+        let Ok(gpu) = Gpu::new() else { return eprintln!("no GPU: skipped") };
+        let Some(wide) = gpu.measure("SRC") else { return eprintln!("no font: skipped") };
+        let low = Block {
+            min: [0.74, 0., 0.45],
+            max: [0.86, 0.05, 0.55],
+            kind: Kind::Building,
+            place: Some(0),
+            district: Some(0),
+        };
+        let fit = ottospace_core::scene::Fit { distance: 1.5, target: [0.8, 0., 0.5], lower: 0. };
+        let seen = |blocks: Vec<Block>| Scene {
+            blocks,
+            camera: Some(fit.camera(&View::default(), 1.6)),
+            fit: Some(fit),
+            ..Scene::default()
+        };
+        let (w, h) = (640, 400);
+        let scene = seen(vec![low]);
+        let sign =
+            ottospace_core::city_walls::billboards(&scene, |_| Some(wide), [w as f32, h as f32], 1., &[], false)[0];
+        let camera = scene.camera.unwrap();
+        let on: [f32; 3] = std::array::from_fn(|i| sign.anchor[i] + (camera.eye[i] - sign.anchor[i]) * 0.3);
+        let tower = Block {
+            min: [on[0] - 0.3, 0., on[2] - 0.02],
+            max: [on[0] + 0.3, 1., on[2] + 0.02],
+            kind: Kind::Building,
+            place: Some(1),
+            district: None,
+        };
+        let behind = seen(vec![low, tower]);
+        assert!(
+            !ottospace_core::city_walls::hidden(&scene, &sign) && ottospace_core::city_walls::hidden(&behind, &sign)
+        );
+        let label = |dim: f32| Label {
+            text: "SRC".into(),
+            origin: sign.origin,
+            across: sign.across,
+            up: sign.up,
+            em: sign.em,
+            colour: [1., 1., 1., dim],
+            on_top: true,
+            backing: Some([0., 0., 0., 0.78 * dim]),
+        };
+        // Over its pill: how many pixels its letters lighten, and its pill darkens.
+        let marks = |scene: &Scene, dim: f32, name: &str| {
+            let picture = |labels: &[Label]| gpu.render(scene, w, h, 1., true, labels).unwrap();
+            let (plain, named) = (picture(&[]), picture(&[label(dim)]));
+            if let Some(dir) = std::env::var_os("CITY_PICTURE") {
+                std::fs::write(std::path::Path::new(&dir).join(format!("label-{name}.bmp")), bmp(&named)).unwrap();
+            }
+            let [x, y, rw, rh] = sign.rect;
+            let (x0, y0) = ((x * w as f32) as u32, (y * h as f32) as u32);
+            let (x1, y1) = (((x + rw) * w as f32) as u32, ((y + rh) * h as f32) as u32);
+            let light = |p: &Picture, px: u32, py: u32| -> i32 {
+                p.bgra[((py * w + px) * 4) as usize..][..3].iter().map(|c| i32::from(*c)).sum()
+            };
+            let pixels: Vec<(u32, u32)> =
+                (y0..y1.min(h)).flat_map(|py| (x0..x1.min(w)).map(move |px| (px, py))).collect();
+            let lighter =
+                pixels.iter().filter(|(px, py)| light(&named, *px, *py) > light(&plain, *px, *py) + 120).count();
+            let darker =
+                pixels.iter().filter(|(px, py)| light(&named, *px, *py) + 20 < light(&plain, *px, *py)).count();
+            (lighter, darker)
+        };
+        let (lit, _) = marks(&scene, 1., "shown");
+        let (dimmed, pill) = marks(&behind, DIM_TEST, "dimmed");
+        assert!(lit > 30, "drawn: {lit}");
+        assert!(dimmed > 10 && dimmed < lit, "drawn behind the tower, dimmed: {dimmed} of {lit}");
+        assert!(pill > 30, "its pill darkens the tower behind it: {pill}");
+    }
+
+    /// The shell's dimming (`city::DIMMED`).
+    const DIM_TEST: f32 = 0.4;
 
     /// A 32-bit BMP, top row first: enough to look at a picture.
     pub(crate) fn bmp(p: &Picture) -> Vec<u8> {

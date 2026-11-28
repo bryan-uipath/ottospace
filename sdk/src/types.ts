@@ -2186,9 +2186,9 @@ export interface CitySpots {
 export interface CityName {
   tier: "wall" | "folder" | "file";
   rect: Rect;
-  /** Drawn by the city's renderer on its plinth's wall (`city_wall_names`), not by GPUI. */
+  /** Drawn by the city's renderer (`city_wall_names`), on its plinth or a label over its box, not by GPUI. */
   plinth: boolean;
-  /** A plinth's name a standing box is in front of (its middle): a solid one hides it, a glass one dims it. */
+  /** A box stands in front of what it names: a plinth's name is hidden by a solid one, dimmed by glass; a label is drawn on top, dimmed. */
   hidden: boolean;
 }
 

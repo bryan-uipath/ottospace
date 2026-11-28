@@ -1,7 +1,7 @@
-# The top two folder tiers named on their plinths (`city_wall_names`) on the city's live layer
+# Folders and files named in the picture (`city_wall_names`) on the city's live layer
 # (`city_live_layer`): a name is in the picture, so it turns with it in the same refresh. code-
 # city's small repository (`app`; city-walls-live/ is a link to code-city/): fitted, turned, and
-# mid-drag (`turning`: GPUI's names wait out the turn, the plinths' stay).
+# mid-drag (`turning`: every name stays).
 {"env":{"OTTOSPACE_FEATURES":"code_city,city_live_layer,city_wall_names"}}
 {"cmd":"open_repo","path":"{ROOT}/repos/app"}
 {"cmd":"close"}

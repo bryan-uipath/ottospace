@@ -1627,7 +1627,7 @@ then does nothing (a toast says so). A preference is a normal setting.
 | `city_live_layer` | Experimental | off | Code city on a live layer: The code city drawn straight to a layer of its own under the window's content, a new picture each display refresh (with code_city) |
 | `review` | Experimental | off | Review a change: A changed file's diff in the viewer: D on it in the explorer, ]c and [c between its hunks |
 | `city_behind` | Experimental | off | Code city behind panes: A tab's city drawn behind its panes, seen through terminals and explorers at terminal_opacity and explorer_opacity (with code_city) |
-| `city_wall_names` | Experimental | off | Folder names on the plinths: The code city's top two folder tiers named on the wall of their plinth that faces the camera, drawn with the city (with code_city) |
+| `city_wall_names` | Experimental | off | Names drawn in the city: The code city's top folders named on the wall of their plinth that faces the camera, deeper folders and files on labels over them, drawn with the city (with code_city) |
 | `city_kinds` | Experimental | off | Roofs by kind of file: A code city building's roof in its file's kind: code, test, docs, config or data; its walls keep its folder's colour (with code_city) |
 
 - `marks` off: no Marks cell or section, ⌘B, ⌘⇧B, ⌘' and ⌘⌥1…9 do nothing, no Mark commands or
@@ -1786,10 +1786,12 @@ nearest folder's with a named colour (`city_folder_colors`, over built-in ones: 
 name alone; a file in the root is grey. So `crates/a/tests/x.rs` is a test's colour, and adding
 a file or a folder changes no other building's colour. A lit building keeps its task's colour.
 
-- With `city_wall_names` on, the top two folder tiers are named by the city's renderer on the
-  wall of their plinth that faces the camera, in capitals, at least as large as GPUI named them
-  (else not at all), hidden by a building in front, and turning with the city in the same frame
-  (design: [code-city/wall-names.md](ai/code-city/wall-names.md)).
+- With `city_wall_names` on, the city's renderer names it, not GPUI: the top two folder tiers on
+  the wall of their plinth that faces the camera, in capitals, held readable far out; deeper
+  folders and files on labels over their boxes, a size a tier (a file's smaller than a folder's),
+  the largest first and none over another, on a pill. A wall's name is hidden by a building in
+  front, a label drawn on top and dimmed; each turns with the city in the same frame. The hovered box is still named by its label (design:
+  [code-city/wall-names.md](ai/code-city/wall-names.md)).
 - With `city_kinds` on, a building's roof is capped in its file's kind: code slate, test pink,
   docs green, config cyan, data lavender (by path and extension: `tests/`, `*_test.*`, `*.md`,
   `*.toml`, `*.json`, `*.rs`…; a file none names has no cap). Its walls keep its folder's colour;
@@ -2118,7 +2120,7 @@ first brainstorm:
 - [zoom-ax.md](ai/1-initial-brainstorm/zoom-ax.md): what a Zoom meeting exposes through accessibility, measured.
 - [accessibility.md](ai/1-initial-brainstorm/accessibility.md): reading app accessibility trees, toward sneak mode and agent actions.
 - [code-city/plan.md](ai/code-city/plan.md): the atlas, a map where a thing keeps its place, and the code city on it. Built: the layout, and the city behind a task's empty tab, behind `code_city` (see [Code city](#code-city)).
-- [code-city/wall-names.md](ai/code-city/wall-names.md): the top folders' names on their plinths, drawn by the city's renderer. Built, behind `city_wall_names`.
+- [code-city/wall-names.md](ai/code-city/wall-names.md): folders' names on their plinths and labels over deeper folders and files, drawn by the city's renderer. Built, behind `city_wall_names`.
 - [code-city/kinds.md](ai/code-city/kinds.md): a building's roof cap by its file's kind. Built, behind `city_kinds`.
 - [file-viewer.md](ai/file-viewer.md): the read-only file viewer pane, and what comes after it (the markdown pass, the explorer, comments).
 - [review/plan.md](ai/review/plan.md): reviewing a change (design): a checkout's PR diff from its merge base, seen as the city's changes layer, a change list ordered for reading, and a diff mode of the viewer.

@@ -18821,7 +18821,9 @@ fn a_city_rises_once_and_at_once_under_reduce_motion() {
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
 fn a_tabs_city_shows_behind_its_terminal_and_explorer_and_streams_render_nothing() {
-    for features in ["code_city,city_behind", "code_city,city_behind,city_live_layer"] {
+    for features in
+        ["code_city,city_behind", "code_city,city_behind,city_live_layer", "code_city,city_behind,city_wall_names"]
+    {
         let root = support::temp(&format!("ottospace-e2e-city-behind-{}", std::process::id()));
         let app = root.join("app");
         std::fs::create_dir_all(app.join("src")).unwrap();
@@ -19337,27 +19339,28 @@ fn a_live_citys_names_wait_out_a_turn_not_left_behind() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
-/// With `city_wall_names` the top two folder tiers are named on their plinths, in the picture:
-/// reported as `plinth`, none of those tiers named by GPUI, none of the names in the state. A turn
+/// With `city_wall_names` the picture names the city: top folders on their plinths, files on labels
+/// over them, reported as `plinth`; GPUI names none, and none of the names is in the state. A turn
 /// keeps them, moved with the camera, on the image path and on a live layer alike.
 #[test]
 #[ignore = "opens a window; run with `cargo e2e`"]
-fn a_citys_top_folders_are_named_on_their_plinths_and_turn_with_it() {
+fn a_citys_folders_and_files_are_named_in_the_picture_and_turn_with_it() {
     for (name, features) in
         [("city-walls", "code_city,city_wall_names"), ("city-walls-live", "code_city,city_live_layer,city_wall_names")]
     {
         let (otto, root, home) = city_shown(name, features);
         let city = |o: &Otto| o.call(json!({"cmd": "state"}))["city"].clone();
-        let plinths = |c: &Value| -> Vec<Value> {
+        let of = |c: &Value, tier: &str| -> Vec<Value> {
             let names = c["names"].as_array().cloned().unwrap_or_default();
-            names.into_iter().filter(|n| n["plinth"] == json!(true)).collect()
+            names.into_iter().filter(|n| n["tier"] == tier).collect()
         };
-        let rest = otto.wait_for("a name on a plinth", |o| Some(city(o)).filter(|c| !plinths(c).is_empty()));
+        let both = |c: &Value| !of(c, "wall").is_empty() && !of(c, "file").is_empty();
+        let rest = otto.wait_for("a folder and a file named", |o| Some(city(o)).filter(both));
         let names = rest["names"].as_array().unwrap();
-        assert!(names.iter().all(|n| n["tier"] == "wall" || n["plinth"] == json!(false)), "{rest}");
-        assert!(names.iter().all(|n| n["tier"] != "wall" || n["plinth"] == json!(true)), "GPUI names no wall: {rest}");
-        assert!(plinths(&rest).iter().all(|n| n["hidden"].is_boolean() && n["rect"][3].as_f64() > Some(8.)), "{rest}");
-        assert!(!rest.to_string().contains("SRC"), "no name in the state: {rest}");
+        assert!(names.iter().all(|n| n["plinth"] == json!(true)), "GPUI names none: {rest}");
+        assert!(names.iter().all(|n| n["hidden"].is_boolean() && n["rect"][3].as_f64() > Some(8.)), "{rest}");
+        let said = rest.to_string();
+        assert!(!said.contains("SRC") && !said.contains("main.rs"), "no name in the state: {rest}");
         // A turn (⌥ and a trackpad's scroll): the reply's frame still has them, where it turned.
         let n = |v: &Value| v.as_f64().unwrap();
         let b = &rest["bounds"];
@@ -19365,12 +19368,12 @@ fn a_citys_top_folders_are_named_on_their_plinths_and_turn_with_it() {
         let turn = json!({"cmd": "mouse", "action": "wheel", "x": x, "y": y, "dx": 6, "dy": 0, "precise": true,
             "modifiers": ["alt"], "as": "user"});
         let reply = otto.call(turn)["city"].clone();
-        assert!(!plinths(&reply).is_empty(), "{name}: none hidden while it turns: {reply}");
+        assert!(both(&reply), "{name}: none hidden while it turns: {reply}");
         // The turned picture's names: until it is made, the one shown still names the old places.
         let turned = otto.wait_for(&format!("{name}: names moved with the camera"), |o| {
-            Some(city(o)).filter(|c| c["view"] != rest["view"] && plinths(c) != plinths(&rest))
+            Some(city(o)).filter(|c| c["view"] != rest["view"] && of(c, "file") != of(&rest, "file"))
         });
-        assert!(!plinths(&turned).is_empty(), "{name}: named through the turn: {turned}");
+        assert!(both(&turned), "{name}: named through the turn: {turned}");
         drop(otto);
         let _ = std::fs::remove_dir_all(&root);
         let _ = std::fs::remove_dir_all(&home);

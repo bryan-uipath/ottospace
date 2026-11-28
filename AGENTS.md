@@ -259,8 +259,9 @@ Design note: `docs/ai/attention/plan.md`.
     the user's pointer: `file`, `lit`, a file's `beam` its foot and dot `[x0, y0, x1, y1]`, a folder's `outline`
     (its top face's four corners), `beacon` its label's rect, `kind` a capped file's kind (`city_kinds`); null with none), `names` (each name drawn by
     `city_labels`: its `tier`, `wall`, `folder` or `file`, and its `rect`; never the name; with
-    `city_wall_names` also each one the renderer drew on a plinth, `plinth`, its em box's `rect` and
-    `hidden`, a standing box in front of its middle: solid hides it, glass dims it), `spots` (a point
+    `city_wall_names` every one is the renderer's, `plinth`: a top folder's on its plinth, others on
+    labels over their boxes, its `rect` (a plinth's em box, a label's pill) and `hidden`, a standing box in
+    front of what it names: a plinth's name is hidden by a solid one, dimmed by glass; a label is drawn on top, dimmed), `spots` (a point
     over an outer district's own ground, `folder`, and over a building, `file`, for a test's pointer), `lit_beams` (each lit building's beam drawn, as `beam`), `glass` (its buildings see-through:
     `developer.city_opaque` off), `lower` (how far below the picture's middle the fitted city's is,
     a share of its height: `developer.city_frame`), `folder_colors` (how many `city_folder_colors` the
