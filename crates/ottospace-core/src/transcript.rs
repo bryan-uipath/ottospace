@@ -507,6 +507,21 @@ pub struct Turn {
     pub tool: Option<String>,
 }
 
+/// How long after a message is sent its agent shows it (`Transcript::mood`).
+pub const SENT_MS: u64 = 1_500;
+
+/// What an agent does between its calls, for the code city's icon.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Mood {
+    /// Its turn runs and no call does: the model thinks.
+    Thinking,
+    /// Its reply streams.
+    Talking,
+    /// A message was just sent to it.
+    Sent,
+}
+
 /// One conversation as the drawer draws it.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Transcript {
@@ -651,6 +666,29 @@ impl Transcript {
     /// Its dial's state alone: what the agent chip says while the conversation is closed.
     pub fn pulse(&self) -> Pulse {
         self.activity.pulse(&self.is())
+    }
+
+    /// What its agent does between calls, at `now`, while its turn runs: a message just sent to
+    /// it (`SENT_MS`), its reply streaming, or thinking (no call running). None while a call
+    /// runs, a question waits, or its turn is over.
+    pub fn mood(&self, now: u64) -> Option<Mood> {
+        let is = self.is();
+        if self.activity.pulse(&is) != Pulse::Running {
+            return None;
+        }
+        if self.activity.messaged_at().is_some_and(|at| now.saturating_sub(at) < SENT_MS) {
+            return Some(Mood::Sent);
+        }
+        if matches!(self.items.back().map(|item| &item.entry), Some(Entry::Assistant { streaming: true, .. })) {
+            return Some(Mood::Talking);
+        }
+        (!self.calling()).then_some(Mood::Thinking)
+    }
+
+    /// When its `Mood::Sent` ends, while its turn runs: for the shell to look again then.
+    pub fn sent_until(&self) -> Option<u64> {
+        let at = self.activity.messaged_at()?;
+        (self.activity.pulse(&self.is()) == Pulse::Running).then_some(at + SENT_MS)
     }
 
     /// The share of its context window used and its level, when known (`activity::context_used`).

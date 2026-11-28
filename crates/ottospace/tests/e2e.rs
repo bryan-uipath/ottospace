@@ -19757,6 +19757,39 @@ fn a_followed_sessions_context_used_rings_its_icon() {
     let _ = std::fs::remove_dir_all(&home);
 }
 
+/// Between its calls an agent shows what it does: a message just sent to it, then thinking
+/// (no call, no reply yet), then talking as its reply streams.
+#[test]
+#[ignore = "opens a window; run with `cargo e2e`"]
+fn an_agent_shows_a_message_sent_then_thinks_then_talks() {
+    const S: &str = r#""session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003""#;
+    let extra = [("OTTOSPACE_FEATURES", "code_city"), ("GIT_CONFIG_GLOBAL", "/dev/null")];
+    let (root, _, env) = native_setup("city-moods", &[], &extra);
+    let app = root.join("repos/app");
+    git(&app, &["init", "-q"]);
+    std::fs::create_dir_all(app.join("src")).unwrap();
+    std::fs::write(app.join("src/main.rs"), "x".repeat(3000)).unwrap();
+    // Its reply starts streaming only once the test has seen it think.
+    let delta = r#"{"type":"stream_event","session_id":"8f14e45f-ceea-467f-a8d3-0242ac130003","parent_tool_use_id":null,"event":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Made-up"}}}"#;
+    let lines = [
+        format!(r#"{{"type":"system","subtype":"init",{S},"model":"claude-opus-5-5","permissionMode":"default"}}"#),
+        r#"{"_sleep":8}"#.into(),
+        delta.to_string(),
+        r#"{"_sleep":60}"#.into(),
+    ];
+    std::fs::write(root.join("fixtures/turn1.jsonl"), lines.join("\n") + "\n").unwrap();
+    let otto = launch_env("city-moods", &env);
+    otto.call(json!({"cmd": "task_new", "line": "first >app"}));
+    otto.call(json!({"cmd": "section", "section": "tasks"}));
+    otto.start_task(1);
+    otto.call(json!({"cmd": "open_space", "space": {"kind": "task", "id": 1}}));
+    let mood = |o: &Otto| o.call(json!({"cmd": "state"}))["city"]["agents"][0]["mood"].clone();
+    otto.wait_for("thinking", |o| (mood(o) == json!("thinking")).then_some(()));
+    otto.wait_for("talking", |o| (mood(o) == json!("talking")).then_some(()));
+    drop(otto);
+    let _ = std::fs::remove_dir_all(&root);
+}
+
 /// A `claude` in the user's own terminal, followed by its file while its checkout's city shows:
 /// a read written to its file now lights its building and flashes it, its agent over it, as a
 /// chat's does; what its file held before plays nothing.
