@@ -7,6 +7,6 @@
 {"cmd": "open_repo", "path": "{ROOT}/repos/app"}
 {"cmd": "close"}
 {"until": "city.picture", "timeout_ms": 30000}
-{"sleep_ms": 5000}
+{"until": "city.agents.0.followed", "is": true, "timeout_ms": 30000}
 {"settle": 1000}
 {"shot": "context"}

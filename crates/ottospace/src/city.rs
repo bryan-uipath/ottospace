@@ -1216,7 +1216,7 @@ impl Drawn {
                     "pulsing": i.pulsing, "subagents": i.subagents,
                     "station": i.station.map(|station| station.id()), "caption": i.caption.map(rect), "followed": i.followed,
                     "effect": i.effect.map(|effect| match effect { Around::Beam => "beam", Around::Antenna => "antenna" }),
-                    "context": i.context.map(|(used, _)| (f64::from(used) * 100.).round() / 100.),
+                    "context": i.context.map(|(used, _)| f64::from((used * 100.).round()) / 100.),
                     "context_level": i.context.map(|(_, level)| level),
                 })
             })

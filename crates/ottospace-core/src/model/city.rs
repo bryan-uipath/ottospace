@@ -212,12 +212,6 @@ fn below(cwd: &str, dir: &str) -> String {
     rest.map(|rest| rest.trim_start_matches('/').to_string()).unwrap_or_default()
 }
 
-/// A transcript's context used, when known (`Transcript::context_used`).
-fn context_of(t: &Transcript) -> Option<(f32, crate::activity::Level)> {
-    let (used, level) = t.context_used();
-    used.map(|used| (used, level))
-}
-
 fn file_of(s: &crate::sessions::Found) -> Option<&str> {
     s.label.as_deref().filter(|_| station_of(s) == Some(Station::Files))
 }
@@ -360,7 +354,7 @@ impl Model {
                 let (busy, subagents) = (transcript.calling(), transcript.subagents());
                 let (station, line) = (transcript.calling_station(), transcript.live_label().and_then(talk::call_line));
                 let who = Who::Task(*task);
-                let context = context_of(transcript);
+                let context = transcript.context_used();
                 (
                     *task,
                     Agent { who, colour: *colour, at, near, busy, subagents, station, line, followed: false, context },
@@ -490,7 +484,7 @@ impl Model {
         // Its file, read as it is written, says what runs now: an older reading of it does not.
         let (station, line) = (t.calling_station(), t.live_label().and_then(talk::call_line));
         let (busy, subagents) = (busy || t.calling(), subagents.max(t.subagents()));
-        let context = context_of(t);
+        let context = t.context_used();
         Agent { who, colour, at, near, busy, subagents, station, line, followed: true, context }
     }
 

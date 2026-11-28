@@ -19729,8 +19729,8 @@ fn a_followed_sessions_context_used_rings_its_icon() {
     let user = json!({"type": "user", "message": {"role": "user", "content": "made-up prompt"},
         "timestamp": "2026-11-13T09:00:00.000Z", "cwd": app, "sessionId": id});
     let bash = json!({"type": "tool_use", "id": "toolu_b", "name": "Bash", "input": {"command": "cargo test"}});
-    // 160,000 of a Haiku's 200,000: amber.
-    let usage = json!({"input_tokens": 159000, "output_tokens": 1000});
+    // 163,000 of a Haiku's 200,000: amber, 82% as the dial rounds it (81.5).
+    let usage = json!({"input_tokens": 162000, "output_tokens": 1000});
     let call = json!({"type": "assistant", "message": {"id": "msg_1", "model": "claude-haiku-5-5", "content": [bash],
         "usage": usage}, "timestamp": "2026-11-13T09:00:01.000Z", "cwd": app, "sessionId": id});
     std::fs::write(project.join(format!("{id}.jsonl")), format!("{user}\n{call}\n")).unwrap();
@@ -19751,7 +19751,7 @@ fn a_followed_sessions_context_used_rings_its_icon() {
             .find(|a| a["followed"] == json!(true) && a["context"].as_f64() > Some(0.))
             .cloned()
     });
-    assert_eq!((agent["context"].as_f64(), &agent["context_level"]), (Some(0.8), &json!("amber")), "{agent}");
+    assert_eq!((agent["context"].as_f64(), &agent["context_level"]), (Some(0.82), &json!("amber")), "{agent}");
     drop(otto);
     let _ = std::fs::remove_dir_all(&root);
     let _ = std::fs::remove_dir_all(&home);
