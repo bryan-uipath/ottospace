@@ -1,7 +1,7 @@
 # A quick read held (`code_city`): the agent reads a made-up file, the call ends at once, and a
 # shell line naming no path runs. Just after (`held`), the file is still lit and the agent over it,
 # as for `HOLD_MS`; the base has let go already (hovering, nothing lit).
-{"env": {"OTTOSPACE_FEATURES": "code_city"}}
+{"env": {"OTTOSPACE_FEATURES": "code_city", "OTTOSPACE_REDUCE_MOTION": "1"}}
 {"tree": "repos/app", "files": 60}
 {"cmd": "repo_add", "path": "{ROOT}/repos/app"}
 {"until": "repos_bar.0"}

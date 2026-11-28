@@ -2695,6 +2695,7 @@ function cityAgent(value: unknown, at: string): CityAgent {
     station: orNull(station)(o.station, `${at}.station`),
     caption: orNull(rect)(o.caption, `${at}.caption`),
     followed: bool(o.followed, `${at}.followed`),
+    effect: orNull(oneOf(["beam", "antenna"] as const, "an agent's effect"))(o.effect, `${at}.effect`),
   };
 }
 

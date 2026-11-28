@@ -18,6 +18,7 @@ use gpui::{
     point, prelude::*, px, rgb,
 };
 use ottospace_core::Action;
+use ottospace_core::activity::Station;
 use ottospace_core::atlas::{self, Atlas};
 use ottospace_core::city_colours::{self, FolderColours};
 use ottospace_core::city_filter;
@@ -99,8 +100,13 @@ const KEPT_PICTURES: usize = 2;
 /// An agent's icon's side and the gap between icons fanned side by side, in points; an icon
 /// moving to another file glides over this long.
 const ICON: f32 = 22.;
+/// A station's effect goes round once this long: a shell beam's dashes fall, a network call's
+/// waves rise.
+const STATION_CYCLE: Duration = Duration::from_millis(1200);
 /// The station's dot at an icon's corner, and the height of its call's line under it, in points.
 const STATION: f32 = 12.;
+/// How far a network call's waves rise over its icon, in points.
+const WAVES: f32 = 18.;
 const CAPTION: f32 = 16.;
 const FAN_GAP: f32 = 4.;
 const GLIDE: Duration = Duration::from_millis(280);
@@ -768,6 +774,15 @@ struct Icon {
     station: Option<ottospace_core::activity::Station>,
     caption: Option<Bounds<Pixels>>,
     followed: bool,
+    /// What its call draws round it: a shell line's beam, a network call's antenna.
+    effect: Option<Around>,
+}
+
+/// What an agent's running call draws round its icon (`agents`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Around {
+    Beam,
+    Antenna,
 }
 
 /// A hovered box's beacon as drawn: whether a file's, whether lit; a file's beam (foot and end)
@@ -806,6 +821,8 @@ pub struct Drawn {
     agent_frames: u64,
     /// Frames a busy agent's pulse asked for: none once its calls end, none under Reduce Motion.
     pulse_frames: u64,
+    /// Frames a running call's beam or antenna asked for: none once it ends, none under Reduce Motion.
+    station_frames: u64,
     /// Frames a read's flash, a search's sweep or its result's light asked for: none once they
     /// end, none under Reduce Motion.
     glimmer_frames: u64,
@@ -1195,6 +1212,7 @@ impl Drawn {
                     "task": i.task, "rect": rect(i.rect), "cone": i.cone, "fan": [i.fan.0, i.fan.1], "hovered": hovered,
                     "pulsing": i.pulsing, "subagents": i.subagents,
                     "station": i.station.map(|station| station.id()), "caption": i.caption.map(rect), "followed": i.followed,
+                    "effect": i.effect.map(|effect| match effect { Around::Beam => "beam", Around::Antenna => "antenna" }),
                 })
             })
             .collect();
@@ -2064,6 +2082,11 @@ impl Workspace {
         self.city_drawn.borrow().pulse_frames
     }
 
+    /// Frames a running call's beam or antenna asked for: for the counts of a test run.
+    pub(crate) fn city_station_frames(&self) -> u64 {
+        self.city_drawn.borrow().station_frames
+    }
+
     /// Frames the reads' and searches' effects asked for: for the counts of a test run.
     pub(crate) fn city_glimmer_frames(&self) -> u64 {
         self.city_drawn.borrow().glimmer_frames
@@ -2631,7 +2654,7 @@ fn paint(
         }
     }
     let glimmering = glance(&mut glimmer, made, glimpses, bounds, window);
-    let (icons, gliding, pulsing) = agents(made, floating, &was, bounds, window, cx, &shape);
+    let (icons, gliding, pulsing, stationing) = agents(made, floating, &was, bounds, window, cx, &shape);
     // The last painted is on top; under the hints, the hints are (an icon there is behind them).
     let pointer = pointer.filter(|at| !clear.dilate(px(CLEAR)).contains(at));
     let over_icon = pointer.and_then(|at| icons.iter().rev().find(|icon| icon.rect.contains(&at)));
@@ -2660,7 +2683,7 @@ fn paint(
     if fades {
         window.request_animation_frame();
     }
-    if gliding || pulsing || glimmering {
+    if gliding || pulsing || glimmering || stationing {
         window.request_animation_frame();
     }
     drawn.paints += 1;
@@ -2673,6 +2696,7 @@ fn paint(
     drawn.rise_frames += u64::from(rising);
     drawn.agent_frames += u64::from(gliding);
     drawn.pulse_frames += u64::from(pulsing);
+    drawn.station_frames += u64::from(stationing);
     drawn.glimmer_frames += u64::from(glimmering);
     if let Some(made) = drawn.pictures.get_mut(&shown) {
         (made.used, made.painted) = (Instant::now(), true);
@@ -2862,7 +2886,9 @@ fn name_agent(
 /// work is whether they show or not. One that moves glides there (at once under Reduce Motion).
 /// A busy agent pulses (none under Reduce Motion): the pool on its building, or at no file a
 /// halo round its icon, swelling and fading once every `PULSE`.
-/// Returns the icons drawn, whether one still glides, and whether one pulses.
+/// A running call draws round it: a shell line's beam, a network or MCP call's antenna.
+/// Returns the icons drawn, whether one still glides, whether one pulses, and whether a call's
+/// beam or antenna moves.
 fn agents(
     made: &Made,
     floating: &[Floating],
@@ -2871,20 +2897,25 @@ fn agents(
     window: &mut Window,
     cx: &mut gpui::App,
     shape: &dyn Fn(&str, Hsla, f32, &mut Window) -> gpui::ShapedLine,
-) -> (Vec<Icon>, bool, bool) {
-    let Some(camera) = made.scene.camera else { return (Vec::new(), false, false) };
+) -> (Vec<Icon>, bool, bool, bool) {
+    let Some(camera) = made.scene.camera else { return (Vec::new(), false, false, false) };
     let (w, h) = (f32::from(bounds.size.width), f32::from(bounds.size.height));
     let to_window = |p: [f32; 3]| camera.project(p).map(|(x, y)| bounds.origin + point(px(x * w), px(y * h)));
     let boxes: Vec<Option<usize>> = floating.iter().map(|agent| block_of(made, agent.at.as_deref()?)).collect();
     let (calm, now) = (crate::dial::calm(), Instant::now());
     let side = gpui::size(px(ICON), px(ICON));
-    let (mut gliding, mut pulsing) = (false, false);
+    let (mut gliding, mut pulsing, mut stationing) = (false, false, false);
     let mut icons = Vec::new();
     // 0 to 1 and back, one clock for every icon so two busy ones pulse together.
     let beat = {
         static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
         let t = START.get_or_init(Instant::now).elapsed().as_secs_f32() / PULSE.as_secs_f32();
         0.5 - 0.5 * (t * std::f32::consts::TAU).cos()
+    };
+    // 0 to 1, again and again: a station's beam falls, its waves rise.
+    let cycle = {
+        static START: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+        (START.get_or_init(Instant::now).elapsed().as_secs_f32() / STATION_CYCLE.as_secs_f32()).fract()
     };
     for (agent, mark) in floating.iter().zip(made.scene.marks(&boxes)) {
         let Some(end) = to_window(mark.at) else { continue };
@@ -2901,7 +2932,8 @@ fn agents(
         };
         // At no file: along the picture's top edge, a place of its own whatever covers the city
         // (the hints stand in its middle, then go when a pane opens over it).
-        let hover = point(end.x, bounds.top() + px(ICON / 2. + STATION / 2. + 1.));
+        // Room above it for its station's dot and a network call's waves (`rise`).
+        let hover = point(end.x, bounds.top() + px(ICON / 2. + WAVES + 2.));
         let to = match foot {
             // Down its beam while it is off the picture.
             Some(f) => [1., 0.75, 0.5, 0.25].into_iter().find_map(|t: f32| fits(f + (end - f) * t + offset)),
@@ -2950,6 +2982,24 @@ fn agents(
             let ring = fill(halo, gpui::transparent_black()).corner_radii(px(ICON / 4. + 4.));
             window.paint_quad(ring.border_widths(px(2.)).border_color(colour.opacity(0.6 * (1. - p))));
         }
+        // The call it runs, below and above it: a shell line's beam falls from it to its building
+        // or the ground, a network call's waves rise over it. Moving while it runs (still under
+        // Reduce Motion), in its station's colour as on the dial.
+        let ground = to_window([mark.at[0], 0., mark.at[2]]);
+        let effect = match agent.station {
+            Some(Station::Shell) => (foot.or(ground)).map(|to| {
+                let hue = Hsla::from(rgb(theme::station(Station::Shell)));
+                fall(window, point(shown.x, rect.bottom()), to, hue, (!calm).then_some(cycle));
+                Around::Beam
+            }),
+            Some(station @ (Station::Network | Station::Mcp)) => {
+                let hue = Hsla::from(rgb(theme::station(station)));
+                rise(window, point(shown.x, rect.top()), hue, (!calm).then_some(cycle));
+                Some(Around::Antenna)
+            }
+            _ => None,
+        };
+        stationing |= effect.is_some() && !calm;
         // The task's badge, as drawn on its row: its letters in a square bordered in its colour.
         window.paint_quad(
             fill(rect, rgb(theme::SELECTED)).corner_radii(px(ICON / 4.)).border_widths(px(2.)).border_color(colour),
@@ -3014,9 +3064,50 @@ fn agents(
             station: agent.station,
             caption,
             followed: agent.followed,
+            effect,
         });
     }
-    (icons, gliding, pulsing)
+    (icons, gliding, pulsing, stationing)
+}
+
+/// A shell line's beam from `from` (an icon's foot) down to `to`: a faint line, and dashes falling
+/// along it with `phase` (0 to 1; none: still, the dashes where they start).
+fn fall(window: &mut Window, from: Point<Pixels>, to: Point<Pixels>, colour: Hsla, phase: Option<f32>) {
+    const DASH: f32 = 6.;
+    let mut line = PathBuilder::stroke(px(1.));
+    line.move_to(from);
+    line.line_to(to);
+    crate::dial::stroke(window, line, colour.opacity(0.25));
+    let length = (to - from).magnitude() as f32;
+    if length < 1. {
+        return;
+    }
+    let shift = phase.unwrap_or(0.) * DASH * 2.;
+    let mut at = shift - DASH * 2.;
+    while at < length {
+        let (a, b) = (at.max(0.) / length, (at + DASH).min(length) / length);
+        if b > a {
+            let mut dash = PathBuilder::stroke(px(2.));
+            dash.move_to(from + (to - from) * a);
+            dash.line_to(from + (to - from) * b);
+            crate::dial::stroke(window, dash, colour.opacity(0.9 - 0.6 * a));
+        }
+        at += DASH * 2.;
+    }
+}
+
+/// A network call's antenna over `top` (an icon's top): three arcs rising and fading with
+/// `phase` (0 to 1; none: still, evenly spaced), at most `WAVES` points above it.
+fn rise(window: &mut Window, top: Point<Pixels>, colour: Hsla, phase: Option<f32>) {
+    const ARCS: usize = 3;
+    for k in 0..ARCS {
+        let t = (k as f32 + phase.unwrap_or(0.5)) / ARCS as f32;
+        let r = 6. + (WAVES - 6.) * t;
+        let centre = top + point(px(0.), px(r * 0.4));
+        let sweep = std::f32::consts::PI * 0.7;
+        let arc = crate::dial::arc(2., centre, r, -sweep / 2., sweep);
+        crate::dial::stroke(window, arc, colour.opacity(1. - 0.7 * t));
+    }
 }
 
 /// Where the end of a beam from `foot` to `end` is drawn (window points), and its label's box (`label`: its
