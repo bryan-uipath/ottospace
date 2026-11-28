@@ -18791,11 +18791,13 @@ fn a_city_rises_once_and_at_once_under_reduce_motion() {
         otto.call(json!({"cmd": "close"}));
         let city = otto.wait_for("the city", |o| Some(state(o)["city"].clone()).filter(|c| !c["picture"].is_null()));
         assert!(city["first_ms"].as_u64().is_some(), "{city}");
-        std::thread::sleep(Duration::from_millis(600));
-        let after = fades(&otto);
+        // Its rise over (as long as a busy machine takes): no frame asked for in 400 ms.
+        let after = otto.wait_for("the rise over", |o| {
+            let before = fades(o);
+            std::thread::sleep(Duration::from_millis(400));
+            (fades(o) == before).then_some(before)
+        });
         assert_eq!(after == 0, calm, "rises or fades in unless Reduce Motion: {after}");
-        std::thread::sleep(Duration::from_millis(400));
-        assert_eq!(fades(&otto), after, "no frame at rest");
         // A pane covers it, and goes: the kept picture, at once.
         let renders = state(&otto)["city"]["renders"].as_u64();
         otto.call(json!({"cmd": "split"}));
